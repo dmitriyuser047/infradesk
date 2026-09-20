@@ -1,4 +1,8 @@
-scalaVersion := "2.11.12"
+scalaVersion := "2.13.18"
+
+lazy val doobieVersion = "1.0.0-RC13"
+lazy val dockerVersion = "3.7.1"
+lazy val sshjVersion = "0.40.0"
 
 lazy val root = rootProject
   .settings(
@@ -8,5 +12,14 @@ lazy val root = rootProject
       //You can add library dependencies here, for example,
       //"org.scalatest" %% "scalatest" % "3.2.19" % Test,
       //"org.scalameta" %% "munit" % "1.2.3" % Test
+      "org.typelevel" %% "cats-effect" % "3.7.0",
+      "org.typelevel" %% "doobie-core"      % doobieVersion,
+      "org.typelevel" %% "doobie-postgres"  % doobieVersion,
+      "org.typelevel" %% "doobie-hikari"    % doobieVersion,
+      "io.circe" %% "circe-core"   % "0.14.10",
+      "io.circe" %% "circe-parser" % "0.14.10",
+      "com.github.docker-java" % "docker-java-core" % dockerVersion,
+      "com.github.docker-java" % "docker-java-transport-httpclient5" % dockerVersion,
+      "com.hierynomus" % "sshj" % sshjVersion
     )
   )

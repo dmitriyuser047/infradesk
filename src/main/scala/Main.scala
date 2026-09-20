@@ -1,18 +1,101 @@
 package ru.bitec.app.ops
 
-
-//TIP To <b>Run</b> code, press <shortcut actionId="Run"/> or click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
-object Main {
-  def main(args: Array[String]): Unit = {
-    //TIP Press <shortcut actionId="ShowIntentionActions"/> with your caret at the highlighted text
-    // to see how IntelliJ IDEA suggests fixing it.
-    (1 to 5).map(println)
-
-    for (i <- 1 to 5) {
-      //TIP Press <shortcut actionId="Debug"/> to start debugging your code. We have set one <icon src="AllIcons.Debugger.Db_set_breakpoint"/> breakpoint
-      // for you, but you can always add more by pressing <shortcut actionId="ToggleLineBreakpoint"/>.
-      println(s"i = $i")
-    }
-  }
+import application.connector.{
+  ResourceConnectorRegistry,
+  SyncConnection
+}
+import application.discovery.{
+  CreateDiscoveredResource,
+  ResolveDiscoveredResource,
+  SyncDiscoveredResource
+}
+import application.resource.PersistExternalResource
+import cats.effect.{IO, IOApp}
+import org.typelevel.doobie.ConnectionIO
+import infrastructure.database.{
+  Database,
+  DatabaseConfig,
+  DoobieTransactionRunner
+}
+import infrastructure.runtime.{
+  SystemIdGenerator,
+  SystemTimeProvider
+}
+import integration.docker.{
+  DockerConnector,
+  DockerJavaEngineClient
+}
+import persistence.postgres.{
+  PostgresExternalRefRepository,
+  PostgresResourceRepository,
+  PostgresResourceTypeRepository
 }
 
+object Main extends IOApp.Simple {
+
+  override def run: IO[Unit] =
+    DatabaseConfig.load.flatMap { config =>
+      Database.transactor(config).use { xa =>
+        val resourceRepository =
+          new PostgresResourceRepository
+
+        val resourceTypeRepository =
+          new PostgresResourceTypeRepository
+
+        val externalRefRepository =
+          new PostgresExternalRefRepository
+
+        val transactionRunner =
+          new DoobieTransactionRunner(xa)
+
+        val idGenerator =
+          new SystemIdGenerator
+
+        val timeProvider =
+          new SystemTimeProvider
+
+        val persistExternalResource =
+          new PersistExternalResource[ConnectionIO](
+            resourceRepository,
+            externalRefRepository
+          )
+
+        val resolveDiscoveredResource =
+          new ResolveDiscoveredResource[ConnectionIO](
+            externalRefRepository
+          )
+
+        val createDiscoveredResource =
+          new CreateDiscoveredResource[ConnectionIO](
+            resourceTypeRepository,
+            persistExternalResource
+          )
+
+        val syncDiscoveredResource =
+          new SyncDiscoveredResource[IO, ConnectionIO](
+            resolveDiscoveredResource,
+            createDiscoveredResource,
+            resourceRepository,
+            externalRefRepository,
+            transactionRunner,
+            idGenerator,
+            timeProvider
+          )
+
+        val dockerEngineClient =
+          new DockerJavaEngineClient[IO]
+
+        val dockerConnector =
+          new DockerConnector[IO](
+            dockerEngineClient
+          )
+
+        val connectorRegistry =
+          new ResourceConnectorRegistry[IO](
+            List(dockerConnector)
+          )
+
+        IO.never
+      }
+    }
+}
