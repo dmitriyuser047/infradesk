@@ -28,21 +28,23 @@ final class PostgresResourceRepository extends ResourceRepository[ConnectionIO] 
                                         specJson: String,
                                         statusJson: String
                                       ) {
-    def toDomain(codec: ResourceDataJsonCodec): Resource =
-      Resource(
-        id = id,
-        organizationId = organizationId,
-        environmentId = environmentId,
-        resourceTypeId = resourceTypeId,
-        parentResourceId = parentResourceId,
-        code = code,
-        name = name,
-        isActive = isActive,
-        createdAt = createdAt,
-        updatedAt = updatedAt,
-        resourceTypeCode = resourceTypeCode,
-        data = codec.decode(resourceTypeCode, specJson, statusJson).fold(throw _, identity)
-      )
+    def toDomain(codec: ResourceDataJsonCodec): Either[IllegalArgumentException, Resource] =
+      codec.decode(resourceTypeCode, specJson, statusJson).map { data =>
+        Resource(
+          id = id,
+          organizationId = organizationId,
+          environmentId = environmentId,
+          resourceTypeId = resourceTypeId,
+          parentResourceId = parentResourceId,
+          code = code,
+          name = name,
+          isActive = isActive,
+          createdAt = createdAt,
+          updatedAt = updatedAt,
+          resourceTypeCode = resourceTypeCode,
+          data = data
+        )
+      }
   }
 
   private val resourceDataJsonCodec = new ResourceDataJsonCodec
@@ -70,7 +72,12 @@ final class PostgresResourceRepository extends ResourceRepository[ConnectionIO] 
     """
       .query[ResourceRow]
       .option
-      .map(_.map(_.toDomain(resourceDataJsonCodec)))
+      .flatMap {
+        case Some(row) =>
+          row.toDomain(resourceDataJsonCodec).map(resource => Option(resource)).liftTo[ConnectionIO]
+        case None =>
+          none[Resource].pure[ConnectionIO]
+      }
 
 
   override def save(resource: Resource): ConnectionIO[Unit] =
