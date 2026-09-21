@@ -83,4 +83,37 @@ final class PostgresResourceRepository extends ResourceRepository[ConnectionIO] 
           ).raiseError[ConnectionIO, Unit]
       }
 
+  override def deactivateMissingForConnection(
+                                                organizationId: UUID,
+                                                connectionId: UUID,
+                                                syncSessionId: UUID,
+                                                now: java.time.Instant
+                                              ): ConnectionIO[Int] =
+    sql"""
+      update resource r
+      set is_active = false, updated_at = $now
+      where r.organization_id = $organizationId
+        and r.is_active
+        and exists (
+          select 1 from external_ref er
+          where er.organization_id = r.organization_id
+            and er.resource_id = r.id
+            and er.connection_id = $connectionId
+            and er.last_seen_sync_session_id is distinct from $syncSessionId
+        )
+        and not exists (
+          select 1 from external_ref er
+          where er.organization_id = r.organization_id
+            and er.resource_id = r.id
+            and er.connection_id = $connectionId
+            and er.last_seen_sync_session_id = $syncSessionId
+        )
+        and not exists (
+          select 1 from external_ref er
+          where er.organization_id = r.organization_id
+            and er.resource_id = r.id
+            and er.connection_id <> $connectionId
+        )
+    """.update.run
+
 }

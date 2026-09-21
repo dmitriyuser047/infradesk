@@ -30,7 +30,8 @@ final class PostgresExternalRefRepository extends ExternalRefRepository[Connecti
         first_seen_at,
         last_seen_at,
         created_at,
-        updated_at
+        updated_at,
+        last_seen_sync_session_id
       from external_ref
       where organization_id = $organizationId
         and connection_id = $connectionId
@@ -52,7 +53,8 @@ final class PostgresExternalRefRepository extends ExternalRefRepository[Connecti
         first_seen_at,
         last_seen_at,
         created_at,
-        updated_at
+        updated_at,
+        last_seen_sync_session_id
       )
       values (
         ${externalRef.id},
@@ -64,12 +66,14 @@ final class PostgresExternalRefRepository extends ExternalRefRepository[Connecti
         ${externalRef.firstSeenAt},
         ${externalRef.lastSeenAt},
         ${externalRef.createdAt},
-        ${externalRef.updatedAt}
+        ${externalRef.updatedAt},
+        ${externalRef.lastSeenSyncSessionId}
       )
       on conflict (connection_id, external_type, external_id)
       do update set
         last_seen_at = excluded.last_seen_at,
-        updated_at = excluded.updated_at
+        updated_at = excluded.updated_at,
+        last_seen_sync_session_id = excluded.last_seen_sync_session_id
       where external_ref.organization_id = excluded.organization_id
         and external_ref.resource_id = excluded.resource_id
     """

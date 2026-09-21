@@ -3,9 +3,7 @@ package application.discovery
 
 import application.discovery.DiscoveredResourceResolution.{Existing, New}
 import application.port.{
-  ExternalRefRepository,
   IdGenerator,
-  ResourceRepository,
   TimeProvider,
   TransactionRunner
 }
@@ -21,14 +19,17 @@ import java.util.UUID
 final class SyncDiscoveredResource[F[_]: Monad, Tx[_]: MonadThrow](
                                                                     resolveDiscoveredResource: ResolveDiscoveredResource[Tx],
                                                                     createDiscoveredResource: CreateDiscoveredResource[Tx],
-                                                                    resourceRepository: ResourceRepository[Tx],
-                                                                    externalRefRepository: ExternalRefRepository[Tx],
+                                                                    reconcileDiscoveredResource: ReconcileDiscoveredResource[Tx],
                                                                     transactionRunner: TransactionRunner[F, Tx],
                                                                     idGenerator: IdGenerator[F],
                                                                     timeProvider: TimeProvider[F]
                                                                   ) {
 
-  def execute(connection: Connection, discovered: DiscoveredResource): F[Resource] =
+  def execute(
+               connection: Connection,
+               discovered: DiscoveredResource,
+               syncSessionId: UUID
+             ): F[Resource] =
     for {
       resourceId <- idGenerator.nextId
       externalRefId <- idGenerator.nextId
@@ -39,6 +40,7 @@ final class SyncDiscoveredResource[F[_]: Monad, Tx[_]: MonadThrow](
           discovered,
           resourceId,
           externalRefId,
+          syncSessionId,
           now
         )
       )
@@ -49,30 +51,18 @@ final class SyncDiscoveredResource[F[_]: Monad, Tx[_]: MonadThrow](
                        discovered: DiscoveredResource,
                        newResourceId: UUID,
                        newExternalRefId: UUID,
+                       syncSessionId: UUID,
                        now: Instant
                      ): Tx[Resource] =
     resolveDiscoveredResource.execute(connection, discovered).flatMap {
       case Existing(externalRef) =>
-        for {
-          resource <- resourceRepository
-            .findById(connection.organizationId, externalRef.resourceId)
-            .flatMap {
-              case Some(resource) =>
-                resource.pure[Tx]
-
-              case None =>
-                new IllegalStateException(
-                  s"Resource ${externalRef.resourceId} referenced by ExternalRef ${externalRef.id} was not found"
-                ).raiseError[Tx, Resource]
-            }
-
-          _ <- externalRefRepository.save(
-            externalRef.copy(
-              lastSeenAt = now,
-              updatedAt = now
-            )
-          )
-        } yield resource
+        reconcileDiscoveredResource.execute(
+          connection,
+          discovered,
+          externalRef,
+          syncSessionId,
+          now
+        )
 
       case New =>
         createDiscoveredResource.execute(
@@ -80,6 +70,7 @@ final class SyncDiscoveredResource[F[_]: Monad, Tx[_]: MonadThrow](
           discovered,
           newResourceId,
           newExternalRefId,
+          syncSessionId,
           now
         )
     }

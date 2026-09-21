@@ -8,6 +8,7 @@ import application.connector.{
 }
 import application.discovery.{
   CreateDiscoveredResource,
+  ReconcileDiscoveredResource,
   ResolveDiscoveredResource,
   SyncDiscoveredResource
 }
@@ -38,7 +39,8 @@ import persistence.postgres.{
   PostgresConnectionRepository,
   PostgresExternalRefRepository,
   PostgresResourceRepository,
-  PostgresResourceTypeRepository
+  PostgresResourceTypeRepository,
+  PostgresSyncSessionRepository
 }
 
 import java.util.UUID
@@ -72,6 +74,9 @@ object DevSshSync extends IOApp.Simple {
         val externalRefRepository =
           new PostgresExternalRefRepository
 
+        val syncSessionRepository =
+          new PostgresSyncSessionRepository
+
         val transactionRunner =
           new DoobieTransactionRunner(xa)
 
@@ -99,12 +104,17 @@ object DevSshSync extends IOApp.Simple {
             persistExternalResource
           )
 
+        val reconcileDiscoveredResource =
+          new ReconcileDiscoveredResource[ConnectionIO](
+            resourceRepository,
+            externalRefRepository
+          )
+
         val syncDiscoveredResource =
           new SyncDiscoveredResource[IO, ConnectionIO](
             resolveDiscoveredResource,
             createDiscoveredResource,
-            resourceRepository,
-            externalRefRepository,
+            reconcileDiscoveredResource,
             transactionRunner,
             idGenerator,
             timeProvider
@@ -132,7 +142,10 @@ object DevSshSync extends IOApp.Simple {
             connectorRegistry,
             syncDiscoveredResource,
             connectionRepository,
+            resourceRepository,
+            syncSessionRepository,
             transactionRunner,
+            idGenerator,
             timeProvider
           )
 
@@ -177,7 +190,15 @@ object DevSshSync extends IOApp.Simple {
           )
 
           _ <- transactionRunner.run(
-            connectionRepository.save(connection)
+            connectionRepository
+              .findById(OrganizationId, ConnectionId)
+              .flatMap {
+                case Some(_) =>
+                  ().pure[ConnectionIO]
+
+                case None =>
+                  connectionRepository.save(connection)
+              }
           )
 
           resources <- syncConnectionById.execute(

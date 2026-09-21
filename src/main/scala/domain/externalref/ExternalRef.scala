@@ -14,5 +14,6 @@ final case class ExternalRef(
                         firstSeenAt: Instant,
                         lastSeenAt: Instant,
                         createdAt: Instant,
-                        updatedAt: Instant
+                        updatedAt: Instant,
+                        lastSeenSyncSessionId: Option[UUID] = None
                       )

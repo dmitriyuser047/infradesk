@@ -6,6 +6,7 @@ import application.connector.{
 }
 import application.discovery.{
   CreateDiscoveredResource,
+  ReconcileDiscoveredResource,
   ResolveDiscoveredResource,
   SyncDiscoveredResource
 }
@@ -72,12 +73,17 @@ object Main extends IOApp.Simple {
             persistExternalResource
           )
 
+        val reconcileDiscoveredResource =
+          new ReconcileDiscoveredResource[ConnectionIO](
+            resourceRepository,
+            externalRefRepository
+          )
+
         val syncDiscoveredResource =
           new SyncDiscoveredResource[IO, ConnectionIO](
             resolveDiscoveredResource,
             createDiscoveredResource,
-            resourceRepository,
-            externalRefRepository,
+            reconcileDiscoveredResource,
             transactionRunner,
             idGenerator,
             timeProvider

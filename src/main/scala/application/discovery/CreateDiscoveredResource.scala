@@ -24,6 +24,7 @@ final class CreateDiscoveredResource[Tx[_]: MonadThrow](
                discovered: DiscoveredResource,
                resourceId: UUID,
                externalRefId: UUID,
+               syncSessionId: UUID,
                now: Instant
              ): Tx[Resource] =
     for {
@@ -69,7 +70,8 @@ final class CreateDiscoveredResource[Tx[_]: MonadThrow](
         firstSeenAt = now,
         lastSeenAt = now,
         createdAt = now,
-        updatedAt = now
+        updatedAt = now,
+        lastSeenSyncSessionId = Some(syncSessionId)
       )
 
       _ <- persistExternalResource.execute(resource, externalRef)
