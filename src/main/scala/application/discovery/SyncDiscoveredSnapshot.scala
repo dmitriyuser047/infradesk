@@ -31,6 +31,7 @@ final class SyncDiscoveredSnapshot[Tx[_]: MonadThrow](
                connection: Connection,
                syncSession: SyncSession,
                discoveredResources: List[PendingDiscoveredResource],
+               completeExternalTypes: Set[String],
                completedAt: Instant
              ): Tx[List[Resource]] =
     for {
@@ -52,7 +53,8 @@ final class SyncDiscoveredSnapshot[Tx[_]: MonadThrow](
 
       missingResourceIds = externalRefs.collect {
         case externalRef
-            if !seenIdentities.contains(identity(externalRef.externalType, externalRef.externalId)) &&
+            if completeExternalTypes.contains(externalRef.externalType) &&
+              !seenIdentities.contains(identity(externalRef.externalType, externalRef.externalId)) &&
               !seenResourceIds.contains(externalRef.resourceId) =>
           externalRef.resourceId
       }.distinct

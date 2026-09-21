@@ -35,6 +35,10 @@ final class SshConnectorSpec extends FunSuite {
     )
 
     assertEquals(result.resources.size, 2)
+    assertEquals(
+      result.completeExternalTypes,
+      Set(SshConnector.NodeExternalType, SshConnector.ContainerExternalType)
+    )
 
     val container = result.resources.tail.head
 
@@ -55,6 +59,37 @@ final class SshConnectorSpec extends FunSuite {
         )
       )
     )
+  }
+
+  test("returns a node-only partial snapshot when Docker discovery is unavailable") {
+    val calls = Ref.of[IO, List[ExecuteCall]](Nil).unsafeRunSync()
+    val connector = new SshConnector[IO](
+      new RecordingSshClient(
+        calls,
+        dockerResult = SshCommandResult(1, "", "docker: permission denied", HostKeyFingerprint)
+      ),
+      new FixedAuthenticationProvider
+    )
+
+    val result = connector.discover(connection).unsafeRunSync()
+
+    assertEquals(result.resources.map(_.externalType), List(SshConnector.NodeExternalType))
+    assertEquals(result.completeExternalTypes, Set(SshConnector.NodeExternalType))
+  }
+
+  test("fails discovery when hostname cannot be obtained") {
+    val calls = Ref.of[IO, List[ExecuteCall]](Nil).unsafeRunSync()
+    val connector = new SshConnector[IO](
+      new RecordingSshClient(
+        calls,
+        hostnameResult = SshCommandResult(1, "", "hostname unavailable", HostKeyFingerprint)
+      ),
+      new FixedAuthenticationProvider
+    )
+
+    intercept[IllegalStateException] {
+      connector.discover(connection).unsafeRunSync()
+    }
   }
 
   private val connection = Connection(
@@ -84,7 +119,11 @@ final class SshConnectorSpec extends FunSuite {
                                          command: String
                                        )
 
-  private final class RecordingSshClient(calls: Ref[IO, List[ExecuteCall]])
+  private final class RecordingSshClient(
+                                           calls: Ref[IO, List[ExecuteCall]],
+                                           hostnameResult: SshCommandResult = SuccessfulHostnameResult,
+                                           dockerResult: SshCommandResult = SuccessfulDockerResult
+                                         )
     extends SshClient[IO] {
 
     override def execute(
@@ -97,17 +136,10 @@ final class SshConnectorSpec extends FunSuite {
     private def response(command: String): IO[SshCommandResult] =
       command match {
         case "hostname" =>
-          IO.pure(SshCommandResult(0, "test-node\n", "", HostKeyFingerprint))
+          IO.pure(hostnameResult)
 
         case DockerContainersCommand =>
-          IO.pure(
-            SshCommandResult(
-              0,
-              s"$FullContainerId\tbackend\tbackend:1.0\texited\n",
-              "",
-              HostKeyFingerprint
-            )
-          )
+          IO.pure(dockerResult)
 
         case other =>
           IO.raiseError(new IllegalArgumentException(s"Unexpected SSH command: $other"))
@@ -119,4 +151,15 @@ final class SshConnectorSpec extends FunSuite {
     override def resolve(connection: Connection): IO[SshAuthentication] =
       IO.pure(SshAuthentication.Password("test-password"))
   }
+
+  private val SuccessfulHostnameResult =
+    SshCommandResult(0, "test-node\n", "", HostKeyFingerprint)
+
+  private val SuccessfulDockerResult =
+    SshCommandResult(
+      0,
+      s"$FullContainerId\tbackend\tbackend:1.0\texited\n",
+      "",
+      HostKeyFingerprint
+    )
 }

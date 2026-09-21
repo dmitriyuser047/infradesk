@@ -27,6 +27,7 @@ final class DockerConnector[F[_]: MonadThrow](
       containers <- dockerEngineClient.listContainers(config)
     } yield ResourceConnectorResult(
       resources = containers.map(toDiscoveredResource),
+      completeExternalTypes = Set(DockerConnector.ExternalType),
       connectionConfig = connection.config
     )
 

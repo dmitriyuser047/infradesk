@@ -50,9 +50,24 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     assertEquals(rolledBackState.sessions.get(syncSessionId).map(_.status), Some(SyncSessionStatus.Running))
   }
 
+  test("does not deactivate containers omitted by a node-only partial discovery") {
+    val result = runSnapshot(
+      initialState,
+      failNewResourceSave = false,
+      completeExternalTypes = Set("NODE"),
+      discoveredResources = List.empty
+    )
+    val state = result.toOption.getOrElse(fail("Snapshot should succeed"))
+
+    assertEquals(state.resources.get(oldResourceId).map(_.isActive), Some(true))
+    assertEquals(state.sessions.get(syncSessionId).map(_.status), Some(SyncSessionStatus.Completed))
+  }
+
   private def runSnapshot(
                           initial: SnapshotState,
-                          failNewResourceSave: Boolean
+                          failNewResourceSave: Boolean,
+                          completeExternalTypes: Set[String] = Set("CONTAINER"),
+                          discoveredResources: List[PendingDiscoveredResource] = List(replacement)
                         ): Either[Throwable, SnapshotState] = {
     var workingState = initial
 
@@ -92,7 +107,13 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     )
 
     snapshot
-      .execute(connection, runningSession, List(replacement), completedAt)
+      .execute(
+        connection,
+        runningSession,
+        discoveredResources,
+        completeExternalTypes,
+        completedAt
+      )
       .attempt
       .unsafeRunSync()
       .map(_ => workingState)

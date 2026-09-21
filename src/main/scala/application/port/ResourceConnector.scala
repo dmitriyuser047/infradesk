@@ -6,6 +6,7 @@ import domain.connection.{Connection, ConnectionConfig}
 
 final case class ResourceConnectorResult(
                                           resources: List[DiscoveredResource],
+                                          completeExternalTypes: Set[String],
                                           connectionConfig: ConnectionConfig
                                         )
 

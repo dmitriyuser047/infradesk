@@ -53,13 +53,24 @@ final class SshConnector[F[_]: MonadThrow](
             )
         }
 
-      containersResult <- sshClient.execute(
-        effectiveConfig,
-        authentication,
-        SshConnector.DockerContainersCommand
-      )
+      containerDiscovery <- sshClient
+        .execute(
+          effectiveConfig,
+          authentication,
+          SshConnector.DockerContainersCommand
+        )
+        .flatMap(parseContainers(connection, _))
+        .map(containers => containers -> Set(
+          SshConnector.NodeExternalType,
+          SshConnector.ContainerExternalType
+        ))
+        .attempt
+        .map {
+          case Right(value) => value
+          case Left(_) => List.empty[DiscoveredResource] -> Set(SshConnector.NodeExternalType)
+        }
 
-      containers <- parseContainers(connection, containersResult)
+      (containers, completeExternalTypes) = containerDiscovery
 
       updatedConfig =
         config.hostKeyFingerprint match {
@@ -80,6 +91,7 @@ final class SshConnector[F[_]: MonadThrow](
         code = connection.code,
         name = hostname
       ) :: containers,
+      completeExternalTypes = completeExternalTypes,
       connectionConfig = updatedConfig
     )
 

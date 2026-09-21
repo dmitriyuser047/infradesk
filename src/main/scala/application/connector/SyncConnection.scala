@@ -90,6 +90,7 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
           connection,
           syncSession,
           pendingResources,
+          discovery.completeExternalTypes,
           completedAt
         )
       )
