@@ -95,6 +95,7 @@ object DevSshSync extends IOApp.Simple {
         val createDiscoveredResource =
           new CreateDiscoveredResource[ConnectionIO](
             resourceTypeRepository,
+            externalRefRepository,
             persistExternalResource
           )
 

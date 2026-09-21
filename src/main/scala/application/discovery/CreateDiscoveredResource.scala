@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package application.discovery
 
-import application.port.ResourceTypeRepository
+import application.port.{ExternalRefRepository, ResourceTypeRepository}
 import application.resource.PersistExternalResource
 import domain.connection.{Connection, ConnectionScope}
 import domain.externalref.ExternalRef
@@ -15,6 +15,7 @@ import java.util.UUID
 
 final class CreateDiscoveredResource[Tx[_]: MonadThrow](
                                                          resourceTypeRepository: ResourceTypeRepository[Tx],
+                                                         externalRefRepository: ExternalRefRepository[Tx],
                                                          persistExternalResource: PersistExternalResource[Tx]
                                                        ) {
 
@@ -27,6 +28,11 @@ final class CreateDiscoveredResource[Tx[_]: MonadThrow](
              ): Tx[Resource] =
     for {
       environmentId <- getEnvironmentId(connection)
+      parentResourceId <-
+        resolveParentResourceId(
+          connection,
+          discovered
+        )
 
       resourceType <- resourceTypeRepository
         .findByCode(discovered.resourceTypeCode)
@@ -45,7 +51,7 @@ final class CreateDiscoveredResource[Tx[_]: MonadThrow](
         organizationId = connection.organizationId,
         environmentId = environmentId,
         resourceTypeId = resourceType.id,
-        parentResourceId = None,
+        parentResourceId = parentResourceId,
         code = discovered.code,
         name = discovered.name,
         isActive = true,
@@ -78,5 +84,34 @@ final class CreateDiscoveredResource[Tx[_]: MonadThrow](
         new IllegalStateException(
           s"Connection ${connection.id} has scope ${scope.code}, but environment scope is required to create a resource"
         ).raiseError[Tx, UUID]
+    }
+
+  private def resolveParentResourceId(
+                                       connection: Connection,
+                                       discovered: DiscoveredResource
+                                     ): Tx[Option[UUID]] =
+    discovered.parentExternalIdentity match {
+      case None =>
+        Option.empty[UUID].pure[Tx]
+
+      case Some(parentIdentity) =>
+        externalRefRepository
+          .findByExternalIdentity(
+            organizationId = connection.organizationId,
+            connectionId = connection.id,
+            externalType = parentIdentity.externalType,
+            externalId = parentIdentity.externalId
+          )
+          .flatMap {
+            case Some(parentExternalRef) =>
+              Some(parentExternalRef.resourceId).pure[Tx]
+
+            case None =>
+              new IllegalStateException(
+                s"Parent resource " +
+                  s"'${parentIdentity.externalType}/${parentIdentity.externalId}' " +
+                  s"was not found for connection ${connection.id}"
+              ).raiseError[Tx, Option[UUID]]
+          }
     }
 }
