@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package application.connector
 
-import application.port.{ConnectionRepository, TransactionRunner}
+import application.port.{ConnectionRepository, ConnectionSynchronizer, TransactionRunner}
 import domain.resource.Resource
 
 import cats.MonadThrow
@@ -13,9 +13,9 @@ final class SyncConnectionById[F[_]: MonadThrow, Tx[_]: MonadThrow](
                                                                      connectionRepository: ConnectionRepository[Tx],
                                                                      transactionRunner: TransactionRunner[F, Tx],
                                                                      syncConnection: SyncConnection[F, Tx]
-                                                                   ) {
+                                                                   ) extends ConnectionSynchronizer[F] {
 
-  def execute(
+  override def execute(
                organizationId: UUID,
                connectionId: UUID
              ): F[List[Resource]] =

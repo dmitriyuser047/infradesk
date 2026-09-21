@@ -2,7 +2,8 @@ package ru.bitec.app.ops
 
 import application.connector.{
   ResourceConnectorRegistry,
-  SyncConnection
+  SyncConnection,
+  SyncConnectionById
 }
 import application.discovery.{
   CreateDiscoveredResource,
@@ -10,6 +11,7 @@ import application.discovery.{
   SyncDiscoveredSnapshot
 }
 import application.resource.{PersistExternalResource, RecordResourceObservations}
+import application.scheduler.SyncScheduler
 import cats.effect.{IO, IOApp}
 import org.typelevel.doobie.ConnectionIO
 import infrastructure.database.{
@@ -27,11 +29,15 @@ import integration.docker.{
 }
 import persistence.postgres.{
   PostgresExternalRefRepository,
+  PostgresConnectionRepository,
+  PostgresConnectionScheduleRepository,
   PostgresMetricObservationRepository,
   PostgresResourceRepository,
   PostgresResourceTypeRepository,
   PostgresSyncSessionRepository
 }
+
+import scala.concurrent.duration._
 
 object Main extends IOApp.Simple {
 
@@ -43,6 +49,12 @@ object Main extends IOApp.Simple {
 
         val resourceTypeRepository =
           new PostgresResourceTypeRepository
+
+        val connectionRepository =
+          new PostgresConnectionRepository
+
+        val connectionScheduleRepository =
+          new PostgresConnectionScheduleRepository
 
         val externalRefRepository =
           new PostgresExternalRefRepository
@@ -109,7 +121,34 @@ object Main extends IOApp.Simple {
             List(dockerConnector)
           )
 
-        IO.never
+        val syncConnection =
+          new SyncConnection[IO, ConnectionIO](
+            connectorRegistry,
+            syncDiscoveredSnapshot,
+            connectionRepository,
+            syncSessionRepository,
+            transactionRunner,
+            idGenerator,
+            timeProvider,
+            recordResourceObservations
+          )
+
+        val syncConnectionById =
+          new SyncConnectionById[IO, ConnectionIO](
+            connectionRepository,
+            transactionRunner,
+            syncConnection
+          )
+
+        val syncScheduler =
+          new SyncScheduler[IO, ConnectionIO](
+            connectionScheduleRepository,
+            syncConnectionById,
+            transactionRunner,
+            timeProvider
+          )
+
+        syncScheduler.run(1.second, limit = 100)
       }
     }
 }
