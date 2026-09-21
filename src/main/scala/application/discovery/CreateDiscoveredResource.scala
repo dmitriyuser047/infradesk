@@ -104,7 +104,7 @@ final class CreateDiscoveredResource[Tx[_]: MonadThrow](
           )
           .flatMap {
             case Some(parentExternalRef) =>
-              Some(parentExternalRef.resourceId).pure[Tx]
+              (Some(parentExternalRef.resourceId): Option[UUID]).pure[Tx]
 
             case None =>
               new IllegalStateException(

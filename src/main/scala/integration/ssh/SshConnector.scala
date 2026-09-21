@@ -1,9 +1,10 @@
 package ru.bitec.app.ops
 package integration.ssh
 
-import application.discovery.DiscoveredResource
+import application.discovery.{DiscoveredExternalIdentity, DiscoveredResource}
 import application.port.{ResourceConnector, ResourceConnectorResult}
 import domain.connection.Connection
+import domain.resource.container.ContainerDefinition
 import domain.resource.node.NodeDefinition
 
 import cats.MonadThrow
@@ -39,6 +40,25 @@ final class SshConnector[F[_]: MonadThrow](
         hostnameResult
       )
 
+      effectiveConfig =
+        config.hostKeyFingerprint match {
+          case Some(_) =>
+            config
+
+          case None =>
+            config.copy(
+              hostKeyFingerprint = Some(hostnameResult.hostKeyFingerprint)
+            )
+        }
+
+      containersResult <- sshClient.execute(
+        effectiveConfig,
+        authentication,
+        SshConnector.DockerContainersCommand
+      )
+
+      containers <- parseContainers(connection, containersResult)
+
       updatedConfig =
         config.hostKeyFingerprint match {
           case Some(_) =>
@@ -51,15 +71,13 @@ final class SshConnector[F[_]: MonadThrow](
             )
         }
     } yield ResourceConnectorResult(
-      resources = List(
-        DiscoveredResource(
-          externalType = SshConnector.NodeExternalType,
-          externalId = SshConnector.NodeExternalId,
-          resourceTypeCode = NodeDefinition.code,
-          code = connection.code,
-          name = hostname
-        )
-      ),
+      resources = DiscoveredResource(
+        externalType = SshConnector.NodeExternalType,
+        externalId = SshConnector.NodeExternalId,
+        resourceTypeCode = NodeDefinition.code,
+        code = connection.code,
+        name = hostname
+      ) :: containers,
       connectionConfig = updatedConfig
     )
 
@@ -82,6 +100,49 @@ final class SshConnector[F[_]: MonadThrow](
           s"SSH connection ${connection.id} returned empty hostname"
         ).raiseError[F, String]
     }
+
+  private def parseContainers(
+                               connection: Connection,
+                               result: SshCommandResult
+                             ): F[List[DiscoveredResource]] =
+    if (!result.isSuccess) {
+      new IllegalStateException(
+        s"Failed to discover Docker containers for SSH connection ${connection.id}: " +
+          s"docker ps exited with code ${result.exitCode}: ${result.stderr.trim}"
+      ).raiseError[F, List[DiscoveredResource]]
+    } else {
+      result.stdout
+        .linesIterator
+        .filter(_.nonEmpty)
+        .toList
+        .traverse(parseContainer(connection, _))
+    }
+
+  private def parseContainer(
+                              connection: Connection,
+                              line: String
+                            ): F[DiscoveredResource] =
+    line.split("\\t", 2).toList match {
+      case containerId :: name :: Nil if containerId.nonEmpty && name.nonEmpty =>
+        DiscoveredResource(
+          externalType = SshConnector.ContainerExternalType,
+          externalId = containerId,
+          resourceTypeCode = ContainerDefinition.code,
+          code = name,
+          name = name,
+          parentExternalIdentity = Some(
+            DiscoveredExternalIdentity(
+              SshConnector.NodeExternalType,
+              SshConnector.NodeExternalId
+            )
+          )
+        ).pure[F]
+
+      case _ =>
+        new IllegalStateException(
+          s"SSH connection ${connection.id} returned malformed docker ps row: '$line'"
+        ).raiseError[F, DiscoveredResource]
+    }
 }
 
 object SshConnector {
@@ -91,5 +152,7 @@ object SshConnector {
   val NodeExternalType = "NODE"
   val NodeExternalId = "SELF"
 
+  val ContainerExternalType = "CONTAINER"
   private val HostnameCommand = "hostname"
+  private val DockerContainersCommand = "docker ps --all --no-trunc --format '{{.ID}}\\t{{.Names}}'"
 }
