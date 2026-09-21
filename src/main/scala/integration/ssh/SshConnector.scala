@@ -4,6 +4,8 @@ package integration.ssh
 import application.discovery.{DiscoveredExternalIdentity, DiscoveredResource}
 import application.port.{ResourceConnector, ResourceConnectorResult}
 import domain.connection.Connection
+import domain.resource.ResourceData
+import domain.resource.container.{ContainerSpec, ContainerStatus}
 import domain.resource.container.ContainerDefinition
 import domain.resource.node.NodeDefinition
 
@@ -122,8 +124,8 @@ final class SshConnector[F[_]: MonadThrow](
                               connection: Connection,
                               line: String
                             ): F[DiscoveredResource] =
-    line.split("\\t", 2).toList match {
-      case containerId :: name :: Nil if containerId.nonEmpty && name.nonEmpty =>
+    line.split("\\t", 4).toList match {
+      case containerId :: name :: image :: state :: Nil if containerId.nonEmpty && name.nonEmpty =>
         DiscoveredResource(
           externalType = SshConnector.ContainerExternalType,
           externalId = containerId,
@@ -135,6 +137,10 @@ final class SshConnector[F[_]: MonadThrow](
               SshConnector.NodeExternalType,
               SshConnector.NodeExternalId
             )
+          ),
+          data = ResourceData(
+            spec = Some(ContainerSpec(optionalValue(image))),
+            status = Some(ContainerStatus(optionalValue(state)))
           )
         ).pure[F]
 
@@ -143,6 +149,9 @@ final class SshConnector[F[_]: MonadThrow](
           s"SSH connection ${connection.id} returned malformed docker ps row: '$line'"
         ).raiseError[F, DiscoveredResource]
     }
+
+  private def optionalValue(value: String): Option[String] =
+    Option(value.trim).filter(_.nonEmpty)
 }
 
 object SshConnector {
@@ -154,5 +163,5 @@ object SshConnector {
 
   val ContainerExternalType = "CONTAINER"
   private val HostnameCommand = "hostname"
-  private val DockerContainersCommand = "docker ps --all --no-trunc --format '{{.ID}}\\t{{.Names}}'"
+  private val DockerContainersCommand = "docker ps --all --no-trunc --format '{{.ID}}\\t{{.Names}}\\t{{.Image}}\\t{{.State}}'"
 }

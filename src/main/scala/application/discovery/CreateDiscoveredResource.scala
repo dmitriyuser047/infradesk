@@ -57,7 +57,9 @@ final class CreateDiscoveredResource[Tx[_]: MonadThrow](
         name = discovered.name,
         isActive = true,
         createdAt = now,
-        updatedAt = now
+        updatedAt = now,
+        resourceTypeCode = resourceType.code,
+        data = discovered.data
       )
 
       externalRef = ExternalRef(

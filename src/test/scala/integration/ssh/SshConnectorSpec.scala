@@ -5,6 +5,8 @@ import application.discovery.DiscoveredExternalIdentity
 import cats.effect.{IO, Ref}
 import cats.effect.unsafe.implicits.global
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
+import domain.resource.ResourceData
+import domain.resource.container.{ContainerSpec, ContainerStatus}
 import munit.FunSuite
 
 import java.time.Instant
@@ -14,7 +16,7 @@ final class SshConnectorSpec extends FunSuite {
 
   private val HostKeyFingerprint = "SHA256:test-host-key"
   private val FullContainerId = "73ac69cf50927aadda817a4a31fdcf6b56f2d3cfe782dabeab65b961c230fc6d"
-  private val DockerContainersCommand = "docker ps --all --no-trunc --format '{{.ID}}\\t{{.Names}}'"
+  private val DockerContainersCommand = "docker ps --all --no-trunc --format '{{.ID}}\\t{{.Names}}\\t{{.Image}}\\t{{.State}}'"
 
   test("uses the discovered host key for Docker discovery and preserves container identity") {
     val calls = Ref.of[IO, List[ExecuteCall]](Nil).unsafeRunSync()
@@ -37,6 +39,13 @@ final class SshConnectorSpec extends FunSuite {
     val container = result.resources.tail.head
 
     assertEquals(container.externalId, FullContainerId)
+    assertEquals(
+      container.data,
+      ResourceData(
+        Some(ContainerSpec(Some("backend:1.0"))),
+        Some(ContainerStatus(Some("exited")))
+      )
+    )
     assertEquals(
       container.parentExternalIdentity,
       Some(
@@ -94,7 +103,7 @@ final class SshConnectorSpec extends FunSuite {
           IO.pure(
             SshCommandResult(
               0,
-              s"$FullContainerId\tbackend\n",
+              s"$FullContainerId\tbackend\tbackend:1.0\texited\n",
               "",
               HostKeyFingerprint
             )

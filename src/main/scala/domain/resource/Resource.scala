@@ -14,5 +14,7 @@ final case class Resource(
                            name: String,
                            isActive: Boolean,
                            createdAt: Instant,
-                           updatedAt: Instant
+                           updatedAt: Instant,
+                           resourceTypeCode: String = "",
+                           data: ResourceData = ResourceData.empty
                          )

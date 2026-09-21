@@ -33,7 +33,8 @@ final class ReconcileDiscoveredResource[Tx[_]: MonadThrow](
         code = discovered.code,
         name = discovered.name,
         isActive = true,
-        updatedAt = now
+        updatedAt = now,
+        data = discovered.data
       )
 
       _ <- resourceRepository.save(reconciledResource)

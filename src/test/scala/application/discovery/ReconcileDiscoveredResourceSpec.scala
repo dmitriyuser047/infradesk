@@ -7,6 +7,8 @@ import cats.effect.unsafe.implicits.global
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
 import domain.externalref.ExternalRef
 import domain.resource.Resource
+import domain.resource.ResourceData
+import domain.resource.container.{ContainerSpec, ContainerStatus}
 import munit.FunSuite
 
 import java.time.Instant
@@ -30,7 +32,11 @@ final class ReconcileDiscoveredResourceSpec extends FunSuite {
         resourceTypeCode = "CONTAINER",
         code = "api",
         name = "api",
-        parentExternalIdentity = Some(DiscoveredExternalIdentity("NODE", "SELF"))
+        parentExternalIdentity = Some(DiscoveredExternalIdentity("NODE", "SELF")),
+        data = ResourceData(
+          Some(ContainerSpec(Some("api:2.0"))),
+          Some(ContainerStatus(Some("running")))
+        )
       ),
       containerExternalRef,
       syncSessionId,
@@ -46,6 +52,13 @@ final class ReconcileDiscoveredResourceSpec extends FunSuite {
     assertEquals(reconciled.parentResourceId, Some(parentResourceId))
     assertEquals(reconciled.isActive, true)
     assertEquals(reconciled.updatedAt, reconciledAt)
+    assertEquals(
+      reconciled.data,
+      ResourceData(
+        Some(ContainerSpec(Some("api:2.0"))),
+        Some(ContainerStatus(Some("running")))
+      )
+    )
     assertEquals(resourceRepository.saved, Some(reconciled))
     assertEquals(
       externalRefRepository.saved,

@@ -8,6 +8,8 @@ import cats.effect.unsafe.implicits.global
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
 import domain.externalref.ExternalRef
 import domain.resource.{Resource, ResourceType}
+import domain.resource.ResourceData
+import domain.resource.container.{ContainerSpec, ContainerStatus}
 import domain.sync.{SyncSession, SyncSessionStatus}
 import munit.FunSuite
 
@@ -23,6 +25,15 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     assertEquals(state.resources.get(oldResourceId).map(_.isActive), Some(false))
     assertEquals(state.resources.get(newResourceId).map(_.isActive), Some(true))
     assertEquals(state.resources.get(newResourceId).map(_.code), Some("backend"))
+    assertEquals(
+      state.resources.get(newResourceId).map(_.data),
+      Some(
+        ResourceData(
+          Some(ContainerSpec(Some("backend:2.0"))),
+          Some(ContainerStatus(Some("running")))
+        )
+      )
+    )
     assertEquals(state.externalRefs.map(_.externalId).toSet, Set("aaa", "bbb"))
     assertEquals(state.sessions.get(syncSessionId).map(_.status), Some(SyncSessionStatus.Completed))
   }
@@ -149,7 +160,17 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
   )
 
   private val replacement = PendingDiscoveredResource(
-    DiscoveredResource("CONTAINER", "bbb", "CONTAINER", "backend", "backend"),
+    DiscoveredResource(
+      "CONTAINER",
+      "bbb",
+      "CONTAINER",
+      "backend",
+      "backend",
+      data = ResourceData(
+        Some(ContainerSpec(Some("backend:2.0"))),
+        Some(ContainerStatus(Some("running")))
+      )
+    ),
     newResourceId,
     newExternalRefId
   )
