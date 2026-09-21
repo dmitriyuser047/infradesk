@@ -27,6 +27,11 @@ import integration.docker.{
   DockerConnector,
   DockerJavaEngineClient
 }
+import integration.ssh.{
+  EnvironmentSshAuthenticationProvider,
+  SshConnector,
+  SshjClient
+}
 import persistence.postgres.{
   PostgresExternalRefRepository,
   PostgresConnectionRepository,
@@ -116,9 +121,21 @@ object Main extends IOApp.Simple {
             dockerEngineClient
           )
 
+        val sshClient =
+          new SshjClient[IO]
+
+        val sshAuthenticationProvider =
+          new EnvironmentSshAuthenticationProvider[IO]
+
+        val sshConnector =
+          new SshConnector[IO](
+            sshClient,
+            sshAuthenticationProvider
+          )
+
         val connectorRegistry =
           new ResourceConnectorRegistry[IO](
-            List(dockerConnector)
+            List(dockerConnector, sshConnector)
           )
 
         val syncConnection =
