@@ -133,13 +133,13 @@ final class ReconcileDiscoveredResourceSpec extends FunSuite {
     override def save(resource: Resource): IO[Unit] =
       IO { saved = Some(resource) }
 
-    override def deactivateMissingForConnection(
-                                                 organizationId: UUID,
-                                                 connectionId: UUID,
-                                                 syncSessionId: UUID,
-                                                 now: Instant
-                                               ): IO[Int] =
-      IO.pure(0)
+    override def deactivateIfExclusiveToConnection(
+                                                     organizationId: UUID,
+                                                     id: UUID,
+                                                     connectionId: UUID,
+                                                     now: Instant
+                                                   ): IO[Unit] =
+      IO.unit
   }
 
   private final class RecordingExternalRefRepository(parentExternalRef: ExternalRef)
@@ -154,6 +154,12 @@ final class ReconcileDiscoveredResourceSpec extends FunSuite {
                                          externalId: String
                                        ): IO[Option[ExternalRef]] =
       IO.pure(Some(parentExternalRef))
+
+    override def findByConnection(
+                                  organizationId: UUID,
+                                  connectionId: UUID
+                                ): IO[List[ExternalRef]] =
+      IO.pure(List(parentExternalRef))
 
     override def save(externalRef: ExternalRef): IO[Unit] =
       IO { saved = Some(externalRef) }

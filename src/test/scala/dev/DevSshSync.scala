@@ -9,8 +9,7 @@ import application.connector.{
 import application.discovery.{
   CreateDiscoveredResource,
   ReconcileDiscoveredResource,
-  ResolveDiscoveredResource,
-  SyncDiscoveredResource
+  SyncDiscoveredSnapshot
 }
 import application.resource.PersistExternalResource
 import cats.effect.{IO, IOApp}
@@ -92,11 +91,6 @@ object DevSshSync extends IOApp.Simple {
             externalRefRepository
           )
 
-        val resolveDiscoveredResource =
-          new ResolveDiscoveredResource[ConnectionIO](
-            externalRefRepository
-          )
-
         val createDiscoveredResource =
           new CreateDiscoveredResource[ConnectionIO](
             resourceTypeRepository,
@@ -110,14 +104,13 @@ object DevSshSync extends IOApp.Simple {
             externalRefRepository
           )
 
-        val syncDiscoveredResource =
-          new SyncDiscoveredResource[IO, ConnectionIO](
-            resolveDiscoveredResource,
+        val syncDiscoveredSnapshot =
+          new SyncDiscoveredSnapshot[ConnectionIO](
             createDiscoveredResource,
             reconcileDiscoveredResource,
-            transactionRunner,
-            idGenerator,
-            timeProvider
+            externalRefRepository,
+            resourceRepository,
+            syncSessionRepository
           )
 
         val sshClient =
@@ -140,9 +133,8 @@ object DevSshSync extends IOApp.Simple {
         val syncConnection =
           new SyncConnection[IO, ConnectionIO](
             connectorRegistry,
-            syncDiscoveredResource,
+            syncDiscoveredSnapshot,
             connectionRepository,
-            resourceRepository,
             syncSessionRepository,
             transactionRunner,
             idGenerator,

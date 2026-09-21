@@ -41,6 +41,30 @@ final class PostgresExternalRefRepository extends ExternalRefRepository[Connecti
       .query[ExternalRef]
       .option
 
+  override def findByConnection(
+                                organizationId: UUID,
+                                connectionId: UUID
+                              ): ConnectionIO[List[ExternalRef]] =
+    sql"""
+      select
+        id,
+        organization_id,
+        connection_id,
+        external_type,
+        external_id,
+        resource_id,
+        first_seen_at,
+        last_seen_at,
+        created_at,
+        updated_at,
+        last_seen_sync_session_id
+      from external_ref
+      where organization_id = $organizationId
+        and connection_id = $connectionId
+    """
+      .query[ExternalRef]
+      .to[List]
+
   override def save(externalRef: ExternalRef): ConnectionIO[Unit] =
     sql"""
       insert into external_ref (

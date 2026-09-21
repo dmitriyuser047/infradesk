@@ -1,11 +1,10 @@
 package ru.bitec.app.ops
 package application.connector
 
-import application.discovery.SyncDiscoveredResource
+import application.discovery.{PendingDiscoveredResource, SyncDiscoveredSnapshot}
 import application.port.{
   ConnectionRepository,
   IdGenerator,
-  ResourceRepository,
   SyncSessionRepository,
   TimeProvider,
   TransactionRunner
@@ -19,9 +18,8 @@ import cats.syntax.all._
 
 final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
                                                      connectorRegistry: ResourceConnectorRegistry[F],
-                                                     syncDiscoveredResource: SyncDiscoveredResource[F, Tx],
+                                                     syncDiscoveredSnapshot: SyncDiscoveredSnapshot[Tx],
                                                      connectionRepository: ConnectionRepository[Tx],
-                                                     resourceRepository: ResourceRepository[Tx],
                                                      syncSessionRepository: SyncSessionRepository[Tx],
                                                      transactionRunner: TransactionRunner[F, Tx],
                                                      idGenerator: IdGenerator[F],
@@ -56,12 +54,12 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
       result <- syncDiscoveredResources(
         connection,
         connector,
-        syncSessionId
+        syncSession
       ).attempt
 
       resources <- result match {
         case Right(resources) =>
-          completeSync(connection, syncSessionId).as(resources)
+          resources.pure[F]
 
         case Left(error) =>
           failSync(connection, syncSessionId, error)
@@ -71,33 +69,31 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
   private def syncDiscoveredResources(
                                        connection: Connection,
                                        connector: application.port.ResourceConnector[F],
-                                       syncSessionId: java.util.UUID
+                                       syncSession: SyncSession
                                      ): F[List[Resource]] =
     for {
       discovery <- connector.discover(connection)
 
       _ <- saveConnectionConfigIfChanged(connection, discovery.connectionConfig)
 
-      resources <- discovery.resources.traverse { discovered =>
-        syncDiscoveredResource.execute(connection, discovered, syncSessionId)
+      pendingResources <- discovery.resources.traverse { discovered =>
+        for {
+          resourceId <- idGenerator.nextId
+          externalRefId <- idGenerator.nextId
+        } yield PendingDiscoveredResource(discovered, resourceId, externalRefId)
       }
-    } yield resources
 
-  private def completeSync(
-                           connection: Connection,
-                           syncSessionId: java.util.UUID
-                         ): F[Unit] =
-    timeProvider.now.flatMap { finishedAt =>
-      transactionRunner.run(
-        syncSessionRepository.complete(connection.organizationId, syncSessionId, finishedAt) *>
-          resourceRepository.deactivateMissingForConnection(
-            connection.organizationId,
-            connection.id,
-            syncSessionId,
-            finishedAt
-          ).void
+      completedAt <- timeProvider.now
+
+      resources <- transactionRunner.run(
+        syncDiscoveredSnapshot.execute(
+          connection,
+          syncSession,
+          pendingResources,
+          completedAt
+        )
       )
-    }
+    } yield resources
 
   private def failSync(
                        connection: Connection,

@@ -13,11 +13,11 @@ trait ResourceRepository[F[_]] {
 
   def save(resource: Resource): F[Unit]
 
-  def deactivateMissingForConnection(
-                                     organizationId: UUID,
-                                     connectionId: UUID,
-                                     syncSessionId: UUID,
-                                     now: Instant
-                                   ): F[Int]
+  def deactivateIfExclusiveToConnection(
+                                        organizationId: UUID,
+                                        id: UUID,
+                                        connectionId: UUID,
+                                        now: Instant
+                                      ): F[Unit]
 
 }

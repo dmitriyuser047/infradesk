@@ -15,5 +15,7 @@ trait ExternalRefRepository[F[_]] {
                               externalId: String
                             ): F[Option[ExternalRef]]
 
+  def findByConnection(organizationId: UUID, connectionId: UUID): F[List[ExternalRef]]
+
   def save(externalRef: ExternalRef): F[Unit]
 }
