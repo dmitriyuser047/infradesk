@@ -53,21 +53,22 @@ final class SshConnector[F[_]: MonadThrow](
             )
         }
 
-      containerDiscovery <- sshClient
-        .execute(
-          effectiveConfig,
-          authentication,
-          SshConnector.DockerContainersCommand
-        )
-        .flatMap(parseContainers(connection, _))
-        .map(containers => containers -> Set(
-          SshConnector.NodeExternalType,
-          SshConnector.ContainerExternalType
-        ))
-        .attempt
-        .map {
-          case Right(value) => value
-          case Left(_) => List.empty[DiscoveredResource] -> Set(SshConnector.NodeExternalType)
+      dockerResult <- sshClient.execute(
+        effectiveConfig,
+        authentication,
+        SshConnector.DockerContainersCommand
+      )
+
+      containerDiscovery <-
+        if (!dockerResult.isSuccess) {
+          (List.empty[DiscoveredResource] -> Set(SshConnector.NodeExternalType)).pure[F]
+        } else {
+          parseContainers(connection, dockerResult).map { containers =>
+            containers -> Set(
+              SshConnector.NodeExternalType,
+              SshConnector.ContainerExternalType
+            )
+          }
         }
 
       (containers, completeExternalTypes) = containerDiscovery

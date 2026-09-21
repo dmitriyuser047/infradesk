@@ -92,6 +92,17 @@ final class SshConnectorSpec extends FunSuite {
     }
   }
 
+  test("fails discovery when Docker SSH execution raises an error") {
+    val connector = new SshConnector[IO](
+      new FailingDockerSshClient,
+      new FixedAuthenticationProvider
+    )
+
+    intercept[IllegalStateException] {
+      connector.discover(connection).unsafeRunSync()
+    }
+  }
+
   private val connection = Connection(
     id = UUID.fromString("60000000-0000-0000-0000-000000000003"),
     organizationId = UUID.fromString("20000000-0000-0000-0000-000000000001"),
@@ -150,6 +161,23 @@ final class SshConnectorSpec extends FunSuite {
 
     override def resolve(connection: Connection): IO[SshAuthentication] =
       IO.pure(SshAuthentication.Password("test-password"))
+  }
+
+  private final class FailingDockerSshClient extends SshClient[IO] {
+
+    override def execute(
+                          config: SshConnectionConfig,
+                          authentication: SshAuthentication,
+                          command: String
+                        ): IO[SshCommandResult] =
+      command match {
+        case "hostname" =>
+          IO.pure(SuccessfulHostnameResult)
+        case DockerContainersCommand =>
+          IO.raiseError(new IllegalStateException("Simulated SSH transport failure"))
+        case other =>
+          IO.raiseError(new IllegalArgumentException(s"Unexpected SSH command: $other"))
+      }
   }
 
   private val SuccessfulHostnameResult =
