@@ -40,7 +40,7 @@ final class ResourceDataJsonCodecSpec extends FunSuite {
   test("round-trips NodeSpec and NodeStatus") {
     val data = ResourceData(
       Some(NodeSpec("node-1", Some("Linux"), Some("x86_64"), Some(4), Some(8192))),
-      Some(NodeStatus(true, None, None, Some(123456)))
+      Some(NodeStatus(true, Some(BigDecimal("12.5")), Some(BigDecimal("37.5")), Some(123456)))
     )
 
     val encoded = codec.encode(NodeDefinition.code, data).toOption.getOrElse(fail("Encode failed"))

@@ -53,8 +53,8 @@ final class SshConnectorSpec extends FunSuite {
         )),
         Some(NodeStatus(
           online = true,
-          cpuUsagePercent = None,
-          memoryUsagePercent = None,
+          cpuUsagePercent = Some(BigDecimal("12.500000")),
+          memoryUsagePercent = Some(BigDecimal("37.500000")),
           uptimeSeconds = Some(123456)
         ))
       )
@@ -112,14 +112,40 @@ final class SshConnectorSpec extends FunSuite {
     }
   }
 
-  test("keeps unavailable optional node fields empty") {
+  test("keeps malformed optional node metrics empty") {
     val calls = Ref.of[IO, List[ExecuteCall]](Nil).unsafeRunSync()
     val connector = new SshConnector[IO](
       new RecordingSshClient(
         calls,
         nodeResult = SshCommandResult(
           0,
-          "hostname\ttest-node\noperating_system\t\narchitecture\t\ncpu_cores\tnot-a-number\nmemory_mb\t\nuptime_seconds\tunknown\n",
+          "hostname\ttest-node\noperating_system\t\narchitecture\t\ncpu_cores\tnot-a-number\nmemory_mb\t\ncpu_usage_percent\tbroken\nmemory_usage_percent\tnot-a-number\nuptime_seconds\tunknown\n",
+          "",
+          HostKeyFingerprint
+        )
+      ),
+      new FixedAuthenticationProvider
+    )
+
+    val nodeData = connector.discover(connection).unsafeRunSync().resources.head.data
+
+    assertEquals(
+      nodeData,
+      ResourceData(
+        Some(NodeSpec("test-node", None, None, None, None)),
+        Some(NodeStatus(true, None, None, None))
+      )
+    )
+  }
+
+  test("rejects node metric values outside the percentage range") {
+    val calls = Ref.of[IO, List[ExecuteCall]](Nil).unsafeRunSync()
+    val connector = new SshConnector[IO](
+      new RecordingSshClient(
+        calls,
+        nodeResult = SshCommandResult(
+          0,
+          "hostname\ttest-node\ncpu_usage_percent\t100.000001\nmemory_usage_percent\t-0.1\n",
           "",
           HostKeyFingerprint
         )
@@ -229,7 +255,7 @@ final class SshConnectorSpec extends FunSuite {
   private val SuccessfulNodeDiscoveryResult =
     SshCommandResult(
       0,
-      "hostname\ttest-node\noperating_system\tLinux\narchitecture\tx86_64\ncpu_cores\t4\nmemory_mb\t8192\nuptime_seconds\t123456\n",
+      "hostname\ttest-node\noperating_system\tLinux\narchitecture\tx86_64\ncpu_cores\t4\nmemory_mb\t8192\ncpu_usage_percent\t12.500000\nmemory_usage_percent\t37.500000\nuptime_seconds\t123456\n",
       "",
       HostKeyFingerprint
     )
