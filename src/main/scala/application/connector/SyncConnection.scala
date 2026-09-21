@@ -9,6 +9,7 @@ import application.port.{
   TimeProvider,
   TransactionRunner
 }
+import application.resource.{PendingMetricObservation, RecordResourceObservations}
 import domain.connection.{Connection, ConnectionConfig}
 import domain.resource.Resource
 import domain.sync.{SyncSession, SyncSessionStatus}
@@ -23,7 +24,8 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
                                                      syncSessionRepository: SyncSessionRepository[Tx],
                                                      transactionRunner: TransactionRunner[F, Tx],
                                                      idGenerator: IdGenerator[F],
-                                                     timeProvider: TimeProvider[F]
+                                                     timeProvider: TimeProvider[F],
+                                                     recordResourceObservations: RecordResourceObservations[Tx]
                                                    ) {
 
   def execute(
@@ -80,7 +82,17 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
         for {
           resourceId <- idGenerator.nextId
           externalRefId <- idGenerator.nextId
-        } yield PendingDiscoveredResource(discovered, resourceId, externalRefId)
+          metricObservations <- recordResourceObservations
+            .metricCodesFor(discovered.resourceTypeCode, discovered.data)
+            .traverse { metricCode =>
+              idGenerator.nextId.map(id => PendingMetricObservation(id, metricCode))
+            }
+        } yield PendingDiscoveredResource(
+          discovered,
+          resourceId,
+          externalRefId,
+          metricObservations
+        )
       }
 
       completedAt <- timeProvider.now

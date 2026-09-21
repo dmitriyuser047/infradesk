@@ -1,8 +1,8 @@
 package ru.bitec.app.ops
 package application.discovery
 
-import application.port.{ExternalRefRepository, ResourceRepository, ResourceTypeRepository, SyncSessionRepository}
-import application.resource.PersistExternalResource
+import application.port.{ExternalRefRepository, MetricObservationRepository, ResourceRepository, ResourceTypeRepository, SyncSessionRepository}
+import application.resource.{PendingMetricObservation, PersistExternalResource, RecordResourceObservations}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
@@ -10,6 +10,8 @@ import domain.externalref.ExternalRef
 import domain.resource.{Resource, ResourceType}
 import domain.resource.ResourceData
 import domain.resource.container.{ContainerSpec, ContainerStatus}
+import domain.resource.node.{NodeSpec, NodeStatus}
+import domain.metric.MetricCode
 import domain.sync.{SyncSession, SyncSessionStatus}
 import munit.FunSuite
 
@@ -63,11 +65,33 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     assertEquals(state.sessions.get(syncSessionId).map(_.status), Some(SyncSessionStatus.Completed))
   }
 
+  test("fails snapshot after node reconcile when observation insert fails") {
+    val result = runSnapshot(
+      nodeInitialState,
+      failNewResourceSave = false,
+      completeExternalTypes = Set("NODE"),
+      discoveredResources = List(nodeReconciliation),
+      metricObservationRepository = new FailingMetricObservationRepository
+    )
+
+    assert(result.isLeft)
+
+    val rolledBackState = result.fold(_ => nodeInitialState, identity)
+    assertEquals(rolledBackState.resources.get(oldResourceId).map(_.code), Some("node-before"))
+    assertEquals(
+      rolledBackState.resources.get(oldResourceId).flatMap(_.data.status),
+      Some(NodeStatus(true, None, None, Some(1)))
+    )
+    assertEquals(rolledBackState.sessions.get(syncSessionId).map(_.status), Some(SyncSessionStatus.Running))
+  }
+
   private def runSnapshot(
                           initial: SnapshotState,
                           failNewResourceSave: Boolean,
                           completeExternalTypes: Set[String] = Set("CONTAINER"),
-                          discoveredResources: List[PendingDiscoveredResource] = List(replacement)
+                          discoveredResources: List[PendingDiscoveredResource] = List(replacement),
+                          metricObservationRepository: MetricObservationRepository[IO] =
+                            new NoopMetricObservationRepository
                         ): Either[Throwable, SnapshotState] = {
     var workingState = initial
 
@@ -98,12 +122,16 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
       resourceRepository,
       externalRefRepository
     )
+    val recordResourceObservations = new RecordResourceObservations[IO](
+      metricObservationRepository
+    )
     val snapshot = new SyncDiscoveredSnapshot[IO](
       create,
       reconcile,
       externalRefRepository,
       resourceRepository,
-      syncSessionRepository
+      syncSessionRepository,
+      recordResourceObservations
     )
 
     snapshot
@@ -158,6 +186,16 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     updatedAt = Instant.EPOCH
   )
 
+  private val oldNodeResource = oldResource.copy(
+    code = "node-before",
+    name = "node-before",
+    resourceTypeCode = "NODE",
+    data = ResourceData(
+      Some(NodeSpec("node-before", None, None, None, None)),
+      Some(NodeStatus(true, None, None, Some(1)))
+    )
+  )
+
   private val oldExternalRef = ExternalRef(
     id = oldExternalRefId,
     organizationId = organizationId,
@@ -169,6 +207,11 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     lastSeenAt = Instant.EPOCH,
     createdAt = Instant.EPOCH,
     updatedAt = Instant.EPOCH
+  )
+
+  private val oldNodeExternalRef = oldExternalRef.copy(
+    externalType = "NODE",
+    externalId = "SELF"
   )
 
   private val runningSession = SyncSession(
@@ -196,9 +239,41 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     newExternalRefId
   )
 
+  private val nodeReconciliation = PendingDiscoveredResource(
+    DiscoveredResource(
+      "NODE",
+      "SELF",
+      "NODE",
+      "TEST",
+      "node-after",
+      data = ResourceData(
+        Some(NodeSpec("node-after", Some("Linux"), Some("x86_64"), Some(4), Some(8192))),
+        Some(NodeStatus(true, Some(BigDecimal("12.5")), Some(BigDecimal("37.5")), Some(2)))
+      )
+    ),
+    newResourceId,
+    newExternalRefId,
+    List(
+      PendingMetricObservation(
+        UUID.fromString("a0000000-0000-0000-0000-000000000001"),
+        MetricCode.CpuUsagePercent
+      ),
+      PendingMetricObservation(
+        UUID.fromString("a0000000-0000-0000-0000-000000000002"),
+        MetricCode.MemoryUsagePercent
+      )
+    )
+  )
+
   private val initialState = SnapshotState(
     resources = Map(oldResourceId -> oldResource),
     externalRefs = List(oldExternalRef),
+    sessions = Map(syncSessionId -> runningSession)
+  )
+
+  private val nodeInitialState = SnapshotState(
+    resources = Map(oldResourceId -> oldNodeResource),
+    externalRefs = List(oldNodeExternalRef),
     sessions = Map(syncSessionId -> runningSession)
   )
 
@@ -312,5 +387,15 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
 
     override def findByCode(code: String): IO[Option[ResourceType]] =
       IO.pure(Some(containerType))
+  }
+
+  private final class NoopMetricObservationRepository extends MetricObservationRepository[IO] {
+    override def insertAll(observations: List[domain.metric.MetricObservation]): IO[Unit] =
+      IO.unit
+  }
+
+  private final class FailingMetricObservationRepository extends MetricObservationRepository[IO] {
+    override def insertAll(observations: List[domain.metric.MetricObservation]): IO[Unit] =
+      IO.raiseError(new IllegalStateException("Simulated metric observation insert failure"))
   }
 }

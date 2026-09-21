@@ -65,9 +65,9 @@ final class ResourceDataJsonCodecSpec extends FunSuite {
   }
 
   test("rejects non-empty JSON for an unsupported resource type") {
-    val result = codec.decode("NODE", "{\"hostname\":\"node-1\"}", "{}")
+    val result = codec.decode("UNKNOWN", "{\"hostname\":\"node-1\"}", "{}")
 
     assert(result.isLeft)
-    assert(result.swap.toOption.exists(_.getMessage.contains("NODE")))
+    assert(result.swap.toOption.exists(_.getMessage.contains("UNKNOWN")))
   }
 }

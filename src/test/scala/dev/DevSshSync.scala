@@ -11,7 +11,7 @@ import application.discovery.{
   ReconcileDiscoveredResource,
   SyncDiscoveredSnapshot
 }
-import application.resource.PersistExternalResource
+import application.resource.{PersistExternalResource, RecordResourceObservations}
 import cats.effect.{IO, IOApp}
 import cats.syntax.all._
 import org.typelevel.doobie.ConnectionIO
@@ -37,6 +37,7 @@ import integration.ssh.{
 import persistence.postgres.{
   PostgresConnectionRepository,
   PostgresExternalRefRepository,
+  PostgresMetricObservationRepository,
   PostgresResourceRepository,
   PostgresResourceTypeRepository,
   PostgresSyncSessionRepository
@@ -76,6 +77,9 @@ object DevSshSync extends IOApp.Simple {
         val syncSessionRepository =
           new PostgresSyncSessionRepository
 
+        val metricObservationRepository =
+          new PostgresMetricObservationRepository
+
         val transactionRunner =
           new DoobieTransactionRunner(xa)
 
@@ -104,13 +108,19 @@ object DevSshSync extends IOApp.Simple {
             externalRefRepository
           )
 
+        val recordResourceObservations =
+          new RecordResourceObservations[ConnectionIO](
+            metricObservationRepository
+          )
+
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](
             createDiscoveredResource,
             reconcileDiscoveredResource,
             externalRefRepository,
             resourceRepository,
-            syncSessionRepository
+            syncSessionRepository,
+            recordResourceObservations
           )
 
         val sshClient =
@@ -138,7 +148,8 @@ object DevSshSync extends IOApp.Simple {
             syncSessionRepository,
             transactionRunner,
             idGenerator,
-            timeProvider
+            timeProvider,
+            recordResourceObservations
           )
 
         val syncConnectionById =

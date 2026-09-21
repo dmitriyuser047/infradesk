@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package application.discovery
 
 import application.port.{ExternalRefRepository, ResourceRepository, SyncSessionRepository}
+import application.resource.{PendingMetricObservation, RecordResourceObservations}
 import domain.connection.Connection
 import domain.externalref.ExternalRef
 import domain.resource.Resource
@@ -16,7 +17,8 @@ import java.util.UUID
 final case class PendingDiscoveredResource(
                                             discovered: DiscoveredResource,
                                             resourceId: UUID,
-                                            externalRefId: UUID
+                                            externalRefId: UUID,
+                                            pendingMetricObservations: List[PendingMetricObservation] = List.empty
                                           )
 
 final class SyncDiscoveredSnapshot[Tx[_]: MonadThrow](
@@ -24,7 +26,8 @@ final class SyncDiscoveredSnapshot[Tx[_]: MonadThrow](
                                                         reconcileDiscoveredResource: ReconcileDiscoveredResource[Tx],
                                                         externalRefRepository: ExternalRefRepository[Tx],
                                                         resourceRepository: ResourceRepository[Tx],
-                                                        syncSessionRepository: SyncSessionRepository[Tx]
+                                                        syncSessionRepository: SyncSessionRepository[Tx],
+                                                        recordResourceObservations: RecordResourceObservations[Tx]
                                                       ) {
 
   def execute(
@@ -69,7 +72,8 @@ final class SyncDiscoveredSnapshot[Tx[_]: MonadThrow](
       }
 
       resources <- discoveredResources.traverse { pending =>
-        externalRefsByIdentity.get(identity(pending.discovered)) match {
+        val resource =
+          externalRefsByIdentity.get(identity(pending.discovered)) match {
           case Some(externalRef) =>
             reconcileDiscoveredResource.execute(
               connection,
@@ -88,6 +92,14 @@ final class SyncDiscoveredSnapshot[Tx[_]: MonadThrow](
               syncSession.id,
               completedAt
             )
+        }
+
+        resource.flatTap { reconciledResource =>
+          recordResourceObservations.execute(
+            reconciledResource,
+            pending.pendingMetricObservations,
+            completedAt
+          )
         }
       }
 

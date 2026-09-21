@@ -9,7 +9,7 @@ import application.discovery.{
   ReconcileDiscoveredResource,
   SyncDiscoveredSnapshot
 }
-import application.resource.PersistExternalResource
+import application.resource.{PersistExternalResource, RecordResourceObservations}
 import cats.effect.{IO, IOApp}
 import org.typelevel.doobie.ConnectionIO
 import infrastructure.database.{
@@ -27,6 +27,7 @@ import integration.docker.{
 }
 import persistence.postgres.{
   PostgresExternalRefRepository,
+  PostgresMetricObservationRepository,
   PostgresResourceRepository,
   PostgresResourceTypeRepository,
   PostgresSyncSessionRepository
@@ -48,6 +49,9 @@ object Main extends IOApp.Simple {
 
         val syncSessionRepository =
           new PostgresSyncSessionRepository
+
+        val metricObservationRepository =
+          new PostgresMetricObservationRepository
 
         val transactionRunner =
           new DoobieTransactionRunner(xa)
@@ -77,13 +81,19 @@ object Main extends IOApp.Simple {
             externalRefRepository
           )
 
+        val recordResourceObservations =
+          new RecordResourceObservations[ConnectionIO](
+            metricObservationRepository
+          )
+
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](
             createDiscoveredResource,
             reconcileDiscoveredResource,
             externalRefRepository,
             resourceRepository,
-            syncSessionRepository
+            syncSessionRepository,
+            recordResourceObservations
           )
 
         val dockerEngineClient =
