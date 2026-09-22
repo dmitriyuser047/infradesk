@@ -14,6 +14,45 @@ import java.util.UUID
 
 final class PostgresSyncSessionRepository extends SyncSessionRepository[ConnectionIO] {
 
+  private final case class SyncSessionRow(
+    id: UUID,
+    organizationId: UUID,
+    connectionId: UUID,
+    startedAt: Instant,
+    finishedAt: Option[Instant],
+    status: String
+  ) {
+    def toDomain: Either[IllegalArgumentException, SyncSession] =
+      SyncSessionStatus.fromCode(status).map { typedStatus =>
+        SyncSession(id, organizationId, connectionId, startedAt, finishedAt, typedStatus)
+      }
+  }
+
+  override def findLatestByConnection(
+    organizationId: UUID,
+    connectionId: UUID
+  ): ConnectionIO[Option[SyncSession]] =
+    sql"""
+      select
+        id,
+        organization_id,
+        connection_id,
+        started_at,
+        finished_at,
+        status
+      from sync_session
+      where organization_id = $organizationId
+        and connection_id = $connectionId
+      order by started_at desc, id desc
+      limit 1
+    """
+      .query[SyncSessionRow]
+      .option
+      .flatMap {
+        case Some(row) => row.toDomain.map(value => Option(value)).liftTo[ConnectionIO]
+        case None => none[SyncSession].pure[ConnectionIO]
+      }
+
   override def create(session: SyncSession): ConnectionIO[Unit] =
     sql"""
       insert into sync_session (

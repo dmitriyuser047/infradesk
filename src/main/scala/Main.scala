@@ -11,6 +11,7 @@ import application.discovery.{
   SyncDiscoveredSnapshot
 }
 import application.monitor.EvaluateMonitorRules
+import application.connection.{GetConnection, ListConnections}
 import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
 import application.scheduler.SyncScheduler
 import cats.effect.{IO, IOApp}
@@ -18,6 +19,7 @@ import com.comcast.ip4s.{Host, Port}
 import infrastructure.http.ResourceRoutes
 import infrastructure.http.IncidentRoutes
 import infrastructure.http.MonitorRuleRoutes
+import infrastructure.http.ConnectionRoutes
 import application.monitor.{ListMonitorRules, CreateMonitorRule, UpdateMonitorRule}
 import application.incident.{GetIncident, ListIncidents}
 import cats.syntax.semigroupk._
@@ -160,6 +162,9 @@ object Main extends IOApp.Simple {
           UpdateMonitorRule(monitorRuleRepository, transactionTimeProvider),
           transactionRunner
         )
+        val getConnection = GetConnection[ConnectionIO](connectionRepository, syncSessionRepository, connectionScheduleRepository)
+        val listConnections = ListConnections[ConnectionIO](connectionRepository, syncSessionRepository, connectionScheduleRepository)
+        val connectionRoutes = new ConnectionRoutes[ConnectionIO](getConnection, listConnections, transactionRunner)
 
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](
@@ -228,7 +233,7 @@ object Main extends IOApp.Simple {
           .default[IO]
           .withHost(httpHost)
           .withPort(httpPort)
-          .withHttpApp((resourceRoutes.routes <+> incidentRoutes.routes <+> monitorRuleRoutes.routes).orNotFound)
+          .withHttpApp((resourceRoutes.routes <+> incidentRoutes.routes <+> monitorRuleRoutes.routes <+> connectionRoutes.routes).orNotFound)
           .build
           .use(_ => syncScheduler.run(1.second, limit = 100))
       }

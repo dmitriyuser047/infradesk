@@ -118,6 +118,32 @@ final class PostgresConnectionRepository extends ConnectionRepository[Connection
       .option
       .map(_.map(_.toDomain))
 
+  override def findByOrganization(
+    organizationId: UUID
+  ): ConnectionIO[List[Connection]] =
+    sql"""
+      select
+        id,
+        organization_id,
+        scope_type,
+        project_id,
+        environment_id,
+        connector_type,
+        code,
+        name,
+        config::text,
+        secret_ref,
+        is_active,
+        created_at,
+        updated_at
+      from connection
+      where organization_id = $organizationId
+      order by name asc, id asc
+    """
+      .query[ConnectionRow]
+      .to[List]
+      .map(_.map(_.toDomain))
+
   override def save(connection: Connection): ConnectionIO[Unit] = {
     val (projectId, environmentId) =
       connection.scope match {

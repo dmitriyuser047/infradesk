@@ -7,6 +7,11 @@ import java.time.Instant
 import java.util.UUID
 
 trait ConnectionScheduleRepository[F[_]] {
+  def findByConnection(
+    organizationId: UUID,
+    connectionId: UUID
+  ): F[Option[ConnectionSchedule]]
+
   def findDue(now: Instant, limit: Int): F[List[ConnectionSchedule]]
 
   def scheduleNext(

@@ -11,5 +11,7 @@ trait ConnectionRepository[F[_]] {
 
   def findById(organizationId: UUID, id: UUID): F[Option[Connection]]
 
+  def findByOrganization(organizationId: UUID): F[List[Connection]]
+
   def save(connection: Connection): F[Unit]
 }

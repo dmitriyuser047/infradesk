@@ -14,6 +14,24 @@ import java.util.UUID
 
 final class PostgresConnectionScheduleRepository extends ConnectionScheduleRepository[ConnectionIO] {
 
+  override def findByConnection(
+    organizationId: UUID,
+    connectionId: UUID
+  ): ConnectionIO[Option[ConnectionSchedule]] =
+    sql"""
+      select
+        organization_id,
+        connection_id,
+        enabled,
+        interval_seconds,
+        next_run_at
+      from connection_schedule
+      where organization_id = $organizationId
+        and connection_id = $connectionId
+    """
+      .query[ConnectionSchedule]
+      .option
+
   override def findDue(now: Instant, limit: Int): ConnectionIO[List[ConnectionSchedule]] =
     sql"""
       select

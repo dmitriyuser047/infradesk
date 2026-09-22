@@ -22,6 +22,60 @@ object HttpJsonCodecs {
   implicit val createMonitorRuleDecoder: Decoder[CreateMonitorRuleRequest] = Decoder.forProduct5("metricCode","operator","threshold","forSeconds","enabled")(CreateMonitorRuleRequest.apply)
   implicit val updateMonitorRuleDecoder: Decoder[UpdateMonitorRuleRequest] = Decoder.forProduct5("metricCode","operator","threshold","forSeconds","enabled")(UpdateMonitorRuleRequest.apply)
 
+  implicit val organizationConnectionScopeResponseEncoder: Encoder[OrganizationConnectionScopeResponse] =
+    Encoder.forProduct1("type")(_.scopeType)
+
+  implicit val projectConnectionScopeResponseEncoder: Encoder[ProjectConnectionScopeResponse] =
+    Encoder.forProduct2("type", "projectId")(value => (value.scopeType, value.projectId))
+
+  implicit val environmentConnectionScopeResponseEncoder: Encoder[EnvironmentConnectionScopeResponse] =
+    Encoder.forProduct3("type", "projectId", "environmentId") { value =>
+      (value.scopeType, value.projectId, value.environmentId)
+    }
+
+  implicit val connectionScopeResponseEncoder: Encoder[ConnectionScopeResponse] = Encoder.instance {
+    case value: OrganizationConnectionScopeResponse => organizationConnectionScopeResponseEncoder(value)
+    case value: ProjectConnectionScopeResponse => projectConnectionScopeResponseEncoder(value)
+    case value: EnvironmentConnectionScopeResponse => environmentConnectionScopeResponseEncoder(value)
+  }
+
+  implicit val syncSessionResponseEncoder: Encoder[SyncSessionResponse] =
+    Encoder.forProduct4("id", "status", "startedAt", "finishedAt") { value =>
+      (value.id, value.status, value.startedAt, value.finishedAt)
+    }
+
+  implicit val connectionScheduleResponseEncoder: Encoder[ConnectionScheduleResponse] =
+    Encoder.forProduct3("enabled", "intervalSeconds", "nextRunAt") { value =>
+      (value.enabled, value.intervalSeconds, value.nextRunAt)
+    }
+
+  implicit val connectionResponseEncoder: Encoder[ConnectionResponse] =
+    Encoder.forProduct10(
+      "id",
+      "connectorType",
+      "code",
+      "name",
+      "scope",
+      "active",
+      "schedule",
+      "lastSync",
+      "createdAt",
+      "updatedAt"
+    ) { value =>
+      (
+        value.id,
+        value.connectorType,
+        value.code,
+        value.name,
+        value.scope,
+        value.active,
+        value.schedule,
+        value.lastSync,
+        value.createdAt,
+        value.updatedAt
+      )
+    }
+
   implicit val nodeSpecResponseEncoder: Encoder[NodeSpecResponse] =
     Encoder.forProduct5("hostname", "operatingSystem", "architecture", "cpuCores", "memoryMb") { value =>
       (value.hostname, value.operatingSystem, value.architecture, value.cpuCores, value.memoryMb)

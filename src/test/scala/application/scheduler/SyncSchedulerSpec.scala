@@ -145,6 +145,14 @@ final class SyncSchedulerSpec extends FunSuite {
                                                            ) extends ConnectionScheduleRepository[IO] {
     var scheduledNext: List[(UUID, UUID, Instant)] = List.empty
 
+    override def findByConnection(
+                                   organizationId: UUID,
+                                   connectionId: UUID
+                                 ): IO[Option[ConnectionSchedule]] =
+      IO.pure(schedules.find(schedule =>
+        schedule.organizationId == organizationId && schedule.connectionId == connectionId
+      ))
+
     override def findDue(now: Instant, limit: Int): IO[List[ConnectionSchedule]] =
       IO.pure(schedules.filter(schedule => schedule.enabled && !schedule.nextRunAt.isAfter(now)).take(limit))
 

@@ -12,6 +12,14 @@ object SyncSessionStatus {
   case object Running extends SyncSessionStatus { override val code = "RUNNING" }
   case object Completed extends SyncSessionStatus { override val code = "COMPLETED" }
   case object Failed extends SyncSessionStatus { override val code = "FAILED" }
+
+  def fromCode(code: String): Either[IllegalArgumentException, SyncSessionStatus] =
+    code match {
+      case Running.code => Right(Running)
+      case Completed.code => Right(Completed)
+      case Failed.code => Right(Failed)
+      case unknown => Left(new IllegalArgumentException(s"Unsupported sync session status '$unknown'"))
+    }
 }
 
 final case class SyncSession(

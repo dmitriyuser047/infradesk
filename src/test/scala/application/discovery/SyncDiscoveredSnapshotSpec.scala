@@ -289,6 +289,20 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
                                                       update: SnapshotState => Unit
                                                     ) extends SyncSessionRepository[IO] {
 
+    override def findLatestByConnection(
+                                          organizationId: UUID,
+                                          connectionId: UUID
+                                        ): IO[Option[SyncSession]] =
+      IO.pure(
+        state().sessions.values
+          .filter(session =>
+            session.organizationId == organizationId && session.connectionId == connectionId
+          )
+          .toList
+          .sortBy(session => (session.startedAt, session.id.toString))
+          .lastOption
+      )
+
     override def create(session: SyncSession): IO[Unit] =
       IO(update(state().copy(sessions = state().sessions.updated(session.id, session))))
 
