@@ -97,6 +97,22 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
     assertEquals(result.saved, List.empty)
   }
 
+  test("does not create state from telemetry older than the current snapshot") {
+    val snapshotAt = ObservedAt.plusSeconds(120)
+    val ruleRepository = new InMemoryRuleRepository(Map(ResourceId -> List(cpuRule(forSeconds = 0))))
+    val stateRepository = new InMemoryStateRepository(Map.empty)
+    val metricRepository = new InMemoryMetricObservationRepository(
+      Map((ResourceId, MetricCode.CpuUsagePercent) -> observation(MetricCode.CpuUsagePercent, 95, ObservedAt))
+    )
+    val evaluator = new EvaluateMonitorRules[IO](ruleRepository, stateRepository, metricRepository)
+
+    evaluator.execute(List(nodeResource.copy(updatedAt = snapshotAt)), EvaluatedAt).unsafeRunSync()
+
+    assertEquals(stateRepository.states, Map.empty[UUID, MonitorRuleState])
+    assertEquals(stateRepository.saved, List.empty)
+    assertEquals(metricRepository.requestedObservedAts, List(snapshotAt))
+  }
+
   test("does not evaluate rules for a container resource") {
     val ruleRepository = new InMemoryRuleRepository(Map(ContainerResourceId -> List(cpuRule())))
     val stateRepository = new InMemoryStateRepository(Map.empty)
@@ -237,18 +253,21 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
                                                             observations: Map[(UUID, MetricCode), MetricObservation]
                                                           ) extends MetricObservationRepository[IO] {
     var requestedCodes: List[MetricCode] = List.empty
+    var requestedObservedAts: List[Instant] = List.empty
 
     override def insertAll(observations: List[MetricObservation]): IO[Unit] =
       IO.unit
 
-    override def findLatest(
-                             organizationId: UUID,
-                             resourceId: UUID,
-                             metricCode: MetricCode
-                           ): IO[Option[MetricObservation]] =
+    override def findLatestAtOrAfter(
+                                      organizationId: UUID,
+                                      resourceId: UUID,
+                                      metricCode: MetricCode,
+                                      observedAt: Instant
+                                    ): IO[Option[MetricObservation]] =
       IO {
         requestedCodes = requestedCodes :+ metricCode
-        observations.get((resourceId, metricCode))
+        requestedObservedAts = requestedObservedAts :+ observedAt
+        observations.get((resourceId, metricCode)).filter(!_.observedAt.isBefore(observedAt))
       }
   }
 

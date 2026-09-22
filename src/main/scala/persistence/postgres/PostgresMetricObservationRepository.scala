@@ -9,13 +9,17 @@ import org.typelevel.doobie.ConnectionIO
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 
+import java.time.Instant
+import java.util.UUID
+
 final class PostgresMetricObservationRepository extends MetricObservationRepository[ConnectionIO] {
 
-  override def findLatest(
-                           organizationId: java.util.UUID,
-                           resourceId: java.util.UUID,
-                           metricCode: MetricCode
-                         ): ConnectionIO[Option[MetricObservation]] =
+  override def findLatestAtOrAfter(
+                                    organizationId: UUID,
+                                    resourceId: UUID,
+                                    metricCode: MetricCode,
+                                    observedAt: Instant
+                                  ): ConnectionIO[Option[MetricObservation]] =
     sql"""
       select
         id,
@@ -28,6 +32,7 @@ final class PostgresMetricObservationRepository extends MetricObservationReposit
       where organization_id = $organizationId
         and resource_id = $resourceId
         and metric_code = ${metricCode.code}
+        and observed_at >= $observedAt
       order by observed_at desc
       limit 1
     """

@@ -324,11 +324,12 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     override def insertAll(observations: List[domain.metric.MetricObservation]): IO[Unit] =
       IO.unit
 
-    override def findLatest(
-                             organizationId: UUID,
-                             resourceId: UUID,
-                             metricCode: domain.metric.MetricCode
-                           ): IO[Option[domain.metric.MetricObservation]] =
+    override def findLatestAtOrAfter(
+                                      organizationId: UUID,
+                                      resourceId: UUID,
+                                      metricCode: domain.metric.MetricCode,
+                                      observedAt: Instant
+                                    ): IO[Option[domain.metric.MetricObservation]] =
       IO.pure(None)
   }
 

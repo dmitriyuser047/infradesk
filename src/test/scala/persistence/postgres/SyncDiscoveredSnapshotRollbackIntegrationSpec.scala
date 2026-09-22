@@ -205,12 +205,13 @@ final class SyncDiscoveredSnapshotRollbackIntegrationSpec extends FunSuite {
         new IllegalStateException("Simulated metric observation failure after insert")
           .raiseError[ConnectionIO, Unit]
 
-    override def findLatest(
-                             organizationId: UUID,
-                             resourceId: UUID,
-                             metricCode: domain.metric.MetricCode
-                           ): ConnectionIO[Option[MetricObservation]] =
-      delegate.findLatest(organizationId, resourceId, metricCode)
+    override def findLatestAtOrAfter(
+                                      organizationId: UUID,
+                                      resourceId: UUID,
+                                      metricCode: domain.metric.MetricCode,
+                                      observedAt: Instant
+                                    ): ConnectionIO[Option[MetricObservation]] =
+      delegate.findLatestAtOrAfter(organizationId, resourceId, metricCode, observedAt)
   }
 
   private final case class TestIds(

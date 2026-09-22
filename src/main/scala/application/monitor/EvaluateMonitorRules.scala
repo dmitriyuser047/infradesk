@@ -34,7 +34,12 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
                             evaluatedAt: Instant
                           ): Tx[Unit] =
     metricObservationRepository
-      .findLatest(resource.organizationId, resource.id, rule.metricCode)
+      .findLatestAtOrAfter(
+        resource.organizationId,
+        resource.id,
+        rule.metricCode,
+        resource.updatedAt
+      )
       .flatMap {
         case Some(observation) =>
           monitorRuleStateRepository

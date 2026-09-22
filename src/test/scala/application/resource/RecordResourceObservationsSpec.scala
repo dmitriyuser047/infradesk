@@ -127,11 +127,12 @@ final class RecordResourceObservationsSpec extends FunSuite {
         inserted = inserted ++ observations
       }
 
-    override def findLatest(
-                             organizationId: UUID,
-                             resourceId: UUID,
-                             metricCode: MetricCode
-                           ): IO[Option[MetricObservation]] =
+    override def findLatestAtOrAfter(
+                                      organizationId: UUID,
+                                      resourceId: UUID,
+                                      metricCode: MetricCode,
+                                      observedAt: Instant
+                                    ): IO[Option[MetricObservation]] =
       IO.pure(None)
   }
 }
