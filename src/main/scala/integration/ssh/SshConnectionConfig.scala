@@ -15,6 +15,15 @@ final case class SshConnectionConfig(
 
 object SshConnectionConfig {
 
+  def toConnectionConfig(value: SshConnectionConfig): ConnectionConfig =
+    ConnectionConfig(Map(
+      "host" -> value.host,
+      "port" -> value.port.toString,
+      "username" -> value.username,
+      "connectTimeoutSeconds" -> value.connectTimeoutSeconds.toString,
+      "commandTimeoutSeconds" -> value.commandTimeoutSeconds.toString
+    ) ++ value.hostKeyFingerprint.map("hostKeyFingerprint" -> _))
+
   private val HostKey = "host"
   private val PortKey = "port"
   private val UsernameKey = "username"

@@ -11,6 +11,13 @@ import org.http4s.dsl.io._
 
 import java.util.UUID
 import scala.util.Try
+import domain.auth.OrganizationRole
+
+final case class OrganizationAccessContext(
+  user: domain.auth.AuthenticatedUser,
+  organizationId: UUID,
+  role: OrganizationRole
+)
 
 final class AuthBoundary[Tx[_]](
   authRoutes: AuthRoutes[Tx],
@@ -21,6 +28,7 @@ final class AuthBoundary[Tx[_]](
 
   private val unauthenticated = ApiErrorResponse("UNAUTHENTICATED", "Authentication required")
   private val organizationNotFound = ApiErrorResponse("ORGANIZATION_NOT_FOUND", "Organization was not found")
+  private val forbidden = ApiErrorResponse("FORBIDDEN", "Owner role required")
   private val internalError = ApiErrorResponse("INTERNAL_ERROR", "Internal server error")
   private val publicApp = authRoutes.public.orNotFound
 
@@ -37,9 +45,9 @@ final class AuthBoundary[Tx[_]](
           Try(UUID.fromString(organizationIdValue)).toOption match {
             case None => organizationRoutes.run(request)
             case Some(organizationId) =>
-              authentication.hasOrganizationAccess(user.id, organizationId).attempt.flatMap {
-                case Right(true) => organizationRoutes.run(request)
-                case Right(false) => NotFound(organizationNotFound)
+              authentication.organizationRole(user.id, organizationId).attempt.flatMap {
+                case Right(Some(role)) => runForOrganization(OrganizationAccessContext(user, organizationId, role), request)
+                case Right(None) => NotFound(organizationNotFound)
                 case Left(_) => InternalServerError(internalError)
               }
           }
@@ -47,6 +55,21 @@ final class AuthBoundary[Tx[_]](
       case "api" :: "v1" :: _ =>
         authenticated(request)(_ => organizationRoutes.run(request))
       case _ => organizationRoutes.run(request)
+    }
+  }
+
+  private def runForOrganization(context: OrganizationAccessContext, request: Request[IO]): IO[Response[IO]] =
+    if (isConnectionMutation(request) && context.role != OrganizationRole.Owner) Forbidden(forbidden)
+    else organizationRoutes.run(request)
+
+  private def isConnectionMutation(request: Request[IO]): Boolean = {
+    val segments = request.uri.path.renderString.split('/').filter(_.nonEmpty).toList
+    segments match {
+      case List("api", "v1", "organizations", _, "connections") => request.method == POST
+      case List("api", "v1", "organizations", _, "connections", "ssh", "test") => request.method == POST
+      case List("api", "v1", "organizations", _, "connections", _) =>
+        request.method == PUT || request.method == DELETE
+      case _ => false
     }
   }
 

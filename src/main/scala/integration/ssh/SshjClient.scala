@@ -15,6 +15,8 @@ import java.security.PublicKey
 import java.util.{Collections, List => JList}
 import java.util.concurrent.atomic.AtomicReference
 
+final class SshHostKeyMismatch extends RuntimeException("SSH host key mismatch")
+
 final class SshjClient[F[_]: Sync] extends SshClient[F] {
 
   override def execute(
@@ -63,10 +65,11 @@ final class SshjClient[F[_]: Sync] extends SshClient[F] {
       )
 
       try {
-        ssh.connect(
-          config.host,
-          config.port
-        )
+        try ssh.connect(config.host, config.port)
+        catch {
+          case error: Exception if config.hostKeyFingerprint.exists(_ != observedFingerprint.get()) &&
+            observedFingerprint.get() != null => throw new SshHostKeyMismatch
+        }
 
         authenticate(
           ssh,

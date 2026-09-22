@@ -11,6 +11,13 @@ import org.typelevel.doobie.postgres.implicits._
 import java.util.UUID
 
 final class PostgresOrganizationMembershipRepository extends OrganizationMembershipRepository[ConnectionIO] {
+  override def findActiveRole(userId: UUID, organizationId: UUID): ConnectionIO[Option[OrganizationRole]] =
+    sql"""select m.role from organization_membership m
+           join organization o on o.id = m.organization_id
+           where m.user_id = $userId and m.organization_id = $organizationId
+             and m.is_active = true and o.is_active = true"""
+      .query[String].option.flatMap(_.traverse(code =>
+        OrganizationRole.fromCode(code).leftMap(error => error: Throwable).liftTo[ConnectionIO]))
   override def hasActiveMembership(userId: UUID, organizationId: UUID): ConnectionIO[Boolean] =
     sql"""select exists (
               select 1 from organization_membership m

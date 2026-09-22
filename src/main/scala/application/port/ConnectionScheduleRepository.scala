@@ -7,6 +7,7 @@ import java.time.Instant
 import java.util.UUID
 
 trait ConnectionScheduleRepository[F[_]] {
+  def save(schedule: ConnectionSchedule): F[Unit]
   def findByConnection(
     organizationId: UUID,
     connectionId: UUID

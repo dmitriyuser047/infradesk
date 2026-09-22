@@ -14,6 +14,13 @@ import java.util.UUID
 
 final class PostgresConnectionScheduleRepository extends ConnectionScheduleRepository[ConnectionIO] {
 
+  override def save(schedule: ConnectionSchedule): ConnectionIO[Unit] =
+    sql"""insert into connection_schedule (organization_id, connection_id, enabled, interval_seconds, next_run_at)
+           values (${schedule.organizationId}, ${schedule.connectionId}, ${schedule.enabled}, ${schedule.intervalSeconds}, ${schedule.nextRunAt})
+           on conflict (organization_id, connection_id) do update set
+             enabled = excluded.enabled, interval_seconds = excluded.interval_seconds, next_run_at = excluded.next_run_at"""
+      .update.run.void
+
   override def findByConnection(
     organizationId: UUID,
     connectionId: UUID

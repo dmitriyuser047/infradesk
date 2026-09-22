@@ -4,6 +4,7 @@ package application.auth
 import application.port.{AuthSessionRepository, MyOrganization, OrganizationMembershipRepository, TransactionRunner}
 import cats.effect.IO
 import domain.auth.AuthenticatedUser
+import domain.auth.OrganizationRole
 
 import java.time.Instant
 import java.util.UUID
@@ -24,6 +25,9 @@ final class Authentication[Tx[_]](
 
   def hasOrganizationAccess(userId: UUID, organizationId: UUID): IO[Boolean] =
     runner.run(memberships.hasActiveMembership(userId, organizationId))
+
+  def organizationRole(userId: UUID, organizationId: UUID): IO[Option[OrganizationRole]] =
+    runner.run(memberships.findActiveRole(userId, organizationId))
 
   def organizations(userId: UUID): IO[List[MyOrganization]] =
     runner.run(memberships.listActiveOrganizations(userId))

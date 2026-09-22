@@ -10,8 +10,10 @@ import infrastructure.http.dto.{
   EnvironmentConnectionScopeResponse,
   OrganizationConnectionScopeResponse,
   ProjectConnectionScopeResponse,
-  SyncSessionResponse
+  SyncSessionResponse,
+  SshConnectionResponse
 }
+import integration.ssh.SshConnectionConfig
 
 object ConnectionHttpMapper {
   def toResponse(overview: ConnectionOverview): ConnectionResponse = {
@@ -40,7 +42,10 @@ object ConnectionHttpMapper {
         )
       },
       connection.createdAt,
-      connection.updatedAt
+      connection.updatedAt,
+      if (connection.connectorType == "SSH") SshConnectionConfig.from(connection.config).toOption.map { ssh =>
+        SshConnectionResponse(ssh.host, ssh.port, ssh.username, ssh.hostKeyFingerprint, connection.secretRef.nonEmpty)
+      } else None
     )
   }
 

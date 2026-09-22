@@ -257,6 +257,7 @@ final class ConnectionRoutesSpec extends FunSuite {
   private final class InMemoryConnectionScheduleRepository(
     schedules: List[ConnectionSchedule]
   ) extends ConnectionScheduleRepository[IO] {
+    override def save(schedule: ConnectionSchedule): IO[Unit] = IO.unit
     override def findByConnection(
       organizationId: UUID,
       connectionId: UUID

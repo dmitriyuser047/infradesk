@@ -54,4 +54,15 @@ export interface ConnectionResponse {
   lastSync: SyncSessionResponse | null
   createdAt: string
   updatedAt: string
+  ssh: { host: string; port: number; username: string; hostKeyFingerprint: string | null; credentialConfigured: boolean } | null
+}
+
+export interface SaveSshConnectionRequest {
+  connectorType: 'SSH'
+  code: string
+  name: string
+  scope: ConnectionScopeResponse
+  ssh: { host: string; port: number; username: string }
+  credentials?: { type: 'PASSWORD'; password: string }
+  schedule: { enabled: boolean; intervalSeconds: number }
 }

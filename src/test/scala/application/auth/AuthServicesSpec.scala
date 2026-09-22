@@ -99,6 +99,7 @@ final class AuthServicesSpec extends FunSuite {
   }
 
   private final class EmptyMemberships extends application.port.OrganizationMembershipRepository[IO] {
+    override def findActiveRole(userId: UUID, organizationId: UUID): IO[Option[domain.auth.OrganizationRole]] = IO.pure(None)
     override def hasActiveMembership(userId: UUID, organizationId: UUID): IO[Boolean] = IO.pure(false)
     override def listActiveOrganizations(userId: UUID): IO[List[application.port.MyOrganization]] = IO.pure(Nil)
     override def createIfMissing(membership: domain.auth.OrganizationMembership): IO[Unit] = IO.unit

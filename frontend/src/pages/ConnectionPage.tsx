@@ -1,7 +1,8 @@
 import { Cable } from 'lucide-react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 
-import { useConnection } from '../api/connections'
+import { useConnection, useDeactivateConnection } from '../api/connections'
+import { useMyOrganizations } from '../api/auth'
 import { ApiError } from '../api/httpClient'
 import { ConnectionStatusBadge } from '../components/connections/ConnectionStatusBadge'
 import {
@@ -29,6 +30,10 @@ export function ConnectionPage() {
 
 function ConnectionContent({ organizationId, connectionId }: { organizationId: string; connectionId: string }) {
   const connectionQuery = useConnection(organizationId, connectionId)
+  const membership = useMyOrganizations()
+  const deactivate = useDeactivateConnection(organizationId, connectionId)
+  const navigate = useNavigate()
+  const isOwner = membership.data?.find(value => value.id === organizationId)?.role === 'OWNER'
   const connectionsPath = `/organizations/${organizationId}/connections`
 
   if (connectionQuery.isPending) {
@@ -65,10 +70,26 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
             <p className="page-subtitle">{getConnectorTypeLabel(connection.connectorType)} · {connection.code}</p>
           </div>
           <div className="connection-header-status"><ConnectionStatusBadge active={connection.active} /></div>
+          {isOwner && connection.active && connection.connectorType === 'SSH' ? <div className="state-actions">
+            <Link className="retry-button" to={`/organizations/${organizationId}/connections/${connectionId}/edit`}>Edit</Link>
+            <button type="button" disabled={deactivate.isPending} onClick={() => {
+              if (window.confirm('Deactivate this connection? Scheduled sync will stop.')) {
+                deactivate.mutate(undefined, { onSuccess: () => navigate(connectionsPath) })
+              }
+            }}>Deactivate</button>
+          </div> : null}
         </header>
+        {deactivate.isError ? <p role="alert">{safeErrorMessage(deactivate.error)}</p> : null}
         <ConnectionOverview connection={connection} />
         <ConnectionSynchronization connection={connection} />
         <ConnectionSchedule connection={connection} />
+        {connection.ssh ? <section className="content-panel connection-section"><h2>SSH</h2><dl className="summary-grid connection-summary-grid">
+          <DetailItem label="Host" value={connection.ssh.host} />
+          <DetailItem label="Port" value={String(connection.ssh.port)} />
+          <DetailItem label="Username" value={connection.ssh.username} />
+          <DetailItem label="Host key fingerprint" value={connection.ssh.hostKeyFingerprint ?? 'Not pinned'} />
+          <DetailItem label="Credentials" value={connection.ssh.credentialConfigured ? 'Configured' : 'Missing'} />
+        </dl></section> : null}
       </div>
     </AppShell>
   )

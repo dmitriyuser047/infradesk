@@ -143,6 +143,7 @@ final class SyncSchedulerSpec extends FunSuite {
   private final class RecordingConnectionScheduleRepository(
                                                              schedules: List[ConnectionSchedule]
                                                            ) extends ConnectionScheduleRepository[IO] {
+    override def save(schedule: ConnectionSchedule): IO[Unit] = IO.unit
     var scheduledNext: List[(UUID, UUID, Instant)] = List.empty
 
     override def findByConnection(

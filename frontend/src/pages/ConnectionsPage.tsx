@@ -1,6 +1,7 @@
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 
 import { useConnections } from '../api/connections'
+import { useMyOrganizations } from '../api/auth'
 import { ApiError } from '../api/httpClient'
 import { ConnectionList } from '../components/connections/ConnectionList'
 import { AppShell } from '../components/layout/AppShell'
@@ -18,6 +19,8 @@ export function ConnectionsPage() {
 
 function ConnectionsContent({ organizationId }: { organizationId: string }) {
   const connectionsQuery = useConnections(organizationId)
+  const membership = useMyOrganizations()
+  const isOwner = membership.data?.find(value => value.id === organizationId)?.role === 'OWNER'
 
   return (
     <AppShell>
@@ -28,6 +31,7 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
             <h1>Connections</h1>
             <p className="page-subtitle">Infrastructure integrations and synchronization status</p>
           </div>
+          {isOwner ? <Link className="retry-button" to={`/organizations/${organizationId}/connections/new`}>Add SSH connection</Link> : null}
         </header>
         <section className="content-panel connections-panel" aria-labelledby="connections-list-heading">
           <div className="panel-heading">

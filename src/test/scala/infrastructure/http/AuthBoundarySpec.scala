@@ -136,6 +136,20 @@ final class AuthBoundarySpec extends FunSuite {
     assertEquals(membershipRows.length, 1)
   }
 
+  test("connection mutations require OWNER while MEMBER can read") {
+    val fixture = new AuthFixture(secure = false)
+    val raw = tokens.generate()
+    fixture.sessions.values = List(AuthSession(UUID.randomUUID(), userId, tokens.hash(raw), now, now.plusSeconds(3600), None))
+    fixture.memberships.values = List(OrganizationMembership(userId, orgA, OrganizationRole.Member, true, now, now))
+    val listPath = s"/api/v1/organizations/$orgA/connections"
+    assertEquals(fixture.app.run(cookieRequest(Method.GET, listPath, raw)).unsafeRunSync().status, Status.Ok)
+    val denied = fixture.app.run(cookieRequest(Method.POST, listPath, raw)).unsafeRunSync()
+    assertEquals(denied.status, Status.Forbidden)
+    assertEquals(denied.as[Json].unsafeRunSync().hcursor.get[String]("code"), Right("FORBIDDEN"))
+    fixture.memberships.values = fixture.memberships.values.map(_.copy(role = OrganizationRole.Owner))
+    assertEquals(fixture.app.run(cookieRequest(Method.POST, listPath, raw)).unsafeRunSync().status, Status.Ok)
+  }
+
   private def cookieRequest(method: Method, path: String, token: String): Request[IO] =
     Request[IO](method, Uri.unsafeFromString(path))
       .putHeaders(org.http4s.Header.Raw(CIString("Cookie"), s"infradesk_session=$token"))
@@ -153,6 +167,8 @@ final class AuthBoundarySpec extends FunSuite {
     val authRoutes = new AuthRoutes(loginService, authentication, AuthSettings(3600, secure))
     val business = HttpRoutes.of[IO] {
       case GET -> Root / "api" / "v1" / "organizations" / _ / "projects" => Ok("reached")
+      case GET -> Root / "api" / "v1" / "organizations" / _ / "connections" => Ok("reached")
+      case POST -> Root / "api" / "v1" / "organizations" / _ / "connections" => Ok("reached")
     }.orNotFound
     val app = new AuthBoundary(authRoutes, authentication, business).app
 
@@ -200,6 +216,10 @@ final class AuthBoundarySpec extends FunSuite {
           case _ => "B"
         }, value.role))
         .sortBy(value => (value.name, value.id.toString))
+    }
+    override def findActiveRole(id: UUID, organizationId: UUID): IO[Option[OrganizationRole]] = IO {
+      values.find(value => value.userId == id && value.organizationId == organizationId &&
+        value.isActive && activeOrganizations.contains(value.organizationId)).map(_.role)
     }
     override def createIfMissing(value: OrganizationMembership): IO[Unit] = IO { values = value :: values }
   }

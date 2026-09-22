@@ -741,6 +741,40 @@ h3 {
   min-height: 270px;
 }
 
+.connection-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  min-height: 0;
+}
+
+.connection-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.connection-form input:not([type="checkbox"]),
+.connection-form select {
+  width: 100%;
+  min-height: 39px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: inherit;
+}
+
+.connection-form .state-actions,
+.connection-form p[role] {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 650px) {
+  .connection-form { grid-template-columns: 1fr; }
+}
+
 .connection-list {
   padding-top: 7px;
 }

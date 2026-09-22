@@ -8,6 +8,7 @@ import { IncidentsPage } from '../pages/IncidentsPage'
 import { IncidentPage } from '../pages/IncidentPage'
 import { ConnectionPage } from '../pages/ConnectionPage'
 import { ConnectionsPage } from '../pages/ConnectionsPage'
+import { ConnectionFormPage } from '../pages/ConnectionFormPage'
 import { OrganizationPage } from '../pages/OrganizationPage'
 import { OrganizationsPage } from '../pages/OrganizationsPage'
 import { LoginPage } from '../pages/LoginPage'
@@ -23,6 +24,8 @@ export const router = createBrowserRouter([
       { path: '/organizations', element: <OrganizationsPage /> },
       { path: '/organizations/:organizationId', element: <OrganizationPage /> },
       { path: '/organizations/:organizationId/connections/:connectionId', element: <ConnectionPage /> },
+      { path: '/organizations/:organizationId/connections/:connectionId/edit', element: <ConnectionFormPage /> },
+      { path: '/organizations/:organizationId/connections/new', element: <ConnectionFormPage /> },
       { path: '/organizations/:organizationId/connections', element: <ConnectionsPage /> },
       { path: '/organizations/:organizationId/incidents/:incidentId', element: <IncidentPage /> },
       { path: '/organizations/:organizationId/incidents', element: <IncidentsPage /> },

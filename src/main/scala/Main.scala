@@ -11,7 +11,7 @@ import application.discovery.{
   SyncDiscoveredSnapshot
 }
 import application.monitor.EvaluateMonitorRules
-import application.connection.{GetConnection, ListConnections}
+import application.connection.{GetConnection, ListConnections, SshConnectionManagement}
 import application.navigation.{GetOrganization, ListEnvironments, ListProjects}
 import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, BootstrapConfig, Login, SessionTokens}
 import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
@@ -22,6 +22,7 @@ import infrastructure.http.ResourceRoutes
 import infrastructure.http.IncidentRoutes
 import infrastructure.http.MonitorRuleRoutes
 import infrastructure.http.ConnectionRoutes
+import infrastructure.http.SshConnectionMutationRoutes
 import infrastructure.http.NavigationRoutes
 import infrastructure.http.{AuthBoundary, AuthRoutes, AuthSettings}
 import application.monitor.{ListMonitorRules, CreateMonitorRule, UpdateMonitorRule}
@@ -45,7 +46,8 @@ import integration.docker.{
   DockerJavaEngineClient
 }
 import integration.ssh.{
-  EnvironmentSshAuthenticationProvider,
+  CompositeSshAuthenticationProvider,
+  ConnectionSecretCipher,
   SshConnector,
   SshjClient
 }
@@ -53,6 +55,7 @@ import persistence.postgres.{
   PostgresExternalRefRepository,
   PostgresConnectionRepository,
   PostgresConnectionScheduleRepository,
+  PostgresConnectionSecretRepository,
   PostgresMetricObservationRepository,
   PostgresIncidentRepository,
   PostgresMonitorRuleRepository,
@@ -78,6 +81,7 @@ object Main extends IOApp.Simple {
       config <- DatabaseConfig.load
       authSettings <- IO.fromEither(AuthSettings.fromEnvironment(sys.env))
       bootstrapConfig <- IO.fromEither(BootstrapConfig.fromEnvironment(sys.env))
+      secretCipher <- IO.fromEither(ConnectionSecretCipher.fromEnvironment(sys.env))
       _ <- Database.transactor(config).use { xa =>
         val resourceRepository =
           new PostgresResourceRepository
@@ -99,6 +103,8 @@ object Main extends IOApp.Simple {
 
         val connectionScheduleRepository =
           new PostgresConnectionScheduleRepository
+
+        val connectionSecretRepository = new PostgresConnectionSecretRepository
 
         val externalRefRepository =
           new PostgresExternalRefRepository
@@ -191,6 +197,16 @@ object Main extends IOApp.Simple {
         val getConnection = GetConnection[ConnectionIO](connectionRepository, syncSessionRepository, connectionScheduleRepository)
         val listConnections = ListConnections[ConnectionIO](connectionRepository, syncSessionRepository, connectionScheduleRepository)
         val connectionRoutes = new ConnectionRoutes[ConnectionIO](getConnection, listConnections, transactionRunner)
+        val sshClient = new SshjClient[IO]
+        val sshAuthenticationProvider = new CompositeSshAuthenticationProvider[ConnectionIO](
+          connectionSecretRepository, transactionRunner, secretCipher
+        )
+        val sshConnectionManagement = new SshConnectionManagement[ConnectionIO](
+          connectionRepository, connectionScheduleRepository, connectionSecretRepository,
+          projectRepository, environmentRepository, transactionRunner,
+          sshClient, sshAuthenticationProvider, secretCipher
+        )
+        val sshMutationRoutes = new SshConnectionMutationRoutes[ConnectionIO](sshConnectionManagement)
         val navigationRoutes = new NavigationRoutes[ConnectionIO](
           GetOrganization(organizationRepository),
           ListProjects(organizationRepository, projectRepository),
@@ -214,7 +230,7 @@ object Main extends IOApp.Simple {
           transactionRunner, passwordHasher
         )
         val businessApp = (resourceRoutes.routes <+> incidentRoutes.routes <+>
-          monitorRuleRoutes.routes <+> connectionRoutes.routes <+> navigationRoutes.routes).orNotFound
+          monitorRuleRoutes.routes <+> connectionRoutes.routes <+> sshMutationRoutes.routes <+> navigationRoutes.routes).orNotFound
         val protectedApp = new AuthBoundary(authRoutes, authentication, businessApp).app
 
         val syncDiscoveredSnapshot =
@@ -234,12 +250,6 @@ object Main extends IOApp.Simple {
           new DockerConnector[IO](
             dockerEngineClient
           )
-
-        val sshClient =
-          new SshjClient[IO]
-
-        val sshAuthenticationProvider =
-          new EnvironmentSshAuthenticationProvider[IO]
 
         val sshConnector =
           new SshConnector[IO](
@@ -305,12 +315,12 @@ object Main extends IOApp.Simple {
       .flatMap(Port.fromInt)
       .getOrElse(defaultHttpPort)
 
-  private val defaultHttpHost: Host =
+  private lazy val defaultHttpHost: Host =
     Host.fromString("0.0.0.0").getOrElse(
       throw new IllegalStateException("Unable to construct default HTTP host")
     )
 
-  private val defaultHttpPort: Port =
+  private lazy val defaultHttpPort: Port =
     Port.fromInt(8080).getOrElse(
       throw new IllegalStateException("Unable to construct default HTTP port")
     )

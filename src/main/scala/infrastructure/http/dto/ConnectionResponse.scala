@@ -34,6 +34,14 @@ final case class ConnectionScheduleResponse(
   nextRunAt: Instant
 )
 
+final case class SshConnectionResponse(
+  host: String,
+  port: Int,
+  username: String,
+  hostKeyFingerprint: Option[String],
+  credentialConfigured: Boolean
+)
+
 final case class ConnectionResponse(
   id: UUID,
   connectorType: String,
@@ -44,5 +52,6 @@ final case class ConnectionResponse(
   schedule: Option[ConnectionScheduleResponse],
   lastSync: Option[SyncSessionResponse],
   createdAt: Instant,
-  updatedAt: Instant
+  updatedAt: Instant,
+  ssh: Option[SshConnectionResponse]
 )

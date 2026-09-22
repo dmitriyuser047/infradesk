@@ -12,6 +12,8 @@ Vite starts on its default development port and proxies `/api` requests to the b
 
 Open `/login` to sign in. The backend needs an applied `V9__add_authentication.sql` migration and an initial account. To create one owner account on startup, configure all four variables:
 
+SSH password onboarding also requires applying `V10__add_connection_secret.sql` and setting `INFRADESK_SECRET_MASTER_KEY_BASE64` to a persistent Base64-encoded 32-byte random key before starting the backend. The backend refuses to start without a valid key. Keep it outside the repository and back it up securely: losing or rotating it without re-encrypting stored secrets makes saved SSH passwords unreadable. Existing `env:` SSH references remain supported.
+
 ```text
 INFRADESK_BOOTSTRAP_EMAIL
 INFRADESK_BOOTSTRAP_PASSWORD

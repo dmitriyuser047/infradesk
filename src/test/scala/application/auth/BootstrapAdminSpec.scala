@@ -61,6 +61,7 @@ final class BootstrapAdminSpec extends FunSuite {
   }
 
   private final class Memberships extends OrganizationMembershipRepository[IO] {
+    override def findActiveRole(userId: UUID, organizationId: UUID): IO[Option[domain.auth.OrganizationRole]] = IO.pure(None)
     var values: List[OrganizationMembership] = Nil
     override def hasActiveMembership(userId: UUID, organizationId: UUID): IO[Boolean] = IO.pure(false)
     override def listActiveOrganizations(userId: UUID): IO[List[MyOrganization]] = IO.pure(Nil)
