@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  formatIncidentDateTime,
   formatIncidentDuration,
   getIncidentStatusLabel,
   shortIdentifier,
@@ -21,5 +22,9 @@ describe('incident presentation helpers', () => {
   it('formats resolved and ongoing durations', () => {
     expect(formatIncidentDuration('2026-09-22T10:00:00Z', '2026-09-22T10:08:14Z')).toBe('8m 14s')
     expect(formatIncidentDuration('2026-09-22T10:00:00Z', null)).toBe('Ongoing')
+  })
+
+  it('returns a placeholder for an invalid timestamp', () => {
+    expect(formatIncidentDateTime('not-a-timestamp')).toBe('—')
   })
 })

@@ -9,12 +9,16 @@ import { InvalidRoutePage } from './InvalidRoutePage'
 
 export function IncidentsPage() {
   const { organizationId } = useParams()
-  const [searchParams, setSearchParams] = useSearchParams()
 
   if (organizationId === undefined) {
     return <InvalidRoutePage />
   }
 
+  return <IncidentsContent organizationId={organizationId} />
+}
+
+function IncidentsContent({ organizationId }: { organizationId: string }) {
+  const [searchParams, setSearchParams] = useSearchParams()
   const filter = parseFilter(searchParams.get('status'))
   const queryStatus = filter === 'ALL' ? undefined : filter
   const incidentsQuery = useIncidents(organizationId, queryStatus)
