@@ -35,6 +35,8 @@ export interface SyncSessionResponse {
   status: string
   startedAt: string
   finishedAt: string | null
+  errorCode: string | null
+  errorMessage: string | null
 }
 
 export interface ConnectionScheduleResponse {

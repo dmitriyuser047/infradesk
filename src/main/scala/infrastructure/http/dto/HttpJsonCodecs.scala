@@ -82,8 +82,8 @@ object HttpJsonCodecs {
   }
 
   implicit val syncSessionResponseEncoder: Encoder[SyncSessionResponse] =
-    Encoder.forProduct4("id", "status", "startedAt", "finishedAt") { value =>
-      (value.id, value.status, value.startedAt, value.finishedAt)
+    Encoder.forProduct6("id", "status", "startedAt", "finishedAt", "errorCode", "errorMessage") { value =>
+      (value.id, value.status, value.startedAt, value.finishedAt, value.errorCode, value.errorMessage)
     }
 
   implicit val connectionScheduleResponseEncoder: Encoder[ConnectionScheduleResponse] =

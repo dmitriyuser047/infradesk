@@ -306,6 +306,16 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     override def create(session: SyncSession): IO[Unit] =
       IO(update(state().copy(sessions = state().sessions.updated(session.id, session))))
 
+    override def tryCreate(session: SyncSession): IO[Boolean] =
+      create(session).map(_ => true)
+
+    override def findRecentByConnection(organizationId: UUID, connectionId: UUID, limit: Int): IO[List[SyncSession]] =
+      IO.pure(state().sessions.values.filter(s => s.organizationId == organizationId && s.connectionId == connectionId)
+        .toList.sortBy(s => (s.startedAt, s.id.toString)).reverse.take(limit))
+
+    override def findById(organizationId: UUID, connectionId: UUID, sessionId: UUID): IO[Option[SyncSession]] =
+      IO.pure(state().sessions.get(sessionId).filter(s => s.organizationId == organizationId && s.connectionId == connectionId))
+
     override def complete(organizationId: UUID, id: UUID, finishedAt: Instant): IO[Unit] =
       IO {
         state().sessions.get(id).foreach { session =>
@@ -316,7 +326,7 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
         }
       }
 
-    override def fail(organizationId: UUID, id: UUID, finishedAt: Instant): IO[Unit] =
+    override def fail(organizationId: UUID, id: UUID, finishedAt: Instant, errorCode: String, errorMessage: String): IO[Unit] =
       IO.unit
   }
 

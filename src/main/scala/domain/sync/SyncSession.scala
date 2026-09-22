@@ -28,5 +28,7 @@ final case class SyncSession(
                               connectionId: UUID,
                               startedAt: Instant,
                               finishedAt: Option[Instant],
-                              status: SyncSessionStatus
+                              status: SyncSessionStatus,
+                              errorCode: Option[String] = None,
+                              errorMessage: Option[String] = None
                             )

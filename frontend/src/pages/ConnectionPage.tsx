@@ -1,7 +1,7 @@
 import { Cable } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
-import { useConnection, useDeactivateConnection } from '../api/connections'
+import { useConnection, useConnectionSyncSessions, useDeactivateConnection, useRunConnectionSync } from '../api/connections'
 import { useMyOrganizations } from '../api/auth'
 import { ApiError } from '../api/httpClient'
 import { ConnectionStatusBadge } from '../components/connections/ConnectionStatusBadge'
@@ -15,7 +15,7 @@ import {
 } from '../components/connections/connectionPresentation'
 import { SyncStatusBadge } from '../components/connections/SyncStatusBadge'
 import { AppShell } from '../components/layout/AppShell'
-import { ConnectionScopeType, type ConnectionResponse } from '../types/connection'
+import { ConnectionScopeType, SyncStatus, type ConnectionResponse } from '../types/connection'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
 export function ConnectionPage() {
@@ -32,6 +32,7 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
   const connectionQuery = useConnection(organizationId, connectionId)
   const membership = useMyOrganizations()
   const deactivate = useDeactivateConnection(organizationId, connectionId)
+  const sync = useRunConnectionSync(organizationId, connectionId)
   const navigate = useNavigate()
   const isOwner = membership.data?.find(value => value.id === organizationId)?.role === 'OWNER'
   const connectionsPath = `/organizations/${organizationId}/connections`
@@ -78,10 +79,20 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
               }
             }}>Deactivate</button>
           </div> : null}
+          {isOwner && connection.active ? <button type="button"
+            disabled={sync.isPending || connection.lastSync?.status === SyncStatus.running}
+            onClick={() => sync.mutate()}>
+            {sync.isPending ? 'Synchronizing…' : connection.lastSync?.status === SyncStatus.running ? 'Synchronization running' : 'Sync now'}
+          </button> : null}
         </header>
         {deactivate.isError ? <p role="alert">{safeErrorMessage(deactivate.error)}</p> : null}
+        {sync.isError ? <p role="alert">{sync.error instanceof ApiError && sync.error.code === 'SYNC_ALREADY_RUNNING'
+          ? 'Synchronization is already running.' : safeErrorMessage(sync.error)}</p> : null}
+        {sync.isSuccess ? <p role="status">{sync.data.status === SyncStatus.failed
+          ? sync.data.errorMessage ?? 'Synchronization failed' : 'Synchronization completed'}</p> : null}
         <ConnectionOverview connection={connection} />
         <ConnectionSynchronization connection={connection} />
+        <ConnectionSyncHistory organizationId={organizationId} connectionId={connectionId} />
         <ConnectionSchedule connection={connection} />
         {connection.ssh ? <section className="content-panel connection-section"><h2>SSH</h2><dl className="summary-grid connection-summary-grid">
           <DetailItem label="Host" value={connection.ssh.host} />
@@ -93,6 +104,24 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
       </div>
     </AppShell>
   )
+}
+
+function ConnectionSyncHistory({ organizationId, connectionId }: { organizationId: string; connectionId: string }) {
+  const history = useConnectionSyncSessions(organizationId, connectionId)
+  return <section className="content-panel connection-section" aria-labelledby="sync-history-heading">
+    <div className="panel-heading"><div><p className="eyebrow">Executions</p>
+      <h2 id="sync-history-heading">Synchronization history</h2></div></div>
+    {history.isPending ? <div className="connection-skeleton" aria-label="Loading synchronization history"><span /><span /></div> : null}
+    {history.isError ? <div className="connection-state" role="alert"><p>Unable to load synchronization history</p>
+      <button type="button" className="retry-button" onClick={() => history.refetch()}>Retry</button></div> : null}
+    {history.data?.length === 0 ? <p className="connection-section-empty">No synchronization runs yet</p> : null}
+    {history.data?.map(session => <Link className="sync-history-row" key={session.id}
+      to={`/organizations/${organizationId}/connections/${connectionId}/sync-sessions/${session.id}`}>
+      <SyncStatusBadge status={session.status} />
+      <span>{formatConnectionDateTime(session.startedAt)}</span>
+      <span>{formatSyncDuration(session.startedAt, session.finishedAt)}</span>
+    </Link>)}
+  </section>
 }
 
 function ConnectionOverview({ connection }: { connection: ConnectionResponse }) {

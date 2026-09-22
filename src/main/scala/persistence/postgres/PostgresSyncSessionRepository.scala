@@ -20,11 +20,13 @@ final class PostgresSyncSessionRepository extends SyncSessionRepository[Connecti
     connectionId: UUID,
     startedAt: Instant,
     finishedAt: Option[Instant],
-    status: String
+    status: String,
+    errorCode: Option[String],
+    errorMessage: Option[String]
   ) {
     def toDomain: Either[IllegalArgumentException, SyncSession] =
       SyncSessionStatus.fromCode(status).map { typedStatus =>
-        SyncSession(id, organizationId, connectionId, startedAt, finishedAt, typedStatus)
+        SyncSession(id, organizationId, connectionId, startedAt, finishedAt, typedStatus, errorCode, errorMessage)
       }
   }
 
@@ -39,7 +41,9 @@ final class PostgresSyncSessionRepository extends SyncSessionRepository[Connecti
         connection_id,
         started_at,
         finished_at,
-        status
+        status,
+        error_code,
+        error_message
       from sync_session
       where organization_id = $organizationId
         and connection_id = $connectionId
@@ -53,6 +57,30 @@ final class PostgresSyncSessionRepository extends SyncSessionRepository[Connecti
         case None => none[SyncSession].pure[ConnectionIO]
       }
 
+  override def findRecentByConnection(
+    organizationId: UUID,
+    connectionId: UUID,
+    limit: Int
+  ): ConnectionIO[List[SyncSession]] =
+    sql"""select id, organization_id, connection_id, started_at, finished_at, status, error_code, error_message
+           from sync_session
+           where organization_id = $organizationId and connection_id = $connectionId
+           order by started_at desc, id desc
+           limit $limit"""
+      .query[SyncSessionRow].to[List]
+      .flatMap(_.traverse(row => row.toDomain.liftTo[ConnectionIO]))
+
+  override def findById(
+    organizationId: UUID,
+    connectionId: UUID,
+    sessionId: UUID
+  ): ConnectionIO[Option[SyncSession]] =
+    sql"""select id, organization_id, connection_id, started_at, finished_at, status, error_code, error_message
+           from sync_session
+           where organization_id = $organizationId and connection_id = $connectionId and id = $sessionId"""
+      .query[SyncSessionRow].option
+      .flatMap(_.traverse(row => row.toDomain.liftTo[ConnectionIO]))
+
   override def create(session: SyncSession): ConnectionIO[Unit] =
     sql"""
       insert into sync_session (
@@ -62,6 +90,14 @@ final class PostgresSyncSessionRepository extends SyncSessionRepository[Connecti
         ${session.startedAt}, ${session.finishedAt}, ${session.status.code}
       )
     """.update.run.flatMap(rows => expectOne("create")(rows))
+
+  override def tryCreate(session: SyncSession): ConnectionIO[Boolean] =
+    sql"""insert into sync_session
+             (id, organization_id, connection_id, started_at, finished_at, status)
+           values (${session.id}, ${session.organizationId}, ${session.connectionId},
+                   ${session.startedAt}, ${session.finishedAt}, ${session.status.code})
+           on conflict (organization_id, connection_id) where status = 'RUNNING' do nothing"""
+      .update.run.map(_ == 1)
 
   override def complete(
                         organizationId: UUID,
@@ -73,9 +109,16 @@ final class PostgresSyncSessionRepository extends SyncSessionRepository[Connecti
   override def fail(
                     organizationId: UUID,
                     id: UUID,
-                    finishedAt: Instant
+                    finishedAt: Instant,
+                    errorCode: String,
+                    errorMessage: String
                   ): ConnectionIO[Unit] =
-    finish(organizationId, id, finishedAt, SyncSessionStatus.Failed)
+    sql"""update sync_session
+           set finished_at = $finishedAt, status = ${SyncSessionStatus.Failed.code},
+               error_code = $errorCode, error_message = $errorMessage
+           where organization_id = $organizationId and id = $id
+             and status = ${SyncSessionStatus.Running.code}"""
+      .update.run.flatMap(rows => expectOne("fail")(rows))
 
   private def finish(
                       organizationId: UUID,

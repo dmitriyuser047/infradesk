@@ -146,8 +146,13 @@ final class AuthBoundarySpec extends FunSuite {
     val denied = fixture.app.run(cookieRequest(Method.POST, listPath, raw)).unsafeRunSync()
     assertEquals(denied.status, Status.Forbidden)
     assertEquals(denied.as[Json].unsafeRunSync().hcursor.get[String]("code"), Right("FORBIDDEN"))
+    val syncPath = s"$listPath/${UUID.randomUUID()}/sync"
+    val historyPath = syncPath.replace("/sync", "/sync-sessions")
+    assertEquals(fixture.app.run(cookieRequest(Method.POST, syncPath, raw)).unsafeRunSync().status, Status.Forbidden)
+    assertEquals(fixture.app.run(cookieRequest(Method.GET, historyPath, raw)).unsafeRunSync().status, Status.Ok)
     fixture.memberships.values = fixture.memberships.values.map(_.copy(role = OrganizationRole.Owner))
     assertEquals(fixture.app.run(cookieRequest(Method.POST, listPath, raw)).unsafeRunSync().status, Status.Ok)
+    assertEquals(fixture.app.run(cookieRequest(Method.POST, syncPath, raw)).unsafeRunSync().status, Status.Ok)
   }
 
   private def cookieRequest(method: Method, path: String, token: String): Request[IO] =
@@ -169,6 +174,8 @@ final class AuthBoundarySpec extends FunSuite {
       case GET -> Root / "api" / "v1" / "organizations" / _ / "projects" => Ok("reached")
       case GET -> Root / "api" / "v1" / "organizations" / _ / "connections" => Ok("reached")
       case POST -> Root / "api" / "v1" / "organizations" / _ / "connections" => Ok("reached")
+      case POST -> Root / "api" / "v1" / "organizations" / _ / "connections" / _ / "sync" => Ok("reached")
+      case GET -> Root / "api" / "v1" / "organizations" / _ / "connections" / _ / "sync-sessions" => Ok("reached")
     }.orNotFound
     val app = new AuthBoundary(authRoutes, authentication, business).app
 

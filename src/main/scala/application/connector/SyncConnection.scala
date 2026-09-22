@@ -4,6 +4,7 @@ package application.connector
 import application.discovery.{PendingDiscoveredResource, SyncDiscoveredSnapshot}
 import application.port.{
   ConnectionRepository,
+  ConnectionSyncResult,
   IdGenerator,
   SyncSessionRepository,
   TimeProvider,
@@ -30,7 +31,7 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
 
   def execute(
                connection: Connection
-             ): F[List[Resource]] =
+             ): F[ConnectionSyncResult] =
     for {
       connector <- connectorRegistry
         .find(connection.connectorType)
@@ -51,7 +52,8 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
         status = SyncSessionStatus.Running
       )
 
-      _ <- transactionRunner.run(syncSessionRepository.create(syncSession))
+      created <- transactionRunner.run(syncSessionRepository.tryCreate(syncSession))
+      _ <- if (created) ().pure[F] else SyncAlreadyRunning().raiseError[F, Unit]
 
       result <- syncDiscoveredResources(
         connection,
@@ -66,7 +68,7 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
         case Left(error) =>
           failSync(connection, syncSessionId, error)
       }
-    } yield resources
+    } yield ConnectionSyncResult(syncSessionId, resources)
 
   private def syncDiscoveredResources(
                                        connection: Connection,
@@ -115,9 +117,13 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
                      ): F[List[Resource]] =
     timeProvider.now.flatMap { finishedAt =>
       transactionRunner
-        .run(syncSessionRepository.fail(connection.organizationId, syncSessionId, finishedAt))
+        .run(syncSessionRepository.fail(connection.organizationId, syncSessionId, finishedAt,
+          "SYNC_FAILED", "Synchronization failed"))
         .attempt
-        .flatMap(_ => error.raiseError[F, List[Resource]])
+        .flatMap {
+          case Right(_) => ConnectionSyncExecutionFailed(syncSessionId, error).raiseError[F, List[Resource]]
+          case Left(persistenceError) => persistenceError.raiseError[F, List[Resource]]
+        }
     }
 
   private def saveConnectionConfigIfChanged(

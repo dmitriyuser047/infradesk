@@ -3,11 +3,13 @@ package application.scheduler
 
 import application.port.{
   ConnectionScheduleRepository,
+  ConnectionSyncResult,
   ConnectionSynchronizer,
   TimeProvider,
   TransactionRunner
 }
 import application.monitor.MonitorRuleEvaluator
+import application.connector.RunConnectionSync
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -110,12 +112,15 @@ final class SyncSchedulerSpec extends FunSuite {
     val repository = new RecordingConnectionScheduleRepository(schedules)
     val synchronizer = new RecordingConnectionSynchronizer(transactionRunner, failingConnectionIds)
     val evaluator = new RecordingMonitorRuleEvaluator(transactionRunner, failingEvaluator)
+    val timeProvider = new SequenceTimeProvider(times)
+    val runConnectionSync = new RunConnectionSync[IO, IO](
+      synchronizer, evaluator, transactionRunner, timeProvider
+    )
     val scheduler = new SyncScheduler[IO, IO](
       repository,
-      synchronizer,
+      runConnectionSync,
       transactionRunner,
-      new SequenceTimeProvider(times),
-      evaluator
+      timeProvider
     )
 
     SchedulerFixture(scheduler, repository, synchronizer, evaluator)
@@ -174,7 +179,7 @@ final class SyncSchedulerSpec extends FunSuite {
     var calls: List[UUID] = List.empty
     var calledInsideTransaction = false
 
-    override def execute(organizationId: UUID, connectionId: UUID): IO[List[Resource]] =
+    override def execute(organizationId: UUID, connectionId: UUID): IO[ConnectionSyncResult] =
       IO {
         calls = calls :+ connectionId
         calledInsideTransaction ||= transactionRunner.inTransaction
@@ -182,7 +187,7 @@ final class SyncSchedulerSpec extends FunSuite {
         if (failingConnectionIds.contains(connectionId))
           IO.raiseError(new IllegalStateException(s"Simulated sync failure for $connectionId"))
         else
-          IO.pure(List.empty)
+          IO.pure(ConnectionSyncResult(UUID.randomUUID(), List.empty))
       }
   }
 

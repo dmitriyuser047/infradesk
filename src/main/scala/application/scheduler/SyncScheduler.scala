@@ -1,10 +1,9 @@
 package ru.bitec.app.ops
 package application.scheduler
 
-import application.monitor.MonitorRuleEvaluator
 import application.port.{
   ConnectionScheduleRepository,
-  ConnectionSynchronizer,
+  ConnectionSyncRunner,
   TimeProvider,
   TransactionRunner
 }
@@ -18,10 +17,9 @@ import scala.concurrent.duration.FiniteDuration
 
 final class SyncScheduler[F[_]: Temporal, Tx[_]: MonadThrow](
                                                                connectionScheduleRepository: ConnectionScheduleRepository[Tx],
-                                                               connectionSynchronizer: ConnectionSynchronizer[F],
+                                                               connectionSyncRunner: ConnectionSyncRunner[F],
                                                                transactionRunner: TransactionRunner[F, Tx],
-                                                               timeProvider: TimeProvider[F],
-                                                               monitorRuleEvaluator: MonitorRuleEvaluator[Tx]
+                                                               timeProvider: TimeProvider[F]
                                                              ) {
 
   def tick(limit: Int): F[Unit] =
@@ -37,24 +35,10 @@ final class SyncScheduler[F[_]: Temporal, Tx[_]: MonadThrow](
     (tick(limit).attempt.void *> Temporal[F].sleep(pollInterval)).foreverM
 
   private def syncSchedule(schedule: ConnectionSchedule): F[Unit] =
-    connectionSynchronizer
+    connectionSyncRunner
       .execute(schedule.organizationId, schedule.connectionId)
       .attempt
-      .flatMap {
-        case Right(resources) =>
-          timeProvider
-            .now
-            .flatMap { evaluatedAt =>
-              transactionRunner.run(
-                monitorRuleEvaluator.execute(resources, evaluatedAt)
-              )
-            }
-            .attempt
-            .void
-
-        case Left(_) =>
-          ().pure[F]
-      } *>
+      .void *>
       timeProvider.now.flatMap { finishedAt =>
         transactionRunner
           .run(

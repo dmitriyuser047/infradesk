@@ -249,9 +249,18 @@ final class ConnectionRoutesSpec extends FunSuite {
 
     override def create(session: SyncSession): IO[Unit] = IO.unit
 
+    override def tryCreate(session: SyncSession): IO[Boolean] = IO.pure(true)
+
+    override def findRecentByConnection(organizationId: UUID, connectionId: UUID, limit: Int): IO[List[SyncSession]] =
+      IO.pure(sessions.filter(s => s.organizationId == organizationId && s.connectionId == connectionId)
+        .sortBy(s => (s.startedAt, s.id.toString)).reverse.take(limit))
+
+    override def findById(organizationId: UUID, connectionId: UUID, sessionId: UUID): IO[Option[SyncSession]] =
+      IO.pure(sessions.find(s => s.organizationId == organizationId && s.connectionId == connectionId && s.id == sessionId))
+
     override def complete(organizationId: UUID, id: UUID, finishedAt: Instant): IO[Unit] = IO.unit
 
-    override def fail(organizationId: UUID, id: UUID, finishedAt: Instant): IO[Unit] = IO.unit
+    override def fail(organizationId: UUID, id: UUID, finishedAt: Instant, errorCode: String, errorMessage: String): IO[Unit] = IO.unit
   }
 
   private final class InMemoryConnectionScheduleRepository(

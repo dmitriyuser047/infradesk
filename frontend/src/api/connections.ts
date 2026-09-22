@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef } from 'react'
 
-import { requestJson } from './httpClient'
-import type { ConnectionResponse, SaveSshConnectionRequest } from '../types/connection'
+import { ApiError, requestJson } from './httpClient'
+import type { ConnectionResponse, SaveSshConnectionRequest, SyncSessionResponse } from '../types/connection'
 import { requestVoid } from './httpClient'
 
 export function getConnections(organizationId: string): Promise<ConnectionResponse[]> {
@@ -36,6 +36,56 @@ export function useConnection(
     queryKey: ['connection', organizationId, connectionId],
     queryFn: () => getConnection(requireId(organizationId), requireId(connectionId)),
     enabled: Boolean(organizationId && connectionId),
+  })
+}
+
+export function getConnectionSyncSessions(organizationId: string, connectionId: string): Promise<SyncSessionResponse[]> {
+  return requestJson<SyncSessionResponse[]>(`${path(organizationId)}/${encodeURIComponent(connectionId)}/sync-sessions`)
+}
+
+export function getConnectionSyncSession(organizationId: string, connectionId: string, sessionId: string): Promise<SyncSessionResponse> {
+  return requestJson<SyncSessionResponse>(
+    `${path(organizationId)}/${encodeURIComponent(connectionId)}/sync-sessions/${encodeURIComponent(sessionId)}`,
+  )
+}
+
+export function runConnectionSync(organizationId: string, connectionId: string): Promise<SyncSessionResponse> {
+  return requestJson<SyncSessionResponse>(`${path(organizationId)}/${encodeURIComponent(connectionId)}/sync`, {
+    method: 'POST',
+  })
+}
+
+export function useConnectionSyncSessions(organizationId: string, connectionId: string) {
+  return useQuery({
+    queryKey: ['sync-sessions', organizationId, connectionId],
+    queryFn: () => getConnectionSyncSessions(organizationId, connectionId),
+  })
+}
+
+export function useConnectionSyncSession(organizationId: string | undefined, connectionId: string | undefined, sessionId: string | undefined) {
+  return useQuery({
+    queryKey: ['sync-session', organizationId, connectionId, sessionId],
+    queryFn: () => getConnectionSyncSession(requireId(organizationId), requireId(connectionId), requireId(sessionId)),
+    enabled: Boolean(organizationId && connectionId && sessionId),
+  })
+}
+
+export function useRunConnectionSync(organizationId: string, connectionId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => runConnectionSync(organizationId, connectionId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['connection', organizationId, connectionId] })
+      void queryClient.invalidateQueries({ queryKey: ['connections', organizationId] })
+      void queryClient.invalidateQueries({ queryKey: ['sync-sessions', organizationId, connectionId] })
+      void queryClient.invalidateQueries({ queryKey: ['environment-resources', organizationId] })
+    },
+    onError: error => {
+      if (error instanceof ApiError && error.code === 'SYNC_ALREADY_RUNNING') {
+        void queryClient.invalidateQueries({ queryKey: ['connection', organizationId, connectionId] })
+        void queryClient.invalidateQueries({ queryKey: ['sync-sessions', organizationId, connectionId] })
+      }
+    },
   })
 }
 

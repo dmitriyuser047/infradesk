@@ -25,7 +25,9 @@ final case class SyncSessionResponse(
   id: UUID,
   status: String,
   startedAt: Instant,
-  finishedAt: Option[Instant]
+  finishedAt: Option[Instant],
+  errorCode: Option[String],
+  errorMessage: Option[String]
 )
 
 final case class ConnectionScheduleResponse(

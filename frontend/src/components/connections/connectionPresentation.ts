@@ -41,6 +41,10 @@ export function getSyncStatusLabel(status: string): string {
   }
 }
 
+export function getSyncFailureMessage(message: string | null): string {
+  return message?.trim() || 'Synchronization failed'
+}
+
 export function formatScheduleInterval(intervalSeconds: number): string {
   if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
     return '—'

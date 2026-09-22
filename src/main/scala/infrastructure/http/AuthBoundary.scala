@@ -67,6 +67,7 @@ final class AuthBoundary[Tx[_]](
     segments match {
       case List("api", "v1", "organizations", _, "connections") => request.method == POST
       case List("api", "v1", "organizations", _, "connections", "ssh", "test") => request.method == POST
+      case List("api", "v1", "organizations", _, "connections", _, "sync") => request.method == POST
       case List("api", "v1", "organizations", _, "connections", _) =>
         request.method == PUT || request.method == DELETE
       case _ => false

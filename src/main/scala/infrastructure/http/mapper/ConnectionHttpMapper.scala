@@ -33,14 +33,7 @@ object ConnectionHttpMapper {
           schedule.nextRunAt
         )
       },
-      overview.lastSync.map { session =>
-        SyncSessionResponse(
-          session.id,
-          session.status.code,
-          session.startedAt,
-          session.finishedAt
-        )
-      },
+      overview.lastSync.map(SyncSessionHttpMapper.toResponse),
       connection.createdAt,
       connection.updatedAt,
       if (connection.connectorType == "SSH") SshConnectionConfig.from(connection.config).toOption.map { ssh =>

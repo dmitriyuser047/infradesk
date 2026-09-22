@@ -7,6 +7,7 @@ import {
   getConnectionScopeLabel,
   getConnectorTypeLabel,
   getLastSyncSummary,
+  getSyncFailureMessage,
   getSyncStatusLabel,
 } from './connectionPresentation'
 
@@ -49,16 +50,26 @@ describe('connection presentation helpers', () => {
       status: 'RUNNING',
       startedAt: '2026-09-22T10:00:00Z',
       finishedAt: null,
+      errorCode: null,
+      errorMessage: null,
     })).toMatch(/^Started /)
     expect(getLastSyncSummary({
       id: 'sync',
       status: 'COMPLETED',
       startedAt: '2026-09-22T10:00:00Z',
       finishedAt: '2026-09-22T10:00:48Z',
+      errorCode: null,
+      errorMessage: null,
     })).not.toContain('Completed')
   })
 
   it('returns a placeholder for invalid dates', () => {
     expect(formatConnectionDateTime('invalid')).toBe('—')
+  })
+
+  it('uses a safe fallback for missing failure details', () => {
+    expect(getSyncFailureMessage(null)).toBe('Synchronization failed')
+    expect(getSyncFailureMessage('')).toBe('Synchronization failed')
+    expect(getSyncFailureMessage('Synchronization failed')).toBe('Synchronization failed')
   })
 })

@@ -204,12 +204,12 @@ object DevSshSync extends IOApp.Simple {
               }
           )
 
-          resources <- syncConnectionById.execute(
+          result <- syncConnectionById.execute(
             OrganizationId,
             ConnectionId
           )
 
-          _ <- resources.traverse_ { resource =>
+          _ <- result.resources.traverse_ { resource =>
             IO.println(
               s"${resource.id} | ${resource.code} | ${resource.name}"
             )

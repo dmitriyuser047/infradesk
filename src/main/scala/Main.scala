@@ -3,7 +3,8 @@ package ru.bitec.app.ops
 import application.connector.{
   ResourceConnectorRegistry,
   SyncConnection,
-  SyncConnectionById
+  SyncConnectionById,
+  RunConnectionSync
 }
 import application.discovery.{
   CreateDiscoveredResource,
@@ -11,7 +12,7 @@ import application.discovery.{
   SyncDiscoveredSnapshot
 }
 import application.monitor.EvaluateMonitorRules
-import application.connection.{GetConnection, ListConnections, SshConnectionManagement}
+import application.connection.{GetConnection, ListConnections, SshConnectionManagement, ListConnectionSyncSessions, GetConnectionSyncSession, RunManualConnectionSync}
 import application.navigation.{GetOrganization, ListEnvironments, ListProjects}
 import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, BootstrapConfig, Login, SessionTokens}
 import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
@@ -22,6 +23,7 @@ import infrastructure.http.ResourceRoutes
 import infrastructure.http.IncidentRoutes
 import infrastructure.http.MonitorRuleRoutes
 import infrastructure.http.ConnectionRoutes
+import infrastructure.http.ConnectionSyncRoutes
 import infrastructure.http.SshConnectionMutationRoutes
 import infrastructure.http.NavigationRoutes
 import infrastructure.http.{AuthBoundary, AuthRoutes, AuthSettings}
@@ -230,10 +232,6 @@ object Main extends IOApp.Simple {
           userAccountRepository, membershipRepository, organizationRepository,
           transactionRunner, passwordHasher
         )
-        val businessApp = (resourceRoutes.routes <+> incidentRoutes.routes <+>
-          monitorRuleRoutes.routes <+> connectionRoutes.routes <+> sshMutationRoutes.routes <+> navigationRoutes.routes).orNotFound
-        val protectedApp = new AuthBoundary(authRoutes, authentication, businessApp).app
-
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](
             createDiscoveredResource,
@@ -282,13 +280,28 @@ object Main extends IOApp.Simple {
             syncConnection
           )
 
+        val runConnectionSync = new RunConnectionSync[IO, ConnectionIO](
+          syncConnectionById, evaluateMonitorRules, transactionRunner, timeProvider
+        )
+
+        val connectionSyncRoutes = new ConnectionSyncRoutes[ConnectionIO](
+          new ListConnectionSyncSessions(connectionRepository, syncSessionRepository),
+          new GetConnectionSyncSession(syncSessionRepository),
+          new RunManualConnectionSync(runConnectionSync, syncSessionRepository, transactionRunner),
+          transactionRunner
+        )
+
+        val businessApp = (resourceRoutes.routes <+> incidentRoutes.routes <+>
+          monitorRuleRoutes.routes <+> connectionRoutes.routes <+> sshMutationRoutes.routes <+>
+          connectionSyncRoutes.routes <+> navigationRoutes.routes).orNotFound
+        val protectedApp = new AuthBoundary(authRoutes, authentication, businessApp).app
+
         val syncScheduler =
           new SyncScheduler[IO, ConnectionIO](
             connectionScheduleRepository,
-            syncConnectionById,
+            runConnectionSync,
             transactionRunner,
-            timeProvider,
-            evaluateMonitorRules
+            timeProvider
           )
 
         bootstrapAdmin.run(bootstrapConfig).flatMap { _ =>

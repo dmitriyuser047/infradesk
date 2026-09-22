@@ -1,8 +1,7 @@
 package ru.bitec.app.ops
 package application.connector
 
-import application.port.{ConnectionRepository, ConnectionSynchronizer, TransactionRunner}
-import domain.resource.Resource
+import application.port.{ConnectionRepository, ConnectionSynchronizer, ConnectionSyncResult, TransactionRunner}
 
 import cats.MonadThrow
 import cats.syntax.all._
@@ -18,7 +17,7 @@ final class SyncConnectionById[F[_]: MonadThrow, Tx[_]: MonadThrow](
   override def execute(
                organizationId: UUID,
                connectionId: UUID
-             ): F[List[Resource]] =
+             ): F[ConnectionSyncResult] =
     for {
       connection <- transactionRunner
         .run(
@@ -29,9 +28,7 @@ final class SyncConnectionById[F[_]: MonadThrow, Tx[_]: MonadThrow](
                 connection.pure[Tx]
 
               case None =>
-                new IllegalStateException(
-                  s"Connection $connectionId was not found for organization $organizationId"
-                ).raiseError[Tx, domain.connection.Connection]
+                ConnectionSyncNotFound().raiseError[Tx, domain.connection.Connection]
             }
         )
 
@@ -39,9 +36,7 @@ final class SyncConnectionById[F[_]: MonadThrow, Tx[_]: MonadThrow](
         if (connection.isActive)
           ().pure[F]
         else
-          new IllegalStateException(
-            s"Connection ${connection.id} is inactive"
-          ).raiseError[F, Unit]
+          ConnectionSyncInactive().raiseError[F, Unit]
 
       resources <- syncConnection.execute(connection)
     } yield resources
