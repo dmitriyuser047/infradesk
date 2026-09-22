@@ -27,10 +27,7 @@ CREATE TABLE monitor_rule (
     CHECK (for_seconds >= 0),
 
   CONSTRAINT ck_monitor_rule_operator
-    CHECK (operator IN ('GREATER_THAN')),
-
-  CONSTRAINT ck_monitor_rule_metric_code
-    CHECK (metric_code IN ('CPU_USAGE_PERCENT', 'MEMORY_USAGE_PERCENT'))
+    CHECK (operator IN ('GREATER_THAN'))
 );
 
 CREATE TABLE monitor_rule_state (
