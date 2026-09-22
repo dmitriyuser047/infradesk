@@ -79,6 +79,36 @@ final class PostgresResourceRepository extends ResourceRepository[ConnectionIO] 
           none[Resource].pure[ConnectionIO]
       }
 
+  override def findActiveByEnvironment(
+                                         organizationId: UUID,
+                                         environmentId: UUID
+                                       ): ConnectionIO[List[Resource]] =
+    sql"""
+      select
+        r.id,
+        r.organization_id,
+        r.environment_id,
+        r.resource_type_id,
+        r.parent_resource_id,
+        r.code,
+        r.name,
+        r.is_active,
+        r.created_at,
+        r.updated_at,
+        rt.code,
+        r.spec::text,
+        r.status::text
+      from resource r
+      join resource_type rt on rt.id = r.resource_type_id
+      where r.organization_id = $organizationId
+        and r.environment_id = $environmentId
+        and r.is_active = true
+      order by r.parent_resource_id nulls first, r.name, r.id
+    """
+      .query[ResourceRow]
+      .to[List]
+      .flatMap(_.traverse(row => row.toDomain(resourceDataJsonCodec).liftTo[ConnectionIO]))
+
 
   override def save(resource: Resource): ConnectionIO[Unit] =
     resourceDataJsonCodec

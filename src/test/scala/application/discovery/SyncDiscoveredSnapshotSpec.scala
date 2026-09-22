@@ -223,6 +223,12 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     override def findById(organizationId: UUID, id: UUID): IO[Option[Resource]] =
       IO.pure(state().resources.get(id))
 
+    override def findActiveByEnvironment(
+                                           organizationId: UUID,
+                                           environmentId: UUID
+                                         ): IO[List[Resource]] =
+      IO.pure(List.empty)
+
     override def save(resource: Resource): IO[Unit] =
       if (failNewResourceSave && resource.id == newResourceId)
         IO.raiseError(new IllegalStateException("Simulated replacement insert failure"))

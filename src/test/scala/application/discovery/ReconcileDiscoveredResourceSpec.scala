@@ -143,6 +143,12 @@ final class ReconcileDiscoveredResourceSpec extends FunSuite {
     override def findById(organizationId: UUID, id: UUID): IO[Option[Resource]] =
       IO.pure(Some(existing))
 
+    override def findActiveByEnvironment(
+                                           organizationId: UUID,
+                                           environmentId: UUID
+                                         ): IO[List[Resource]] =
+      IO.pure(List.empty)
+
     override def save(resource: Resource): IO[Unit] =
       IO { saved = Some(resource) }
 

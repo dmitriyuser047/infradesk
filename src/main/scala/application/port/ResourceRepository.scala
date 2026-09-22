@@ -11,6 +11,8 @@ trait ResourceRepository[F[_]] {
 
   def findById(organizationId: UUID, id:UUID): F[Option[Resource]]
 
+  def findActiveByEnvironment(organizationId: UUID, environmentId: UUID): F[List[Resource]]
+
   def save(resource: Resource): F[Unit]
 
   def deactivateIfExclusiveToConnection(

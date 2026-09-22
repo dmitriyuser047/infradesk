@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package infrastructure.http
 
 import application.port.{ResourceRepository, TransactionRunner}
-import application.resource.GetResource
+import application.resource.{GetResource, ListEnvironmentResources}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -38,9 +38,9 @@ final class ResourceRoutesSpec extends FunSuite {
   }
 
   test("returns a CONTAINER resource and its data") {
-    val fixture = buildFixture(Map((OrganizationId, ResourceId) -> containerResource))
+    val fixture = buildFixture(Map((OrganizationId, ContainerResourceId) -> containerResource))
 
-    val response = fixture.app.run(request(OrganizationId, ResourceId)).unsafeRunSync()
+    val response = fixture.app.run(request(OrganizationId, ContainerResourceId)).unsafeRunSync()
     val body = response.as[Json].unsafeRunSync()
 
     assertEquals(response.status, Status.Ok)
@@ -59,6 +59,104 @@ final class ResourceRoutesSpec extends FunSuite {
     assertEquals(body.hcursor.downField("data").get[String]("kind"), Right("NODE"))
     assert(body.hcursor.downField("data").downField("spec").focus.exists(_.isNull))
     assert(body.hcursor.downField("data").downField("status").focus.exists(_.isNull))
+  }
+
+  test("lists NODE and CONTAINER resources for an environment in one transaction") {
+    val fixture = buildFixture(
+      Map(
+        (OrganizationId, ResourceId) -> nodeResource,
+        (OrganizationId, ContainerResourceId) -> containerResource
+      )
+    )
+
+    val response = fixture.app.run(environmentResourcesRequest(OrganizationId, EnvironmentId)).unsafeRunSync()
+    val body = response.as[Json].unsafeRunSync()
+    val resources = body.asArray.getOrElse(fail("Expected resource array"))
+    val node = resources.head.hcursor
+    val container = resources(1).hcursor
+
+    assertEquals(response.status, Status.Ok)
+    assertEquals(resources.size, 2)
+    assertEquals(node.get[String]("resourceTypeCode"), Right("NODE"))
+    assertEquals(
+      container.downField("data").downField("spec").get[String]("image"),
+      Right("nginx:1.27")
+    )
+    assertEquals(
+      container.get[String]("parentResourceId"),
+      Right(ResourceId.toString)
+    )
+    assertEquals(fixture.transactionRunner.calls, 1)
+    assertEquals(fixture.repository.environmentRequests, List((OrganizationId, EnvironmentId)))
+  }
+
+  test("lists empty resource data without failing") {
+    val fixture = buildFixture(
+      Map((OrganizationId, ResourceId) -> nodeResource.copy(data = ResourceData.empty))
+    )
+
+    val response = fixture.app.run(environmentResourcesRequest(OrganizationId, EnvironmentId)).unsafeRunSync()
+    val body = response.as[Json].unsafeRunSync()
+
+    assertEquals(response.status, Status.Ok)
+    assert(body.hcursor.downArray.downField("data").downField("spec").focus.exists(_.isNull))
+    assert(body.hcursor.downArray.downField("data").downField("status").focus.exists(_.isNull))
+  }
+
+  test("returns an empty list and excludes inactive, other environment, and other organization resources") {
+    val inactive = nodeResource.copy(id = InactiveResourceId, isActive = false)
+    val otherEnvironment = nodeResource.copy(id = OtherEnvironmentResourceId, environmentId = OtherEnvironmentId)
+    val otherOrganization = nodeResource.copy(id = OtherOrganizationResourceId, organizationId = OtherOrganizationId)
+    val fixture = buildFixture(
+      Map(
+        (OrganizationId, InactiveResourceId) -> inactive,
+        (OrganizationId, OtherEnvironmentResourceId) -> otherEnvironment,
+        (OtherOrganizationId, OtherOrganizationResourceId) -> otherOrganization
+      )
+    )
+
+    val response = fixture.app.run(environmentResourcesRequest(OrganizationId, EnvironmentId)).unsafeRunSync()
+    val body = response.as[Json].unsafeRunSync()
+
+    assertEquals(response.status, Status.Ok)
+    assertEquals(body.asArray, Some(Vector.empty))
+  }
+
+  test("returns 400 for invalid UUIDs in environment resource list") {
+    val fixture = buildFixture(Map.empty)
+    val invalidOrganization = fixture.app.run(
+      Request[IO](Method.GET, Uri.unsafeFromString(s"/api/v1/organizations/not-a-uuid/environments/$EnvironmentId/resources"))
+    ).unsafeRunSync()
+    val invalidEnvironment = fixture.app.run(
+      Request[IO](Method.GET, Uri.unsafeFromString(s"/api/v1/organizations/$OrganizationId/environments/not-a-uuid/resources"))
+    ).unsafeRunSync()
+    val invalidOrganizationBody = invalidOrganization.as[Json].unsafeRunSync()
+    val invalidEnvironmentBody = invalidEnvironment.as[Json].unsafeRunSync()
+
+    assertEquals(invalidOrganization.status, Status.BadRequest)
+    assertEquals(invalidEnvironment.status, Status.BadRequest)
+    assertEquals(invalidOrganizationBody.hcursor.get[String]("code"), Right("INVALID_REQUEST"))
+    assertEquals(invalidOrganizationBody.hcursor.get[String]("message"), Right("Invalid organizationId"))
+    assertEquals(invalidEnvironmentBody.hcursor.get[String]("code"), Right("INVALID_REQUEST"))
+    assertEquals(invalidEnvironmentBody.hcursor.get[String]("message"), Right("Invalid environmentId"))
+  }
+
+  test("returns a sanitized 500 for list query and mapper failures") {
+    val queryFailureFixture = buildFixture(Map.empty, failWith = Some(new IllegalStateException("database connection secret")))
+    val malformedFixture = buildFixture(
+      Map((OrganizationId, ResourceId) -> nodeResource.copy(data = ResourceData(Some(NodeSpec("node-1", None, None, None, None)), None)))
+    )
+
+    val queryFailure = queryFailureFixture.app.run(environmentResourcesRequest(OrganizationId, EnvironmentId)).unsafeRunSync()
+    val malformed = malformedFixture.app.run(environmentResourcesRequest(OrganizationId, EnvironmentId)).unsafeRunSync()
+    val queryFailureBody = queryFailure.as[Json].unsafeRunSync()
+    val malformedBody = malformed.as[Json].unsafeRunSync()
+
+    assertEquals(queryFailure.status, Status.InternalServerError)
+    assertEquals(malformed.status, Status.InternalServerError)
+    assertEquals(queryFailureBody.hcursor.get[String]("code"), Right("INTERNAL_ERROR"))
+    assertEquals(malformedBody.hcursor.get[String]("code"), Right("INTERNAL_ERROR"))
+    assert(!queryFailureBody.noSpaces.contains("database connection secret"))
   }
 
   test("returns 404 when a resource is absent") {
@@ -121,7 +219,11 @@ final class ResourceRoutesSpec extends FunSuite {
                      ): RouteFixture = {
     val repository = new InMemoryResourceRepository(resources, failWith)
     val transactionRunner = new RecordingTransactionRunner
-    val routes = new ResourceRoutes[IO](GetResource[IO](repository), transactionRunner)
+    val routes = new ResourceRoutes[IO](
+      GetResource[IO](repository),
+      ListEnvironmentResources[IO](repository),
+      transactionRunner
+    )
 
     RouteFixture(routes.routes.orNotFound, repository, transactionRunner)
   }
@@ -130,6 +232,12 @@ final class ResourceRoutesSpec extends FunSuite {
     Request[IO](
       Method.GET,
       Uri.unsafeFromString(s"/api/v1/organizations/$organizationId/resources/$resourceId")
+    )
+
+  private def environmentResourcesRequest(organizationId: UUID, environmentId: UUID): Request[IO] =
+    Request[IO](
+      Method.GET,
+      Uri.unsafeFromString(s"/api/v1/organizations/$organizationId/environments/$environmentId/resources")
     )
 
   private final case class RouteFixture(
@@ -150,11 +258,30 @@ final class ResourceRoutesSpec extends FunSuite {
                                                    failWith: Option[Throwable]
                                                  ) extends ResourceRepository[IO] {
     var requests: List[(UUID, UUID)] = List.empty
+    var environmentRequests: List[(UUID, UUID)] = List.empty
 
     override def findById(organizationId: UUID, id: UUID): IO[Option[Resource]] =
       IO {
         requests = requests :+ (organizationId, id)
       } *> failWith.fold(IO.pure(resources.get((organizationId, id))))(IO.raiseError)
+
+    override def findActiveByEnvironment(
+                                           organizationId: UUID,
+                                           environmentId: UUID
+                                         ): IO[List[Resource]] =
+      IO {
+        environmentRequests = environmentRequests :+ (organizationId, environmentId)
+      } *> failWith.fold(
+        IO.pure(
+          resources.values.toList
+            .filter(resource =>
+              resource.organizationId == organizationId &&
+                resource.environmentId == environmentId &&
+                resource.isActive
+            )
+            .sortBy(resource => (resource.parentResourceId.isDefined, resource.name, resource.id.toString))
+        )
+      )(IO.raiseError)
 
     override def save(resource: Resource): IO[Unit] = IO.unit
 
@@ -169,8 +296,13 @@ final class ResourceRoutesSpec extends FunSuite {
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
   private val OtherOrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000002")
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
+  private val OtherEnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000002")
   private val ResourceTypeId = UUID.fromString("10000000-0000-0000-0000-000000000001")
   private val ResourceId = UUID.fromString("70000000-0000-0000-0000-000000000001")
+  private val ContainerResourceId = UUID.fromString("70000000-0000-0000-0000-000000000002")
+  private val InactiveResourceId = UUID.fromString("70000000-0000-0000-0000-000000000003")
+  private val OtherEnvironmentResourceId = UUID.fromString("70000000-0000-0000-0000-000000000004")
+  private val OtherOrganizationResourceId = UUID.fromString("70000000-0000-0000-0000-000000000005")
   private val Now = Instant.parse("2026-09-22T10:00:00Z")
 
   private val nodeResource = Resource(
@@ -192,6 +324,8 @@ final class ResourceRoutesSpec extends FunSuite {
   )
 
   private val containerResource = nodeResource.copy(
+    id = ContainerResourceId,
+    parentResourceId = Some(ResourceId),
     code = "nginx",
     name = "nginx",
     resourceTypeCode = "CONTAINER",
