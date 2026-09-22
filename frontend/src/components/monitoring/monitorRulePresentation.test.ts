@@ -5,6 +5,8 @@ import {
   formatRuleDuration,
   getMetricLabel,
   getOperatorLabel,
+  isSupportedMetricCode,
+  isSupportedOperator,
   secondsToDurationInput,
 } from './monitorRulePresentation'
 
@@ -32,5 +34,9 @@ describe('monitor rule presentation helpers', () => {
     expect(getMetricLabel('FUTURE_METRIC')).toBe('FUTURE_METRIC')
     expect(getOperatorLabel('GREATER_THAN')).toBe('Greater than')
     expect(getOperatorLabel('FUTURE_OPERATOR')).toBe('FUTURE_OPERATOR')
+    expect(isSupportedMetricCode('CPU_USAGE_PERCENT')).toBe(true)
+    expect(isSupportedMetricCode('FUTURE_METRIC')).toBe(false)
+    expect(isSupportedOperator('GREATER_THAN')).toBe(true)
+    expect(isSupportedOperator('FUTURE_OPERATOR')).toBe(false)
   })
 })

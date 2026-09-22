@@ -43,12 +43,16 @@ export function MonitorRulesSection({ organizationId, resourceId }: MonitorRules
   }
 
   const save = async (request: MonitorRuleRequest) => {
-    if (dialogRule === undefined) {
-      await createMutation.mutateAsync(request)
-    } else {
-      await updateMutation.mutateAsync({ monitorRuleId: dialogRule.id, request })
+    try {
+      if (dialogRule === undefined) {
+        await createMutation.mutateAsync(request)
+      } else {
+        await updateMutation.mutateAsync({ monitorRuleId: dialogRule.id, request })
+      }
+      setDialogOpen(false)
+    } catch {
+      // The mutation error is rendered inside the dialog; do not leak a rejected submit promise.
     }
-    setDialogOpen(false)
   }
 
   const mutationError = createMutation.error ?? updateMutation.error

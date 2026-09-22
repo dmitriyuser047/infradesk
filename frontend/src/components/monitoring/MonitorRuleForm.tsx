@@ -9,6 +9,8 @@ import {
   secondsToDurationInput,
   supportedMetricCodes,
   supportedOperators,
+  isSupportedMetricCode,
+  isSupportedOperator,
   type DurationUnit,
 } from './monitorRulePresentation'
 
@@ -45,16 +47,22 @@ export function MonitorRuleForm({
   onSubmit,
   onCancel,
 }: MonitorRuleFormProps) {
-  const [form, setForm] = useState<FormState>(() => rule === undefined ? defaultState : stateFromRule(rule))
+  const [form, setForm] = useState<FormState | null>(() => rule === undefined ? defaultState : stateFromRule(rule))
   const [validationError, setValidationError] = useState<string | undefined>()
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
-    setForm((current) => ({ ...current, [key]: value }))
+    if (form === null) {
+      return
+    }
+    setForm({ ...form, [key]: value })
     setValidationError(undefined)
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (form === null) {
+      return
+    }
     const threshold = Number(form.threshold)
     const durationValue = Number(form.durationValue)
 
@@ -74,6 +82,17 @@ export function MonitorRuleForm({
       forSeconds: durationToSeconds(durationValue, form.durationUnit),
       enabled: form.enabled,
     })
+  }
+
+  if (form === null) {
+    return (
+      <div className="monitor-rule-form">
+        <p className="form-error" role="alert">This rule type is not supported for editing yet.</p>
+        <div className="dialog-actions">
+          <button className="secondary-button" type="button" onClick={onCancel}>Close</button>
+        </div>
+      </div>
+    )
   }
 
   const error = validationError ?? errorMessage
@@ -129,15 +148,16 @@ export function MonitorRuleForm({
   )
 }
 
-function stateFromRule(rule: MonitorRuleResponse): FormState {
+function stateFromRule(rule: MonitorRuleResponse): FormState | null {
+  if (!isSupportedMetricCode(rule.metricCode) || !isSupportedOperator(rule.operator)) {
+    return null
+  }
+
   const duration = secondsToDurationInput(rule.forSeconds)
-  const metricCode = rule.metricCode === MetricCode.memoryUsagePercent
-    ? MetricCode.memoryUsagePercent
-    : MetricCode.cpuUsagePercent
 
   return {
-    metricCode,
-    operator: rule.operator === 'GREATER_THAN' ? 'GREATER_THAN' : 'GREATER_THAN',
+    metricCode: rule.metricCode,
+    operator: rule.operator,
     threshold: String(rule.threshold),
     durationValue: String(duration.value),
     durationUnit: duration.unit,

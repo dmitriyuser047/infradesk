@@ -1,4 +1,4 @@
-import { MetricCode } from '../../types/metric'
+import { MetricCode, type KnownMetricCode } from '../../types/metric'
 import { MonitorOperator, type MonitorOperatorCode } from '../../types/monitorRule'
 
 export type DurationUnit = 'seconds' | 'minutes' | 'hours'
@@ -68,4 +68,12 @@ export function supportedMetricCodes() {
 
 export function supportedOperators(): readonly MonitorOperatorCode[] {
   return [MonitorOperator.greaterThan]
+}
+
+export function isSupportedMetricCode(value: string): value is KnownMetricCode {
+  return supportedMetricCodes().includes(value as KnownMetricCode)
+}
+
+export function isSupportedOperator(value: string): value is MonitorOperatorCode {
+  return supportedOperators().includes(value as MonitorOperatorCode)
 }
