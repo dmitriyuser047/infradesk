@@ -5,7 +5,7 @@ import application.connection.{ConnectionManagementError, SshConnectionManagemen
 import cats.effect.IO
 import cats.syntax.all._
 import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs, SaveSshConnectionRequest, TestSshConnectionRequest, TestSshConnectionResponse}
-import infrastructure.http.mapper.ConnectionHttpMapper
+import infrastructure.http.mapper.{ConnectionHttpMapper, SshConnectionCommandMapper}
 import org.http4s.{HttpRoutes, Response}
 import org.http4s.circe.{CirceEntityDecoder, CirceEntityEncoder}
 import org.http4s.dsl.io._
@@ -23,7 +23,8 @@ final class SshConnectionMutationRoutes[Tx[_]](management: SshConnectionManageme
       withOrganization(org) { id =>
         request.as[TestSshConnectionRequest].attempt.flatMap {
           case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid SSH test request"))
-          case Right(body) => respond(management.test(body).flatMap(fingerprint =>
+          case Right(body) => respond(IO.fromEither(SshConnectionCommandMapper.test(body))
+            .flatMap(management.test).flatMap(fingerprint =>
             Ok(TestSshConnectionResponse(true, fingerprint))))
         }
       }
@@ -32,7 +33,8 @@ final class SshConnectionMutationRoutes[Tx[_]](management: SshConnectionManageme
       withOrganization(org) { id =>
         request.as[SaveSshConnectionRequest].attempt.flatMap {
           case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid connection request"))
-          case Right(body) => respond(management.create(id, body).flatMap(value =>
+          case Right(body) => respond(IO.fromEither(SshConnectionCommandMapper.create(body))
+            .flatMap(management.create(id, _)).flatMap(value =>
             Created(ConnectionHttpMapper.toResponse(value))))
         }
       }
@@ -41,7 +43,8 @@ final class SshConnectionMutationRoutes[Tx[_]](management: SshConnectionManageme
       withIds(org, connection) { (orgId, connectionId) =>
         request.as[SaveSshConnectionRequest].attempt.flatMap {
           case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid connection request"))
-          case Right(body) => respond(management.update(orgId, connectionId, body).flatMap(value =>
+          case Right(body) => respond(IO.fromEither(SshConnectionCommandMapper.update(body))
+            .flatMap(management.update(orgId, connectionId, _)).flatMap(value =>
             Ok(ConnectionHttpMapper.toResponse(value))))
         }
       }

@@ -1,5 +1,5 @@
 package ru.bitec.app.ops
-package integration.ssh
+package domain.connection
 
 import java.util.UUID
 import scala.util.Try
@@ -13,6 +13,8 @@ object SecretRef {
     if (value.startsWith("env:") && value.drop(4).trim.nonEmpty)
       Right(Environment(value.drop(4).trim))
     else if (value.startsWith("db:"))
-      Try(UUID.fromString(value.drop(3))).toEither.left.map(_ => new IllegalArgumentException("Invalid database secret reference")).map(Database.apply)
+      Try(UUID.fromString(value.drop(3))).toEither
+        .left.map(_ => new IllegalArgumentException("Invalid database secret reference"))
+        .map(Database.apply)
     else Left(new IllegalArgumentException("Unsupported secret reference"))
 }

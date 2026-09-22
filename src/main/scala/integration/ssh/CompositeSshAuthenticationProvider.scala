@@ -3,13 +3,19 @@ package integration.ssh
 
 import application.port.{ConnectionSecretRepository, TransactionRunner}
 import cats.effect.IO
-import domain.connection.Connection
+import domain.connection.{Connection, SecretRef}
+import application.port.SshPasswordResolver
 
 final class CompositeSshAuthenticationProvider[Tx[_]](
   secrets: ConnectionSecretRepository[Tx],
   runner: TransactionRunner[IO, Tx],
   cipher: ConnectionSecretCipher
-) extends SshAuthenticationProvider[IO] {
+) extends SshAuthenticationProvider[IO] with SshPasswordResolver[IO] {
+  override def resolvePassword(connection: Connection): IO[String] =
+    resolve(connection).flatMap {
+      case SshAuthentication.Password(value) => IO.pure(value)
+      case _ => IO.raiseError(new IllegalStateException("SSH credential is not a password"))
+    }
   override def resolve(connection: Connection): IO[SshAuthentication] =
     connection.secretRef match {
       case None => IO.raiseError(new IllegalStateException("SSH credential is not configured"))

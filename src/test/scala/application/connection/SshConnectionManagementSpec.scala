@@ -5,7 +5,7 @@ import application.port._
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
-import domain.connection.{Connection, ConnectionSchedule}
+import domain.connection.{Connection, ConnectionSchedule, ConnectionScope, SshConnectionSettings}
 import domain.enviroment.Environment
 import domain.project.Project
 import infrastructure.http.dto._
@@ -25,11 +25,12 @@ final class SshConnectionManagementSpec extends FunSuite {
   private val org = UUID.randomUUID()
   private val key = Base64.getEncoder.encodeToString(Array.fill[Byte](32)(7))
   private val cipher = ConnectionSecretCipher.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> key)).toOption.get
-  private val request = SaveSshConnectionRequest("SSH", "prod-vps", "Production VPS",
-    ConnectionScopeRequest("ORGANIZATION", None, None),
-    SshSettingsRequest("example.org", Some(22), "root"),
-    Some(PasswordCredentialsRequest("PASSWORD", "secret")),
-    ConnectionScheduleRequest(true, 60))
+  private val request = CreateSshConnectionCommand("prod-vps", "Production VPS",
+    ConnectionScope.Organization,
+    SshConnectionSettings("example.org", 22, "root", None, 10, 30),
+    "secret", SshScheduleCommand(true, 60))
+  private val updateRequest = UpdateSshConnectionCommand(request.code, request.name, request.scope,
+    request.ssh, None, request.schedule)
 
   test("create probes outside transaction, saves encrypted credential and due schedule") {
     val f = new ManagementFixture
@@ -48,7 +49,7 @@ final class SshConnectionManagementSpec extends FunSuite {
     val f = new ManagementFixture
     val created = f.management.create(org, request).unsafeRunSync().connection
     val originalSecret = f.savedSecret.get
-    val changed = f.management.update(org, created.id, request.copy(name = "Renamed", credentials = None)).unsafeRunSync()
+    val changed = f.management.update(org, created.id, updateRequest.copy(name = "Renamed")).unsafeRunSync()
     assertEquals(changed.connection.name, "Renamed")
     assertEquals(f.probes, 1)
     assertEquals(f.savedSecret.get.id, originalSecret.id)
@@ -65,12 +66,24 @@ final class SshConnectionManagementSpec extends FunSuite {
     val originalSecret = f.savedSecret.get
     f.failProbe = true
     val error = intercept[ConnectionManagementError] {
-      f.management.update(org, created.id, request.copy(ssh = request.ssh.copy(host = "other.example.org"),
-        credentials = None)).unsafeRunSync()
+      f.management.update(org, created.id, updateRequest.copy(ssh = request.ssh.copy(host = "other.example.org"))).unsafeRunSync()
     }
     assertEquals(error.code, "SSH_CONNECTION_FAILED")
     assertEquals(f.savedConnection.get, created)
     assertEquals(f.savedSecret.get.id, originalSecret.id)
+  }
+
+  test("changing an enabled interval schedules the next run immediately") {
+    val f = new ManagementFixture
+    val created = f.management.create(org, request.copy(schedule = SshScheduleCommand(true, 3600))).unsafeRunSync().connection
+    val oldNextRun = Instant.now().plusSeconds(3300)
+    f.savedSchedule = f.savedSchedule.map(_.copy(nextRunAt = oldNextRun))
+    val changed = f.management.update(org, created.id,
+      updateRequest.copy(schedule = SshScheduleCommand(true, 60))).unsafeRunSync()
+    assertEquals(changed.schedule.get.intervalSeconds, 60L)
+    assert(changed.schedule.get.nextRunAt.isBefore(oldNextRun))
+    assert(!changed.schedule.get.nextRunAt.isBefore(created.createdAt))
+    assertEquals(f.probes, 1)
   }
 
   test("mutation routes return safe 201, 422 for probe failure and 404 for unknown ID") {
@@ -146,20 +159,19 @@ final class SshConnectionManagementSpec extends FunSuite {
     val environments = new EnvironmentRepository[IO] {
       override def findActiveByProject(organizationId: UUID, projectId: UUID): IO[List[Environment]] = IO.pure(Nil)
     }
-    val client = new SshClient[IO] {
-      override def execute(config: SshConnectionConfig, authentication: SshAuthentication, command: String): IO[SshCommandResult] =
+    val probe = new SshConnectionProbe[IO] {
+      override def probe(config: SshConnectionSettings, password: String): IO[String] =
         IO {
           probes += 1
           probedInTransaction ||= inTransaction
-          if (failProbe) throw new IllegalStateException("simulated failure")
-          SshCommandResult(0, "infradesk-ok\n", "", "SHA256:test")
+          if (failProbe) throw SshProbeError.ConnectionFailed
+          "SHA256:test"
         }
     }
-    val auth = new SshAuthenticationProvider[IO] {
-      override def resolve(connection: Connection): IO[SshAuthentication] =
-        IO.pure(SshAuthentication.Password("secret"))
+    val auth = new SshPasswordResolver[IO] {
+      override def resolvePassword(connection: Connection): IO[String] = IO.pure("secret")
     }
     val management = new SshConnectionManagement[IO](connections, schedules, secrets,
-      projects, environments, runner, client, auth, cipher)
+      projects, environments, runner, probe, auth, cipher)
   }
 }

@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package integration.ssh
 
 import application.port.ConnectionSecret
+import domain.connection.SecretRef
 import munit.FunSuite
 
 import java.util.{Base64, UUID}

@@ -48,6 +48,7 @@ import integration.docker.{
 import integration.ssh.{
   CompositeSshAuthenticationProvider,
   ConnectionSecretCipher,
+  SshConnectionProbeAdapter,
   SshConnector,
   SshjClient
 }
@@ -204,7 +205,7 @@ object Main extends IOApp.Simple {
         val sshConnectionManagement = new SshConnectionManagement[ConnectionIO](
           connectionRepository, connectionScheduleRepository, connectionSecretRepository,
           projectRepository, environmentRepository, transactionRunner,
-          sshClient, sshAuthenticationProvider, secretCipher
+          new SshConnectionProbeAdapter(sshClient), sshAuthenticationProvider, secretCipher
         )
         val sshMutationRoutes = new SshConnectionMutationRoutes[ConnectionIO](sshConnectionManagement)
         val navigationRoutes = new NavigationRoutes[ConnectionIO](
