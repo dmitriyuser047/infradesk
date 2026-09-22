@@ -3,6 +3,7 @@ scalaVersion := "2.13.18"
 lazy val doobieVersion = "1.0.0-RC13"
 lazy val dockerVersion = "3.7.1"
 lazy val sshjVersion = "0.40.0"
+lazy val http4sVersion = "0.23.30"
 
 lazy val root = rootProject
   .settings(
@@ -18,6 +19,9 @@ lazy val root = rootProject
       "org.typelevel" %% "doobie-hikari"    % doobieVersion,
       "io.circe" %% "circe-core"   % "0.14.10",
       "io.circe" %% "circe-parser" % "0.14.10",
+      "org.http4s" %% "http4s-ember-server" % http4sVersion,
+      "org.http4s" %% "http4s-dsl" % http4sVersion,
+      "org.http4s" %% "http4s-circe" % http4sVersion,
       "com.github.docker-java" % "docker-java-core" % dockerVersion,
       "com.github.docker-java" % "docker-java-transport-httpclient5" % dockerVersion,
       "com.hierynomus" % "sshj" % sshjVersion

@@ -11,9 +11,12 @@ import application.discovery.{
   SyncDiscoveredSnapshot
 }
 import application.monitor.EvaluateMonitorRules
-import application.resource.{PersistExternalResource, RecordResourceObservations}
+import application.resource.{GetResource, PersistExternalResource, RecordResourceObservations}
 import application.scheduler.SyncScheduler
 import cats.effect.{IO, IOApp}
+import com.comcast.ip4s.{Host, Port}
+import infrastructure.http.ResourceRoutes
+import org.http4s.ember.server.EmberServerBuilder
 import org.typelevel.doobie.ConnectionIO
 import infrastructure.database.{
   Database,
@@ -48,6 +51,7 @@ import persistence.postgres.{
 }
 
 import scala.concurrent.duration._
+import scala.util.Try
 
 object Main extends IOApp.Simple {
 
@@ -129,6 +133,12 @@ object Main extends IOApp.Simple {
             transactionIdGenerator
           )
 
+        val getResource =
+          GetResource[ConnectionIO](resourceRepository)
+
+        val resourceRoutes =
+          new ResourceRoutes[ConnectionIO](getResource, transactionRunner)
+
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](
             createDiscoveredResource,
@@ -192,7 +202,36 @@ object Main extends IOApp.Simple {
             evaluateMonitorRules
           )
 
-        syncScheduler.run(1.second, limit = 100)
+        EmberServerBuilder
+          .default[IO]
+          .withHost(httpHost)
+          .withPort(httpPort)
+          .withHttpApp(resourceRoutes.routes.orNotFound)
+          .build
+          .use(_ => syncScheduler.run(1.second, limit = 100))
       }
     }
+
+  private val httpHost: Host =
+    sys.env
+      .get("INFRADESK_HTTP_HOST")
+      .flatMap(Host.fromString)
+      .getOrElse(defaultHttpHost)
+
+  private val httpPort: Port =
+    sys.env
+      .get("INFRADESK_HTTP_PORT")
+      .flatMap(value => Try(value.toInt).toOption)
+      .flatMap(Port.fromInt)
+      .getOrElse(defaultHttpPort)
+
+  private val defaultHttpHost: Host =
+    Host.fromString("0.0.0.0").getOrElse(
+      throw new IllegalStateException("Unable to construct default HTTP host")
+    )
+
+  private val defaultHttpPort: Port =
+    Port.fromInt(8080).getOrElse(
+      throw new IllegalStateException("Unable to construct default HTTP port")
+    )
 }
