@@ -5,6 +5,7 @@ import application.port.ProjectRepository
 import domain.project.Project
 import org.typelevel.doobie.ConnectionIO
 import org.typelevel.doobie.implicits._
+import org.typelevel.doobie.postgres.implicits._
 
 import java.time.Instant
 import java.util.UUID
