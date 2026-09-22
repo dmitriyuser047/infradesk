@@ -62,6 +62,76 @@ final class ResourceRoutesSpec extends FunSuite {
     assert(body.hcursor.downField("data").downField("status").focus.exists(_.isNull))
   }
 
+  test("returns chronological CPU and memory history with an inclusive-exclusive period") {
+    val from = Instant.parse("2026-09-22T10:00:00Z")
+    val to = Instant.parse("2026-09-22T11:00:00Z")
+    val fixture = buildFixture(
+      Map((OrganizationId, ResourceId) -> nodeResource),
+      observations = List(
+        observation(MetricCode.CpuUsagePercent, 10, from.minusSeconds(60)),
+        observation(MetricCode.CpuUsagePercent, 42.5, from),
+        observation(MetricCode.MemoryUsagePercent, 68.2, from),
+        observation(MetricCode.CpuUsagePercent, 45.1, from.plusSeconds(1800)),
+        observation(MetricCode.CpuUsagePercent, 99, to)
+      )
+    )
+
+    val response = fixture.app.run(metricRequest(OrganizationId, ResourceId, from, to)).unsafeRunSync()
+    val body = response.as[Json].unsafeRunSync()
+    val values = body.asArray.getOrElse(fail("Expected metric array"))
+
+    assertEquals(response.status, Status.Ok)
+    assertEquals(values.size, 3)
+    assertEquals(values.map(_.hcursor.get[String]("metricCode")), Vector(Right("CPU_USAGE_PERCENT"), Right("MEMORY_USAGE_PERCENT"), Right("CPU_USAGE_PERCENT")))
+    assertEquals(values.map(_.hcursor.get[BigDecimal]("value")), Vector(Right(BigDecimal(42.5)), Right(BigDecimal(68.2)), Right(BigDecimal(45.1))))
+    assertEquals(values.head.hcursor.get[String]("observedAt"), Right(from.toString))
+    assertEquals(fixture.transactionRunner.calls, 1)
+    assertEquals(fixture.metricRepository.requests, List((OrganizationId, ResourceId, from, to)))
+  }
+
+  test("returns 404 for absent or cross-organization resource metric history") {
+    val from = Now
+    val to = Now.plusSeconds(60)
+    val fixture = buildFixture(Map((OrganizationId, ResourceId) -> nodeResource))
+
+    val absent = fixture.app.run(metricRequest(OrganizationId, ContainerResourceId, from, to)).unsafeRunSync()
+    val foreign = fixture.app.run(metricRequest(OtherOrganizationId, ResourceId, from, to)).unsafeRunSync()
+
+    assertEquals(absent.status, Status.NotFound)
+    assertEquals(foreign.status, Status.NotFound)
+  }
+
+  test("returns 400 for missing, invalid, and invalid-order metric periods") {
+    val fixture = buildFixture(Map((OrganizationId, ResourceId) -> nodeResource))
+    val base = s"/api/v1/organizations/$OrganizationId/resources/$ResourceId/metrics"
+    val requests = List(
+      Uri.unsafeFromString(base),
+      Uri.unsafeFromString(s"$base?from=$Now"),
+      Uri.unsafeFromString(s"$base?from=invalid&to=${Now.plusSeconds(60)}"),
+      Uri.unsafeFromString(s"$base?from=${Now.plusSeconds(60)}&to=invalid"),
+      Uri.unsafeFromString(s"$base?from=$Now&to=$Now"),
+      Uri.unsafeFromString(s"$base?from=${Now.plusSeconds(60)}&to=$Now")
+    )
+
+    requests.foreach { uri =>
+      val response = fixture.app.run(Request[IO](Method.GET, uri)).unsafeRunSync()
+      assertEquals(response.status, Status.BadRequest)
+    }
+  }
+
+  test("returns sanitized 500 when metric history query fails") {
+    val fixture = buildFixture(
+      Map((OrganizationId, ResourceId) -> nodeResource),
+      metricFailure = Some(new IllegalStateException("metric SQL secret"))
+    )
+    val response = fixture.app.run(metricRequest(OrganizationId, ResourceId, Now, Now.plusSeconds(60))).unsafeRunSync()
+    val body = response.as[Json].unsafeRunSync()
+
+    assertEquals(response.status, Status.InternalServerError)
+    assertEquals(body.hcursor.get[String]("code"), Right("INTERNAL_ERROR"))
+    assert(!body.noSpaces.contains("metric SQL secret"))
+  }
+
   test("lists NODE and CONTAINER resources for an environment in one transaction") {
     val fixture = buildFixture(
       Map(
@@ -216,18 +286,21 @@ final class ResourceRoutesSpec extends FunSuite {
 
   private def buildFixture(
                        resources: Map[(UUID, UUID), Resource],
-                       failWith: Option[Throwable] = None
+                       failWith: Option[Throwable] = None,
+                       observations: List[MetricObservation] = List.empty,
+                       metricFailure: Option[Throwable] = None
                      ): RouteFixture = {
     val repository = new InMemoryResourceRepository(resources, failWith)
     val transactionRunner = new RecordingTransactionRunner
+    val metricRepository = new RecordingMetricObservationRepository(observations, metricFailure)
     val routes = new ResourceRoutes[IO](
       GetResource[IO](repository),
       ListEnvironmentResources[IO](repository),
-      GetResourceMetricHistory[IO](repository, new EmptyMetricObservationRepository),
+      GetResourceMetricHistory[IO](repository, metricRepository),
       transactionRunner
     )
 
-    RouteFixture(routes.routes.orNotFound, repository, transactionRunner)
+    RouteFixture(routes.routes.orNotFound, repository, metricRepository, transactionRunner)
   }
 
   private def request(organizationId: UUID, resourceId: UUID): Request[IO] =
@@ -242,9 +315,13 @@ final class ResourceRoutesSpec extends FunSuite {
       Uri.unsafeFromString(s"/api/v1/organizations/$organizationId/environments/$environmentId/resources")
     )
 
+  private def metricRequest(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): Request[IO] =
+    Request[IO](Method.GET, Uri.unsafeFromString(s"/api/v1/organizations/$organizationId/resources/$resourceId/metrics?from=$from&to=$to"))
+
   private final case class RouteFixture(
                                           app: org.http4s.HttpApp[IO],
                                           repository: InMemoryResourceRepository,
+                                          metricRepository: RecordingMetricObservationRepository,
                                           transactionRunner: RecordingTransactionRunner
                                         )
 
@@ -295,10 +372,15 @@ final class ResourceRoutesSpec extends FunSuite {
                                                    ): IO[Unit] = IO.unit
   }
 
-  private final class EmptyMetricObservationRepository extends MetricObservationRepository[IO] {
+  private final class RecordingMetricObservationRepository(initial: List[MetricObservation], failure: Option[Throwable]) extends MetricObservationRepository[IO] {
+    var requests: List[(UUID, UUID, Instant, Instant)] = List.empty
     override def insertAll(observations: List[MetricObservation]): IO[Unit] = IO.unit
     override def findLatestAtOrAfter(organizationId: UUID, resourceId: UUID, metricCode: MetricCode, observedAt: Instant): IO[Option[MetricObservation]] = IO.pure(None)
-    override def findByResourceAndPeriod(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): IO[List[MetricObservation]] = IO.pure(List.empty)
+    override def findByResourceAndPeriod(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): IO[List[MetricObservation]] =
+      IO { requests = requests :+ (organizationId, resourceId, from, to) } *> (failure match {
+        case Some(error) => IO.raiseError[List[MetricObservation]](error)
+        case None => IO.pure(initial.filter(value => value.organizationId == organizationId && value.resourceId == resourceId && !value.observedAt.isBefore(from) && value.observedAt.isBefore(to)).sortBy(value => (value.observedAt, value.metricCode.code, value.id.toString)))
+      })
   }
 
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
@@ -342,4 +424,7 @@ final class ResourceRoutesSpec extends FunSuite {
       Some(ContainerStatus(Some("running")))
     )
   )
+
+  private def observation(metricCode: MetricCode, value: BigDecimal, observedAt: Instant): MetricObservation =
+    MetricObservation(UUID.randomUUID(), OrganizationId, ResourceId, metricCode, value, observedAt)
 }
