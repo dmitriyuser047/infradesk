@@ -7,6 +7,7 @@ import application.port.{
   TimeProvider,
   TransactionRunner
 }
+import application.monitor.MonitorRuleEvaluator
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -33,7 +34,7 @@ final class SyncSchedulerSpec extends FunSuite {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     val finishedAt = now.plusSeconds(3)
     val due = schedule(nextRunAt = now)
-    val fixture = buildFixture(List(due), List(now, finishedAt))
+    val fixture = buildFixture(List(due), List(now, now.plusSeconds(2), finishedAt))
 
     fixture.scheduler.tick(limit = 10).unsafeRunSync()
 
@@ -43,6 +44,8 @@ final class SyncSchedulerSpec extends FunSuite {
       List((due.organizationId, due.connectionId, finishedAt.plusSeconds(due.intervalSeconds)))
     )
     assertEquals(fixture.synchronizer.calledInsideTransaction, false)
+    assertEquals(fixture.evaluator.calls, 1)
+    assertEquals(fixture.evaluator.calledOutsideTransaction, false)
   }
 
   test("schedules next run after a failed sync") {
@@ -58,6 +61,7 @@ final class SyncSchedulerSpec extends FunSuite {
       fixture.repository.scheduledNext,
       List((due.organizationId, due.connectionId, finishedAt.plusSeconds(due.intervalSeconds)))
     )
+    assertEquals(fixture.evaluator.calls, 0)
   }
 
   test("continues with later schedules when one sync fails") {
@@ -66,7 +70,7 @@ final class SyncSchedulerSpec extends FunSuite {
     val second = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000011"), nextRunAt = now)
     val fixture = buildFixture(
       List(first, second),
-      List(now, now.plusSeconds(1), now.plusSeconds(2)),
+      List(now, now.plusSeconds(1), now.plusSeconds(2), now.plusSeconds(3)),
       failingConnectionIds = Set(first.connectionId)
     )
 
@@ -76,22 +80,45 @@ final class SyncSchedulerSpec extends FunSuite {
     assertEquals(fixture.repository.scheduledNext.map(_._2), List(first.connectionId, second.connectionId))
   }
 
+  test("schedules next run when evaluator fails after a successful sync") {
+    val now = Instant.parse("2026-09-21T10:00:00Z")
+    val finishedAt = now.plusSeconds(3)
+    val due = schedule(nextRunAt = now)
+    val fixture = buildFixture(
+      List(due),
+      List(now, now.plusSeconds(2), finishedAt),
+      failingEvaluator = true
+    )
+
+    fixture.scheduler.tick(limit = 10).unsafeRunSync()
+
+    assertEquals(fixture.synchronizer.calls, List(due.connectionId))
+    assertEquals(fixture.evaluator.calls, 1)
+    assertEquals(
+      fixture.repository.scheduledNext,
+      List((due.organizationId, due.connectionId, finishedAt.plusSeconds(due.intervalSeconds)))
+    )
+  }
+
   private def buildFixture(
                        schedules: List[ConnectionSchedule],
                        times: List[Instant],
-                       failingConnectionIds: Set[UUID] = Set.empty
+                       failingConnectionIds: Set[UUID] = Set.empty,
+                       failingEvaluator: Boolean = false
   ): SchedulerFixture = {
     val transactionRunner = new RecordingTransactionRunner
     val repository = new RecordingConnectionScheduleRepository(schedules)
     val synchronizer = new RecordingConnectionSynchronizer(transactionRunner, failingConnectionIds)
+    val evaluator = new RecordingMonitorRuleEvaluator(transactionRunner, failingEvaluator)
     val scheduler = new SyncScheduler[IO, IO](
       repository,
       synchronizer,
       transactionRunner,
-      new SequenceTimeProvider(times)
+      new SequenceTimeProvider(times),
+      evaluator
     )
 
-    SchedulerFixture(scheduler, repository, synchronizer)
+    SchedulerFixture(scheduler, repository, synchronizer, evaluator)
   }
 
   private def schedule(
@@ -109,7 +136,8 @@ final class SyncSchedulerSpec extends FunSuite {
   private final case class SchedulerFixture(
                                              scheduler: SyncScheduler[IO, IO],
                                              repository: RecordingConnectionScheduleRepository,
-                                             synchronizer: RecordingConnectionSynchronizer
+                                             synchronizer: RecordingConnectionSynchronizer,
+                                             evaluator: RecordingMonitorRuleEvaluator
                                            )
 
   private final class RecordingConnectionScheduleRepository(
@@ -158,6 +186,25 @@ final class SyncSchedulerSpec extends FunSuite {
       } *> program.guarantee(IO {
         inTransaction = false
       })
+  }
+
+  private final class RecordingMonitorRuleEvaluator(
+                                                     transactionRunner: RecordingTransactionRunner,
+                                                     failing: Boolean
+                                                   ) extends MonitorRuleEvaluator[IO] {
+    var calls = 0
+    var calledOutsideTransaction = false
+
+    override def execute(resources: List[Resource], evaluatedAt: Instant): IO[Unit] =
+      IO {
+        calls += 1
+        calledOutsideTransaction ||= !transactionRunner.inTransaction
+      } *> {
+        if (failing)
+          IO.raiseError(new IllegalStateException("Simulated evaluator failure"))
+        else
+          IO.unit
+      }
   }
 
   private final class SequenceTimeProvider(times: List[Instant]) extends TimeProvider[IO] {

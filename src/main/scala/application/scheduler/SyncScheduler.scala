@@ -1,6 +1,7 @@
 package ru.bitec.app.ops
 package application.scheduler
 
+import application.monitor.MonitorRuleEvaluator
 import application.port.{
   ConnectionScheduleRepository,
   ConnectionSynchronizer,
@@ -19,7 +20,8 @@ final class SyncScheduler[F[_]: Temporal, Tx[_]: MonadThrow](
                                                                connectionScheduleRepository: ConnectionScheduleRepository[Tx],
                                                                connectionSynchronizer: ConnectionSynchronizer[F],
                                                                transactionRunner: TransactionRunner[F, Tx],
-                                                               timeProvider: TimeProvider[F]
+                                                               timeProvider: TimeProvider[F],
+                                                               monitorRuleEvaluator: MonitorRuleEvaluator[Tx]
                                                              ) {
 
   def tick(limit: Int): F[Unit] =
@@ -38,7 +40,21 @@ final class SyncScheduler[F[_]: Temporal, Tx[_]: MonadThrow](
     connectionSynchronizer
       .execute(schedule.organizationId, schedule.connectionId)
       .attempt
-      .void *>
+      .flatMap {
+        case Right(resources) =>
+          timeProvider
+            .now
+            .flatMap { evaluatedAt =>
+              transactionRunner.run(
+                monitorRuleEvaluator.execute(resources, evaluatedAt)
+              )
+            }
+            .attempt
+            .void
+
+        case Left(_) =>
+          ().pure[F]
+      } *>
       timeProvider.now.flatMap { finishedAt =>
         transactionRunner
           .run(

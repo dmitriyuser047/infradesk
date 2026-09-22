@@ -10,6 +10,7 @@ import application.discovery.{
   ReconcileDiscoveredResource,
   SyncDiscoveredSnapshot
 }
+import application.monitor.EvaluateMonitorRules
 import application.resource.{PersistExternalResource, RecordResourceObservations}
 import application.scheduler.SyncScheduler
 import cats.effect.{IO, IOApp}
@@ -37,6 +38,8 @@ import persistence.postgres.{
   PostgresConnectionRepository,
   PostgresConnectionScheduleRepository,
   PostgresMetricObservationRepository,
+  PostgresMonitorRuleRepository,
+  PostgresMonitorRuleStateRepository,
   PostgresResourceRepository,
   PostgresResourceTypeRepository,
   PostgresSyncSessionRepository
@@ -70,6 +73,12 @@ object Main extends IOApp.Simple {
         val metricObservationRepository =
           new PostgresMetricObservationRepository
 
+        val monitorRuleRepository =
+          new PostgresMonitorRuleRepository
+
+        val monitorRuleStateRepository =
+          new PostgresMonitorRuleStateRepository
+
         val transactionRunner =
           new DoobieTransactionRunner(xa)
 
@@ -100,6 +109,13 @@ object Main extends IOApp.Simple {
 
         val recordResourceObservations =
           new RecordResourceObservations[ConnectionIO](
+            metricObservationRepository
+          )
+
+        val evaluateMonitorRules =
+          new EvaluateMonitorRules[ConnectionIO](
+            monitorRuleRepository,
+            monitorRuleStateRepository,
             metricObservationRepository
           )
 
@@ -162,7 +178,8 @@ object Main extends IOApp.Simple {
             connectionScheduleRepository,
             syncConnectionById,
             transactionRunner,
-            timeProvider
+            timeProvider,
+            evaluateMonitorRules
           )
 
         syncScheduler.run(1.second, limit = 100)

@@ -323,6 +323,13 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
   private final class NoopMetricObservationRepository extends MetricObservationRepository[IO] {
     override def insertAll(observations: List[domain.metric.MetricObservation]): IO[Unit] =
       IO.unit
+
+    override def findLatest(
+                             organizationId: UUID,
+                             resourceId: UUID,
+                             metricCode: domain.metric.MetricCode
+                           ): IO[Option[domain.metric.MetricObservation]] =
+      IO.pure(None)
   }
 
 }
