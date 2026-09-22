@@ -5,14 +5,13 @@ import application.port.TransactionRunner
 import cats.effect.IO
 import cats.syntax.all._
 import domain.incident.{Incident,IncidentStatus}
-import infrastructure.http.dto.{ApiErrorResponse,HttpJsonCodecs}
+import infrastructure.http.dto.{ApiErrorResponse,HttpJsonCodecs,IncidentResponse}
 import org.http4s.HttpRoutes
 import org.http4s.dsl.io._
 import org.http4s.circe.CirceEntityEncoder._
 import java.util.UUID
 import java.time.Instant
 import scala.util.Try
-final case class IncidentResponse(id:UUID,monitorRuleId:UUID,resourceId:UUID,status:String,startedAt:Instant,openedAt:Instant,resolvedAt:Option[Instant],createdAt:Instant,updatedAt:Instant)
 final class IncidentRoutes[Tx[_]](get:GetIncident[Tx], list:ListIncidents[Tx], runner:TransactionRunner[IO,Tx]) {
  import HttpJsonCodecs._
  private def uuid(s:String,n:String)=Try(UUID.fromString(s)).toEither.leftMap(_=>ApiErrorResponse("INVALID_REQUEST",s"Invalid $n"))

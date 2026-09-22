@@ -2,7 +2,6 @@ package ru.bitec.app.ops
 package infrastructure.http.dto
 
 import io.circe.{Encoder, Json}
-import infrastructure.http.IncidentResponse
 
 import java.time.Instant
 import java.util.UUID

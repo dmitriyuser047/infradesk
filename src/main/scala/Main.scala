@@ -16,6 +16,9 @@ import application.scheduler.SyncScheduler
 import cats.effect.{IO, IOApp}
 import com.comcast.ip4s.{Host, Port}
 import infrastructure.http.ResourceRoutes
+import infrastructure.http.IncidentRoutes
+import application.incident.{GetIncident, ListIncidents}
+import cats.syntax.semigroupk._
 import org.http4s.ember.server.EmberServerBuilder
 import org.typelevel.doobie.ConnectionIO
 import infrastructure.database.{
@@ -144,6 +147,10 @@ object Main extends IOApp.Simple {
         val resourceRoutes =
           new ResourceRoutes[ConnectionIO](getResource, listEnvironmentResources, getResourceMetricHistory, transactionRunner)
 
+        val getIncident = GetIncident[ConnectionIO](incidentRepository)
+        val listIncidents = ListIncidents[ConnectionIO](incidentRepository)
+        val incidentRoutes = new IncidentRoutes[ConnectionIO](getIncident, listIncidents, transactionRunner)
+
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](
             createDiscoveredResource,
@@ -211,7 +218,7 @@ object Main extends IOApp.Simple {
           .default[IO]
           .withHost(httpHost)
           .withPort(httpPort)
-          .withHttpApp(resourceRoutes.routes.orNotFound)
+          .withHttpApp((resourceRoutes.routes <+> incidentRoutes.routes).orNotFound)
           .build
           .use(_ => syncScheduler.run(1.second, limit = 100))
       }

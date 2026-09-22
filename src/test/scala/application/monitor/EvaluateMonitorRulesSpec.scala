@@ -380,6 +380,9 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
   private final class InMemoryIncidentRepository(initial: List[Incident]) extends IncidentRepository[IO] {
     var incidents: List[Incident] = initial
 
+    override def findById(organizationId: UUID, incidentId: UUID): IO[Option[Incident]] = IO.pure(incidents.find(i => i.organizationId == organizationId && i.id == incidentId))
+    override def findByOrganization(organizationId: UUID, status: Option[IncidentStatus]): IO[List[Incident]] = IO.pure(incidents.filter(i => i.organizationId == organizationId && status.forall(_ == i.status)))
+
     override def findOpenByRule(organizationId: UUID, monitorRuleId: UUID): IO[Option[Incident]] =
       IO.pure(
         incidents.find(incident =>
