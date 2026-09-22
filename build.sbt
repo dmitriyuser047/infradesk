@@ -17,6 +17,7 @@ lazy val root = rootProject
       "org.typelevel" %% "doobie-core"      % doobieVersion,
       "org.typelevel" %% "doobie-postgres"  % doobieVersion,
       "org.typelevel" %% "doobie-hikari"    % doobieVersion,
+      "org.mindrot" % "jbcrypt" % "0.4",
       "io.circe" %% "circe-core"   % "0.14.10",
       "io.circe" %% "circe-parser" % "0.14.10",
       "org.http4s" %% "http4s-ember-server" % http4sVersion,

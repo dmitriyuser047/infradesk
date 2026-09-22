@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
-import { Boxes, Cable, House, ShieldAlert } from 'lucide-react'
-import { Link, useLocation, useParams } from 'react-router-dom'
+import { Boxes, Cable, House, LogOut, ShieldAlert } from 'lucide-react'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+
+import { useLogout } from '../../api/auth'
 
 interface AppShellProps {
   children: ReactNode
@@ -8,6 +10,8 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const location = useLocation()
+  const navigate = useNavigate()
+  const logout = useLogout()
   const { organizationId, environmentId } = useParams()
   const incidentsActive = location.pathname.includes('/incidents')
   const connectionsActive = location.pathname.includes('/connections')
@@ -34,6 +38,7 @@ export function AppShell({ children }: AppShellProps) {
           <span>InfraDesk</span>
         </div>
         <nav className="primary-nav" aria-label="Primary navigation">
+          <Link className="nav-item" to="/organizations"><House aria-hidden size={17} />Organizations</Link>
           {workspacePath !== undefined ? (
             <Link className={`nav-item ${workspaceActive ? 'nav-item-active' : ''}`} to={workspacePath}>
               <House aria-hidden size={17} />Workspace
@@ -61,6 +66,10 @@ export function AppShell({ children }: AppShellProps) {
             <span className="nav-item nav-item-disabled"><Cable aria-hidden size={17} />Connections</span>
           )}
         </nav>
+        <button className="nav-item logout-button" type="button" disabled={logout.isPending} onClick={() => {
+          logout.mutate(undefined, { onSuccess: () => navigate('/login', { replace: true }) })
+        }}><LogOut aria-hidden size={17} />Sign out</button>
+        {logout.isError ? <p className="logout-error" role="alert">Unable to sign out</p> : null}
       </aside>
       <main className="content">{children}</main>
     </div>

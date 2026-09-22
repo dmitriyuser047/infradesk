@@ -40,7 +40,7 @@ function OrganizationContent({ organizationId }: { organizationId: string }) {
             )}
           </section>
         ) : null}
-        {organizationQuery.data !== undefined ? (
+        {organizationQuery.isSuccess && organizationQuery.data !== undefined ? (
           <>
             <header className="page-header organization-header">
               <div>

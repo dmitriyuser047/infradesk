@@ -13,6 +13,7 @@ import application.discovery.{
 import application.monitor.EvaluateMonitorRules
 import application.connection.{GetConnection, ListConnections}
 import application.navigation.{GetOrganization, ListEnvironments, ListProjects}
+import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, BootstrapConfig, Login, SessionTokens}
 import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
 import application.scheduler.SyncScheduler
 import cats.effect.{IO, IOApp}
@@ -22,6 +23,7 @@ import infrastructure.http.IncidentRoutes
 import infrastructure.http.MonitorRuleRoutes
 import infrastructure.http.ConnectionRoutes
 import infrastructure.http.NavigationRoutes
+import infrastructure.http.{AuthBoundary, AuthRoutes, AuthSettings}
 import application.monitor.{ListMonitorRules, CreateMonitorRule, UpdateMonitorRule}
 import application.incident.{GetIncident, ListIncidents}
 import cats.syntax.semigroupk._
@@ -60,7 +62,10 @@ import persistence.postgres.{
   PostgresProjectRepository,
   PostgresResourceRepository,
   PostgresResourceTypeRepository,
-  PostgresSyncSessionRepository
+  PostgresSyncSessionRepository,
+  PostgresAuthSessionRepository,
+  PostgresOrganizationMembershipRepository,
+  PostgresUserAccountRepository
 }
 
 import scala.concurrent.duration._
@@ -69,8 +74,11 @@ import scala.util.Try
 object Main extends IOApp.Simple {
 
   override def run: IO[Unit] =
-    DatabaseConfig.load.flatMap { config =>
-      Database.transactor(config).use { xa =>
+    for {
+      config <- DatabaseConfig.load
+      authSettings <- IO.fromEither(AuthSettings.fromEnvironment(sys.env))
+      bootstrapConfig <- IO.fromEither(BootstrapConfig.fromEnvironment(sys.env))
+      _ <- Database.transactor(config).use { xa =>
         val resourceRepository =
           new PostgresResourceRepository
 
@@ -109,6 +117,10 @@ object Main extends IOApp.Simple {
 
         val incidentRepository =
           new PostgresIncidentRepository
+
+        val userAccountRepository = new PostgresUserAccountRepository
+        val authSessionRepository = new PostgresAuthSessionRepository
+        val membershipRepository = new PostgresOrganizationMembershipRepository
 
         val transactionRunner =
           new DoobieTransactionRunner(xa)
@@ -186,6 +198,25 @@ object Main extends IOApp.Simple {
           transactionRunner
         )
 
+        val passwordHasher = new BCryptPasswordHasher
+        val tokens = new SessionTokens
+        val authentication = new Authentication[ConnectionIO](
+          authSessionRepository, membershipRepository, transactionRunner, tokens
+        )
+        val authRoutes = new AuthRoutes[ConnectionIO](
+          new Login(userAccountRepository, authSessionRepository, transactionRunner,
+            passwordHasher, tokens, authSettings.ttlSeconds),
+          authentication,
+          authSettings
+        )
+        val bootstrapAdmin = new BootstrapAdmin[ConnectionIO](
+          userAccountRepository, membershipRepository, organizationRepository,
+          transactionRunner, passwordHasher
+        )
+        val businessApp = (resourceRoutes.routes <+> incidentRoutes.routes <+>
+          monitorRuleRoutes.routes <+> connectionRoutes.routes <+> navigationRoutes.routes).orNotFound
+        val protectedApp = new AuthBoundary(authRoutes, authentication, businessApp).app
+
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](
             createDiscoveredResource,
@@ -249,15 +280,17 @@ object Main extends IOApp.Simple {
             evaluateMonitorRules
           )
 
-        EmberServerBuilder
-          .default[IO]
-          .withHost(httpHost)
-          .withPort(httpPort)
-          .withHttpApp((resourceRoutes.routes <+> incidentRoutes.routes <+> monitorRuleRoutes.routes <+> connectionRoutes.routes <+> navigationRoutes.routes).orNotFound)
-          .build
-          .use(_ => syncScheduler.run(1.second, limit = 100))
+        bootstrapAdmin.run(bootstrapConfig).flatMap { _ =>
+          EmberServerBuilder
+            .default[IO]
+            .withHost(httpHost)
+            .withPort(httpPort)
+            .withHttpApp(protectedApp)
+            .build
+            .use(_ => syncScheduler.run(1.second, limit = 100))
+        }
       }
-    }
+    } yield ()
 
   private val httpHost: Host =
     sys.env
