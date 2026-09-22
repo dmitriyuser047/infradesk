@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package integration.ssh
 
 import application.port.SshProbeError
+import cats.syntax.all._
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.connection.SshConnectionSettings
@@ -12,27 +13,36 @@ final class SshConnectionProbeAdapterSpec extends FunSuite {
 
   test("probe uses the existing SSH client and lightweight command") {
     val client = new SshClient[IO] {
-      override def execute(config: SshConnectionConfig, auth: SshAuthentication, command: String): IO[SshCommandResult] = IO {
+      override def withSession[A](config: SshConnectionConfig, auth: SshAuthentication)
+                                 (use: SshSession[IO] => IO[A]): IO[A] = IO {
         assertEquals(config.hostKeyFingerprint, Some("SHA256:pinned"))
         assertEquals(auth, SshAuthentication.Password("password"))
-        assertEquals(command, "printf 'infradesk-ok\\n'")
-        SshCommandResult(0, "infradesk-ok\n", "", "SHA256:pinned")
-      }
+      } *> use(new SshSession[IO] {
+        override def execute(command: String): IO[SshCommandResult] = IO {
+          assertEquals(command, "printf 'infradesk-ok\\n'")
+          SshCommandResult(0, "infradesk-ok\n", "", "SHA256:pinned")
+        }
+      })
     }
     assertEquals(new SshConnectionProbeAdapter(client).probe(settings, "password").unsafeRunSync(), "SHA256:pinned")
   }
 
   test("probe keeps host-key mismatch distinct from other SSH failures") {
     val mismatch = new SshClient[IO] {
-      override def execute(config: SshConnectionConfig, auth: SshAuthentication, command: String): IO[SshCommandResult] =
+      override def withSession[A](config: SshConnectionConfig, auth: SshAuthentication)
+                                 (use: SshSession[IO] => IO[A]): IO[A] =
         IO.raiseError(new SshHostKeyMismatch)
     }
     intercept[SshProbeError.HostKeyMismatch.type] {
       new SshConnectionProbeAdapter(mismatch).probe(settings, "password").unsafeRunSync()
     }
     val failed = new SshClient[IO] {
-      override def execute(config: SshConnectionConfig, auth: SshAuthentication, command: String): IO[SshCommandResult] =
-        IO.pure(SshCommandResult(1, "", "denied", "SHA256:pinned"))
+      override def withSession[A](config: SshConnectionConfig, auth: SshAuthentication)
+                                 (use: SshSession[IO] => IO[A]): IO[A] =
+        use(new SshSession[IO] {
+          override def execute(command: String): IO[SshCommandResult] =
+            IO.pure(SshCommandResult(1, "", "denied", "SHA256:pinned"))
+        })
     }
     intercept[SshProbeError.ConnectionFailed.type] {
       new SshConnectionProbeAdapter(failed).probe(settings, "password").unsafeRunSync()

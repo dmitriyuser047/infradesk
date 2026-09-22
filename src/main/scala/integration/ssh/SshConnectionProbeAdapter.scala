@@ -9,7 +9,9 @@ final class SshConnectionProbeAdapter(client: SshClient[IO]) extends SshConnecti
   private val command = "printf 'infradesk-ok\\n'"
 
   override def probe(settings: SshConnectionSettings, password: String): IO[String] =
-    client.execute(SshConnectionConfig.fromSettings(settings), SshAuthentication.Password(password), command)
+    client.withSession(SshConnectionConfig.fromSettings(settings), SshAuthentication.Password(password))(
+      _.execute(command)
+    )
       .attempt.flatMap {
         case Right(result) if result.exitCode == 0 && result.stdout == "infradesk-ok\n" =>
           IO.pure(result.hostKeyFingerprint)

@@ -33,85 +33,58 @@ final class SshConnector[F[_]: MonadThrow](
       authentication <-
         authenticationProvider.resolve(connection)
 
-      nodeResult <- sshClient.execute(
-        config,
-        authentication,
-        SshConnector.NodeDiscoveryCommand
-      )
+      result <- sshClient.withSession(config, authentication) { ssh =>
+        for {
+          nodeResult <- ssh.execute(SshConnector.NodeDiscoveryCommand)
+          node <- parseNodeDiscovery(connection, nodeResult)
+          dockerResult <- ssh.execute(SshConnector.DockerContainersCommand)
 
-      node <- parseNodeDiscovery(
-        connection,
-        nodeResult
-      )
+          containerDiscovery <-
+            if (!dockerResult.isSuccess) {
+              (List.empty[DiscoveredResource] -> Set(SshConnector.NodeExternalType)).pure[F]
+            } else {
+              parseContainers(connection, dockerResult).map { containers =>
+                containers -> Set(SshConnector.NodeExternalType, SshConnector.ContainerExternalType)
+              }
+            }
 
-      effectiveConfig =
-        config.hostKeyFingerprint match {
-          case Some(_) =>
-            config
+          (containers, completeExternalTypes) = containerDiscovery
 
-          case None =>
-            config.copy(
-              hostKeyFingerprint = Some(nodeResult.hostKeyFingerprint)
-            )
-        }
-
-      dockerResult <- sshClient.execute(
-        effectiveConfig,
-        authentication,
-        SshConnector.DockerContainersCommand
-      )
-
-      containerDiscovery <-
-        if (!dockerResult.isSuccess) {
-          (List.empty[DiscoveredResource] -> Set(SshConnector.NodeExternalType)).pure[F]
-        } else {
-          parseContainers(connection, dockerResult).map { containers =>
-            containers -> Set(
-              SshConnector.NodeExternalType,
-              SshConnector.ContainerExternalType
-            )
-          }
-        }
-
-      (containers, completeExternalTypes) = containerDiscovery
-
-      updatedConfig =
-        config.hostKeyFingerprint match {
-          case Some(_) =>
-            connection.config
-
-          case None =>
-            connection.config.updated(
+          updatedConfig = config.hostKeyFingerprint match {
+            case Some(_) => connection.config
+            case None => connection.config.updated(
               SshConnectionConfig.HostKeyFingerprintKey,
               nodeResult.hostKeyFingerprint
             )
-        }
-    } yield ResourceConnectorResult(
-      resources = DiscoveredResource(
-        externalType = SshConnector.NodeExternalType,
-        externalId = SshConnector.NodeExternalId,
-        resourceTypeCode = NodeDefinition.code,
-        code = connection.code,
-        name = node.hostname,
-        data = ResourceData(
-          spec = Some(NodeSpec(
-            hostname = node.hostname,
-            operatingSystem = node.operatingSystem,
-            architecture = node.architecture,
-            cpuCores = node.cpuCores,
-            memoryMb = node.memoryMb
-          )),
-          status = Some(NodeStatus(
-            online = true,
-            cpuUsagePercent = node.cpuUsagePercent,
-            memoryUsagePercent = node.memoryUsagePercent,
-            uptimeSeconds = node.uptimeSeconds
-          ))
+          }
+        } yield ResourceConnectorResult(
+          resources = DiscoveredResource(
+            externalType = SshConnector.NodeExternalType,
+            externalId = SshConnector.NodeExternalId,
+            resourceTypeCode = NodeDefinition.code,
+            code = connection.code,
+            name = node.hostname,
+            data = ResourceData(
+              spec = Some(NodeSpec(
+                hostname = node.hostname,
+                operatingSystem = node.operatingSystem,
+                architecture = node.architecture,
+                cpuCores = node.cpuCores,
+                memoryMb = node.memoryMb
+              )),
+              status = Some(NodeStatus(
+                online = true,
+                cpuUsagePercent = node.cpuUsagePercent,
+                memoryUsagePercent = node.memoryUsagePercent,
+                uptimeSeconds = node.uptimeSeconds
+              ))
+            )
+          ) :: containers,
+          completeExternalTypes = completeExternalTypes,
+          connectionConfig = updatedConfig
         )
-      ) :: containers,
-      completeExternalTypes = completeExternalTypes,
-      connectionConfig = updatedConfig
-    )
+      }
+    } yield result
 
   private final case class NodeDiscovery(
                                            hostname: String,

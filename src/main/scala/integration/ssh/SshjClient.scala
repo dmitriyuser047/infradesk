@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package integration.ssh
 
-import cats.effect.Sync
+import cats.effect.{Resource, Sync}
 
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.userauth.password.{PasswordFinder, PasswordUtils}
@@ -19,13 +19,21 @@ final class SshHostKeyMismatch extends RuntimeException("SSH host key mismatch")
 
 final class SshjClient[F[_]: Sync] extends SshClient[F] {
 
-  override def execute(
-                        config: SshConnectionConfig,
-                        authentication: SshAuthentication,
-                        command: String
-                      ): F[SshCommandResult] =
-    Sync[F].blocking {
+  override def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
+                             (use: SshSession[F] => F[A]): F[A] =
+    Resource.make(Sync[F].blocking(open(config, authentication))) {
+      case (ssh, _) => Sync[F].blocking(ssh.close())
+    }.use { case (ssh, observedFingerprint) =>
+      use(new SshSession[F] {
+        override def execute(command: String): F[SshCommandResult] =
+          Sync[F].blocking(runCommand(ssh, observedFingerprint, config, command))
+      })
+    }
+
+  private def open(config: SshConnectionConfig, authentication: SshAuthentication):
+    (SSHClient, AtomicReference[String]) = {
       val ssh = new SSHClient()
+      try {
 
       ssh.setConnectTimeout(
         config.connectTimeoutSeconds * 1000
@@ -64,7 +72,6 @@ final class SshjClient[F[_]: Sync] extends SshClient[F] {
         }
       )
 
-      try {
         try ssh.connect(config.host, config.port)
         catch {
           case error: Exception if config.hostKeyFingerprint.exists(_ != observedFingerprint.get()) &&
@@ -77,60 +84,42 @@ final class SshjClient[F[_]: Sync] extends SshClient[F] {
           authentication
         )
 
-        val session = ssh.startSession()
-
-        try {
-          val remoteCommand =
-            session.exec(command)
-
-          remoteCommand.join(
-            config.commandTimeoutSeconds.toLong,
-            TimeUnit.SECONDS
-          )
-
-          val exitCode =
-            Option(remoteCommand.getExitStatus)
-              .map(_.intValue())
-              .getOrElse {
-                throw new TimeoutException(
-                  s"SSH command timed out after " +
-                    s"${config.commandTimeoutSeconds} seconds: $command"
-                )
-              }
-
-          val stdout =
-            new String(
-              remoteCommand.getInputStream.readAllBytes(),
-              StandardCharsets.UTF_8
-            )
-
-          val stderr =
-            new String(
-              remoteCommand.getErrorStream.readAllBytes(),
-              StandardCharsets.UTF_8
-            )
-
-          val hostKeyFingerprint =
-            Option(observedFingerprint.get())
-              .getOrElse {
-                throw new IllegalStateException(
-                  s"SSH host key was not received from ${config.host}:${config.port}"
-                )
-              }
-
-          SshCommandResult(
-            exitCode = exitCode,
-            stdout = stdout,
-            stderr = stderr,
-            hostKeyFingerprint = hostKeyFingerprint
-          )
-        } finally {
-          session.close()
-        }
-      } finally {
-        ssh.close()
+        (ssh, observedFingerprint)
+      } catch {
+        case error: Throwable =>
+          try ssh.close()
+          catch {
+            case closeError: Throwable =>
+              if (closeError ne error) error.addSuppressed(closeError)
+          }
+          throw error
       }
     }
+
+  private def runCommand(ssh: SSHClient, observedFingerprint: AtomicReference[String],
+                         config: SshConnectionConfig, command: String): SshCommandResult = {
+    val session = ssh.startSession()
+    try {
+      val remoteCommand = session.exec(command)
+      remoteCommand.join(config.commandTimeoutSeconds.toLong, TimeUnit.SECONDS)
+
+      val exitCode = Option(remoteCommand.getExitStatus).map(_.intValue()).getOrElse {
+        throw new TimeoutException(
+          s"SSH command timed out after ${config.commandTimeoutSeconds} seconds: $command"
+        )
+      }
+
+      val stdout = new String(remoteCommand.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+      val stderr = new String(remoteCommand.getErrorStream.readAllBytes(), StandardCharsets.UTF_8)
+      val fingerprint = Option(observedFingerprint.get()).getOrElse {
+        throw new IllegalStateException(s"SSH host key was not received from ${config.host}:${config.port}")
+      }
+
+      SshCommandResult(exitCode, stdout, stderr, fingerprint)
+    } finally {
+      session.close()
+    }
+  }
 
   private def authenticate(
                             ssh: SSHClient,

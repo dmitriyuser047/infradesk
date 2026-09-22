@@ -25,11 +25,11 @@ final case class SshCommandResult(
     exitCode == 0
 }
 
-trait SshClient[F[_]] {
+trait SshSession[F[_]] {
+  def execute(command: String): F[SshCommandResult]
+}
 
-  def execute(
-               config: SshConnectionConfig,
-               authentication: SshAuthentication,
-               command: String
-             ): F[SshCommandResult]
+trait SshClient[F[_]] {
+  def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
+                    (use: SshSession[F] => F[A]): F[A]
 }
