@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package infrastructure.http.dto
 
 import io.circe.{Encoder, Json}
+import infrastructure.http.IncidentResponse
 
 import java.time.Instant
 import java.util.UUID
@@ -16,6 +17,7 @@ object HttpJsonCodecs {
 
   implicit val metricObservationResponseEncoder: Encoder[MetricObservationResponse] =
     Encoder.forProduct3("metricCode", "value", "observedAt")(value => (value.metricCode, value.value, value.observedAt))
+  implicit val incidentResponseEncoder: Encoder[IncidentResponse] = Encoder.forProduct9("id","monitorRuleId","resourceId","status","startedAt","openedAt","resolvedAt","createdAt","updatedAt")(v => (v.id,v.monitorRuleId,v.resourceId,v.status,v.startedAt,v.openedAt,v.resolvedAt,v.createdAt,v.updatedAt))
 
   implicit val nodeSpecResponseEncoder: Encoder[NodeSpecResponse] =
     Encoder.forProduct5("hostname", "operatingSystem", "architecture", "cpuCores", "memoryMb") { value =>

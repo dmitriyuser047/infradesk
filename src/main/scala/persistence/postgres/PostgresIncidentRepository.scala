@@ -6,6 +6,7 @@ import domain.incident.{Incident, IncidentStatus}
 
 import cats.syntax.all._
 import org.typelevel.doobie.ConnectionIO
+import org.typelevel.doobie.Query0
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 
@@ -15,6 +16,8 @@ import java.util.UUID
 import PostgresIncidentRepository.IncidentRow
 
 final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] {
+  private val selectColumns = fr"select id, organization_id, monitor_rule_id, resource_id, status, started_at, opened_at, resolved_at, created_at, updated_at from incident"
+  private def rows(query: Query0[IncidentRow]): ConnectionIO[List[Incident]] = query.to[List].flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
 
   override def findOpenByRule(
                                organizationId: UUID,
@@ -43,6 +46,16 @@ final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] 
         case Some(row) => row.toDomain.map(value => Option(value)).liftTo[ConnectionIO]
         case None => none[Incident].pure[ConnectionIO]
       }
+
+  override def findById(organizationId: UUID, incidentId: UUID): ConnectionIO[Option[Incident]] =
+    (selectColumns ++ fr"where organization_id = $organizationId and id = $incidentId").query[IncidentRow].option.flatMap {
+      case Some(row) => row.toDomain.map(value => Option(value)).liftTo[ConnectionIO]; case None => none[Incident].pure[ConnectionIO]
+    }
+
+  override def findByOrganization(organizationId: UUID, status: Option[IncidentStatus]): ConnectionIO[List[Incident]] = {
+    val where = status.fold(fr"where organization_id = $organizationId")(value => fr"where organization_id = $organizationId and status = ${value.code}")
+    rows((selectColumns ++ where ++ fr"order by opened_at desc, id desc").query[IncidentRow])
+  }
 
   override def save(incident: Incident): ConnectionIO[Unit] =
     sql"""
