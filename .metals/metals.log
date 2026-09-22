@@ -1,5 +1,0 @@
-2026.09.22 22:43:44 INFO  Started: Metals version 1.6.9 in folders 'C:\Users\user\Documents\infradesk\infradesk' for client Visual Studio Code 1.137.0.
-2026.09.22 22:43:44 INFO  Memory monitor started
-2026.09.22 22:43:45 WARN  Using H2 2.5.250 which is newer than the version Flyway has been verified with. The latest verified version of H2 is 2.3.232.
-2026.09.22 22:48:45 INFO  no build target found for C:\Users\user\Documents\infradesk\infradesk\build.sbt. Using presentation compiler with project's scala-library version: 3.3.8
-2026.09.22 22:48:45 WARN  no build target for: C:\Users\user\Documents\infradesk\infradesk\build.sbt
