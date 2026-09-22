@@ -23,6 +23,26 @@ export function getEnvironmentResources(
   )
 }
 
+export function useResource(
+  organizationId: string | undefined,
+  resourceId: string | undefined,
+) {
+  return useQuery({
+    queryKey: ['resource', organizationId, resourceId],
+    queryFn: () => getResource(requireId(organizationId), requireId(resourceId)),
+    enabled: Boolean(organizationId && resourceId),
+  })
+}
+
+export function getResource(
+  organizationId: string,
+  resourceId: string,
+): Promise<ResourceResponse> {
+  return requestJson<ResourceResponse>(
+    `/api/v1/organizations/${encodeURIComponent(organizationId)}/resources/${encodeURIComponent(resourceId)}`,
+  )
+}
+
 function requireId(value: string | undefined): string {
   if (value === undefined || value.length === 0) {
     throw new Error('Missing route identifier')

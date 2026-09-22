@@ -47,7 +47,11 @@ function EnvironmentContent({ organizationId, environmentId }: EnvironmentConten
         {resourcesQuery.isError ? <ResourceTreeError error={resourcesQuery.error} retry={resourcesQuery.refetch} /> : null}
         {resourcesQuery.data !== undefined && resourcesQuery.data.length === 0 ? <ResourceTreeEmpty /> : null}
         {resourcesQuery.data !== undefined && resourcesQuery.data.length > 0 ? (
-          <ResourceTree resources={resourcesQuery.data} />
+          <ResourceTree
+            resources={resourcesQuery.data}
+            organizationId={organizationId}
+            environmentId={environmentId}
+          />
         ) : null}
       </section>
     </AppShell>

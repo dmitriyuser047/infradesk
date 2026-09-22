@@ -1,13 +1,14 @@
 :root {
-  --bg: #111315;
-  --surface: #191c20;
-  --surface-hover: #22262b;
-  --border: #2d333a;
-  --text: #e8ebee;
-  --text-muted: #929aa5;
-  --accent: #6ea8fe;
-  --success: #65c18c;
-  --danger: #ed7d7d;
+  --bg: #f6f8fa;
+  --surface: #ffffff;
+  --surface-hover: #f0f4f8;
+  --border: #d8dee4;
+  --text: #20262d;
+  --text-muted: #697582;
+  --accent: #2563eb;
+  --success: #16803c;
+  --danger: #c43636;
+  --chart-grid: #e5e9ee;
   color: var(--text);
   background: var(--bg);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -47,7 +48,7 @@ button {
   height: 100vh;
   padding: 24px 14px;
   border-right: 1px solid var(--border);
-  background: #15181b;
+  background: #ffffff;
 }
 
 .brand {
@@ -55,7 +56,7 @@ button {
   align-items: center;
   gap: 10px;
   padding: 0 10px 28px;
-  color: #fff;
+  color: #172033;
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -66,10 +67,10 @@ button {
   width: 26px;
   height: 26px;
   place-items: center;
-  border: 1px solid #3c5e90;
+  border: 1px solid #bed0f6;
   border-radius: 7px;
-  color: #b8d3ff;
-  background: #1c2c40;
+  color: #1d4ed8;
+  background: #eff6ff;
 }
 
 .primary-nav {
@@ -88,8 +89,8 @@ button {
 }
 
 .nav-item-active {
-  color: #dceaff;
-  background: #1c2c40;
+  color: #1e3a8a;
+  background: #eef5ff;
 }
 
 .nav-item-disabled {
@@ -209,12 +210,12 @@ h3 {
 .tree-toggle:focus-visible {
   color: var(--text);
   outline: none;
-  background: #30363d;
+  background: #e6eef9;
 }
 
 .resource-icon {
   flex: 0 0 auto;
-  color: #9bbfff;
+  color: var(--accent);
 }
 
 .resource-name {
@@ -223,6 +224,22 @@ h3 {
   white-space: nowrap;
   color: var(--text);
   font-size: 14px;
+}
+
+.resource-link {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.resource-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .resource-code {
@@ -246,13 +263,13 @@ h3 {
 }
 
 .resource-badge-node {
-  color: #b8d3ff;
-  background: #1c2c40;
+  color: #1d4ed8;
+  background: #eff6ff;
 }
 
 .resource-badge-container {
-  color: #b7dfc7;
-  background: #183126;
+  color: #157342;
+  background: #ecfdf3;
 }
 
 .tree-skeleton {
@@ -266,7 +283,7 @@ h3 {
   width: min(480px, 82%);
   height: 14px;
   border-radius: 3px;
-  background: linear-gradient(90deg, #24292f 15%, #30363d 50%, #24292f 85%);
+  background: linear-gradient(90deg, #e9edf1 15%, #f5f7f9 50%, #e9edf1 85%);
   background-size: 220% 100%;
   animation: shimmer 1.3s ease-in-out infinite;
 }
@@ -293,16 +310,215 @@ h3 {
   width: fit-content;
   margin-top: 18px;
   padding: 7px 12px;
-  border: 1px solid #416ea8;
+  border: 1px solid #9bbcf7;
   border-radius: 6px;
-  color: #dceaff;
-  background: #1c2c40;
+  color: #1e4eb5;
+  background: #eff6ff;
   cursor: pointer;
 }
 
 .retry-button:hover,
 .retry-button:focus-visible {
-  background: #263d59;
+  background: #dfeaff;
+}
+
+.detail-page {
+  max-width: 1080px;
+}
+
+.back-link {
+  display: inline-flex;
+  margin-bottom: 22px;
+  color: var(--accent);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.back-link:hover,
+.back-link:focus-visible {
+  text-decoration: underline;
+}
+
+.resource-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 112px;
+  margin-bottom: 20px;
+}
+
+.resource-header-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid #bed0f6;
+  border-radius: 9px;
+  color: var(--accent);
+  background: #eff6ff;
+}
+
+.resource-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.status-badge {
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.status-badge-online {
+  color: #157342;
+  background: #ecfdf3;
+}
+
+.status-badge-offline {
+  color: #b42318;
+  background: #fff1f0;
+}
+
+.status-badge-unknown {
+  color: #5e6872;
+  background: #eef1f4;
+}
+
+.resource-summary,
+.metrics-section {
+  margin-bottom: 20px;
+}
+
+.current-metrics {
+  display: flex;
+  gap: 18px;
+}
+
+.current-metric {
+  display: grid;
+  gap: 2px;
+}
+
+.current-metric span,
+.summary-grid dt {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.current-metric strong {
+  font-size: 15px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px 28px;
+  margin: 20px 4px 4px;
+}
+
+.summary-grid div {
+  min-width: 0;
+}
+
+.summary-grid dt {
+  margin-bottom: 5px;
+}
+
+.summary-grid dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refresh-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: #344252;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.refresh-button:hover,
+.refresh-button:focus-visible {
+  border-color: #9bbcf7;
+  color: var(--accent);
+  background: #f6f9ff;
+}
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding-top: 18px;
+}
+
+.chart-card {
+  min-width: 0;
+  padding: 16px 12px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.chart-card h3 {
+  padding: 0 6px;
+}
+
+.chart-skeleton {
+  min-height: 220px;
+}
+
+.chart-skeleton span {
+  display: block;
+  width: 100%;
+  height: 188px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #e9edf1 15%, #f5f7f9 50%, #e9edf1 85%);
+  background-size: 220% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+
+.metric-empty,
+.metrics-error {
+  padding: 22px 4px 4px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.metrics-error p {
+  margin-bottom: 8px;
+}
+
+.detail-skeleton {
+  display: grid;
+  gap: 18px;
+  max-width: 920px;
+  padding: 48px 0;
+}
+
+.detail-skeleton span {
+  height: 70px;
+  border-radius: 9px;
+  background: linear-gradient(90deg, #e9edf1 15%, #f5f7f9 50%, #e9edf1 85%);
+  background-size: 220% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+
+.state-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
 }
 
 @keyframes shimmer {
@@ -344,5 +560,20 @@ h3 {
 
   .resource-code {
     display: none;
+  }
+
+  .resource-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .resource-header-meta {
+    width: 100%;
+    margin-left: 60px;
+  }
+
+  .summary-grid,
+  .charts-grid {
+    grid-template-columns: 1fr;
   }
 }
