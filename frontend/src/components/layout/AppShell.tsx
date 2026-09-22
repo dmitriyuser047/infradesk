@@ -10,12 +10,16 @@ export function AppShell({ children }: AppShellProps) {
   const location = useLocation()
   const { organizationId, environmentId } = useParams()
   const incidentsActive = location.pathname.includes('/incidents')
-  const infrastructureActive = !incidentsActive
+  const connectionsActive = location.pathname.includes('/connections')
+  const infrastructureActive = !incidentsActive && !connectionsActive
   const infrastructurePath = organizationId !== undefined && environmentId !== undefined
     ? `/organizations/${organizationId}/environments/${environmentId}`
     : undefined
   const incidentsPath = organizationId !== undefined
     ? `/organizations/${organizationId}/incidents`
+    : undefined
+  const connectionsPath = organizationId !== undefined
+    ? `/organizations/${organizationId}/connections`
     : undefined
 
   return (
@@ -40,7 +44,13 @@ export function AppShell({ children }: AppShellProps) {
           ) : (
             <span className="nav-item nav-item-disabled"><ShieldAlert aria-hidden size={17} />Incidents</span>
           )}
-          <span className="nav-item nav-item-disabled"><Cable aria-hidden size={17} />Connections</span>
+          {connectionsPath !== undefined ? (
+            <Link className={`nav-item ${connectionsActive ? 'nav-item-active' : ''}`} to={connectionsPath}>
+              <Cable aria-hidden size={17} />Connections
+            </Link>
+          ) : (
+            <span className="nav-item nav-item-disabled"><Cable aria-hidden size={17} />Connections</span>
+          )}
         </nav>
       </aside>
       <main className="content">{children}</main>

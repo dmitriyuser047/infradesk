@@ -4,8 +4,18 @@ import { EnvironmentPage } from '../pages/EnvironmentPage'
 import { InvalidRoutePage } from '../pages/InvalidRoutePage'
 import { IncidentsPage } from '../pages/IncidentsPage'
 import { IncidentPage } from '../pages/IncidentPage'
+import { ConnectionPage } from '../pages/ConnectionPage'
+import { ConnectionsPage } from '../pages/ConnectionsPage'
 
 export const router = createBrowserRouter([
+  {
+    path: '/organizations/:organizationId/connections/:connectionId',
+    element: <ConnectionPage />,
+  },
+  {
+    path: '/organizations/:organizationId/connections',
+    element: <ConnectionsPage />,
+  },
   {
     path: '/organizations/:organizationId/incidents/:incidentId',
     element: <IncidentPage />,
