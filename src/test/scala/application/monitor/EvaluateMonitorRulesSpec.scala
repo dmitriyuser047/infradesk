@@ -175,6 +175,25 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
     }
   }
 
+  test("fails when a non-FIRING state has an OPEN incident") {
+    val ruleRepository = new InMemoryRuleRepository(Map(ResourceId -> List(cpuRule())))
+    val stateRepository = new InMemoryStateRepository(Map(RuleId -> okState))
+    val metricRepository = new InMemoryMetricObservationRepository(
+      Map((ResourceId, MetricCode.CpuUsagePercent) -> observation(MetricCode.CpuUsagePercent, 40))
+    )
+    val evaluator = new EvaluateMonitorRules[IO](
+      ruleRepository,
+      stateRepository,
+      metricRepository,
+      new InMemoryIncidentRepository(List(openIncident(state(MonitorRuleStatus.Firing, Some(ObservedAt))))),
+      new FixedIdGenerator
+    )
+
+    intercept[IllegalStateException] {
+      evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
+    }
+  }
+
   test("does not evaluate rules for a container resource") {
     val ruleRepository = new InMemoryRuleRepository(Map(ContainerResourceId -> List(cpuRule())))
     val stateRepository = new InMemoryStateRepository(Map.empty)

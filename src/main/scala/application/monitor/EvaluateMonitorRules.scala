@@ -135,8 +135,11 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
       case (_, MonitorRuleStatus.Firing) =>
         createOpenIncident(rule, nextState, evaluatedAt)
 
-      case _ =>
-        ().pure[Tx]
+      case (_, MonitorRuleStatus.Ok) =>
+        requireNoOpenIncident(rule)
+
+      case (_, MonitorRuleStatus.Pending) =>
+        requireNoOpenIncident(rule)
     }
 
   private def createOpenIncident(
@@ -187,6 +190,17 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
         case None =>
           new IllegalStateException(
             s"Monitor rule ${rule.id} is FIRING without an OPEN incident"
+          ).raiseError[Tx, Unit]
+      }
+
+  private def requireNoOpenIncident(rule: MonitorRule): Tx[Unit] =
+    incidentRepository
+      .findOpenByRule(rule.organizationId, rule.id)
+      .flatMap {
+        case None => ().pure[Tx]
+        case Some(incident) =>
+          new IllegalStateException(
+            s"Monitor rule ${rule.id} is not FIRING while incident ${incident.id} is still OPEN"
           ).raiseError[Tx, Unit]
       }
 
