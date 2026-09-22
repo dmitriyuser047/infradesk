@@ -86,6 +86,7 @@ button {
   border-radius: 6px;
   color: var(--text-muted);
   font-size: 14px;
+  text-decoration: none;
 }
 
 .nav-item-active {
@@ -1172,6 +1173,126 @@ h3 {
   margin-top: 5px;
 }
 
+.organization-page {
+  max-width: 920px;
+}
+
+.organization-header {
+  margin-bottom: 18px;
+}
+
+.organization-state {
+  min-height: 150px;
+}
+
+.organization-state .retry-button {
+  margin-top: 12px;
+}
+
+.organization-skeleton,
+.context-skeleton {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.organization-skeleton span,
+.context-skeleton span {
+  display: block;
+  width: min(100%, 360px);
+  height: 24px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #e9edf1 15%, #f5f7f9 50%, #e9edf1 85%);
+  background-size: 220% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+
+.organization-skeleton span:first-child {
+  width: 110px;
+  height: 13px;
+}
+
+.context-panel {
+  min-height: 0;
+}
+
+.context-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  padding: 22px 4px 16px;
+}
+
+.context-field {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.context-field select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: #ffffff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.context-field select:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid #dbeafe;
+}
+
+.context-field select:disabled {
+  color: var(--text-muted);
+  background: #f6f8fa;
+}
+
+.context-field small {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.context-empty,
+.context-area-error {
+  padding: 20px 4px 4px;
+}
+
+.context-empty p,
+.context-area-error p,
+.context-empty-inline {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.context-area-error p {
+  color: var(--danger);
+}
+
+.context-field .context-area-error {
+  padding-top: 0;
+}
+
+.context-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 3px 4px 0;
+}
+
+.context-actions .primary-button:disabled {
+  cursor: not-allowed;
+}
+
 @keyframes shimmer {
   to {
     background-position: -220% 0;
@@ -1191,6 +1312,8 @@ h3 {
     padding: 12px 16px;
     border-right: 0;
     border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    gap: 12px;
   }
 
   .brand {
@@ -1198,7 +1321,15 @@ h3 {
   }
 
   .primary-nav {
-    display: none;
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 4px;
+  }
+
+  .primary-nav .nav-item {
+    padding: 7px;
+    font-size: 12px;
   }
 
   .content {
@@ -1263,5 +1394,9 @@ h3 {
 
   .lifecycle-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .context-fields {
+    grid-template-columns: 1fr;
   }
 }

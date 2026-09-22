@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Boxes, Cable, ShieldAlert } from 'lucide-react'
+import { Boxes, Cable, House, ShieldAlert } from 'lucide-react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 
 interface AppShellProps {
@@ -11,7 +11,11 @@ export function AppShell({ children }: AppShellProps) {
   const { organizationId, environmentId } = useParams()
   const incidentsActive = location.pathname.includes('/incidents')
   const connectionsActive = location.pathname.includes('/connections')
-  const infrastructureActive = !incidentsActive && !connectionsActive
+  const workspacePath = organizationId !== undefined
+    ? `/organizations/${organizationId}`
+    : undefined
+  const workspaceActive = location.pathname === workspacePath
+  const infrastructureActive = location.pathname.includes('/environments/') && !incidentsActive && !connectionsActive
   const infrastructurePath = organizationId !== undefined && environmentId !== undefined
     ? `/organizations/${organizationId}/environments/${environmentId}`
     : undefined
@@ -30,6 +34,11 @@ export function AppShell({ children }: AppShellProps) {
           <span>InfraDesk</span>
         </div>
         <nav className="primary-nav" aria-label="Primary navigation">
+          {workspacePath !== undefined ? (
+            <Link className={`nav-item ${workspaceActive ? 'nav-item-active' : ''}`} to={workspacePath}>
+              <House aria-hidden size={17} />Workspace
+            </Link>
+          ) : null}
           {infrastructurePath !== undefined ? (
             <Link className={`nav-item ${infrastructureActive ? 'nav-item-active' : ''}`} to={infrastructurePath}>
               <Boxes aria-hidden size={17} />Infrastructure

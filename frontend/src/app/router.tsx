@@ -6,8 +6,13 @@ import { IncidentsPage } from '../pages/IncidentsPage'
 import { IncidentPage } from '../pages/IncidentPage'
 import { ConnectionPage } from '../pages/ConnectionPage'
 import { ConnectionsPage } from '../pages/ConnectionsPage'
+import { OrganizationPage } from '../pages/OrganizationPage'
 
 export const router = createBrowserRouter([
+  {
+    path: '/organizations/:organizationId',
+    element: <OrganizationPage />,
+  },
   {
     path: '/organizations/:organizationId/connections/:connectionId',
     element: <ConnectionPage />,
