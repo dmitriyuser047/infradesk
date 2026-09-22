@@ -1,10 +1,11 @@
 package ru.bitec.app.ops
 package application.monitor
 
-import application.port.{MetricObservationRepository, MonitorRuleRepository, MonitorRuleStateRepository}
+import application.port.{IdGenerator, IncidentRepository, MetricObservationRepository, MonitorRuleRepository, MonitorRuleStateRepository}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.metric.{MetricCode, MetricObservation}
+import domain.incident.{Incident, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import domain.resource.{Resource, ResourceData}
 import munit.FunSuite
@@ -28,6 +29,7 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
 
     assertEquals(result.state.status, MonitorRuleStatus.Pending)
     assertEquals(result.state.pendingSince, Some(metricAt))
+    assertEquals(result.incidents, List.empty)
   }
 
   test("keeps PENDING and original pendingSince before duration passes") {
@@ -52,6 +54,10 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
 
     assertEquals(result.state.status, MonitorRuleStatus.Firing)
     assertEquals(result.state.pendingSince, Some(pendingSince))
+    assertEquals(result.incidents.size, 1)
+    assertEquals(result.incidents.head.status, IncidentStatus.Open)
+    assertEquals(result.incidents.head.startedAt, pendingSince)
+    assertEquals(result.incidents.head.openedAt, EvaluatedAt)
   }
 
   test("keeps FIRING and pendingSince while violation continues") {
@@ -64,6 +70,7 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
 
     assertEquals(result.state.status, MonitorRuleStatus.Firing)
     assertEquals(result.state.pendingSince, Some(pendingSince))
+    assertEquals(result.incidents.map(_.id), List(IncidentId))
   }
 
   test("resets FIRING to OK after recovery") {
@@ -75,6 +82,11 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
 
     assertEquals(result.state.status, MonitorRuleStatus.Ok)
     assertEquals(result.state.pendingSince, None)
+    assertEquals(result.incidents.size, 1)
+    assertEquals(result.incidents.head.status, IncidentStatus.Resolved)
+    assertEquals(result.incidents.head.resolvedAt, Some(EvaluatedAt))
+    assertEquals(result.incidents.head.startedAt, ObservedAt)
+    assertEquals(result.incidents.head.openedAt, ObservedAt)
   }
 
   test("fires immediately for a zero-duration violation") {
@@ -87,6 +99,9 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
 
     assertEquals(result.state.status, MonitorRuleStatus.Firing)
     assertEquals(result.state.pendingSince, Some(metricAt))
+    assertEquals(result.incidents.size, 1)
+    assertEquals(result.incidents.head.status, IncidentStatus.Open)
+    assertEquals(result.incidents.head.startedAt, metricAt)
   }
 
   test("does not create or change state when latest observation is absent") {
@@ -95,6 +110,7 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
 
     assertEquals(result.states.get(RuleId), Some(original))
     assertEquals(result.saved, List.empty)
+    assertEquals(result.incidents, List(openIncident(original)))
   }
 
   test("does not create state from telemetry older than the current snapshot") {
@@ -104,7 +120,13 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
     val metricRepository = new InMemoryMetricObservationRepository(
       Map((ResourceId, MetricCode.CpuUsagePercent) -> observation(MetricCode.CpuUsagePercent, 95, ObservedAt))
     )
-    val evaluator = new EvaluateMonitorRules[IO](ruleRepository, stateRepository, metricRepository)
+    val evaluator = new EvaluateMonitorRules[IO](
+      ruleRepository,
+      stateRepository,
+      metricRepository,
+      new InMemoryIncidentRepository(List.empty),
+      new FixedIdGenerator
+    )
 
     evaluator.execute(List(nodeResource.copy(updatedAt = snapshotAt)), EvaluatedAt).unsafeRunSync()
 
@@ -113,11 +135,57 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
     assertEquals(metricRepository.requestedObservedAts, List(snapshotAt))
   }
 
+  test("fails when a FIRING state has no OPEN incident") {
+    val firing = state(MonitorRuleStatus.Firing, Some(ObservedAt))
+    val ruleRepository = new InMemoryRuleRepository(Map(ResourceId -> List(cpuRule())))
+    val stateRepository = new InMemoryStateRepository(Map(RuleId -> firing))
+    val metricRepository = new InMemoryMetricObservationRepository(
+      Map((ResourceId, MetricCode.CpuUsagePercent) -> observation(MetricCode.CpuUsagePercent, 95))
+    )
+    val evaluator = new EvaluateMonitorRules[IO](
+      ruleRepository,
+      stateRepository,
+      metricRepository,
+      new InMemoryIncidentRepository(List.empty),
+      new FixedIdGenerator
+    )
+
+    intercept[IllegalStateException] {
+      evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
+    }
+  }
+
+  test("fails when a transition to FIRING already has an OPEN incident") {
+    val pending = state(MonitorRuleStatus.Pending, Some(ObservedAt.minusSeconds(300)))
+    val ruleRepository = new InMemoryRuleRepository(Map(ResourceId -> List(cpuRule())))
+    val stateRepository = new InMemoryStateRepository(Map(RuleId -> pending))
+    val metricRepository = new InMemoryMetricObservationRepository(
+      Map((ResourceId, MetricCode.CpuUsagePercent) -> observation(MetricCode.CpuUsagePercent, 95))
+    )
+    val evaluator = new EvaluateMonitorRules[IO](
+      ruleRepository,
+      stateRepository,
+      metricRepository,
+      new InMemoryIncidentRepository(List(openIncident(firingState = pending.copy(status = MonitorRuleStatus.Firing)))),
+      new FixedIdGenerator
+    )
+
+    intercept[IllegalStateException] {
+      evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
+    }
+  }
+
   test("does not evaluate rules for a container resource") {
     val ruleRepository = new InMemoryRuleRepository(Map(ContainerResourceId -> List(cpuRule())))
     val stateRepository = new InMemoryStateRepository(Map.empty)
     val metricRepository = new InMemoryMetricObservationRepository(Map.empty)
-    val evaluator = new EvaluateMonitorRules[IO](ruleRepository, stateRepository, metricRepository)
+    val evaluator = new EvaluateMonitorRules[IO](
+      ruleRepository,
+      stateRepository,
+      metricRepository,
+      new InMemoryIncidentRepository(List.empty),
+      new FixedIdGenerator
+    )
 
     evaluator.execute(List(containerResource), EvaluatedAt).unsafeRunSync()
 
@@ -138,7 +206,13 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
         (ResourceId, MetricCode.MemoryUsagePercent) -> observation(MetricCode.MemoryUsagePercent, 95)
       )
     )
-    val evaluator = new EvaluateMonitorRules[IO](ruleRepository, stateRepository, metricRepository)
+    val evaluator = new EvaluateMonitorRules[IO](
+      ruleRepository,
+      stateRepository,
+      metricRepository,
+      new InMemoryIncidentRepository(List.empty),
+      new FixedIdGenerator
+    )
 
     evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
 
@@ -160,14 +234,24 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
     val metricRepository = new InMemoryMetricObservationRepository(
       latestObservation.map(value => Map((ResourceId, rule.metricCode) -> value)).getOrElse(Map.empty)
     )
-    val evaluator = new EvaluateMonitorRules[IO](ruleRepository, stateRepository, metricRepository)
+    val incidentRepository = new InMemoryIncidentRepository(
+      currentState.filter(_.status == MonitorRuleStatus.Firing).map(value => List(openIncident(value))).getOrElse(List.empty)
+    )
+    val evaluator = new EvaluateMonitorRules[IO](
+      ruleRepository,
+      stateRepository,
+      metricRepository,
+      incidentRepository,
+      new FixedIdGenerator
+    )
 
     evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
 
     EvaluationResult(
       stateRepository.states(rule.id),
       stateRepository.states,
-      stateRepository.saved
+      stateRepository.saved,
+      incidentRepository.incidents
     )
   }
 
@@ -212,7 +296,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
   private final case class EvaluationResult(
                                               state: MonitorRuleState,
                                               states: Map[UUID, MonitorRuleState],
-                                              saved: List[MonitorRuleState]
+                                              saved: List[MonitorRuleState],
+                                              incidents: List[Incident]
                                             )
 
   private final class InMemoryRuleRepository(
@@ -271,6 +356,28 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
       }
   }
 
+  private final class InMemoryIncidentRepository(initial: List[Incident]) extends IncidentRepository[IO] {
+    var incidents: List[Incident] = initial
+
+    override def findOpenByRule(organizationId: UUID, monitorRuleId: UUID): IO[Option[Incident]] =
+      IO.pure(
+        incidents.find(incident =>
+          incident.organizationId == organizationId &&
+            incident.monitorRuleId == monitorRuleId &&
+            incident.status == IncidentStatus.Open
+        )
+      )
+
+    override def save(incident: Incident): IO[Unit] =
+      IO {
+        incidents = incident :: incidents.filterNot(_.id == incident.id)
+      }
+  }
+
+  private final class FixedIdGenerator extends IdGenerator[IO] {
+    override def nextId: IO[UUID] = IO.pure(NewIncidentId)
+  }
+
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
   private val ResourceTypeId = UUID.fromString("10000000-0000-0000-0000-000000000001")
@@ -278,6 +385,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
   private val ContainerResourceId = UUID.fromString("70000000-0000-0000-0000-000000000002")
   private val RuleId = UUID.fromString("90000000-0000-0000-0000-000000000001")
   private val MemoryRuleId = UUID.fromString("90000000-0000-0000-0000-000000000002")
+  private val IncidentId = UUID.fromString("a0000000-0000-0000-0000-000000000001")
+  private val NewIncidentId = UUID.fromString("a0000000-0000-0000-0000-000000000002")
   private val ObservedAt = Instant.parse("2026-09-22T10:00:00Z")
   private val EvaluatedAt = Instant.parse("2026-09-22T10:05:00Z")
 
@@ -302,4 +411,18 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
   )
 
   private val okState = state(MonitorRuleStatus.Ok, None)
+
+  private def openIncident(firingState: MonitorRuleState): Incident =
+    Incident(
+      IncidentId,
+      OrganizationId,
+      RuleId,
+      ResourceId,
+      IncidentStatus.Open,
+      firingState.pendingSince.get,
+      firingState.updatedAt,
+      None,
+      firingState.updatedAt,
+      firingState.updatedAt
+    )
 }

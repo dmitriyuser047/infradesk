@@ -5,6 +5,7 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.metric.MetricCode
+import domain.incident.{Incident, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import domain.resource.{Resource, ResourceData}
 import domain.resource.node.{NodeSpec, NodeStatus}
@@ -101,8 +102,95 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     }.unsafeRunSync()
   }
 
+  test("enforces incident lifecycle constraints and one OPEN incident per rule") {
+    assume(
+      sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
+      "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests"
+    )
+
+    val ids = TestIds.random()
+    val config = DatabaseConfig.load.unsafeRunSync()
+
+    Database.transactor(config).use { xa =>
+      val transactionRunner = new DoobieTransactionRunner(xa)
+      val resourceRepository = new PostgresResourceRepository
+      val ruleRepository = new PostgresMonitorRuleRepository
+      val incidentRepository = new PostgresIncidentRepository
+      val resource = Resource(
+        id = ids.resourceId,
+        organizationId = OrganizationId,
+        environmentId = EnvironmentId,
+        resourceTypeId = NodeResourceTypeId,
+        parentResourceId = None,
+        code = ids.resourceCode,
+        name = ids.resourceCode,
+        isActive = true,
+        createdAt = Now,
+        updatedAt = Now,
+        resourceTypeCode = "NODE",
+        data = ResourceData.empty
+      )
+      val rule = MonitorRule(
+        ids.ruleId,
+        OrganizationId,
+        ids.resourceId,
+        MetricCode.CpuUsagePercent,
+        MonitorOperator.GreaterThan,
+        BigDecimal(90),
+        300,
+        enabled = true,
+        Now,
+        Now
+      )
+      val open = Incident(
+        ids.incidentId,
+        OrganizationId,
+        ids.ruleId,
+        ids.resourceId,
+        IncidentStatus.Open,
+        Now,
+        Now,
+        None,
+        Now,
+        Now
+      )
+
+      val program = for {
+        _ <- transactionRunner.run(resourceRepository.save(resource))
+        _ <- transactionRunner.run(ruleRepository.save(rule))
+        _ <- transactionRunner.run(incidentRepository.save(open))
+        loadedOpen <- transactionRunner.run(incidentRepository.findOpenByRule(OrganizationId, ids.ruleId))
+        openWithResolution <- transactionRunner.run(
+          incidentRepository.save(open.copy(id = ids.secondIncidentId, resolvedAt = Some(Now)))
+        ).attempt
+        resolvedWithoutResolution <- transactionRunner.run(
+          incidentRepository.save(open.copy(id = ids.secondIncidentId, status = IncidentStatus.Resolved))
+        ).attempt
+        duplicateOpen <- transactionRunner.run(
+          incidentRepository.save(open.copy(id = ids.secondIncidentId))
+        ).attempt
+        _ <- transactionRunner.run(cleanup(ids))
+      } yield (loadedOpen, openWithResolution, resolvedWithoutResolution, duplicateOpen)
+
+      program.guarantee(transactionRunner.run(cleanup(ids)).attempt.void).flatMap {
+        case (loadedOpen, openWithResolution, resolvedWithoutResolution, duplicateOpen) =>
+          IO {
+            assertEquals(loadedOpen, Some(open))
+            assert(openWithResolution.isLeft)
+            assert(resolvedWithoutResolution.isLeft)
+            assert(duplicateOpen.isLeft)
+          }
+      }
+    }.unsafeRunSync()
+  }
+
   private def cleanup(ids: TestIds): ConnectionIO[Unit] =
     for {
+      _ <- sql"""
+        delete from incident
+        where organization_id = $OrganizationId
+          and monitor_rule_id = ${ids.ruleId}
+      """.update.run
       _ <- sql"""
         delete from monitor_rule_state
         where organization_id = $OrganizationId
@@ -123,6 +211,8 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
   private final case class TestIds(
                                     resourceId: UUID,
                                     ruleId: UUID,
+                                    incidentId: UUID,
+                                    secondIncidentId: UUID,
                                     resourceCode: String
                                   )
 
@@ -133,6 +223,8 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       TestIds(
         resourceId = UUID.randomUUID(),
         ruleId = UUID.randomUUID(),
+        incidentId = UUID.randomUUID(),
+        secondIncidentId = UUID.randomUUID(),
         resourceCode = s"monitor-rule-$suffix"
       )
     }

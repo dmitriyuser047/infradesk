@@ -18,6 +18,7 @@ import org.typelevel.doobie.ConnectionIO
 import infrastructure.database.{
   Database,
   DatabaseConfig,
+  ConnectionIOIdGenerator,
   DoobieTransactionRunner
 }
 import infrastructure.runtime.{
@@ -38,6 +39,7 @@ import persistence.postgres.{
   PostgresConnectionRepository,
   PostgresConnectionScheduleRepository,
   PostgresMetricObservationRepository,
+  PostgresIncidentRepository,
   PostgresMonitorRuleRepository,
   PostgresMonitorRuleStateRepository,
   PostgresResourceRepository,
@@ -79,11 +81,17 @@ object Main extends IOApp.Simple {
         val monitorRuleStateRepository =
           new PostgresMonitorRuleStateRepository
 
+        val incidentRepository =
+          new PostgresIncidentRepository
+
         val transactionRunner =
           new DoobieTransactionRunner(xa)
 
         val idGenerator =
           new SystemIdGenerator
+
+        val transactionIdGenerator =
+          new ConnectionIOIdGenerator
 
         val timeProvider =
           new SystemTimeProvider
@@ -116,7 +124,9 @@ object Main extends IOApp.Simple {
           new EvaluateMonitorRules[ConnectionIO](
             monitorRuleRepository,
             monitorRuleStateRepository,
-            metricObservationRepository
+            metricObservationRepository,
+            incidentRepository,
+            transactionIdGenerator
           )
 
         val syncDiscoveredSnapshot =
