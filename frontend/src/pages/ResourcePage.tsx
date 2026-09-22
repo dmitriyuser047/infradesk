@@ -9,6 +9,7 @@ import { AppShell } from '../components/layout/AppShell'
 import { formatDuration, formatMemoryMb, formatPercent } from '../components/metrics/formatters'
 import { MetricChart } from '../components/metrics/MetricChart'
 import { filterMetricSeries } from '../components/metrics/metricSeries'
+import { MonitorRulesSection } from '../components/monitoring/MonitorRulesSection'
 import { MetricCode } from '../types/metric'
 import type { ResourceResponse } from '../types/resource'
 import { InvalidRoutePage } from './InvalidRoutePage'
@@ -38,7 +39,12 @@ interface ResourceContentProps {
 function ResourceContent({ organizationId, environmentId, resourceId }: ResourceContentProps) {
   const [metricWindow, setMetricWindow] = useState(() => createLastHourWindow())
   const resourceQuery = useResource(organizationId, resourceId)
-  const metricsQuery = useResourceMetrics(organizationId, resourceId, metricWindow)
+  const metricsQuery = useResourceMetrics(
+    organizationId,
+    resourceId,
+    metricWindow,
+    resourceQuery.data?.data.kind === 'NODE',
+  )
   const environmentPath = `/organizations/${organizationId}/environments/${environmentId}`
 
   if (resourceQuery.isPending) {
@@ -86,6 +92,9 @@ function ResourceContent({ organizationId, environmentId, resourceId }: Resource
           refresh={() => setMetricWindow(createLastHourWindow())}
           retry={metricsQuery.refetch}
         />
+        {resourceQuery.data.data.kind === 'NODE' ? (
+          <MonitorRulesSection organizationId={organizationId} resourceId={resourceId} />
+        ) : null}
       </div>
     </AppShell>
   )

@@ -521,6 +521,275 @@ h3 {
   margin-top: 18px;
 }
 
+.monitor-rules-section {
+  margin-bottom: 20px;
+}
+
+.primary-button,
+.secondary-button,
+.text-button,
+.dialog-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.primary-button {
+  padding: 7px 11px;
+  border: 1px solid #2563eb;
+  color: #ffffff;
+  background: #2563eb;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.primary-button:hover,
+.primary-button:focus-visible {
+  background: #1d4ed8;
+}
+
+.primary-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.secondary-button {
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: #ffffff;
+  font-size: 13px;
+}
+
+.secondary-button:hover,
+.secondary-button:focus-visible {
+  background: var(--surface-hover);
+}
+
+.monitor-rules-list {
+  padding-top: 10px;
+}
+
+.monitor-rule-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 55px;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.monitor-rule-row:last-child {
+  border-bottom: 0;
+}
+
+.monitor-rule-condition {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.monitor-rule-condition strong {
+  font-size: 14px;
+}
+
+.monitor-rule-condition span {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.monitor-rule-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
+.rule-state {
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rule-state-enabled {
+  color: #157342;
+  background: #ecfdf3;
+}
+
+.rule-state-disabled {
+  color: #626c77;
+  background: #eef1f4;
+}
+
+.text-button {
+  padding: 5px 7px;
+  border: 0;
+  color: var(--accent);
+  background: transparent;
+  font-size: 13px;
+}
+
+.text-button:hover,
+.text-button:focus-visible {
+  background: #eff6ff;
+}
+
+.monitor-rules-empty,
+.monitor-rules-error {
+  display: grid;
+  gap: 5px;
+  padding: 23px 4px 7px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.monitor-rules-empty strong,
+.monitor-rules-error p {
+  margin: 0;
+  color: var(--text);
+}
+
+.monitor-rules-error p {
+  color: var(--danger);
+}
+
+.monitor-rules-error .retry-button {
+  margin-top: 8px;
+}
+
+.rules-skeleton {
+  display: grid;
+  gap: 12px;
+  padding: 15px 4px 4px;
+}
+
+.rules-skeleton span {
+  display: block;
+  width: 82%;
+  height: 18px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #e9edf1 15%, #f5f7f9 50%, #e9edf1 85%);
+  background-size: 220% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  z-index: 10;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(31 41 55 / 24%);
+}
+
+.monitor-rule-dialog {
+  width: min(100%, 440px);
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 18px 55px rgb(31 41 55 / 16%);
+}
+
+.dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.dialog-heading h2 {
+  margin: 0;
+}
+
+.dialog-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.dialog-close:hover,
+.dialog-close:focus-visible {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.monitor-rule-form {
+  display: grid;
+  gap: 14px;
+}
+
+.monitor-rule-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.monitor-rule-form input[type="number"],
+.monitor-rule-form select {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: #ffffff;
+  font-size: 14px;
+}
+
+.monitor-rule-form input:focus-visible,
+.monitor-rule-form select:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid #dbeafe;
+}
+
+.duration-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.checkbox-field {
+  display: flex !important;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px !important;
+}
+
+.checkbox-field input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.form-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 5px;
+}
+
 @keyframes shimmer {
   to {
     background-position: -220% 0;
@@ -575,5 +844,16 @@ h3 {
   .summary-grid,
   .charts-grid {
     grid-template-columns: 1fr;
+  }
+
+  .monitor-rule-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .monitor-rule-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 }

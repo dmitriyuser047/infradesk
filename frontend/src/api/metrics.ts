@@ -19,6 +19,7 @@ export function useResourceMetrics(
   organizationId: string | undefined,
   resourceId: string | undefined,
   window: MetricWindow,
+  enabled: boolean,
 ) {
   return useQuery({
     queryKey: [
@@ -34,7 +35,7 @@ export function useResourceMetrics(
       window.from,
       window.to,
     ),
-    enabled: Boolean(organizationId && resourceId),
+    enabled: Boolean(organizationId && resourceId) && enabled,
   })
 }
 
