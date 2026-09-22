@@ -12,6 +12,7 @@ import application.discovery.{
 }
 import application.monitor.EvaluateMonitorRules
 import application.connection.{GetConnection, ListConnections}
+import application.navigation.{GetOrganization, ListEnvironments, ListProjects}
 import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
 import application.scheduler.SyncScheduler
 import cats.effect.{IO, IOApp}
@@ -20,6 +21,7 @@ import infrastructure.http.ResourceRoutes
 import infrastructure.http.IncidentRoutes
 import infrastructure.http.MonitorRuleRoutes
 import infrastructure.http.ConnectionRoutes
+import infrastructure.http.NavigationRoutes
 import application.monitor.{ListMonitorRules, CreateMonitorRule, UpdateMonitorRule}
 import application.incident.{GetIncident, ListIncidents}
 import cats.syntax.semigroupk._
@@ -53,6 +55,9 @@ import persistence.postgres.{
   PostgresIncidentRepository,
   PostgresMonitorRuleRepository,
   PostgresMonitorRuleStateRepository,
+  PostgresEnvironmentRepository,
+  PostgresOrganizationRepository,
+  PostgresProjectRepository,
   PostgresResourceRepository,
   PostgresResourceTypeRepository,
   PostgresSyncSessionRepository
@@ -68,6 +73,15 @@ object Main extends IOApp.Simple {
       Database.transactor(config).use { xa =>
         val resourceRepository =
           new PostgresResourceRepository
+
+        val organizationRepository =
+          new PostgresOrganizationRepository
+
+        val projectRepository =
+          new PostgresProjectRepository
+
+        val environmentRepository =
+          new PostgresEnvironmentRepository
 
         val resourceTypeRepository =
           new PostgresResourceTypeRepository
@@ -165,6 +179,12 @@ object Main extends IOApp.Simple {
         val getConnection = GetConnection[ConnectionIO](connectionRepository, syncSessionRepository, connectionScheduleRepository)
         val listConnections = ListConnections[ConnectionIO](connectionRepository, syncSessionRepository, connectionScheduleRepository)
         val connectionRoutes = new ConnectionRoutes[ConnectionIO](getConnection, listConnections, transactionRunner)
+        val navigationRoutes = new NavigationRoutes[ConnectionIO](
+          GetOrganization(organizationRepository),
+          ListProjects(organizationRepository, projectRepository),
+          ListEnvironments(organizationRepository, projectRepository, environmentRepository),
+          transactionRunner
+        )
 
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](
@@ -233,7 +253,7 @@ object Main extends IOApp.Simple {
           .default[IO]
           .withHost(httpHost)
           .withPort(httpPort)
-          .withHttpApp((resourceRoutes.routes <+> incidentRoutes.routes <+> monitorRuleRoutes.routes <+> connectionRoutes.routes).orNotFound)
+          .withHttpApp((resourceRoutes.routes <+> incidentRoutes.routes <+> monitorRuleRoutes.routes <+> connectionRoutes.routes <+> navigationRoutes.routes).orNotFound)
           .build
           .use(_ => syncScheduler.run(1.second, limit = 100))
       }

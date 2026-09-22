@@ -15,6 +15,19 @@ object HttpJsonCodecs {
   implicit val apiErrorResponseEncoder: Encoder[ApiErrorResponse] =
     Encoder.forProduct2("code", "message")(value => (value.code, value.message))
 
+  implicit val organizationResponseEncoder: Encoder[OrganizationResponse] =
+    Encoder.forProduct3("id", "code", "name")(value => (value.id, value.code, value.name))
+
+  implicit val projectResponseEncoder: Encoder[ProjectResponse] =
+    Encoder.forProduct5("id", "organizationId", "code", "name", "description") { value =>
+      (value.id, value.organizationId, value.code, value.name, value.description)
+    }
+
+  implicit val environmentResponseEncoder: Encoder[EnvironmentResponse] =
+    Encoder.forProduct6("id", "organizationId", "projectId", "code", "name", "kind") { value =>
+      (value.id, value.organizationId, value.projectId, value.code, value.name, value.kind)
+    }
+
   implicit val metricObservationResponseEncoder: Encoder[MetricObservationResponse] =
     Encoder.forProduct3("metricCode", "value", "observedAt")(value => (value.metricCode, value.value, value.observedAt))
   implicit val incidentResponseEncoder: Encoder[IncidentResponse] = Encoder.forProduct9("id","monitorRuleId","resourceId","status","startedAt","openedAt","resolvedAt","createdAt","updatedAt")(v => (v.id,v.monitorRuleId,v.resourceId,v.status,v.startedAt,v.openedAt,v.resolvedAt,v.createdAt,v.updatedAt))

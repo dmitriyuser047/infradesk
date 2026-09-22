@@ -6,6 +6,7 @@ import {
   formatSyncDuration,
   getConnectionScopeLabel,
   getConnectorTypeLabel,
+  getLastSyncSummary,
   getSyncStatusLabel,
 } from './connectionPresentation'
 
@@ -39,6 +40,22 @@ describe('connection presentation helpers', () => {
     expect(formatSyncDuration('2026-09-22T10:00:00Z', '2026-09-22T10:00:48Z')).toBe('48s')
     expect(formatSyncDuration('2026-09-22T10:00:00Z', null)).toBe('In progress')
     expect(formatSyncDuration('invalid', '2026-09-22T10:00:48Z')).toBe('—')
+  })
+
+  it('keeps last-sync secondary text free of duplicated status', () => {
+    expect(getLastSyncSummary(null)).toBe('Never synchronized')
+    expect(getLastSyncSummary({
+      id: 'sync',
+      status: 'RUNNING',
+      startedAt: '2026-09-22T10:00:00Z',
+      finishedAt: null,
+    })).toMatch(/^Started /)
+    expect(getLastSyncSummary({
+      id: 'sync',
+      status: 'COMPLETED',
+      startedAt: '2026-09-22T10:00:00Z',
+      finishedAt: '2026-09-22T10:00:48Z',
+    })).not.toContain('Completed')
   })
 
   it('returns a placeholder for invalid dates', () => {

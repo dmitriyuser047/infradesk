@@ -105,10 +105,10 @@ export function getLastSyncSummary(lastSync: SyncSessionResponse | null): string
     return 'Never synchronized'
   }
   if (lastSync.status === SyncStatus.running) {
-    return `${getSyncStatusLabel(lastSync.status)} · started ${formatConnectionDateTime(lastSync.startedAt)}`
+    return `Started ${formatConnectionDateTime(lastSync.startedAt)}`
   }
 
-  return `${getSyncStatusLabel(lastSync.status)} · ${formatConnectionDateTime(lastSync.finishedAt ?? lastSync.startedAt)}`
+  return formatConnectionDateTime(lastSync.finishedAt ?? lastSync.startedAt)
 }
 
 export function shortConnectionIdentifier(id: string): string {
