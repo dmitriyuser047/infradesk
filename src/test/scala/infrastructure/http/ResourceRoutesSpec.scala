@@ -49,6 +49,18 @@ final class ResourceRoutesSpec extends FunSuite {
     assertEquals(body.hcursor.downField("data").downField("status").get[String]("state"), Right("running"))
   }
 
+  test("returns a NODE resource with empty resource data") {
+    val fixture = buildFixture(Map((OrganizationId, ResourceId) -> nodeResource.copy(data = ResourceData.empty)))
+
+    val response = fixture.app.run(request(OrganizationId, ResourceId)).unsafeRunSync()
+    val body = response.as[Json].unsafeRunSync()
+
+    assertEquals(response.status, Status.Ok)
+    assertEquals(body.hcursor.downField("data").get[String]("kind"), Right("NODE"))
+    assert(body.hcursor.downField("data").downField("spec").focus.exists(_.isNull))
+    assert(body.hcursor.downField("data").downField("status").focus.exists(_.isNull))
+  }
+
   test("returns 404 when a resource is absent") {
     val fixture = buildFixture(Map.empty)
 

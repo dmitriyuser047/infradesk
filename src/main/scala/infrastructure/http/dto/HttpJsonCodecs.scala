@@ -34,14 +34,14 @@ object HttpJsonCodecs {
     case NodeResourceDataResponse(spec, status) =>
       Json.obj(
         "kind" -> Json.fromString("NODE"),
-        "spec" -> nodeSpecResponseEncoder(spec),
-        "status" -> nodeStatusResponseEncoder(status)
+        "spec" -> Encoder.encodeOption[NodeSpecResponse].apply(spec),
+        "status" -> Encoder.encodeOption[NodeStatusResponse].apply(status)
       )
     case ContainerResourceDataResponse(spec, status) =>
       Json.obj(
         "kind" -> Json.fromString("CONTAINER"),
-        "spec" -> containerSpecResponseEncoder(spec),
-        "status" -> containerStatusResponseEncoder(status)
+        "spec" -> Encoder.encodeOption[ContainerSpecResponse].apply(spec),
+        "status" -> Encoder.encodeOption[ContainerStatusResponse].apply(status)
       )
   }
 

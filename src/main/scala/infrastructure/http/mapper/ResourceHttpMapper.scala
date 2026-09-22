@@ -32,30 +32,36 @@ object ResourceHttpMapper {
           if resourceTypeCode == NodeDefinition.code =>
         Right(
           NodeResourceDataResponse(
-            NodeSpecResponse(
+            Some(NodeSpecResponse(
               spec.hostname,
               spec.operatingSystem,
               spec.architecture,
               spec.cpuCores,
               spec.memoryMb
-            ),
-            NodeStatusResponse(
+            )),
+            Some(NodeStatusResponse(
               status.online,
               status.cpuUsagePercent,
               status.memoryUsagePercent,
               status.uptimeSeconds
-            )
+            ))
           )
         )
+
+      case (resourceTypeCode, None, None) if resourceTypeCode == NodeDefinition.code =>
+        Right(NodeResourceDataResponse(None, None))
 
       case (resourceTypeCode, Some(spec: ContainerSpec), Some(status: ContainerStatus))
           if resourceTypeCode == ContainerDefinition.code =>
         Right(
           ContainerResourceDataResponse(
-            ContainerSpecResponse(spec.image),
-            ContainerStatusResponse(status.state)
+            Some(ContainerSpecResponse(spec.image)),
+            Some(ContainerStatusResponse(status.state))
           )
         )
+
+      case (resourceTypeCode, None, None) if resourceTypeCode == ContainerDefinition.code =>
+        Right(ContainerResourceDataResponse(None, None))
 
       case (resourceTypeCode, _, _) =>
         Left(new IllegalArgumentException(s"Unsupported HTTP resource data for type '$resourceTypeCode'"))

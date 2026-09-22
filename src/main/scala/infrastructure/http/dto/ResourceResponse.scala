@@ -21,7 +21,7 @@ final case class ResourceResponse(
 
 sealed trait ResourceDataResponse
 
-final case class NodeResourceDataResponse(spec: NodeSpecResponse, status: NodeStatusResponse)
+final case class NodeResourceDataResponse(spec: Option[NodeSpecResponse], status: Option[NodeStatusResponse])
   extends ResourceDataResponse
 
 final case class NodeSpecResponse(
@@ -39,7 +39,7 @@ final case class NodeStatusResponse(
                                      uptimeSeconds: Option[Long]
                                    )
 
-final case class ContainerResourceDataResponse(spec: ContainerSpecResponse, status: ContainerStatusResponse)
+final case class ContainerResourceDataResponse(spec: Option[ContainerSpecResponse], status: Option[ContainerStatusResponse])
   extends ResourceDataResponse
 
 final case class ContainerSpecResponse(image: Option[String])
