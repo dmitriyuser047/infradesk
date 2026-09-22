@@ -333,6 +333,9 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
         rulesByResource.getOrElse(resourceId, List.empty).filter(_.enabled)
       }
 
+    override def findByResource(organizationId: UUID, resourceId: UUID): IO[List[MonitorRule]] =
+      IO.pure(rulesByResource.getOrElse(resourceId, List.empty))
+
     override def save(rule: MonitorRule): IO[Unit] =
       IO.unit
   }

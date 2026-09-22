@@ -17,6 +17,8 @@ import cats.effect.{IO, IOApp}
 import com.comcast.ip4s.{Host, Port}
 import infrastructure.http.ResourceRoutes
 import infrastructure.http.IncidentRoutes
+import infrastructure.http.MonitorRuleRoutes
+import application.monitor.{ListMonitorRules, CreateMonitorRule, UpdateMonitorRule}
 import application.incident.{GetIncident, ListIncidents}
 import cats.syntax.semigroupk._
 import org.http4s.ember.server.EmberServerBuilder
@@ -25,6 +27,7 @@ import infrastructure.database.{
   Database,
   DatabaseConfig,
   ConnectionIOIdGenerator,
+  ConnectionIOTimeProvider,
   DoobieTransactionRunner
 }
 import infrastructure.runtime.{
@@ -99,6 +102,7 @@ object Main extends IOApp.Simple {
 
         val transactionIdGenerator =
           new ConnectionIOIdGenerator
+        val transactionTimeProvider = new ConnectionIOTimeProvider
 
         val timeProvider =
           new SystemTimeProvider
@@ -150,6 +154,12 @@ object Main extends IOApp.Simple {
         val getIncident = GetIncident[ConnectionIO](incidentRepository)
         val listIncidents = ListIncidents[ConnectionIO](incidentRepository)
         val incidentRoutes = new IncidentRoutes[ConnectionIO](getIncident, listIncidents, transactionRunner)
+        val monitorRuleRoutes = new MonitorRuleRoutes[ConnectionIO](
+          ListMonitorRules(resourceRepository, monitorRuleRepository),
+          CreateMonitorRule(resourceRepository, monitorRuleRepository, transactionIdGenerator, transactionTimeProvider),
+          UpdateMonitorRule(monitorRuleRepository, transactionTimeProvider),
+          transactionRunner
+        )
 
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](
@@ -218,7 +228,7 @@ object Main extends IOApp.Simple {
           .default[IO]
           .withHost(httpHost)
           .withPort(httpPort)
-          .withHttpApp((resourceRoutes.routes <+> incidentRoutes.routes).orNotFound)
+          .withHttpApp((resourceRoutes.routes <+> incidentRoutes.routes <+> monitorRuleRoutes.routes).orNotFound)
           .build
           .use(_ => syncScheduler.run(1.second, limit = 100))
       }

@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package infrastructure.http.dto
 
 import io.circe.{Encoder, Json}
+import io.circe.Decoder
 
 import java.time.Instant
 import java.util.UUID
@@ -17,6 +18,9 @@ object HttpJsonCodecs {
   implicit val metricObservationResponseEncoder: Encoder[MetricObservationResponse] =
     Encoder.forProduct3("metricCode", "value", "observedAt")(value => (value.metricCode, value.value, value.observedAt))
   implicit val incidentResponseEncoder: Encoder[IncidentResponse] = Encoder.forProduct9("id","monitorRuleId","resourceId","status","startedAt","openedAt","resolvedAt","createdAt","updatedAt")(v => (v.id,v.monitorRuleId,v.resourceId,v.status,v.startedAt,v.openedAt,v.resolvedAt,v.createdAt,v.updatedAt))
+  implicit val monitorRuleResponseEncoder: Encoder[MonitorRuleResponse] = Encoder.forProduct9("id","resourceId","metricCode","operator","threshold","forSeconds","enabled","createdAt","updatedAt")(v=>(v.id,v.resourceId,v.metricCode,v.operator,v.threshold,v.forSeconds,v.enabled,v.createdAt,v.updatedAt))
+  implicit val createMonitorRuleDecoder: Decoder[CreateMonitorRuleRequest] = Decoder.forProduct5("metricCode","operator","threshold","forSeconds","enabled")(CreateMonitorRuleRequest.apply)
+  implicit val updateMonitorRuleDecoder: Decoder[UpdateMonitorRuleRequest] = Decoder.forProduct5("metricCode","operator","threshold","forSeconds","enabled")(UpdateMonitorRuleRequest.apply)
 
   implicit val nodeSpecResponseEncoder: Encoder[NodeSpecResponse] =
     Encoder.forProduct5("hostname", "operatingSystem", "architecture", "cpuCores", "memoryMb") { value =>

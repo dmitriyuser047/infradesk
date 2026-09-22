@@ -92,6 +92,9 @@ final class PostgresMonitorRuleRepository extends MonitorRuleRepository[Connecti
       .to[List]
       .flatMap(_.traverse(row => row.toDomain.liftTo[ConnectionIO]))
 
+  override def findByResource(organizationId: UUID, resourceId: UUID): ConnectionIO[List[MonitorRule]] =
+    sql"""select id, organization_id, resource_id, metric_code, operator, threshold, for_seconds, enabled, created_at, updated_at from monitor_rule where organization_id=$organizationId and resource_id=$resourceId order by created_at asc, id asc""".query[MonitorRuleRow].to[List].flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
+
   override def save(rule: MonitorRule): ConnectionIO[Unit] =
     sql"""
       insert into monitor_rule (
