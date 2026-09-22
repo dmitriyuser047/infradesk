@@ -14,6 +14,13 @@ import java.util.UUID
 
 final class PostgresMetricObservationRepository extends MetricObservationRepository[ConnectionIO] {
 
+  private type MetricObservationRow = (UUID, UUID, UUID, String, BigDecimal, Instant)
+
+  private def toDomain(row: MetricObservationRow): Either[IllegalArgumentException, MetricObservation] = {
+    val (id, organizationId, resourceId, metricCode, value, observedAt) = row
+    MetricCode.fromCode(metricCode).map(MetricObservation(id, organizationId, resourceId, _, value, observedAt))
+  }
+
   override def findLatestAtOrAfter(
                                     organizationId: UUID,
                                     resourceId: UUID,
@@ -36,28 +43,22 @@ final class PostgresMetricObservationRepository extends MetricObservationReposit
       order by observed_at desc
       limit 1
     """
-      .query[(java.util.UUID, java.util.UUID, java.util.UUID, String, BigDecimal, java.time.Instant)]
+      .query[MetricObservationRow]
       .option
       .flatMap {
-        case Some((id, observationOrganizationId, observationResourceId, persistedMetricCode, value, observedAt)) =>
-          MetricCode
-            .fromCode(persistedMetricCode)
-            .map { typedMetricCode =>
-              Option(
-                MetricObservation(
-                  id,
-                  observationOrganizationId,
-                  observationResourceId,
-                  typedMetricCode,
-                  value,
-                  observedAt
-                )
-              )
-            }
-            .liftTo[ConnectionIO]
+        case Some(row) => toDomain(row).map(Option(_)).liftTo[ConnectionIO]
         case None =>
           none[MetricObservation].pure[ConnectionIO]
       }
+
+  override def findByResourceAndPeriod(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): ConnectionIO[List[MetricObservation]] =
+    sql"""select id, organization_id, resource_id, metric_code, value, observed_at
+      from metric_observation
+      where organization_id = $organizationId and resource_id = $resourceId
+        and observed_at >= $from and observed_at < $to
+      order by observed_at asc, metric_code asc, id asc"""
+      .query[MetricObservationRow].to[List]
+      .flatMap(_.traverse(row => toDomain(row).liftTo[ConnectionIO]))
 
   override def insertAll(observations: List[MetricObservation]): ConnectionIO[Unit] =
     observations.traverse_ { observation =>

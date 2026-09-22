@@ -373,6 +373,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
         requestedObservedAts = requestedObservedAts :+ observedAt
         observations.get((resourceId, metricCode)).filter(!_.observedAt.isBefore(observedAt))
       }
+
+    override def findByResourceAndPeriod(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): IO[List[MetricObservation]] = IO.pure(List.empty)
   }
 
   private final class InMemoryIncidentRepository(initial: List[Incident]) extends IncidentRepository[IO] {

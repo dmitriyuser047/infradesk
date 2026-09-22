@@ -15,4 +15,6 @@ trait MetricObservationRepository[F[_]] {
                            metricCode: MetricCode,
                            observedAt: Instant
                          ): F[Option[MetricObservation]]
+
+  def findByResourceAndPeriod(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): F[List[MetricObservation]]
 }

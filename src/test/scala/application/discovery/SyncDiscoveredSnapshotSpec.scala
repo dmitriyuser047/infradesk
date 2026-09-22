@@ -337,6 +337,8 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
                                       observedAt: Instant
                                     ): IO[Option[domain.metric.MetricObservation]] =
       IO.pure(None)
+
+    override def findByResourceAndPeriod(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): IO[List[domain.metric.MetricObservation]] = IO.pure(List.empty)
   }
 
 }

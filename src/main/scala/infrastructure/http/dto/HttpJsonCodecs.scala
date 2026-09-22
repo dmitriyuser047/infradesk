@@ -14,6 +14,9 @@ object HttpJsonCodecs {
   implicit val apiErrorResponseEncoder: Encoder[ApiErrorResponse] =
     Encoder.forProduct2("code", "message")(value => (value.code, value.message))
 
+  implicit val metricObservationResponseEncoder: Encoder[MetricObservationResponse] =
+    Encoder.forProduct3("metricCode", "value", "observedAt")(value => (value.metricCode, value.value, value.observedAt))
+
   implicit val nodeSpecResponseEncoder: Encoder[NodeSpecResponse] =
     Encoder.forProduct5("hostname", "operatingSystem", "architecture", "cpuCores", "memoryMb") { value =>
       (value.hostname, value.operatingSystem, value.architecture, value.cpuCores, value.memoryMb)

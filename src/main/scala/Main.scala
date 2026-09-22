@@ -11,7 +11,7 @@ import application.discovery.{
   SyncDiscoveredSnapshot
 }
 import application.monitor.EvaluateMonitorRules
-import application.resource.{GetResource, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
+import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
 import application.scheduler.SyncScheduler
 import cats.effect.{IO, IOApp}
 import com.comcast.ip4s.{Host, Port}
@@ -138,9 +138,11 @@ object Main extends IOApp.Simple {
 
         val listEnvironmentResources =
           ListEnvironmentResources[ConnectionIO](resourceRepository)
+        val getResourceMetricHistory =
+          GetResourceMetricHistory[ConnectionIO](resourceRepository, metricObservationRepository)
 
         val resourceRoutes =
-          new ResourceRoutes[ConnectionIO](getResource, listEnvironmentResources, transactionRunner)
+          new ResourceRoutes[ConnectionIO](getResource, listEnvironmentResources, getResourceMetricHistory, transactionRunner)
 
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](

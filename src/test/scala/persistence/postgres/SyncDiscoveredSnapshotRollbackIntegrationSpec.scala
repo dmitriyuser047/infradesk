@@ -212,6 +212,9 @@ final class SyncDiscoveredSnapshotRollbackIntegrationSpec extends FunSuite {
                                       observedAt: Instant
                                     ): ConnectionIO[Option[MetricObservation]] =
       delegate.findLatestAtOrAfter(organizationId, resourceId, metricCode, observedAt)
+
+    override def findByResourceAndPeriod(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): ConnectionIO[List[MetricObservation]] =
+      delegate.findByResourceAndPeriod(organizationId, resourceId, from, to)
   }
 
   private final case class TestIds(

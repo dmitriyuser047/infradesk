@@ -134,5 +134,7 @@ final class RecordResourceObservationsSpec extends FunSuite {
                                       observedAt: Instant
                                     ): IO[Option[MetricObservation]] =
       IO.pure(None)
+
+    override def findByResourceAndPeriod(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): IO[List[MetricObservation]] = IO.pure(List.empty)
   }
 }

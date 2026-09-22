@@ -1,14 +1,15 @@
 package ru.bitec.app.ops
 package infrastructure.http
 
-import application.port.{ResourceRepository, TransactionRunner}
-import application.resource.{GetResource, ListEnvironmentResources}
+import application.port.{MetricObservationRepository, ResourceRepository, TransactionRunner}
+import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.resource.container.{ContainerSpec, ContainerStatus}
 import domain.resource.node.{NodeSpec, NodeStatus}
 import domain.resource.{Resource, ResourceData}
+import domain.metric.{MetricCode, MetricObservation}
 import io.circe.Json
 import infrastructure.http.dto.HttpJsonCodecs._
 import munit.FunSuite
@@ -222,6 +223,7 @@ final class ResourceRoutesSpec extends FunSuite {
     val routes = new ResourceRoutes[IO](
       GetResource[IO](repository),
       ListEnvironmentResources[IO](repository),
+      GetResourceMetricHistory[IO](repository, new EmptyMetricObservationRepository),
       transactionRunner
     )
 
@@ -291,6 +293,12 @@ final class ResourceRoutesSpec extends FunSuite {
                                                      connectionId: UUID,
                                                      now: Instant
                                                    ): IO[Unit] = IO.unit
+  }
+
+  private final class EmptyMetricObservationRepository extends MetricObservationRepository[IO] {
+    override def insertAll(observations: List[MetricObservation]): IO[Unit] = IO.unit
+    override def findLatestAtOrAfter(organizationId: UUID, resourceId: UUID, metricCode: MetricCode, observedAt: Instant): IO[Option[MetricObservation]] = IO.pure(None)
+    override def findByResourceAndPeriod(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): IO[List[MetricObservation]] = IO.pure(List.empty)
   }
 
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
