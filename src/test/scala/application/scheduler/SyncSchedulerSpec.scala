@@ -13,7 +13,7 @@ import application.port.{
 }
 import application.monitor.MonitorRuleEvaluator
 import application.connector.{ConnectionSyncExecutionFailed, RunConnectionSync, SyncAlreadyRunning}
-import cats.effect.{Deferred, IO}
+import cats.effect.{Deferred, IO, Ref}
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.connection.ConnectionSchedule
@@ -99,11 +99,109 @@ final class SyncSchedulerSpec extends FunSuite {
   test("already-running attempt keeps failure count and schedules normal interval") {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     val due = schedule(nextRunAt = now, intervalSeconds = 300, consecutiveFailures = 2)
-    val fixture = buildFixture(List(due), List(now, now),
+    val later = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000004"), nextRunAt = now)
+    val fixture = buildFixture(List(due, later), List.fill(4)(now),
       failures = Map(due.connectionId -> SyncAlreadyRunning()))
     fixture.scheduler.tick(limit = 10).unsafeRunSync()
     assertEquals(fixture.repository.scheduledNext,
-      List((due.organizationId, due.connectionId, now.plusSeconds(300), 2L)))
+      List(
+        (due.organizationId, due.connectionId, now.plusSeconds(300), 2L),
+        (later.organizationId, later.connectionId, now.plusSeconds(later.intervalSeconds), 0L)
+      ))
+  }
+
+  test("executes a due batch with bounded parallelism") {
+    val now = Instant.parse("2026-09-21T10:00:00Z")
+    val schedules = (1 to 10).toList.map(index => schedule(
+      connectionId = UUID.fromString(f"60000000-0000-0000-0000-${index}%012d"), nextRunAt = now
+    ))
+
+    val observed = (for {
+      release <- Deferred[IO, Unit]
+      firstThreeStarted <- Deferred[IO, Unit]
+      active <- Ref.of[IO, Int](0)
+      maxObserved <- Ref.of[IO, Int](0)
+      started <- Ref.of[IO, Int](0)
+      updated <- Ref.of[IO, List[UUID]](List.empty)
+      runner = new ConnectionSyncRunner[IO] {
+        override def execute(organizationId: UUID, connectionId: UUID): IO[ConnectionSyncResult] =
+          active.modify(current => (current + 1, current + 1)).flatMap { current =>
+            maxObserved.update(value => value.max(current)) *>
+              started.modify(value => (value + 1, value + 1)).flatMap { count =>
+                (if (count == 3) firstThreeStarted.complete(()).void else IO.unit) *>
+                  release.get.guarantee(active.update(_ - 1)) *>
+                  IO.pure(ConnectionSyncResult(UUID.randomUUID(), List.empty))
+              }
+          }
+      }
+      scheduler <- boundedScheduler(schedules, runner, updated, now, maxConcurrency = 3)
+      fiber <- scheduler.tick(limit = 10).start
+      _ <- firstThreeStarted.get.timeout(3.seconds)
+      maximumWhileBlocked <- maxObserved.get
+      _ <- release.complete(())
+      _ <- fiber.joinWithNever
+      finalMaximum <- maxObserved.get
+      updatedIds <- updated.get
+    } yield (maximumWhileBlocked, finalMaximum, updatedIds)).unsafeRunSync()
+
+    assertEquals(observed._1, 3)
+    assertEquals(observed._2, 3)
+    assertEquals(observed._3.toSet, schedules.map(_.connectionId).toSet)
+  }
+
+  test("a failed schedule releases its permit so a waiting schedule runs") {
+    val now = Instant.parse("2026-09-21T10:00:00Z")
+    val failing = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000031"), nextRunAt = now)
+    val waiting = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000032"), nextRunAt = now)
+
+    val updatedIds = (for {
+      failNow <- Deferred[IO, Unit]
+      failingStarted <- Deferred[IO, Unit]
+      waitingStarted <- Deferred[IO, Unit]
+      updated <- Ref.of[IO, List[UUID]](List.empty)
+      runner = new ConnectionSyncRunner[IO] {
+        override def execute(organizationId: UUID, connectionId: UUID): IO[ConnectionSyncResult] =
+          if (connectionId == failing.connectionId)
+            failingStarted.complete(()).void *> failNow.get *> IO.raiseError(new IllegalStateException("planned failure"))
+          else
+            waitingStarted.complete(()).void *> IO.pure(ConnectionSyncResult(UUID.randomUUID(), List.empty))
+      }
+      scheduler <- boundedScheduler(List(failing, waiting), runner, updated, now, maxConcurrency = 1)
+      fiber <- scheduler.tick(limit = 10).start
+      _ <- failingStarted.get.timeout(3.seconds)
+      _ <- failNow.complete(())
+      _ <- waitingStarted.get.timeout(3.seconds)
+      _ <- fiber.joinWithNever
+      values <- updated.get
+    } yield values).unsafeRunSync()
+
+    assertEquals(updatedIds.toSet, Set(failing.connectionId, waiting.connectionId))
+  }
+
+  test("a failed worker is isolated and does not cancel other schedules") {
+    val now = Instant.parse("2026-09-21T10:00:00Z")
+    val schedules = (41 to 45).toList.map(index => schedule(
+      connectionId = UUID.fromString(f"60000000-0000-0000-0000-${index}%012d"), nextRunAt = now
+    ))
+    val failed = schedules.head
+
+    val result = (for {
+      executed <- Ref.of[IO, List[UUID]](List.empty)
+      updated <- Ref.of[IO, List[UUID]](List.empty)
+      runner = new ConnectionSyncRunner[IO] {
+        override def execute(organizationId: UUID, connectionId: UUID): IO[ConnectionSyncResult] =
+          executed.update(_ :+ connectionId) *> (if (connectionId == failed.connectionId)
+            IO.raiseError(new IllegalStateException("planned failure"))
+          else IO.pure(ConnectionSyncResult(UUID.randomUUID(), List.empty)))
+      }
+      scheduler <- boundedScheduler(schedules, runner, updated, now, maxConcurrency = 2)
+      _ <- scheduler.tick(limit = 10)
+      executedIds <- executed.get
+      updatedIds <- updated.get
+    } yield (executedIds, updatedIds)).unsafeRunSync()
+
+    assertEquals(result._1.toSet, schedules.map(_.connectionId).toSet)
+    assertEquals(result._2.toSet, schedules.map(_.connectionId).toSet)
   }
 
   test("typed SSH failure still increments ordinary scheduled backoff") {
@@ -188,7 +286,7 @@ final class SyncSchedulerSpec extends FunSuite {
       }
       transactionRunner = new TransactionRunner[IO, IO] { def run[A](program: IO[A]): IO[A] = program }
       clock = new TimeProvider[IO] { def now: IO[Instant] = IO.pure(Instant.parse("2026-09-21T10:00:00Z")) }
-      scheduler = new SyncScheduler[IO, IO](repository, runner, transactionRunner, clock, logger)
+      scheduler = new SyncScheduler[IO, IO](repository, runner, transactionRunner, clock, logger, maxConcurrency = 1)
       fiber <- scheduler.run(1.millis, 10).start
       _ <- secondTick.get.timeout(3.seconds).guarantee(fiber.cancel)
     } yield ()).unsafeRunSync()
@@ -232,6 +330,37 @@ final class SyncSchedulerSpec extends FunSuite {
     )
   }
 
+  private def boundedScheduler(
+    schedules: List[ConnectionSchedule],
+    runner: ConnectionSyncRunner[IO],
+    updated: Ref[IO, List[UUID]],
+    at: Instant,
+    maxConcurrency: Int
+  ): IO[SyncScheduler[IO, IO]] = IO.pure {
+    val repository = new ConnectionScheduleRepository[IO] {
+      override def save(schedule: ConnectionSchedule): IO[Unit] = IO.unit
+      override def findByConnection(organizationId: UUID, connectionId: UUID): IO[Option[ConnectionSchedule]] =
+        IO.pure(schedules.find(schedule =>
+          schedule.organizationId == organizationId && schedule.connectionId == connectionId
+        ))
+      override def findDue(at: Instant, limit: Int): IO[List[ConnectionSchedule]] =
+        IO.pure(schedules.filter(schedule => !schedule.nextRunAt.isAfter(at)).take(limit))
+      override def updateAfterRun(
+        organizationId: UUID,
+        connectionId: UUID,
+        nextRunAt: Instant,
+        consecutiveFailures: Long
+      ): IO[Unit] = updated.update(_ :+ connectionId)
+    }
+    val transactionRunner = new TransactionRunner[IO, IO] {
+      override def run[A](program: IO[A]): IO[A] = program
+    }
+    val clock = new TimeProvider[IO] {
+      override def now: IO[Instant] = IO.pure(at)
+    }
+    new SyncScheduler[IO, IO](repository, runner, transactionRunner, clock, logger, maxConcurrency)
+  }
+
   private def buildFixture(
                        schedules: List[ConnectionSchedule],
                        times: List[Instant],
@@ -239,7 +368,8 @@ final class SyncSchedulerSpec extends FunSuite {
                        failures: Map[UUID, Throwable] = Map.empty,
                        failingEvaluator: Boolean = false,
                        failingUpdateIds: Set[UUID] = Set.empty,
-                       overrideLogger: Logger[IO] = logger
+                       overrideLogger: Logger[IO] = logger,
+                       maxConcurrency: Int = 1
   ): SchedulerFixture = {
     val transactionRunner = new RecordingTransactionRunner
     val repository = new RecordingConnectionScheduleRepository(schedules, failingUpdateIds)
@@ -255,7 +385,8 @@ final class SyncSchedulerSpec extends FunSuite {
       runConnectionSync,
       transactionRunner,
       timeProvider,
-      overrideLogger
+      overrideLogger,
+      maxConcurrency
     )
 
     SchedulerFixture(scheduler, repository, synchronizer, evaluator)

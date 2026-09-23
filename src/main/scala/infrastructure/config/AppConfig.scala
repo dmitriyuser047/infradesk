@@ -12,7 +12,7 @@ import scala.concurrent.duration._
 import scala.util.Try
 
 final case class HttpConfig(host: Host, port: Port)
-final case class SchedulerConfig(pollInterval: FiniteDuration, batchSize: Int)
+final case class SchedulerConfig(pollInterval: FiniteDuration, batchSize: Int, maxConcurrency: Int)
 
 final case class AppConfig(
   database: DatabaseConfig,
@@ -76,6 +76,7 @@ object AppConfig {
     for {
       seconds <- positiveInt("INFRADESK_SCHEDULER_POLL_INTERVAL_SECONDS", 1)
       batchSize <- positiveInt("INFRADESK_SCHEDULER_BATCH_SIZE", 100)
-    } yield SchedulerConfig(seconds.seconds, batchSize)
+      maxConcurrency <- positiveInt("INFRADESK_SCHEDULER_MAX_CONCURRENCY", 5)
+    } yield SchedulerConfig(seconds.seconds, batchSize, maxConcurrency)
   }
 }

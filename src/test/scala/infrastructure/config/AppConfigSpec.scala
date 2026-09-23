@@ -25,6 +25,7 @@ final class AppConfigSpec extends FunSuite {
     assertEquals(config.bootstrap, None)
     assertEquals(config.scheduler.pollInterval, 1.second)
     assertEquals(config.scheduler.batchSize, 100)
+    assertEquals(config.scheduler.maxConcurrency, 5)
     assert(!config.toString.contains(key))
     assert(!config.toString.contains("test-password")) // DatabaseConfig must not be rendered in logs.
   }
@@ -62,11 +63,14 @@ final class AppConfigSpec extends FunSuite {
     assertInvalid("INFRADESK_SECRET_MASTER_KEY_BASE64", Base64.getEncoder.encodeToString(new Array[Byte](16)))
   }
 
-  test("invalid scheduler interval and batch size fail with their keys") {
+  test("invalid scheduler interval, batch size and max concurrency fail with their keys") {
     assertInvalid("INFRADESK_SCHEDULER_POLL_INTERVAL_SECONDS", "0")
     assertInvalid("INFRADESK_SCHEDULER_POLL_INTERVAL_SECONDS", "abc")
     assertInvalid("INFRADESK_SCHEDULER_BATCH_SIZE", "-1")
     assertInvalid("INFRADESK_SCHEDULER_BATCH_SIZE", "abc")
+    assertInvalid("INFRADESK_SCHEDULER_MAX_CONCURRENCY", "0")
+    assertInvalid("INFRADESK_SCHEDULER_MAX_CONCURRENCY", "-1")
+    assertInvalid("INFRADESK_SCHEDULER_MAX_CONCURRENCY", "abc")
   }
 
   test("explicit valid HTTP and scheduler values are retained") {
@@ -74,11 +78,13 @@ final class AppConfigSpec extends FunSuite {
       "INFRADESK_HTTP_HOST" -> "127.0.0.1",
       "INFRADESK_HTTP_PORT" -> "5174",
       "INFRADESK_SCHEDULER_POLL_INTERVAL_SECONDS" -> "5",
-      "INFRADESK_SCHEDULER_BATCH_SIZE" -> "17"
+      "INFRADESK_SCHEDULER_BATCH_SIZE" -> "17",
+      "INFRADESK_SCHEDULER_MAX_CONCURRENCY" -> "8"
     )).toOption.get
     assertEquals(config.http.port.value, 5174)
     assertEquals(config.scheduler.pollInterval, 5.seconds)
     assertEquals(config.scheduler.batchSize, 17)
+    assertEquals(config.scheduler.maxConcurrency, 8)
   }
 
   private def assertInvalid(key: String, value: String): Unit = {

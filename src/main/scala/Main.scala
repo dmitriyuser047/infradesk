@@ -331,7 +331,8 @@ object Main extends IOApp.Simple {
             runConnectionSync,
             transactionRunner,
             timeProvider,
-            schedulerLogger
+            schedulerLogger,
+            config.scheduler.maxConcurrency
           )
 
         bootstrapAdmin.run(config.bootstrap).flatMap { _ =>
