@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from './httpClient'
-import type { CreateEnvironmentRequest, CreateProjectRequest, EnvironmentResponse, OrganizationResponse, ProjectResponse } from '../types/navigation'
+import type { CreateEnvironmentRequest, CreateProjectRequest, EnvironmentContextResponse, EnvironmentResponse, OrganizationResponse, ProjectResponse } from '../types/navigation'
 
 const organizationPath = (organizationId: string) =>
   `/api/v1/organizations/${encodeURIComponent(organizationId)}`
@@ -20,6 +20,15 @@ export function getEnvironments(
 ): Promise<EnvironmentResponse[]> {
   return requestJson<EnvironmentResponse[]>(
     `${organizationPath(organizationId)}/projects/${encodeURIComponent(projectId)}/environments`,
+  )
+}
+
+export function getEnvironmentContext(
+  organizationId: string,
+  environmentId: string,
+): Promise<EnvironmentContextResponse> {
+  return requestJson<EnvironmentContextResponse>(
+    `${organizationPath(organizationId)}/environments/${encodeURIComponent(environmentId)}/context`,
   )
 }
 
@@ -75,9 +84,28 @@ export function useEnvironments(organizationId: string, projectId: string | null
   })
 }
 
+export function useEnvironmentContext(
+  organizationId: string,
+  environmentId: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ['environment-context', organizationId, environmentId],
+    queryFn: () => getEnvironmentContext(organizationId, requireEnvironmentId(environmentId)),
+    enabled: enabled && environmentId !== null,
+  })
+}
+
 function requireProjectId(projectId: string | null): string {
   if (projectId === null || projectId.length === 0) {
     throw new Error('Missing project identifier')
   }
   return projectId
+}
+
+function requireEnvironmentId(environmentId: string | null): string {
+  if (environmentId === null || environmentId.length === 0) {
+    throw new Error('Missing environment identifier')
+  }
+  return environmentId
 }

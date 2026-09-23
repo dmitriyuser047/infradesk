@@ -1,11 +1,11 @@
 package ru.bitec.app.ops
 package application.monitor
 
-import application.port.{IdGenerator, IncidentRepository, MetricObservationRepository, MonitorRuleRepository, MonitorRuleStateRepository}
+import application.port.{IdGenerator, IncidentRepository, MonitorEvaluationQuery, MonitorRuleStateRepository}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import domain.metric.{MetricCode, MetricObservation}
 import domain.incident.{Incident, IncidentStatus}
+import domain.metric.{MetricCode, MetricObservation}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import domain.resource.{Resource, ResourceData}
 import munit.FunSuite
@@ -14,455 +14,205 @@ import java.time.Instant
 import java.util.UUID
 
 final class EvaluateMonitorRulesSpec extends FunSuite {
-  test("returns only committed-candidate incident transitions") {
-    val opened = evaluate(cpuRule(forSeconds = 0), None, Some(observation(MetricCode.CpuUsagePercent, 95)))
-    val unchanged = evaluate(cpuRule(), Some(state(MonitorRuleStatus.Firing, Some(ObservedAt))),
-      Some(observation(MetricCode.CpuUsagePercent, 95)))
-    val resolved = evaluate(cpuRule(), Some(state(MonitorRuleStatus.Firing, Some(ObservedAt))),
-      Some(observation(MetricCode.CpuUsagePercent, 40)))
+  test("preserves OK, PENDING, FIRING and recovery semantics") {
+    val normal = run(input(cpuRule(), None, Some(observation(40)), None))
+    val pending = run(input(cpuRule(), Some(okState), Some(observation(95)), None))
+    val pendingSince = ObservedAt.minusSeconds(300)
+    val firing = run(input(cpuRule(), Some(state(MonitorRuleStatus.Pending, Some(pendingSince))),
+      Some(observation(95)), None))
+    val continuing = run(input(cpuRule(), Some(state(MonitorRuleStatus.Firing, Some(ObservedAt))),
+      Some(observation(95)), Some(openIncident)))
+    val recovered = run(input(cpuRule(), Some(state(MonitorRuleStatus.Firing, Some(ObservedAt))),
+      Some(observation(40)), Some(openIncident)))
 
-    assertEquals(opened.transitions, List(MonitorTransition.Opened(OrganizationId, ResourceId, RuleId, NewIncidentId, EvaluatedAt)))
-    assertEquals(unchanged.transitions, List.empty[MonitorTransition])
-    assertEquals(resolved.transitions, List(MonitorTransition.Resolved(OrganizationId, ResourceId, RuleId, IncidentId, EvaluatedAt)))
+    assertEquals(normal.states.head.status, MonitorRuleStatus.Ok)
+    assertEquals(pending.states.head.status, MonitorRuleStatus.Pending)
+    assertEquals(pending.states.head.pendingSince, Some(ObservedAt))
+    assertEquals(firing.states.head.status, MonitorRuleStatus.Firing)
+    assertEquals(firing.incidents.head.status, IncidentStatus.Open)
+    assertEquals(continuing.states.head.status, MonitorRuleStatus.Firing)
+    assertEquals(continuing.incidents, List.empty)
+    assertEquals(recovered.states.head.status, MonitorRuleStatus.Ok)
+    assertEquals(recovered.incidents.head.status, IncidentStatus.Resolved)
+    assertEquals(recovered.transitions, List(
+      MonitorTransition.Resolved(OrganizationId, ResourceId, RuleId, IncidentId, EvaluatedAt)
+    ))
   }
 
-  test("creates OK when a normal metric has no state") {
-    val result = evaluate(cpuRule(), None, Some(observation(MetricCode.CpuUsagePercent, 40)))
+  test("opens immediately for a zero-duration violation and returns the transition") {
+    val result = run(input(cpuRule(forSeconds = 0), None, Some(observation(95)), None))
 
-    assertEquals(result.state.status, MonitorRuleStatus.Ok)
-    assertEquals(result.state.pendingSince, None)
-    assertEquals(result.state.updatedAt, EvaluatedAt)
+    assertEquals(result.states.head.status, MonitorRuleStatus.Firing)
+    assertEquals(result.incidents.head.startedAt, ObservedAt)
+    assertEquals(result.transitions, List(
+      MonitorTransition.Opened(OrganizationId, ResourceId, RuleId, NewIncidentId, EvaluatedAt)
+    ))
   }
 
-  test("creates PENDING when OK violates a non-zero duration rule") {
-    val metricAt = Instant.parse("2026-09-22T10:01:00Z")
-    val result = evaluate(cpuRule(forSeconds = 300), Some(okState), Some(observation(MetricCode.CpuUsagePercent, 95, metricAt)))
+  test("keeps the original pendingSince until the configured duration is reached") {
+    val pendingSince = ObservedAt.minusSeconds(299)
+    val result = run(input(cpuRule(), Some(state(MonitorRuleStatus.Pending, Some(pendingSince))),
+      Some(observation(95)), None))
 
-    assertEquals(result.state.status, MonitorRuleStatus.Pending)
-    assertEquals(result.state.pendingSince, Some(metricAt))
+    assertEquals(result.states.head.status, MonitorRuleStatus.Pending)
+    assertEquals(result.states.head.pendingSince, Some(pendingSince))
     assertEquals(result.incidents, List.empty)
   }
 
-  test("keeps PENDING and original pendingSince before duration passes") {
-    val pendingSince = Instant.parse("2026-09-22T10:00:00Z")
-    val result = evaluate(
-      cpuRule(forSeconds = 300),
-      Some(state(MonitorRuleStatus.Pending, Some(pendingSince))),
-      Some(observation(MetricCode.CpuUsagePercent, 95, pendingSince.plusSeconds(299)))
-    )
+  test("does not write state or incident when the projection has no current observation") {
+    val result = run(input(cpuRule(), Some(okState), None, None))
 
-    assertEquals(result.state.status, MonitorRuleStatus.Pending)
-    assertEquals(result.state.pendingSince, Some(pendingSince))
+    assertEquals(result.states, List.empty)
+    assertEquals(result.incidents, List.empty)
+    assertEquals(result.stateBatchCalls, 0)
+    assertEquals(result.incidentBatchCalls, 0)
   }
 
-  test("promotes PENDING to FIRING when duration is reached") {
-    val pendingSince = Instant.parse("2026-09-22T10:00:00Z")
-    val result = evaluate(
-      cpuRule(forSeconds = 300),
-      Some(state(MonitorRuleStatus.Pending, Some(pendingSince))),
-      Some(observation(MetricCode.CpuUsagePercent, 95, pendingSince.plusSeconds(300)))
+  test("rejects inconsistent state and incident projections before any write") {
+    val cases = List(
+      input(cpuRule(), Some(state(MonitorRuleStatus.Firing, Some(ObservedAt))), Some(observation(95)), None),
+      input(cpuRule(), Some(state(MonitorRuleStatus.Pending, Some(ObservedAt.minusSeconds(300)))),
+        Some(observation(95)), Some(openIncident)),
+      input(cpuRule(), Some(okState), Some(observation(40)), Some(openIncident))
     )
 
-    assertEquals(result.state.status, MonitorRuleStatus.Firing)
-    assertEquals(result.state.pendingSince, Some(pendingSince))
-    assertEquals(result.incidents.size, 1)
-    assertEquals(result.incidents.head.status, IncidentStatus.Open)
-    assertEquals(result.incidents.head.startedAt, pendingSince)
-    assertEquals(result.incidents.head.openedAt, EvaluatedAt)
-  }
-
-  test("keeps FIRING and pendingSince while violation continues") {
-    val pendingSince = Instant.parse("2026-09-22T10:00:00Z")
-    val result = evaluate(
-      cpuRule(),
-      Some(state(MonitorRuleStatus.Firing, Some(pendingSince))),
-      Some(observation(MetricCode.CpuUsagePercent, 95, pendingSince.plusSeconds(600)))
-    )
-
-    assertEquals(result.state.status, MonitorRuleStatus.Firing)
-    assertEquals(result.state.pendingSince, Some(pendingSince))
-    assertEquals(result.incidents.map(_.id), List(IncidentId))
-  }
-
-  test("resets FIRING to OK after recovery") {
-    val result = evaluate(
-      cpuRule(),
-      Some(state(MonitorRuleStatus.Firing, Some(ObservedAt))),
-      Some(observation(MetricCode.CpuUsagePercent, 40))
-    )
-
-    assertEquals(result.state.status, MonitorRuleStatus.Ok)
-    assertEquals(result.state.pendingSince, None)
-    assertEquals(result.incidents.size, 1)
-    assertEquals(result.incidents.head.status, IncidentStatus.Resolved)
-    assertEquals(result.incidents.head.resolvedAt, Some(EvaluatedAt))
-    assertEquals(result.incidents.head.startedAt, ObservedAt)
-    assertEquals(result.incidents.head.openedAt, ObservedAt)
-  }
-
-  test("fires immediately for a zero-duration violation") {
-    val metricAt = Instant.parse("2026-09-22T10:01:00Z")
-    val result = evaluate(
-      cpuRule(forSeconds = 0),
-      None,
-      Some(observation(MetricCode.CpuUsagePercent, 95, metricAt))
-    )
-
-    assertEquals(result.state.status, MonitorRuleStatus.Firing)
-    assertEquals(result.state.pendingSince, Some(metricAt))
-    assertEquals(result.incidents.size, 1)
-    assertEquals(result.incidents.head.status, IncidentStatus.Open)
-    assertEquals(result.incidents.head.startedAt, metricAt)
-  }
-
-  test("does not create or change state when latest observation is absent") {
-    val original = state(MonitorRuleStatus.Firing, Some(ObservedAt))
-    val result = evaluate(cpuRule(), Some(original), None)
-
-    assertEquals(result.states.get(RuleId), Some(original))
-    assertEquals(result.saved, List.empty)
-    assertEquals(result.incidents, List(openIncident(original)))
-  }
-
-  test("does not create state from telemetry older than the current snapshot") {
-    val snapshotAt = ObservedAt.plusSeconds(120)
-    val ruleRepository = new InMemoryRuleRepository(Map(ResourceId -> List(cpuRule(forSeconds = 0))))
-    val stateRepository = new InMemoryStateRepository(Map.empty)
-    val metricRepository = new InMemoryMetricObservationRepository(
-      Map((ResourceId, MetricCode.CpuUsagePercent) -> observation(MetricCode.CpuUsagePercent, 95, ObservedAt))
-    )
-    val evaluator = new EvaluateMonitorRules[IO](
-      ruleRepository,
-      stateRepository,
-      metricRepository,
-      new InMemoryIncidentRepository(List.empty),
-      new FixedIdGenerator
-    )
-
-    evaluator.execute(List(nodeResource.copy(updatedAt = snapshotAt)), EvaluatedAt).unsafeRunSync()
-
-    assertEquals(stateRepository.states, Map.empty[UUID, MonitorRuleState])
-    assertEquals(stateRepository.saved, List.empty)
-    assertEquals(metricRepository.requestedObservedAts, List(snapshotAt))
-  }
-
-  test("fails when a FIRING state has no OPEN incident") {
-    val firing = state(MonitorRuleStatus.Firing, Some(ObservedAt))
-    val ruleRepository = new InMemoryRuleRepository(Map(ResourceId -> List(cpuRule())))
-    val stateRepository = new InMemoryStateRepository(Map(RuleId -> firing))
-    val metricRepository = new InMemoryMetricObservationRepository(
-      Map((ResourceId, MetricCode.CpuUsagePercent) -> observation(MetricCode.CpuUsagePercent, 95))
-    )
-    val evaluator = new EvaluateMonitorRules[IO](
-      ruleRepository,
-      stateRepository,
-      metricRepository,
-      new InMemoryIncidentRepository(List.empty),
-      new FixedIdGenerator
-    )
-
-    intercept[IllegalStateException] {
-      evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
+    cases.foreach { value =>
+      val query = new RecordingQuery(List(value))
+      val states = new RecordingStateRepository
+      val incidents = new RecordingIncidentRepository
+      val evaluator = new EvaluateMonitorRules[IO](query, states, incidents, new FixedIdGenerator)
+      intercept[IllegalStateException](evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync())
+      assertEquals(states.batches, List.empty)
+      assertEquals(incidents.batches, List.empty)
     }
   }
 
-  test("fails when a transition to FIRING already has an OPEN incident") {
-    val pending = state(MonitorRuleStatus.Pending, Some(ObservedAt.minusSeconds(300)))
-    val ruleRepository = new InMemoryRuleRepository(Map(ResourceId -> List(cpuRule())))
-    val stateRepository = new InMemoryStateRepository(Map(RuleId -> pending))
-    val metricRepository = new InMemoryMetricObservationRepository(
-      Map((ResourceId, MetricCode.CpuUsagePercent) -> observation(MetricCode.CpuUsagePercent, 95))
-    )
-    val evaluator = new EvaluateMonitorRules[IO](
-      ruleRepository,
-      stateRepository,
-      metricRepository,
-      new InMemoryIncidentRepository(List(openIncident(firingState = pending.copy(status = MonitorRuleStatus.Firing)))),
-      new FixedIdGenerator
-    )
-
-    intercept[IllegalStateException] {
-      evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
-    }
-  }
-
-  test("fails when a non-FIRING state has an OPEN incident") {
-    val ruleRepository = new InMemoryRuleRepository(Map(ResourceId -> List(cpuRule())))
-    val stateRepository = new InMemoryStateRepository(Map(RuleId -> okState))
-    val metricRepository = new InMemoryMetricObservationRepository(
-      Map((ResourceId, MetricCode.CpuUsagePercent) -> observation(MetricCode.CpuUsagePercent, 40))
-    )
-    val evaluator = new EvaluateMonitorRules[IO](
-      ruleRepository,
-      stateRepository,
-      metricRepository,
-      new InMemoryIncidentRepository(List(openIncident(state(MonitorRuleStatus.Firing, Some(ObservedAt))))),
-      new FixedIdGenerator
-    )
-
-    intercept[IllegalStateException] {
-      evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
-    }
-  }
-
-  test("does not evaluate rules for a container resource") {
-    val ruleRepository = new InMemoryRuleRepository(Map(ContainerResourceId -> List(cpuRule())))
-    val stateRepository = new InMemoryStateRepository(Map.empty)
-    val metricRepository = new InMemoryMetricObservationRepository(Map.empty)
-    val evaluator = new EvaluateMonitorRules[IO](
-      ruleRepository,
-      stateRepository,
-      metricRepository,
-      new InMemoryIncidentRepository(List.empty),
-      new FixedIdGenerator
-    )
+  test("ignores non-node resources without querying persistence") {
+    val query = new RecordingQuery(List.empty)
+    val evaluator = new EvaluateMonitorRules[IO](query, new RecordingStateRepository,
+      new RecordingIncidentRepository, new FixedIdGenerator)
 
     evaluator.execute(List(containerResource), EvaluatedAt).unsafeRunSync()
 
-    assertEquals(ruleRepository.findEnabledCalls, List.empty)
-    assertEquals(stateRepository.saved, List.empty)
+    assertEquals(query.calls, List.empty)
   }
 
-  test("uses each rule metric code to select CPU and memory observations") {
-    val memoryRule = cpuRule(
-      id = MemoryRuleId,
-      metricCode = MetricCode.MemoryUsagePercent
-    )
-    val ruleRepository = new InMemoryRuleRepository(Map(ResourceId -> List(cpuRule(), memoryRule)))
-    val stateRepository = new InMemoryStateRepository(Map.empty)
-    val metricRepository = new InMemoryMetricObservationRepository(
-      Map(
-        (ResourceId, MetricCode.CpuUsagePercent) -> observation(MetricCode.CpuUsagePercent, 40),
-        (ResourceId, MetricCode.MemoryUsagePercent) -> observation(MetricCode.MemoryUsagePercent, 95)
-      )
-    )
-    val evaluator = new EvaluateMonitorRules[IO](
-      ruleRepository,
-      stateRepository,
-      metricRepository,
-      new InMemoryIncidentRepository(List.empty),
-      new FixedIdGenerator
-    )
+  test("loads 300 rules for 100 resources once and persists deterministic batches") {
+    val resources = (1 to 100).toList.map(index => nodeResource.copy(id = uuid(index)))
+    val inputs = resources.zipWithIndex.flatMap { case (resource, resourceIndex) =>
+      (1 to 3).map { ruleIndex =>
+        val ruleId = uuid(1000 + resourceIndex * 3 + ruleIndex)
+        val rule = cpuRule(id = ruleId, resourceId = resource.id)
+        MonitorEvaluationInput(rule, Some(observation(40, resource.id)), None, None)
+      }
+    }
+    val query = new RecordingQuery(inputs)
+    val states = new RecordingStateRepository
+    val incidents = new RecordingIncidentRepository
+    val evaluator = new EvaluateMonitorRules[IO](query, states, incidents, new FixedIdGenerator)
 
-    evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
+    evaluator.execute(resources, EvaluatedAt).unsafeRunSync()
 
-    assertEquals(
-      metricRepository.requestedCodes,
-      List(MetricCode.CpuUsagePercent, MetricCode.MemoryUsagePercent)
-    )
-    assertEquals(stateRepository.states(RuleId).status, MonitorRuleStatus.Ok)
-    assertEquals(stateRepository.states(MemoryRuleId).status, MonitorRuleStatus.Pending)
+    assertEquals(query.calls.size, 1)
+    assertEquals(query.calls.head._1, OrganizationId)
+    assertEquals(query.calls.head._2.toSet, resources.map(_.id).toSet)
+    assertEquals(states.batches.map(_.size), List(300))
+    assertEquals(incidents.batches, List.empty)
   }
 
-  private def evaluate(
-                        rule: MonitorRule,
-                        currentState: Option[MonitorRuleState],
-                        latestObservation: Option[MetricObservation]
-                      ): EvaluationResult = {
-    val ruleRepository = new InMemoryRuleRepository(Map(ResourceId -> List(rule)))
-    val stateRepository = new InMemoryStateRepository(currentState.map(value => Map(rule.id -> value)).getOrElse(Map.empty))
-    val metricRepository = new InMemoryMetricObservationRepository(
-      latestObservation.map(value => Map((ResourceId, rule.metricCode) -> value)).getOrElse(Map.empty)
-    )
-    val incidentRepository = new InMemoryIncidentRepository(
-      currentState.filter(_.status == MonitorRuleStatus.Firing).map(value => List(openIncident(value))).getOrElse(List.empty)
-    )
-    val evaluator = new EvaluateMonitorRules[IO](
-      ruleRepository,
-      stateRepository,
-      metricRepository,
-      incidentRepository,
-      new FixedIdGenerator
-    )
+  test("issues one projection query per organization") {
+    val otherOrganization = uuid(9000)
+    val query = new RecordingQuery(List.empty)
+    val evaluator = new EvaluateMonitorRules[IO](query, new RecordingStateRepository,
+      new RecordingIncidentRepository, new FixedIdGenerator)
 
-    val transitions = evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
+    evaluator.execute(List(nodeResource, nodeResource.copy(id = uuid(9001), organizationId = otherOrganization)),
+      EvaluatedAt).unsafeRunSync()
 
-    EvaluationResult(
-      stateRepository.states(rule.id),
-      stateRepository.states,
-      stateRepository.saved,
-      incidentRepository.incidents,
-      transitions
-    )
+    assertEquals(query.calls.map(_._1).toSet, Set(OrganizationId, otherOrganization))
   }
+
+  private def run(value: MonitorEvaluationInput): Result = {
+    val query = new RecordingQuery(List(value))
+    val states = new RecordingStateRepository
+    val incidents = new RecordingIncidentRepository
+    val transitions = new EvaluateMonitorRules[IO](query, states, incidents, new FixedIdGenerator)
+      .execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
+    Result(states.batches.flatten, incidents.batches.flatten, transitions, states.batches.size, incidents.batches.size)
+  }
+
+  private def input(
+    rule: MonitorRule,
+    currentState: Option[MonitorRuleState],
+    latest: Option[MetricObservation],
+    incident: Option[Incident]
+  ): MonitorEvaluationInput = MonitorEvaluationInput(rule, latest, currentState, incident)
 
   private def cpuRule(
-                       id: UUID = RuleId,
-                       metricCode: MetricCode = MetricCode.CpuUsagePercent,
-                       forSeconds: Long = 300
-                     ): MonitorRule =
-    MonitorRule(
-      id,
-      OrganizationId,
-      ResourceId,
-      metricCode,
-      MonitorOperator.GreaterThan,
-      BigDecimal(90),
-      forSeconds,
-      enabled = true,
-      createdAt = ObservedAt,
-      updatedAt = ObservedAt
-    )
+    id: UUID = RuleId,
+    resourceId: UUID = ResourceId,
+    forSeconds: Long = 300
+  ): MonitorRule = MonitorRule(id, OrganizationId, resourceId, MetricCode.CpuUsagePercent,
+    MonitorOperator.GreaterThan, BigDecimal(90), forSeconds, enabled = true, ObservedAt, ObservedAt)
 
-  private def state(
-                    status: MonitorRuleStatus,
-                    pendingSince: Option[Instant]
-                  ): MonitorRuleState =
+  private def state(status: MonitorRuleStatus, pendingSince: Option[Instant]): MonitorRuleState =
     MonitorRuleState(OrganizationId, RuleId, status, pendingSince, ObservedAt)
 
-  private def observation(
-                           metricCode: MetricCode,
-                           value: BigDecimal,
-                           observedAt: Instant = ObservedAt
-                         ): MetricObservation =
-    MetricObservation(
-      UUID.randomUUID(),
-      OrganizationId,
-      ResourceId,
-      metricCode,
-      value,
-      observedAt
-    )
+  private def observation(value: BigDecimal, resourceId: UUID = ResourceId): MetricObservation =
+    MetricObservation(UUID.randomUUID(), OrganizationId, resourceId, MetricCode.CpuUsagePercent, value, ObservedAt)
 
-  private final case class EvaluationResult(
-                                              state: MonitorRuleState,
-                                              states: Map[UUID, MonitorRuleState],
-                                              saved: List[MonitorRuleState],
-                                              incidents: List[Incident],
-                                              transitions: List[MonitorTransition]
-                                            )
+  private final case class Result(
+    states: List[MonitorRuleState],
+    incidents: List[Incident],
+    transitions: List[MonitorTransition],
+    stateBatchCalls: Int,
+    incidentBatchCalls: Int
+  )
 
-  private final class InMemoryRuleRepository(
-                                               rulesByResource: Map[UUID, List[MonitorRule]]
-                                             ) extends MonitorRuleRepository[IO] {
-    var findEnabledCalls: List[UUID] = List.empty
-
-    override def findById(organizationId: UUID, id: UUID): IO[Option[MonitorRule]] =
-      IO.pure(rulesByResource.values.flatten.find(_.id == id))
-
-    override def findEnabledByResource(organizationId: UUID, resourceId: UUID): IO[List[MonitorRule]] =
-      IO {
-        findEnabledCalls = findEnabledCalls :+ resourceId
-        rulesByResource.getOrElse(resourceId, List.empty).filter(_.enabled)
-      }
-
-    override def findByResource(organizationId: UUID, resourceId: UUID): IO[List[MonitorRule]] =
-      IO.pure(rulesByResource.getOrElse(resourceId, List.empty))
-
-    override def save(rule: MonitorRule): IO[Unit] =
-      IO.unit
+  private final class RecordingQuery(values: List[MonitorEvaluationInput]) extends MonitorEvaluationQuery[IO] {
+    var calls: List[(UUID, List[UUID])] = List.empty
+    override def findEnabledForResources(organizationId: UUID, resourceIds: List[UUID]): IO[List[MonitorEvaluationInput]] = IO {
+      calls = calls :+ (organizationId -> resourceIds)
+      values.filter(value => value.rule.organizationId == organizationId && resourceIds.contains(value.rule.resourceId))
+    }
   }
 
-  private final class InMemoryStateRepository(
-                                                initial: Map[UUID, MonitorRuleState]
-                                              ) extends MonitorRuleStateRepository[IO] {
-    var states: Map[UUID, MonitorRuleState] = initial
-    var saved: List[MonitorRuleState] = List.empty
-
-    override def findByRuleId(organizationId: UUID, monitorRuleId: UUID): IO[Option[MonitorRuleState]] =
-      IO.pure(states.get(monitorRuleId))
-
-    override def save(state: MonitorRuleState): IO[Unit] =
-      IO {
-        states = states.updated(state.monitorRuleId, state)
-        saved = saved :+ state
-      }
+  private final class RecordingStateRepository extends MonitorRuleStateRepository[IO] {
+    var batches: List[List[MonitorRuleState]] = List.empty
+    override def findByRuleId(organizationId: UUID, monitorRuleId: UUID): IO[Option[MonitorRuleState]] = IO.pure(None)
+    override def save(value: MonitorRuleState): IO[Unit] = saveAll(List(value))
+    override def saveAll(values: List[MonitorRuleState]): IO[Unit] = IO { batches = batches :+ values }
   }
 
-  private final class InMemoryMetricObservationRepository(
-                                                            observations: Map[(UUID, MetricCode), MetricObservation]
-                                                          ) extends MetricObservationRepository[IO] {
-    var requestedCodes: List[MetricCode] = List.empty
-    var requestedObservedAts: List[Instant] = List.empty
-
-    override def insertAll(observations: List[MetricObservation]): IO[Unit] =
-      IO.unit
-
-    override def findLatestAtOrAfter(
-                                      organizationId: UUID,
-                                      resourceId: UUID,
-                                      metricCode: MetricCode,
-                                      observedAt: Instant
-                                    ): IO[Option[MetricObservation]] =
-      IO {
-        requestedCodes = requestedCodes :+ metricCode
-        requestedObservedAts = requestedObservedAts :+ observedAt
-        observations.get((resourceId, metricCode)).filter(!_.observedAt.isBefore(observedAt))
-      }
-
-    override def findByResourceAndPeriod(organizationId: UUID, resourceId: UUID, from: Instant, to: Instant): IO[List[MetricObservation]] = IO.pure(List.empty)
-  }
-
-  private final class InMemoryIncidentRepository(initial: List[Incident]) extends IncidentRepository[IO] {
-    var incidents: List[Incident] = initial
-
-    override def findById(organizationId: UUID, incidentId: UUID): IO[Option[Incident]] = IO.pure(incidents.find(i => i.organizationId == organizationId && i.id == incidentId))
-    override def findByOrganization(organizationId: UUID, status: Option[IncidentStatus]): IO[List[Incident]] = IO.pure(incidents.filter(i => i.organizationId == organizationId && status.forall(_ == i.status)))
-
-    override def findOpenByRule(organizationId: UUID, monitorRuleId: UUID): IO[Option[Incident]] =
-      IO.pure(
-        incidents.find(incident =>
-          incident.organizationId == organizationId &&
-            incident.monitorRuleId == monitorRuleId &&
-            incident.status == IncidentStatus.Open
-        )
-      )
-
-    override def save(incident: Incident): IO[Unit] =
-      IO {
-        incidents = incident :: incidents.filterNot(_.id == incident.id)
-      }
+  private final class RecordingIncidentRepository extends IncidentRepository[IO] {
+    var batches: List[List[Incident]] = List.empty
+    override def findOpenByRule(organizationId: UUID, monitorRuleId: UUID): IO[Option[Incident]] = IO.pure(None)
+    override def findById(organizationId: UUID, incidentId: UUID): IO[Option[Incident]] = IO.pure(None)
+    override def findByOrganization(organizationId: UUID, status: Option[IncidentStatus]): IO[List[Incident]] = IO.pure(List.empty)
+    override def save(value: Incident): IO[Unit] = saveAll(List(value))
+    override def saveAll(values: List[Incident]): IO[Unit] = IO { batches = batches :+ values }
   }
 
   private final class FixedIdGenerator extends IdGenerator[IO] {
     override def nextId: IO[UUID] = IO.pure(NewIncidentId)
   }
 
+  private def uuid(value: Int): UUID = UUID.fromString(f"00000000-0000-0000-0000-${value}%012d")
+
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
   private val ResourceTypeId = UUID.fromString("10000000-0000-0000-0000-000000000001")
   private val ResourceId = UUID.fromString("70000000-0000-0000-0000-000000000001")
-  private val ContainerResourceId = UUID.fromString("70000000-0000-0000-0000-000000000002")
   private val RuleId = UUID.fromString("90000000-0000-0000-0000-000000000001")
-  private val MemoryRuleId = UUID.fromString("90000000-0000-0000-0000-000000000002")
   private val IncidentId = UUID.fromString("a0000000-0000-0000-0000-000000000001")
   private val NewIncidentId = UUID.fromString("a0000000-0000-0000-0000-000000000002")
   private val ObservedAt = Instant.parse("2026-09-22T10:00:00Z")
   private val EvaluatedAt = Instant.parse("2026-09-22T10:05:00Z")
-
-  private val nodeResource = Resource(
-    ResourceId,
-    OrganizationId,
-    EnvironmentId,
-    ResourceTypeId,
-    None,
-    "node",
-    "node",
-    isActive = true,
-    createdAt = ObservedAt,
-    updatedAt = ObservedAt,
-    resourceTypeCode = "NODE",
-    data = ResourceData.empty
-  )
-
-  private val containerResource = nodeResource.copy(
-    id = ContainerResourceId,
-    resourceTypeCode = "CONTAINER"
-  )
-
   private val okState = state(MonitorRuleStatus.Ok, None)
+  private val openIncident = Incident(IncidentId, OrganizationId, RuleId, ResourceId, IncidentStatus.Open,
+    ObservedAt, ObservedAt, None, ObservedAt, ObservedAt)
 
-  private def openIncident(firingState: MonitorRuleState): Incident =
-    Incident(
-      IncidentId,
-      OrganizationId,
-      RuleId,
-      ResourceId,
-      IncidentStatus.Open,
-      firingState.pendingSince.get,
-      firingState.updatedAt,
-      None,
-      firingState.updatedAt,
-      firingState.updatedAt
-    )
+  private val nodeResource = Resource(ResourceId, OrganizationId, EnvironmentId, ResourceTypeId, None,
+    "node", "node", isActive = true, ObservedAt, ObservedAt, "NODE", ResourceData.empty)
+  private val containerResource = nodeResource.copy(id = uuid(999), resourceTypeCode = "CONTAINER")
 }

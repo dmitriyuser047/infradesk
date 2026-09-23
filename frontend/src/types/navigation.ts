@@ -21,6 +21,11 @@ export interface EnvironmentResponse {
   kind: string
 }
 
+export interface EnvironmentContextResponse {
+  project: ProjectResponse
+  environment: EnvironmentResponse
+}
+
 export const EnvironmentKind = {
   dev: 'DEV',
   test: 'TEST',

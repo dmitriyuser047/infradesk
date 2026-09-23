@@ -86,6 +86,9 @@ object HttpJsonCodecs {
       (value.id, value.status, value.startedAt, value.finishedAt, value.errorCode, value.errorMessage)
     }
 
+  implicit val environmentContextResponseEncoder: Encoder[EnvironmentContextResponse] =
+    Encoder.forProduct2("project", "environment")(value => (value.project, value.environment))
+
   implicit val createProjectRequestDecoder: Decoder[CreateProjectRequest] =
     Decoder.forProduct3("code", "name", "description")(CreateProjectRequest.apply)
 

@@ -13,7 +13,7 @@ import application.discovery.{
 }
 import application.monitor.EvaluateMonitorRules
 import application.connection.{GetConnection, ListConnections, SshConnectionManagement, ListConnectionSyncSessions, GetConnectionSyncSession, RunManualConnectionSync}
-import application.navigation.{GetOrganization, ListEnvironments, ListProjects}
+import application.navigation.{GetEnvironmentContext, GetOrganization, ListEnvironments, ListProjects}
 import application.workspace.{CreateEnvironment, CreateProject}
 import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, Login, SessionTokens}
 import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
@@ -70,6 +70,8 @@ import persistence.postgres.{
   PostgresIncidentRepository,
   PostgresMonitorRuleRepository,
   PostgresMonitorRuleStateRepository,
+  PostgresMonitorEvaluationQuery,
+  PostgresNavigationQueryRepository,
   PostgresEnvironmentRepository,
   PostgresOrganizationRepository,
   PostgresProjectRepository,
@@ -137,6 +139,9 @@ object Main extends IOApp.Simple {
         val incidentRepository =
           new PostgresIncidentRepository
 
+        val monitorEvaluationQuery = new PostgresMonitorEvaluationQuery
+        val navigationQueryRepository = new PostgresNavigationQueryRepository
+
         val userAccountRepository = new PostgresUserAccountRepository
         val authSessionRepository = new PostgresAuthSessionRepository
         val membershipRepository = new PostgresOrganizationMembershipRepository
@@ -180,9 +185,8 @@ object Main extends IOApp.Simple {
 
         val evaluateMonitorRules =
           new EvaluateMonitorRules[ConnectionIO](
-            monitorRuleRepository,
+            monitorEvaluationQuery,
             monitorRuleStateRepository,
-            metricObservationRepository,
             incidentRepository,
             transactionIdGenerator
           )
@@ -224,6 +228,7 @@ object Main extends IOApp.Simple {
           GetOrganization(organizationRepository),
           ListProjects(organizationRepository, projectRepository),
           ListEnvironments(organizationRepository, projectRepository, environmentRepository),
+          GetEnvironmentContext(navigationQueryRepository),
           transactionRunner
         )
         val workspaceMutationRoutes = new WorkspaceMutationRoutes[ConnectionIO](

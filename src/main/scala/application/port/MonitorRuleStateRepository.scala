@@ -9,4 +9,5 @@ trait MonitorRuleStateRepository[F[_]] {
   def findByRuleId(organizationId: UUID, monitorRuleId: UUID): F[Option[MonitorRuleState]]
 
   def save(state: MonitorRuleState): F[Unit]
+  def saveAll(states: List[MonitorRuleState]): F[Unit]
 }

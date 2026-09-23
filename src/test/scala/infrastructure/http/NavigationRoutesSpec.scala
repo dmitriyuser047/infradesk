@@ -1,8 +1,8 @@
 package ru.bitec.app.ops
 package infrastructure.http
 
-import application.navigation.{GetOrganization, ListEnvironments, ListProjects}
-import application.port.{EnvironmentRepository, OrganizationRepository, ProjectRepository, TransactionRunner}
+import application.navigation.{EnvironmentContext, GetEnvironmentContext, GetOrganization, ListEnvironments, ListProjects}
+import application.port.{EnvironmentRepository, NavigationQueryRepository, OrganizationRepository, ProjectRepository, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -100,6 +100,42 @@ final class NavigationRoutesSpec extends FunSuite {
     assertEquals(invalid._2.hcursor.get[String]("code"), Right("INVALID_REQUEST"))
   }
 
+  test("resolves environment context with one transactional query") {
+    val fixture = buildFixture(List(organizationA), List(projectA), List(environmentA))
+
+    val response = run(fixture, contextRequest(OrganizationAId, EnvironmentAId))
+
+    assertEquals(response._1.status, Status.Ok)
+    assertEquals(response._2.hcursor.downField("project").get[String]("id"), Right(ProjectAId.toString))
+    assertEquals(response._2.hcursor.downField("environment").get[String]("id"), Right(EnvironmentAId.toString))
+    assertEquals(fixture.transactionRunner.calls, 1)
+  }
+
+  test("does not disclose environment context across tenants and validates ids") {
+    val fixture = buildFixture(List(organizationA), List(projectA, projectB), List(environmentA, environmentB))
+
+    val foreign = run(fixture, contextRequest(OrganizationAId, EnvironmentBId))
+    val invalid = run(fixture, Request[IO](Method.GET,
+      Uri.unsafeFromString(s"/api/v1/organizations/$OrganizationAId/environments/invalid/context")))
+
+    assertEquals(foreign._1.status, Status.NotFound)
+    assertEquals(foreign._2.hcursor.get[String]("code"), Right("ENVIRONMENT_NOT_FOUND"))
+    assertEquals(invalid._1.status, Status.BadRequest)
+  }
+
+  test("returns not found for inactive environment hierarchy members") {
+    val inactiveEnvironment = buildFixture(List(organizationA), List(projectA),
+      List(environmentA.copy(isActive = false)))
+    val inactiveProject = buildFixture(List(organizationA), List(projectA.copy(isActive = false)),
+      List(environmentA))
+    val inactiveOrganizationFixture = buildFixture(List(organizationA.copy(isActive = false)),
+      List(projectA), List(environmentA))
+
+    List(inactiveEnvironment, inactiveProject, inactiveOrganizationFixture).foreach { fixture =>
+      assertEquals(run(fixture, contextRequest(OrganizationAId, EnvironmentAId))._1.status, Status.NotFound)
+    }
+  }
+
   private def buildFixture(
     organizations: List[Organization],
     projects: List[Project],
@@ -108,11 +144,13 @@ final class NavigationRoutesSpec extends FunSuite {
     val organizationRepository = new InMemoryOrganizationRepository(organizations)
     val projectRepository = new InMemoryProjectRepository(projects)
     val environmentRepository = new InMemoryEnvironmentRepository(environments)
+    val navigationQueries = new InMemoryNavigationQueryRepository(organizations, projects, environments)
     val transactionRunner = new RecordingTransactionRunner
     val routes = new NavigationRoutes[IO](
       GetOrganization(organizationRepository),
       ListProjects(organizationRepository, projectRepository),
       ListEnvironments(organizationRepository, projectRepository, environmentRepository),
+      GetEnvironmentContext(navigationQueries),
       transactionRunner
     )
 
@@ -135,6 +173,10 @@ final class NavigationRoutesSpec extends FunSuite {
     projectId: UUID
   ): Request[IO] =
     Request[IO](Method.GET, Uri.unsafeFromString(s"/api/v1/organizations/$organizationId/projects/$projectId/environments"))
+
+  private def contextRequest(organizationId: UUID, environmentId: UUID): Request[IO] =
+    Request[IO](Method.GET,
+      Uri.unsafeFromString(s"/api/v1/organizations/$organizationId/environments/$environmentId/context"))
 
   private final case class RouteFixture(
     app: org.http4s.HttpApp[IO],
@@ -182,6 +224,21 @@ final class NavigationRoutesSpec extends FunSuite {
       IO.pure(environments.filter(environment =>
         environment.organizationId == organizationId && environment.projectId == projectId && environment.isActive
       ))
+  }
+
+  private final class InMemoryNavigationQueryRepository(
+    organizations: List[Organization],
+    projects: List[Project],
+    environments: List[Environment]
+  ) extends NavigationQueryRepository[IO] {
+    override def findEnvironmentContext(organizationId: UUID, environmentId: UUID): IO[Option[EnvironmentContext]] =
+      IO.pure(for {
+        _ <- organizations.find(value => value.id == organizationId && value.isActive)
+        environment <- environments.find(value => value.organizationId == organizationId &&
+          value.id == environmentId && value.isActive)
+        project <- projects.find(value => value.organizationId == organizationId &&
+          value.id == environment.projectId && value.isActive)
+      } yield EnvironmentContext(project, environment))
   }
 
   private val OrganizationAId = UUID.fromString("10000000-0000-0000-0000-000000000001")

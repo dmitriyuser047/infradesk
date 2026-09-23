@@ -16,6 +16,53 @@ import java.time.Instant
 import java.util.UUID
 
 final class WorkspaceRepositoryIntegrationSpec extends FunSuite {
+  test("environment context projection enforces tenant and active boundaries") {
+    assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
+      "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
+
+    val orgA = UUID.randomUUID()
+    val orgB = UUID.randomUUID()
+    val projectId = UUID.randomUUID()
+    val environmentId = UUID.randomUUID()
+    val queries = new PostgresNavigationQueryRepository
+
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+      val runner = new DoobieTransactionRunner(xa)
+      val setup: ConnectionIO[Unit] = for {
+        _ <- sql"insert into organization (id, code, name) values ($orgA, ${orgA.toString}, 'Context A')".update.run
+        _ <- sql"insert into organization (id, code, name) values ($orgB, ${orgB.toString}, 'Context B')".update.run
+        _ <- sql"insert into project (id, organization_id, code, name) values ($projectId, $orgA, 'context', 'Context')".update.run
+        _ <- sql"insert into environment (id, organization_id, project_id, code, name, kind) values ($environmentId, $orgA, $projectId, 'prod', 'Production', 'PROD')".update.run
+      } yield ()
+      val cleanup: ConnectionIO[Unit] = for {
+        _ <- sql"delete from environment where id = $environmentId".update.run
+        _ <- sql"delete from project where id = $projectId".update.run
+        _ <- sql"delete from organization where id in ($orgA, $orgB)".update.run
+      } yield ()
+
+      (runner.run(setup) *> (for {
+        own <- runner.run(queries.findEnvironmentContext(orgA, environmentId))
+        foreign <- runner.run(queries.findEnvironmentContext(orgB, environmentId))
+        _ <- runner.run(sql"update project set is_active = false where id = $projectId".update.run)
+        inactiveProject <- runner.run(queries.findEnvironmentContext(orgA, environmentId))
+        _ <- runner.run(sql"update project set is_active = true where id = $projectId".update.run)
+        _ <- runner.run(sql"update environment set is_active = false where id = $environmentId".update.run)
+        inactiveEnvironment <- runner.run(queries.findEnvironmentContext(orgA, environmentId))
+        _ <- runner.run(sql"update environment set is_active = true where id = $environmentId".update.run)
+        _ <- runner.run(sql"update organization set is_active = false where id = $orgA".update.run)
+        inactiveOrganization <- runner.run(queries.findEnvironmentContext(orgA, environmentId))
+        _ <- IO {
+          assertEquals(own.map(_.project.id), Some(projectId))
+          assertEquals(own.map(_.environment.id), Some(environmentId))
+          assertEquals(foreign, None)
+          assertEquals(inactiveProject, None)
+          assertEquals(inactiveEnvironment, None)
+          assertEquals(inactiveOrganization, None)
+        }
+      } yield ())).guarantee(runner.run(cleanup))
+    }.unsafeRunSync()
+  }
+
   test("PostgreSQL enforces case-insensitive scoped project and environment creation") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")

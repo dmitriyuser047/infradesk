@@ -39,6 +39,7 @@ final class IncidentRoutesSpec extends FunSuite {
     def findById(o:UUID,id:UUID)=failure match {case Some(e)=>IO.raiseError[Option[Incident]](e);case None=>IO.pure(values.find(x=>x.organizationId==o&&x.id==id))}
     def findByOrganization(o:UUID,s:Option[IncidentStatus])=failure match {case Some(e)=>IO.raiseError[List[Incident]](e);case None=>IO.pure(values.filter(x=>x.organizationId==o&&s.forall(_==x.status)))}
     def save(i:Incident)=IO.unit
+    def saveAll(i:List[Incident])=IO.unit
   }
   private val Org=UUID.fromString("20000000-0000-0000-0000-000000000001");private val Other=UUID.fromString("20000000-0000-0000-0000-000000000002");private val OtherId=UUID.randomUUID();private val Now=Instant.parse("2026-09-22T10:00:00Z")
   private val open=Incident(UUID.randomUUID(),Org,UUID.randomUUID(),UUID.randomUUID(),IncidentStatus.Open,Now,Now,None,Now,Now);private val resolved=open.copy(id=UUID.randomUUID(),status=IncidentStatus.Resolved,resolvedAt=Some(Now.plusSeconds(1)))

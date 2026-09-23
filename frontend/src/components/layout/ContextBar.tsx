@@ -1,8 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { useQueries } from '@tanstack/react-query'
-
 import { useMyOrganizations } from '../../api/auth'
-import { getEnvironments, useEnvironments, useProjects } from '../../api/navigation'
+import { useEnvironmentContext, useEnvironments, useProjects } from '../../api/navigation'
 import { getEnvironmentKindLabel } from '../navigation/navigationPresentation'
 import { useWorkspaceRouteContext } from './useWorkspaceRouteContext'
 
@@ -30,13 +28,12 @@ function OrganizationContext({ organizationId, projectId, environmentId, organiz
   navigate: ReturnType<typeof useNavigate>
 }) {
   const projects = useProjects(organizationId)
-  const candidates = useQueries({ queries: (projects.data ?? []).map(project => ({
-    queryKey: ['environments', organizationId, project.id],
-    queryFn: () => getEnvironments(organizationId, project.id),
-    enabled: Boolean(environmentId && !projectId),
-  })) })
-  const resolvedProjectId = projectId ?? projects.data?.find((_, index) =>
-    candidates[index]?.data?.some(environment => environment.id === environmentId))?.id
+  const environmentContext = useEnvironmentContext(
+    organizationId,
+    environmentId ?? null,
+    Boolean(environmentId && !projectId),
+  )
+  const resolvedProjectId = projectId ?? environmentContext.data?.project.id
   const environments = useEnvironments(organizationId, resolvedProjectId ?? null)
   const base = `/organizations/${encodeURIComponent(organizationId)}`
 

@@ -1,97 +1,82 @@
 package ru.bitec.app.ops
 package application.monitor
 
-import application.port.{IdGenerator, IncidentRepository, MetricObservationRepository, MonitorRuleRepository, MonitorRuleStateRepository}
+import application.port.{IdGenerator, IncidentRepository, MonitorEvaluationQuery, MonitorRuleStateRepository}
+import cats.MonadThrow
+import cats.syntax.all._
 import domain.incident.{Incident, IncidentStatus}
 import domain.metric.MetricObservation
 import domain.monitor.{MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import domain.resource.Resource
 import domain.resource.node.NodeDefinition
 
-import cats.MonadThrow
-import cats.syntax.all._
-
 import java.time.{Duration, Instant}
 
 final class EvaluateMonitorRules[Tx[_]: MonadThrow](
-                                                     monitorRuleRepository: MonitorRuleRepository[Tx],
-                                                     monitorRuleStateRepository: MonitorRuleStateRepository[Tx],
-                                                     metricObservationRepository: MetricObservationRepository[Tx],
-                                                     incidentRepository: IncidentRepository[Tx],
-                                                     idGenerator: IdGenerator[Tx]
-                                                   ) extends MonitorRuleEvaluator[Tx] {
+  evaluationQuery: MonitorEvaluationQuery[Tx],
+  monitorRuleStateRepository: MonitorRuleStateRepository[Tx],
+  incidentRepository: IncidentRepository[Tx],
+  idGenerator: IdGenerator[Tx]
+) extends MonitorRuleEvaluator[Tx] {
 
-  override def execute(resources: List[Resource], evaluatedAt: Instant): Tx[List[MonitorTransition]] =
-    resources
-      .filter(resource => resource.resourceTypeCode == NodeDefinition.code)
-      .traverse(evaluateResource(_, evaluatedAt)).map(_.flatten)
+  override def execute(resources: List[Resource], evaluatedAt: Instant): Tx[List[MonitorTransition]] = {
+    val resourcesByOrganization = resources
+      .filter(_.resourceTypeCode == NodeDefinition.code)
+      .groupBy(_.organizationId)
+      .toList
+      .sortBy(_._1.toString)
 
-  private def evaluateResource(resource: Resource, evaluatedAt: Instant): Tx[List[MonitorTransition]] =
-    monitorRuleRepository
-      .findEnabledByResource(resource.organizationId, resource.id)
-      .flatMap(_.traverse(evaluateRule(resource, _, evaluatedAt)).map(_.flatten))
+    for {
+      inputs <- resourcesByOrganization.traverse { case (organizationId, organizationResources) =>
+        evaluationQuery.findEnabledForResources(organizationId, organizationResources.map(_.id).distinct)
+      }.map(_.flatten)
+      plans <- inputs.flatMap(input => input.observation.map(input -> _))
+        .traverse { case (input, observation) =>
+          calculate(input, observation, evaluatedAt).liftTo[Tx]
+        }
+      decisions <- plans.traverse(materialize)
+      states = decisions.map(_.state)
+      incidents = decisions.flatMap(_.incident)
+      _ <- if (states.isEmpty) ().pure[Tx] else monitorRuleStateRepository.saveAll(states)
+      _ <- if (incidents.isEmpty) ().pure[Tx] else incidentRepository.saveAll(incidents)
+    } yield decisions.flatMap(_.transition)
+  }
 
-  private def evaluateRule(
-                            resource: Resource,
-                            rule: MonitorRule,
-                            evaluatedAt: Instant
-                          ): Tx[List[MonitorTransition]] =
-    metricObservationRepository
-      .findLatestAtOrAfter(
-        resource.organizationId,
-        resource.id,
-        rule.metricCode,
-        resource.updatedAt
-      )
-      .flatMap {
-        case Some(observation) =>
-          monitorRuleStateRepository
-            .findByRuleId(rule.organizationId, rule.id)
-            .flatMap { currentState =>
-              nextState(rule, currentState, observation, evaluatedAt)
-                .liftTo[Tx]
-                .flatMap { next =>
-                  processIncidentTransition(rule, currentState, next, evaluatedAt)
-                    .flatTap(_ => monitorRuleStateRepository.save(next))
-                }
-            }
-
-        case None =>
-          List.empty[MonitorTransition].pure[Tx]
-      }
+  private def calculate(
+    input: MonitorEvaluationInput,
+    observation: MetricObservation,
+    evaluatedAt: Instant
+  ): Either[Throwable, EvaluationPlan] =
+    nextState(input.rule, input.state, observation, evaluatedAt).flatMap { next =>
+      incidentPlan(input, next, evaluatedAt).map(EvaluationPlan(next, _))
+    }
 
   private def nextState(
-                         rule: MonitorRule,
-                         currentState: Option[MonitorRuleState],
-                         observation: MetricObservation,
-                         evaluatedAt: Instant
-                       ): Either[IllegalArgumentException, MonitorRuleState] =
+    rule: MonitorRule,
+    currentState: Option[MonitorRuleState],
+    observation: MetricObservation,
+    evaluatedAt: Instant
+  ): Either[IllegalArgumentException, MonitorRuleState] =
     if (!rule.operator.matches(observation.value, rule.threshold)) {
-      Right(
-        MonitorRuleState(
-          rule.organizationId,
-          rule.id,
-          MonitorRuleStatus.Ok,
-          None,
-          evaluatedAt
-        )
-      )
+      Right(MonitorRuleState(rule.organizationId, rule.id, MonitorRuleStatus.Ok, None, evaluatedAt))
     } else {
       currentState match {
         case None | Some(MonitorRuleState(_, _, MonitorRuleStatus.Ok, _, _)) =>
-          initialViolationState(rule, observation, evaluatedAt)
-
+          Right(MonitorRuleState(
+            rule.organizationId,
+            rule.id,
+            if (rule.forSeconds == 0) MonitorRuleStatus.Firing else MonitorRuleStatus.Pending,
+            Some(observation.observedAt),
+            evaluatedAt
+          ))
         case Some(state @ MonitorRuleState(_, _, MonitorRuleStatus.Pending, Some(pendingSince), _)) =>
-          val elapsedSeconds = Duration.between(pendingSince, observation.observedAt).getSeconds
           val status =
-            if (elapsedSeconds >= rule.forSeconds) MonitorRuleStatus.Firing
+            if (Duration.between(pendingSince, observation.observedAt).getSeconds >= rule.forSeconds)
+              MonitorRuleStatus.Firing
             else MonitorRuleStatus.Pending
-
           Right(state.copy(status = status, updatedAt = evaluatedAt))
-
         case Some(state @ MonitorRuleState(_, _, MonitorRuleStatus.Firing, Some(_), _)) =>
           Right(state.copy(updatedAt = evaluatedAt))
-
         case Some(state) =>
           Left(new IllegalArgumentException(
             s"Monitor rule state ${state.monitorRuleId} has invalid pendingSince for status ${state.status.code}"
@@ -99,127 +84,71 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
       }
     }
 
-  private def initialViolationState(
-                                    rule: MonitorRule,
-                                    observation: MetricObservation,
-                                    evaluatedAt: Instant
-                                  ): Either[IllegalArgumentException, MonitorRuleState] = {
-    val status =
-      if (rule.forSeconds == 0) MonitorRuleStatus.Firing
-      else MonitorRuleStatus.Pending
+  private def incidentPlan(
+    input: MonitorEvaluationInput,
+    nextState: MonitorRuleState,
+    evaluatedAt: Instant
+  ): Either[Throwable, Option[IncidentPlan]] =
+    (input.state.map(_.status), nextState.status, input.openIncident) match {
+      case (Some(MonitorRuleStatus.Firing), MonitorRuleStatus.Firing, Some(_)) => Right(None)
+      case (Some(MonitorRuleStatus.Firing), MonitorRuleStatus.Firing, None) =>
+        Left(new IllegalStateException(s"Monitor rule ${input.rule.id} is FIRING without an OPEN incident"))
 
-    Right(
-      MonitorRuleState(
-        rule.organizationId,
-        rule.id,
-        status,
-        Some(observation.observedAt),
-        evaluatedAt
-      )
-    )
-  }
+      case (Some(MonitorRuleStatus.Firing), MonitorRuleStatus.Ok, Some(incident)) =>
+        Right(Some(ResolveIncident(input.rule, incident, evaluatedAt)))
+      case (Some(MonitorRuleStatus.Firing), MonitorRuleStatus.Ok, None) =>
+        Left(new IllegalStateException(
+          s"Monitor rule ${input.rule.id} recovered from FIRING without an OPEN incident"
+        ))
 
-  private def processIncidentTransition(
-                                        rule: MonitorRule,
-                                        currentState: Option[MonitorRuleState],
-                                        nextState: MonitorRuleState,
-                                        evaluatedAt: Instant
-                                      ): Tx[List[MonitorTransition]] =
-    (currentState.map(_.status), nextState.status) match {
-      case (Some(MonitorRuleStatus.Firing), MonitorRuleStatus.Firing) =>
-        requireOpenIncident(rule).as(List.empty[MonitorTransition])
+      case (_, MonitorRuleStatus.Firing, Some(existing)) =>
+        Left(new IllegalStateException(
+          s"Monitor rule ${input.rule.id} transitioned to FIRING while incident ${existing.id} is already OPEN"
+        ))
+      case (_, MonitorRuleStatus.Firing, None) =>
+        nextState.pendingSince match {
+          case Some(startedAt) => Right(Some(OpenIncident(input.rule, startedAt, evaluatedAt)))
+          case None => Left(new IllegalStateException(
+            s"Monitor rule ${input.rule.id} transitioned to FIRING without pendingSince"
+          ))
+        }
 
-      case (Some(MonitorRuleStatus.Firing), MonitorRuleStatus.Ok) =>
-        resolveOpenIncident(rule, evaluatedAt)
-
-      case (_, MonitorRuleStatus.Firing) =>
-        createOpenIncident(rule, nextState, evaluatedAt)
-
-      case (_, MonitorRuleStatus.Ok) =>
-        requireNoOpenIncident(rule).as(List.empty[MonitorTransition])
-
-      case (_, MonitorRuleStatus.Pending) =>
-        requireNoOpenIncident(rule).as(List.empty[MonitorTransition])
+      case (_, MonitorRuleStatus.Ok | MonitorRuleStatus.Pending, None) => Right(None)
+      case (_, _, Some(incident)) => Left(new IllegalStateException(
+        s"Monitor rule ${input.rule.id} is not FIRING while incident ${incident.id} is still OPEN"
+      ))
     }
 
-  private def createOpenIncident(
-                                  rule: MonitorRule,
-                                  nextState: MonitorRuleState,
-                                  evaluatedAt: Instant
-                                ): Tx[List[MonitorTransition]] =
-    incidentRepository
-      .findOpenByRule(rule.organizationId, rule.id)
-      .flatMap {
-        case Some(existing) =>
-          new IllegalStateException(
-            s"Monitor rule ${rule.id} transitioned to FIRING while incident ${existing.id} is already OPEN"
-          ).raiseError[Tx, List[MonitorTransition]]
+  private def materialize(plan: EvaluationPlan): Tx[EvaluationDecision] =
+    plan.incident match {
+      case None => EvaluationDecision(plan.state, None, None).pure[Tx]
+      case Some(OpenIncident(rule, startedAt, evaluatedAt)) =>
+        idGenerator.nextId.map { incidentId =>
+          val incident = Incident(incidentId, rule.organizationId, rule.id, rule.resourceId,
+            IncidentStatus.Open, startedAt, evaluatedAt, None, evaluatedAt, evaluatedAt)
+          EvaluationDecision(plan.state, Some(incident), Some(
+            MonitorTransition.Opened(rule.organizationId, rule.resourceId, rule.id, incidentId, evaluatedAt)
+          ))
+        }
+      case Some(ResolveIncident(rule, incident, evaluatedAt)) =>
+        EvaluationDecision(
+          plan.state,
+          Some(incident.copy(status = IncidentStatus.Resolved,
+            resolvedAt = Some(evaluatedAt), updatedAt = evaluatedAt)),
+          Some(MonitorTransition.Resolved(rule.organizationId, rule.resourceId,
+            rule.id, incident.id, evaluatedAt))
+        ).pure[Tx]
+    }
 
-        case None =>
-          nextState.pendingSince match {
-            case Some(startedAt) =>
-              idGenerator.nextId.flatMap { incidentId =>
-                incidentRepository.save(
-                  Incident(
-                    incidentId,
-                    rule.organizationId,
-                    rule.id,
-                    rule.resourceId,
-                    IncidentStatus.Open,
-                    startedAt,
-                    evaluatedAt,
-                    None,
-                    evaluatedAt,
-                    evaluatedAt
-                  )
-                ).as(List(MonitorTransition.Opened(rule.organizationId, rule.resourceId, rule.id, incidentId, evaluatedAt)))
-              }
-
-            case None =>
-              new IllegalStateException(
-                s"Monitor rule ${rule.id} transitioned to FIRING without pendingSince"
-              ).raiseError[Tx, List[MonitorTransition]]
-          }
-      }
-
-  private def requireOpenIncident(rule: MonitorRule): Tx[Unit] =
-    incidentRepository
-      .findOpenByRule(rule.organizationId, rule.id)
-      .flatMap {
-        case Some(_) => ().pure[Tx]
-        case None =>
-          new IllegalStateException(
-            s"Monitor rule ${rule.id} is FIRING without an OPEN incident"
-          ).raiseError[Tx, Unit]
-      }
-
-  private def requireNoOpenIncident(rule: MonitorRule): Tx[Unit] =
-    incidentRepository
-      .findOpenByRule(rule.organizationId, rule.id)
-      .flatMap {
-        case None => ().pure[Tx]
-        case Some(incident) =>
-          new IllegalStateException(
-            s"Monitor rule ${rule.id} is not FIRING while incident ${incident.id} is still OPEN"
-          ).raiseError[Tx, Unit]
-      }
-
-  private def resolveOpenIncident(rule: MonitorRule, evaluatedAt: Instant): Tx[List[MonitorTransition]] =
-    incidentRepository
-      .findOpenByRule(rule.organizationId, rule.id)
-      .flatMap {
-        case Some(incident) =>
-          incidentRepository.save(
-            incident.copy(
-              status = IncidentStatus.Resolved,
-              resolvedAt = Some(evaluatedAt),
-              updatedAt = evaluatedAt
-            )
-          ).as(List(MonitorTransition.Resolved(rule.organizationId, rule.resourceId, rule.id, incident.id, evaluatedAt)))
-
-        case None =>
-          new IllegalStateException(
-            s"Monitor rule ${rule.id} recovered from FIRING without an OPEN incident"
-          ).raiseError[Tx, List[MonitorTransition]]
-      }
+  private final case class EvaluationPlan(state: MonitorRuleState, incident: Option[IncidentPlan])
+  private final case class EvaluationDecision(
+    state: MonitorRuleState,
+    incident: Option[Incident],
+    transition: Option[MonitorTransition]
+  )
+  private sealed trait IncidentPlan
+  private final case class OpenIncident(rule: MonitorRule, startedAt: Instant, evaluatedAt: Instant)
+    extends IncidentPlan
+  private final case class ResolveIncident(rule: MonitorRule, incident: Incident, evaluatedAt: Instant)
+    extends IncidentPlan
 }

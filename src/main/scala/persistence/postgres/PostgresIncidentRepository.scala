@@ -6,7 +6,7 @@ import domain.incident.{Incident, IncidentStatus}
 
 import cats.syntax.all._
 import org.typelevel.doobie.ConnectionIO
-import org.typelevel.doobie.Query0
+import org.typelevel.doobie.{Query0, Update}
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 
@@ -58,7 +58,11 @@ final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] 
   }
 
   override def save(incident: Incident): ConnectionIO[Unit] =
-    sql"""
+    saveAll(List(incident))
+
+  override def saveAll(incidents: List[Incident]): ConnectionIO[Unit] =
+    if (incidents.isEmpty) ().pure[ConnectionIO]
+    else Update[(UUID, UUID, UUID, UUID, String, Instant, Instant, Option[Instant], Instant, Instant)]("""
       insert into incident (
         id,
         organization_id,
@@ -71,34 +75,23 @@ final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] 
         created_at,
         updated_at
       )
-      values (
-        ${incident.id},
-        ${incident.organizationId},
-        ${incident.monitorRuleId},
-        ${incident.resourceId},
-        ${incident.status.code},
-        ${incident.startedAt},
-        ${incident.openedAt},
-        ${incident.resolvedAt},
-        ${incident.createdAt},
-        ${incident.updatedAt}
-      )
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       on conflict (id)
       do update set
         status = excluded.status,
         resolved_at = excluded.resolved_at,
         updated_at = excluded.updated_at
       where incident.organization_id = excluded.organization_id
-    """
-      .update
-      .run
-      .flatMap {
-        case 1 => ().pure[ConnectionIO]
-        case rows =>
-          new IllegalStateException(
-            s"Expected to save 1 incident row, affected: ${rows}"
-          ).raiseError[ConnectionIO, Unit]
-      }
+    """).updateMany(incidents.map(incident =>
+      (incident.id, incident.organizationId, incident.monitorRuleId, incident.resourceId,
+        incident.status.code, incident.startedAt, incident.openedAt, incident.resolvedAt,
+        incident.createdAt, incident.updatedAt)
+    )).flatMap { rows =>
+      if (rows == incidents.size) ().pure[ConnectionIO]
+      else new IllegalStateException(
+        s"Expected to save ${incidents.size} incident rows, affected: $rows"
+      ).raiseError[ConnectionIO, Unit]
+    }
 }
 
 object PostgresIncidentRepository {

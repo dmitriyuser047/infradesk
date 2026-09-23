@@ -5,7 +5,7 @@ import application.port.MetricObservationRepository
 import domain.metric.{MetricCode, MetricObservation}
 
 import cats.syntax.all._
-import org.typelevel.doobie.ConnectionIO
+import org.typelevel.doobie.{ConnectionIO, Update}
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 
@@ -61,33 +61,17 @@ final class PostgresMetricObservationRepository extends MetricObservationReposit
       .flatMap(_.traverse(row => toDomain(row).liftTo[ConnectionIO]))
 
   override def insertAll(observations: List[MetricObservation]): ConnectionIO[Unit] =
-    observations.traverse_ { observation =>
-      sql"""
-        insert into metric_observation (
-          id,
-          organization_id,
-          resource_id,
-          metric_code,
-          value,
-          observed_at
-        )
-        values (
-          ${observation.id},
-          ${observation.organizationId},
-          ${observation.resourceId},
-          ${observation.metricCode.code},
-          ${observation.value},
-          ${observation.observedAt}
-        )
-      """
-        .update
-        .run
-        .flatMap {
-          case 1 => ().pure[ConnectionIO]
-          case rows =>
-            new IllegalStateException(
-              s"Expected to insert 1 metric_observation row, affected: ${rows}"
-            ).raiseError[ConnectionIO, Unit]
-        }
+    if (observations.isEmpty) ().pure[ConnectionIO]
+    else Update[MetricObservationRow](
+      """insert into metric_observation
+        |(id, organization_id, resource_id, metric_code, value, observed_at)
+        |values (?, ?, ?, ?, ?, ?)""".stripMargin
+    ).updateMany(observations.map(value =>
+      (value.id, value.organizationId, value.resourceId, value.metricCode.code, value.value, value.observedAt)
+    )).flatMap { rows =>
+      if (rows == observations.size) ().pure[ConnectionIO]
+      else new IllegalStateException(
+        s"Expected to insert ${observations.size} metric_observation rows, affected: $rows"
+      ).raiseError[ConnectionIO, Unit]
     }
 }

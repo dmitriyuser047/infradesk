@@ -25,3 +25,8 @@ final case class EnvironmentResponse(
   name: String,
   kind: String
 )
+
+final case class EnvironmentContextResponse(
+  project: ProjectResponse,
+  environment: EnvironmentResponse
+)

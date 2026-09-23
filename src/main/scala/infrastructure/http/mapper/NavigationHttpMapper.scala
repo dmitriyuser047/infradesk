@@ -4,7 +4,8 @@ package infrastructure.http.mapper
 import domain.enviroment.Environment
 import domain.organization.Organization
 import domain.project.Project
-import infrastructure.http.dto.{EnvironmentResponse, OrganizationResponse, ProjectResponse}
+import application.navigation.EnvironmentContext
+import infrastructure.http.dto.{EnvironmentContextResponse, EnvironmentResponse, OrganizationResponse, ProjectResponse}
 
 object NavigationHttpMapper {
   def organizationResponse(organization: Organization): OrganizationResponse =
@@ -28,4 +29,7 @@ object NavigationHttpMapper {
       environment.name,
       environment.kind.code
     )
+
+  def environmentContextResponse(context: EnvironmentContext): EnvironmentContextResponse =
+    EnvironmentContextResponse(projectResponse(context.project), environmentResponse(context.environment))
 }

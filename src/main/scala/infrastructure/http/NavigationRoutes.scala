@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package infrastructure.http
 
-import application.navigation.{GetOrganization, ListEnvironments, ListProjects}
+import application.navigation.{GetEnvironmentContext, GetOrganization, ListEnvironments, ListProjects}
 import application.port.TransactionRunner
 import cats.effect.IO
 import cats.syntax.all._
@@ -18,6 +18,7 @@ final class NavigationRoutes[Tx[_]](
   getOrganization: GetOrganization[Tx],
   listProjects: ListProjects[Tx],
   listEnvironments: ListEnvironments[Tx],
+  getEnvironmentContext: GetEnvironmentContext[Tx],
   transactionRunner: TransactionRunner[IO, Tx]
 ) {
   import HttpJsonCodecs._
@@ -33,6 +34,10 @@ final class NavigationRoutes[Tx[_]](
   private val internalError = ApiErrorResponse(
     "INTERNAL_ERROR",
     "Internal server error"
+  )
+  private val environmentNotFound = ApiErrorResponse(
+    "ENVIRONMENT_NOT_FOUND",
+    "Environment was not found"
   )
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
@@ -66,6 +71,18 @@ final class NavigationRoutes[Tx[_]](
           transactionRunner.run(listEnvironments.execute(organizationId, projectId)).attempt.flatMap {
             case Right(Some(environments)) => Ok(environments.map(NavigationHttpMapper.environmentResponse))
             case Right(None) => NotFound(projectNotFound)
+            case Left(_) => InternalServerError(internalError)
+          }
+      }
+
+    case GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "environments" / environmentIdValue / "context" =>
+      (parseUuid(organizationIdValue, "organizationId"), parseUuid(environmentIdValue, "environmentId")) match {
+        case (Left(error), _) => BadRequest(error)
+        case (_, Left(error)) => BadRequest(error)
+        case (Right(organizationId), Right(environmentId)) =>
+          transactionRunner.run(getEnvironmentContext.execute(organizationId, environmentId)).attempt.flatMap {
+            case Right(Some(context)) => Ok(NavigationHttpMapper.environmentContextResponse(context))
+            case Right(None) => NotFound(environmentNotFound)
             case Left(_) => InternalServerError(internalError)
           }
       }

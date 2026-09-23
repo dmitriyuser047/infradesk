@@ -4,7 +4,7 @@ package persistence.postgres
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
-import domain.metric.MetricCode
+import domain.metric.{MetricCode, MetricObservation}
 import domain.incident.{Incident, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import domain.resource.{Resource, ResourceData}
@@ -184,8 +184,93 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     }.unsafeRunSync()
   }
 
+  test("loads the complete monitor projection and inserts observations in one batch") {
+    assume(
+      sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
+      "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests"
+    )
+
+    val ids = TestIds.random()
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+      val runner = new DoobieTransactionRunner(xa)
+      val resources = new PostgresResourceRepository
+      val rules = new PostgresMonitorRuleRepository
+      val states = new PostgresMonitorRuleStateRepository
+      val incidents = new PostgresIncidentRepository
+      val metrics = new PostgresMetricObservationRepository
+      val projection = new PostgresMonitorEvaluationQuery
+      val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
+        ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
+      val rule = MonitorRule(ids.ruleId, OrganizationId, ids.resourceId, MetricCode.CpuUsagePercent,
+        MonitorOperator.GreaterThan, BigDecimal(90), 300, enabled = true, Now, Now)
+      val memoryRule = rule.copy(id = UUID.randomUUID(), metricCode = MetricCode.MemoryUsagePercent)
+      val disabledRule = rule.copy(id = UUID.randomUUID(), enabled = false)
+      val state = MonitorRuleState(OrganizationId, ids.ruleId, MonitorRuleStatus.Firing, Some(Now), Now)
+      val incident = Incident(ids.incidentId, OrganizationId, ids.ruleId, ids.resourceId,
+        IncidentStatus.Open, Now, Now, None, Now, Now)
+      val resolvedIncident = incident.copy(id = ids.secondIncidentId, status = IncidentStatus.Resolved,
+        resolvedAt = Some(Now.plusSeconds(1)), updatedAt = Now.plusSeconds(1))
+      val observations = List(
+        MetricObservation(UUID.randomUUID(), OrganizationId, ids.resourceId,
+          MetricCode.CpuUsagePercent, BigDecimal(10), Now.minusSeconds(1)),
+        MetricObservation(UUID.randomUUID(), OrganizationId, ids.resourceId,
+          MetricCode.CpuUsagePercent, BigDecimal(91), Now.plusSeconds(1)),
+        MetricObservation(UUID.randomUUID(), OrganizationId, ids.resourceId,
+          MetricCode.CpuUsagePercent, BigDecimal(99), Now.plusSeconds(2)),
+        MetricObservation(UUID.randomUUID(), OrganizationId, ids.resourceId,
+          MetricCode.MemoryUsagePercent, BigDecimal(77), Now.minusSeconds(1))
+      )
+
+      val program = for {
+        _ <- runner.run(resources.save(resource))
+        _ <- runner.run(rules.save(rule))
+        _ <- runner.run(rules.save(memoryRule))
+        _ <- runner.run(rules.save(disabledRule))
+        _ <- runner.run(metrics.insertAll(observations))
+        _ <- runner.run(states.saveAll(List(state)))
+        _ <- runner.run(incidents.saveAll(List(incident, resolvedIncident)))
+        loaded <- runner.run(projection.findEnabledForResources(OrganizationId, List(ids.resourceId)))
+        foreign <- runner.run(projection.findEnabledForResources(UUID.randomUUID(), List(ids.resourceId)))
+        persistedMetrics <- runner.run(metrics.findByResourceAndPeriod(
+          OrganizationId, ids.resourceId, Now.minusSeconds(2), Now.plusSeconds(3)))
+        indexNames <- runner.run(sql"""
+          select indexname from pg_indexes
+          where schemaname = current_schema()
+            and indexname in (
+              'ix_metric_observation_resource_metric_observed_at',
+              'ix_monitor_rule_enabled_resource'
+            )
+        """.query[String].to[List])
+      } yield (loaded, foreign, persistedMetrics, indexNames)
+
+      program.guarantee(runner.run(cleanup(ids)).attempt.void).flatMap {
+        case (loaded, foreign, persistedMetrics, indexNames) => IO {
+        assertEquals(loaded.map(_.rule.id).toSet, Set(rule.id, memoryRule.id))
+        val cpu = loaded.find(_.rule.id == rule.id).get
+        val memory = loaded.find(_.rule.id == memoryRule.id).get
+        assertEquals(cpu.observation.map(_.value), Some(BigDecimal(99)))
+        assertEquals(cpu.state, Some(state))
+        assertEquals(cpu.openIncident, Some(incident))
+        assertEquals(memory.observation, None)
+        assertEquals(memory.state, None)
+        assertEquals(memory.openIncident, None)
+        assertEquals(foreign, List.empty)
+        assertEquals(persistedMetrics.map(_.id).toSet, observations.map(_.id).toSet)
+        assertEquals(indexNames.toSet, Set(
+          "ix_metric_observation_resource_metric_observed_at",
+          "ix_monitor_rule_enabled_resource"
+        ))
+      }}
+    }.unsafeRunSync()
+  }
+
   private def cleanup(ids: TestIds): ConnectionIO[Unit] =
     for {
+      _ <- sql"""
+        delete from metric_observation
+        where organization_id = $OrganizationId
+          and resource_id = ${ids.resourceId}
+      """.update.run
       _ <- sql"""
         delete from incident
         where organization_id = $OrganizationId
@@ -199,7 +284,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       _ <- sql"""
         delete from monitor_rule
         where organization_id = $OrganizationId
-          and id = ${ids.ruleId}
+          and resource_id = ${ids.resourceId}
       """.update.run
       _ <- sql"""
         delete from resource

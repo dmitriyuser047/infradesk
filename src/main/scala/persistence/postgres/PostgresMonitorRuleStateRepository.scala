@@ -5,7 +5,7 @@ import application.port.MonitorRuleStateRepository
 import domain.monitor.{MonitorRuleState, MonitorRuleStatus}
 
 import cats.syntax.all._
-import org.typelevel.doobie.ConnectionIO
+import org.typelevel.doobie.{ConnectionIO, Update}
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 
@@ -58,7 +58,11 @@ final class PostgresMonitorRuleStateRepository extends MonitorRuleStateRepositor
       }
 
   override def save(state: MonitorRuleState): ConnectionIO[Unit] =
-    sql"""
+    saveAll(List(state))
+
+  override def saveAll(states: List[MonitorRuleState]): ConnectionIO[Unit] =
+    if (states.isEmpty) ().pure[ConnectionIO]
+    else Update[(UUID, UUID, String, Option[Instant], Instant)]("""
       insert into monitor_rule_state (
         organization_id,
         monitor_rule_id,
@@ -66,27 +70,18 @@ final class PostgresMonitorRuleStateRepository extends MonitorRuleStateRepositor
         pending_since,
         updated_at
       )
-      values (
-        ${state.organizationId},
-        ${state.monitorRuleId},
-        ${state.status.code},
-        ${state.pendingSince},
-        ${state.updatedAt}
-      )
+      values (?, ?, ?, ?, ?)
       on conflict (organization_id, monitor_rule_id)
       do update set
         status = excluded.status,
         pending_since = excluded.pending_since,
         updated_at = excluded.updated_at
-    """
-      .update
-      .run
-      .flatMap {
-        case 1 =>
-          ().pure[ConnectionIO]
-        case rows =>
-          new IllegalStateException(
-            s"Expected to save 1 monitor_rule_state row, affected: ${rows}"
-          ).raiseError[ConnectionIO, Unit]
-      }
+    """).updateMany(states.map(state =>
+      (state.organizationId, state.monitorRuleId, state.status.code, state.pendingSince, state.updatedAt)
+    )).flatMap { rows =>
+      if (rows == states.size) ().pure[ConnectionIO]
+      else new IllegalStateException(
+        s"Expected to save ${states.size} monitor_rule_state rows, affected: $rows"
+      ).raiseError[ConnectionIO, Unit]
+    }
 }

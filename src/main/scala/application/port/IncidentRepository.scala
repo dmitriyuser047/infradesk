@@ -12,4 +12,5 @@ trait IncidentRepository[F[_]] {
   def findByOrganization(organizationId: UUID, status: Option[IncidentStatus]): F[List[Incident]]
 
   def save(incident: Incident): F[Unit]
+  def saveAll(incidents: List[Incident]): F[Unit]
 }

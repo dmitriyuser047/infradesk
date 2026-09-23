@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package application.navigation
 
-import application.port.{EnvironmentRepository, OrganizationRepository, ProjectRepository}
+import application.port.{EnvironmentRepository, NavigationQueryRepository, OrganizationRepository, ProjectRepository}
 import cats.Monad
 import cats.syntax.all._
 import domain.enviroment.Environment
@@ -45,4 +45,11 @@ final case class ListEnvironments[Tx[_]: Monad](
           case None => none[List[Environment]].pure[Tx]
         }
     }
+}
+
+final case class GetEnvironmentContext[Tx[_]](
+  navigationQueries: NavigationQueryRepository[Tx]
+) {
+  def execute(organizationId: UUID, environmentId: UUID): Tx[Option[EnvironmentContext]] =
+    navigationQueries.findEnvironmentContext(organizationId, environmentId)
 }
