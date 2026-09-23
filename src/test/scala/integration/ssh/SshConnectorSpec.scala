@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package integration.ssh
 
 import application.discovery.DiscoveredExternalIdentity
+import application.port.{ResourceConnectorFailure, ResourceConnectorFailureCode}
 import cats.effect.{IO, Ref, Resource}
 import cats.effect.unsafe.implicits.global
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
@@ -295,6 +296,47 @@ final class SshConnectorSpec extends FunSuite {
           IO.raiseError(new IllegalArgumentException(s"Unexpected SSH command: $other"))
         }
       }))
+  }
+
+  test("maps only typed SSH transport failures to safe connector diagnostics") {
+    val raw = "password=super-secret host=10.0.0.1"
+    val cases = List[(SshTransportFailure, String, String)](
+      (new SshTransportFailure.ConnectTimeout(new RuntimeException(raw)),
+        ResourceConnectorFailureCode.SshConnectTimeout, "SSH connection timed out"),
+      (new SshTransportFailure.ConnectionRefused(new RuntimeException(raw)),
+        ResourceConnectorFailureCode.SshConnectionRefused, "SSH connection was refused"),
+      (new SshTransportFailure.AuthenticationFailed(new RuntimeException(raw)),
+        ResourceConnectorFailureCode.SshAuthenticationFailed, "SSH authentication failed"),
+      (new SshTransportFailure.HostKeyMismatch(new SshHostKeyMismatch(new RuntimeException(raw))),
+        ResourceConnectorFailureCode.SshHostKeyMismatch, "SSH host key has changed"),
+      (new SshTransportFailure.CommandTimeout(new RuntimeException(raw)),
+        ResourceConnectorFailureCode.SshCommandTimeout, "SSH command timed out"),
+      (new SshTransportFailure.ConnectionFailed(new RuntimeException(raw)),
+        ResourceConnectorFailureCode.SshConnectionFailed, "SSH connection failed")
+    )
+
+    cases.foreach { case (transport, code, message) =>
+      val client = new SshClient[IO] {
+        override def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
+                                   (use: SshSession[IO] => IO[A]): IO[A] = IO.raiseError(transport)
+      }
+      val error = intercept[ResourceConnectorFailure] {
+        new SshConnector[IO](client, new FixedAuthenticationProvider).discover(connection).unsafeRunSync()
+      }
+      assertEquals(error.code, code)
+      assertEquals(error.safeMessage, message)
+      assertEquals(error.getCause, transport)
+      assert(!error.safeMessage.contains(raw))
+    }
+
+    val unknown = new IllegalStateException(raw)
+    val client = new SshClient[IO] {
+      override def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
+                                 (use: SshSession[IO] => IO[A]): IO[A] = IO.raiseError(unknown)
+    }
+    assertEquals(intercept[IllegalStateException] {
+      new SshConnector[IO](client, new FixedAuthenticationProvider).discover(connection).unsafeRunSync()
+    }, unknown)
   }
 
   private val SuccessfulNodeDiscoveryResult =

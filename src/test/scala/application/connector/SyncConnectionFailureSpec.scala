@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package application.connector
 
 import application.discovery.SyncDiscoveredSnapshot
-import application.port.{IdGenerator, ResourceConnector, ResourceConnectorResult, SyncSessionRepository, TimeProvider, TransactionRunner}
+import application.port.{IdGenerator, ResourceConnector, ResourceConnectorFailure, ResourceConnectorFailureCode, ResourceConnectorResult, SyncSessionRepository, TimeProvider, TransactionRunner}
 import application.resource.RecordResourceObservations
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -22,15 +22,37 @@ final class SyncConnectionFailureSpec extends FunSuite {
     ConnectionConfig(Map.empty), None, true, at, at)
 
   test("discovery failure persists only safe metadata and preserves exact session ID") {
-    val f = new FailureFixture
+    val raw = new IllegalStateException("password=super-secret host=10.0.0.1")
+    val f = new FailureFixture(raw)
     val error = intercept[ConnectionSyncExecutionFailed] { f.sync.execute(connection).unsafeRunSync() }
     assertEquals(error.sessionId, sessionId)
+    assertEquals(error.getCause, raw)
     assertEquals(f.repository.current.map(_.status), Some(SyncSessionStatus.Failed))
     assertEquals(f.repository.current.flatMap(_.finishedAt), Some(at.plusSeconds(1)))
     assertEquals(f.repository.current.flatMap(_.errorCode), Some("SYNC_FAILED"))
     assertEquals(f.repository.current.flatMap(_.errorMessage), Some("Synchronization failed"))
-    assert(!f.repository.current.toString.contains("raw password in SSH exception"))
+    assert(!f.repository.current.toString.contains("super-secret"))
+    assert(!f.repository.current.toString.contains("10.0.0.1"))
     assertEquals(f.discoverCalls, 1)
+  }
+
+  test("typed connector failure persists safe code and message while preserving original cause") {
+    val raw = new IllegalStateException("password=super-secret host=10.0.0.1")
+    val failure = ResourceConnectorFailure(ResourceConnectorFailureCode.SshConnectTimeout,
+      "SSH connection timed out", raw)
+    val f = new FailureFixture(failure)
+
+    val error = intercept[ConnectionSyncExecutionFailed] { f.sync.execute(connection).unsafeRunSync() }
+
+    assertEquals(error.sessionId, sessionId)
+    assertEquals(error.getCause, failure)
+    assertEquals(failure.getCause, raw)
+    assertEquals(f.repository.current.map(_.status), Some(SyncSessionStatus.Failed))
+    assertEquals(f.repository.current.flatMap(_.finishedAt), Some(at.plusSeconds(1)))
+    assertEquals(f.repository.current.flatMap(_.errorCode), Some(ResourceConnectorFailureCode.SshConnectTimeout))
+    assertEquals(f.repository.current.flatMap(_.errorMessage), Some("SSH connection timed out"))
+    assert(!f.repository.current.toString.contains("super-secret"))
+    assert(!f.repository.current.toString.contains("10.0.0.1"))
   }
 
   test("already RUNNING session rejects a second run before discovery") {
@@ -41,13 +63,13 @@ final class SyncConnectionFailureSpec extends FunSuite {
     assertEquals(f.repository.current.map(_.status), Some(SyncSessionStatus.Running))
   }
 
-  private final class FailureFixture {
+  private final class FailureFixture(failure: Throwable = new IllegalStateException("raw password in SSH exception")) {
     var discoverCalls = 0
     val connector = new ResourceConnector[IO] {
       override val connectorType = "FAILING"
       override def discover(value: Connection): IO[ResourceConnectorResult] = IO {
         discoverCalls += 1
-        throw new IllegalStateException("raw password in SSH exception")
+        throw failure
       }
     }
     val repository = new Sessions

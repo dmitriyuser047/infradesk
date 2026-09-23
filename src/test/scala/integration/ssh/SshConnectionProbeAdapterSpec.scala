@@ -36,6 +36,14 @@ final class SshConnectionProbeAdapterSpec extends FunSuite {
     intercept[SshProbeError.HostKeyMismatch.type] {
       new SshConnectionProbeAdapter(mismatch).probe(settings, "password").unsafeRunSync()
     }
+    val typedMismatch = new SshClient[IO] {
+      override def withSession[A](config: SshConnectionConfig, auth: SshAuthentication)
+                                 (use: SshSession[IO] => IO[A]): IO[A] =
+        IO.raiseError(new SshTransportFailure.HostKeyMismatch(new SshHostKeyMismatch))
+    }
+    intercept[SshProbeError.HostKeyMismatch.type] {
+      new SshConnectionProbeAdapter(typedMismatch).probe(settings, "password").unsafeRunSync()
+    }
     val failed = new SshClient[IO] {
       override def withSession[A](config: SshConnectionConfig, auth: SshAuthentication)
                                  (use: SshSession[IO] => IO[A]): IO[A] =

@@ -71,5 +71,6 @@ describe('connection presentation helpers', () => {
     expect(getSyncFailureMessage(null)).toBe('Synchronization failed')
     expect(getSyncFailureMessage('')).toBe('Synchronization failed')
     expect(getSyncFailureMessage('Synchronization failed')).toBe('Synchronization failed')
+    expect(getSyncFailureMessage('SSH connection timed out')).toBe('SSH connection timed out')
   })
 })

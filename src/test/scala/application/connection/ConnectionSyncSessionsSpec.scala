@@ -3,7 +3,7 @@ package application.connection
 
 import application.connector.{ConnectionSyncExecutionFailed, ConnectionSyncInactive, ConnectionSyncNotFound, RunConnectionSync, SyncAlreadyRunning}
 import application.monitor.MonitorRuleEvaluator
-import application.port.{ConnectionRepository, ConnectionSyncResult, ConnectionSyncRunner, ConnectionSynchronizer, SyncSessionRepository, TimeProvider, TransactionRunner}
+import application.port.{ConnectionRepository, ConnectionSyncResult, ConnectionSyncRunner, ConnectionSynchronizer, ResourceConnectorFailure, ResourceConnectorFailureCode, SyncSessionRepository, TimeProvider, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
@@ -186,6 +186,38 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
       assertEquals(result._1, status)
       assertEquals(result._2.hcursor.get[String]("code"), Right(code))
     }
+  }
+
+  test("manual and history HTTP expose only typed safe failure metadata") {
+    val f = new SyncFixture
+    val id = UUID.randomUUID()
+    val raw = new IllegalStateException("password=super-secret host=10.0.0.1")
+    val typed = ResourceConnectorFailure(ResourceConnectorFailureCode.SshConnectTimeout,
+      "SSH connection timed out", raw)
+    val run = new ConnectionSyncRunner[IO] {
+      override def execute(organizationId: UUID, requestedConnectionId: UUID): IO[ConnectionSyncResult] = IO {
+        f.sessions.values = List(session(id, org, connectionId, at, SyncSessionStatus.Failed).copy(
+          errorCode = Some(ResourceConnectorFailureCode.SshConnectTimeout),
+          errorMessage = Some("SSH connection timed out")))
+        throw ConnectionSyncExecutionFailed(id, typed)
+      }
+    }
+    val app = routes(f, run)
+    val path = s"/api/v1/organizations/$org/connections/$connectionId"
+
+    val manual = response(app, Method.POST, s"$path/sync")
+    assertEquals(manual._1, Status.Ok)
+    assertEquals(manual._2.hcursor.get[String]("status"), Right("FAILED"))
+    assertEquals(manual._2.hcursor.get[String]("errorCode"), Right(ResourceConnectorFailureCode.SshConnectTimeout))
+    assertEquals(manual._2.hcursor.get[String]("errorMessage"), Right("SSH connection timed out"))
+
+    val detail = response(app, Method.GET, s"$path/sync-sessions/$id")
+    assertEquals(detail._1, Status.Ok)
+    assertEquals(detail._2.hcursor.get[String]("errorCode"), Right(ResourceConnectorFailureCode.SshConnectTimeout))
+    assertEquals(detail._2.hcursor.get[String]("errorMessage"), Right("SSH connection timed out"))
+    assert(!manual._2.noSpaces.contains("super-secret"))
+    assert(!detail._2.noSpaces.contains("10.0.0.1"))
+    assert(!detail._2.noSpaces.contains("IllegalStateException"))
   }
 
   private def routes(f: SyncFixture, syncRunner: ConnectionSyncRunner[IO]): _root_.org.http4s.HttpApp[IO] =

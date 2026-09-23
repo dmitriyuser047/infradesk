@@ -116,9 +116,10 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
                        error: Throwable
                      ): F[List[Resource]] =
     timeProvider.now.flatMap { finishedAt =>
+      val failure = SyncFailure.from(error)
       transactionRunner
         .run(syncSessionRepository.fail(connection.organizationId, syncSessionId, finishedAt,
-          "SYNC_FAILED", "Synchronization failed"))
+          failure.code, failure.message))
         .attempt
         .flatMap {
           case Right(_) => ConnectionSyncExecutionFailed(syncSessionId, error).raiseError[F, List[Resource]]

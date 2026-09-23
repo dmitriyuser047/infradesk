@@ -5,6 +5,8 @@ import application.port.{
   ConnectionScheduleRepository,
   ConnectionSyncResult,
   ConnectionSynchronizer,
+  ResourceConnectorFailure,
+  ResourceConnectorFailureCode,
   TimeProvider,
   TransactionRunner
 }
@@ -97,6 +99,19 @@ final class SyncSchedulerSpec extends FunSuite {
     fixture.scheduler.tick(limit = 10).unsafeRunSync()
     assertEquals(fixture.repository.scheduledNext,
       List((due.organizationId, due.connectionId, now.plusSeconds(300), 2L)))
+  }
+
+  test("typed SSH failure still increments ordinary scheduled backoff") {
+    val now = Instant.parse("2026-09-21T10:00:00Z")
+    val due = schedule(nextRunAt = now, intervalSeconds = 300, consecutiveFailures = 1)
+    val failure = ResourceConnectorFailure(ResourceConnectorFailureCode.SshConnectTimeout,
+      "SSH connection timed out", new IllegalStateException("raw internal detail"))
+    val fixture = buildFixture(List(due), List(now, now), failures = Map(due.connectionId -> failure))
+
+    fixture.scheduler.tick(limit = 10).unsafeRunSync()
+
+    assertEquals(fixture.repository.scheduledNext,
+      List((due.organizationId, due.connectionId, now.plusSeconds(900), 2L)))
   }
 
   test("continues with later schedules when one sync fails") {

@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package integration.ssh
 
 import application.discovery.{DiscoveredExternalIdentity, DiscoveredResource}
-import application.port.{ResourceConnector, ResourceConnectorResult}
+import application.port.{ResourceConnector, ResourceConnectorFailure, ResourceConnectorFailureCode, ResourceConnectorResult}
 import domain.connection.Connection
 import domain.resource.ResourceData
 import domain.resource.container.{ContainerSpec, ContainerStatus}
@@ -83,6 +83,8 @@ final class SshConnector[F[_]: MonadThrow](
           completeExternalTypes = completeExternalTypes,
           connectionConfig = updatedConfig
         )
+      }.adaptError { case failure: SshTransportFailure =>
+        SshConnector.toConnectorFailure(failure)
       }
     } yield result
 
@@ -199,6 +201,24 @@ final class SshConnector[F[_]: MonadThrow](
 }
 
 object SshConnector {
+
+  private[ssh] def toConnectorFailure(failure: SshTransportFailure): ResourceConnectorFailure = {
+    val (code, message) = failure match {
+      case _: SshTransportFailure.ConnectTimeout =>
+        ResourceConnectorFailureCode.SshConnectTimeout -> "SSH connection timed out"
+      case _: SshTransportFailure.ConnectionRefused =>
+        ResourceConnectorFailureCode.SshConnectionRefused -> "SSH connection was refused"
+      case _: SshTransportFailure.AuthenticationFailed =>
+        ResourceConnectorFailureCode.SshAuthenticationFailed -> "SSH authentication failed"
+      case _: SshTransportFailure.HostKeyMismatch =>
+        ResourceConnectorFailureCode.SshHostKeyMismatch -> "SSH host key has changed"
+      case _: SshTransportFailure.CommandTimeout =>
+        ResourceConnectorFailureCode.SshCommandTimeout -> "SSH command timed out"
+      case _: SshTransportFailure.ConnectionFailed =>
+        ResourceConnectorFailureCode.SshConnectionFailed -> "SSH connection failed"
+    }
+    ResourceConnectorFailure(code, message, failure)
+  }
 
   val ConnectorType = "SSH"
 

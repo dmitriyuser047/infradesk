@@ -15,7 +15,8 @@ final class SshConnectionProbeAdapter(client: SshClient[IO]) extends SshConnecti
       .attempt.flatMap {
         case Right(result) if result.exitCode == 0 && result.stdout == "infradesk-ok\n" =>
           IO.pure(result.hostKeyFingerprint)
-        case Left(_: SshHostKeyMismatch) => IO.raiseError(SshProbeError.HostKeyMismatch)
+        case Left(_: SshTransportFailure.HostKeyMismatch) | Left(_: SshHostKeyMismatch) =>
+          IO.raiseError(SshProbeError.HostKeyMismatch)
         case _ => IO.raiseError(SshProbeError.ConnectionFailed)
       }
 }

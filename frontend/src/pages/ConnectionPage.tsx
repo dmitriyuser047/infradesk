@@ -9,6 +9,7 @@ import {
   formatConnectionDateTime,
   formatScheduleInterval,
   formatSyncDuration,
+  getSyncFailureMessage,
   getConnectionScopeLabel,
   getConnectorTypeLabel,
   shortConnectionIdentifier,
@@ -89,7 +90,7 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
         {sync.isError ? <p role="alert">{sync.error instanceof ApiError && sync.error.code === 'SYNC_ALREADY_RUNNING'
           ? 'Synchronization is already running.' : safeErrorMessage(sync.error)}</p> : null}
         {sync.isSuccess ? <p role="status">{sync.data.status === SyncStatus.failed
-          ? sync.data.errorMessage ?? 'Synchronization failed' : 'Synchronization completed'}</p> : null}
+          ? getSyncFailureMessage(sync.data.errorMessage) : 'Synchronization completed'}</p> : null}
         <ConnectionOverview connection={connection} />
         <ConnectionSynchronization connection={connection} />
         <ConnectionSyncHistory organizationId={organizationId} connectionId={connectionId} />
@@ -165,6 +166,8 @@ function ConnectionSynchronization({ connection }: { connection: ConnectionRespo
           <DetailItem label="Started" value={formatConnectionDateTime(lastSync.startedAt)} />
           <DetailItem label="Finished" value={lastSync.finishedAt === null ? 'In progress' : formatConnectionDateTime(lastSync.finishedAt)} />
           <DetailItem label="Duration" value={formatSyncDuration(lastSync.startedAt, lastSync.finishedAt)} />
+          {lastSync.status === SyncStatus.failed
+            ? <DetailItem label="Error" value={getSyncFailureMessage(lastSync.errorMessage)} /> : null}
         </dl>
       )}
     </section>
