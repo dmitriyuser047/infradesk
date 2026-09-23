@@ -1,9 +1,10 @@
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 
 import { ApiError } from '../../api/httpClient'
 import { useEnvironments, useProjects } from '../../api/navigation'
-import { getEnvironmentKindLabel, selectProject, validSelection, type ContextSelection } from './navigationPresentation'
+import { EmptyWorkspaceState, WorkspaceSection } from '../layout/WorkspacePrimitives'
+import { getEnvironmentKindLabel, validSelection } from './navigationPresentation'
 
 interface ContextSelectorProps {
   organizationId: string
@@ -12,108 +13,66 @@ interface ContextSelectorProps {
 }
 
 export function ContextSelector({ organizationId, projectsQuery, isOwner }: ContextSelectorProps) {
-  const navigate = useNavigate()
-  const [selection, setSelection] = useState<ContextSelection>({ projectId: null, environmentId: null })
-
-  const projectId = projectsQuery.data === undefined
-    ? null
-    : validSelection(selection.projectId, projectsQuery.data)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const base = `/organizations/${encodeURIComponent(organizationId)}`
+  const projectId = projectsQuery.data ? validSelection(searchParams.get('project'), projectsQuery.data) : null
   const environmentsQuery = useEnvironments(organizationId, projectId)
-  const environmentId = environmentsQuery.isSuccess && environmentsQuery.data !== undefined
-    ? validSelection(selection.projectId === projectId ? selection.environmentId : null, environmentsQuery.data)
-    : null
+  const environmentId = environmentsQuery.data
+    ? validSelection(searchParams.get('environment'), environmentsQuery.data) : null
+  const selectedProject = projectsQuery.data?.find(project => project.id === projectId)
 
-  function handleProjectChange(nextProjectId: string) {
-    setSelection(selectProject(nextProjectId))
-  }
-
-  function openInfrastructure() {
-    if (projectId !== null && environmentId !== null) {
-      navigate(`/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(environmentId)}`)
+  useEffect(() => {
+    if (!projectId) return
+    const next = new URLSearchParams({ project: projectId })
+    if (environmentId) next.set('environment', environmentId)
+    if (searchParams.get('project') !== projectId || searchParams.get('environment') !== (environmentId ?? null)) {
+      setSearchParams(next, { replace: true })
     }
+  }, [projectId, environmentId, searchParams, setSearchParams])
+
+  function selectProject(next: string) { setSearchParams({ project: next }) }
+  function selectEnvironment(next: string) {
+    if (projectId) setSearchParams({ project: projectId, environment: next })
   }
 
-  return (
-    <section className="content-panel context-panel" aria-labelledby="context-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Select where to work</p>
-          <h2 id="context-heading">Workspace context</h2>
-        </div>
-      </div>
-      {projectsQuery.isPending ? (
-        <div className="context-skeleton" aria-label="Loading projects"><span /><span /></div>
-      ) : null}
-      {projectsQuery.isError ? (
-        <div className="context-area-error" role="alert">
-          <p>{projectsQuery.error instanceof ApiError && projectsQuery.error.code === 'ORGANIZATION_NOT_FOUND'
-            ? 'Organization not found'
-            : 'Unable to load projects'}</p>
-          <button className="retry-button" type="button" onClick={() => projectsQuery.refetch()}>Retry</button>
-        </div>
-      ) : null}
-      {projectsQuery.isSuccess && projectsQuery.data.length === 0 ? (
-        <div className="context-empty">
-          <h3>No projects configured</h3>
-          <p>Projects will appear here once they are configured.</p>
-          {isOwner ? <Link to={`/organizations/${encodeURIComponent(organizationId)}/projects/new`}>Create project</Link> : null}
-        </div>
-      ) : null}
-      {projectsQuery.isSuccess && projectId !== null ? (
-        <>
-          <div className="context-fields">
-            <label className="context-field">
-              <span>Project</span>
-              <select value={projectId} onChange={(event) => handleProjectChange(event.target.value)}>
-                {projectsQuery.data.map((project) => (
-                  <option key={project.id} value={project.id}>{project.name}</option>
-                ))}
-              </select>
-              <small>{projectsQuery.data.find((project) => project.id === projectId)?.code}</small>
-            </label>
-            <div className="context-field">
-              <label htmlFor="context-environment">Environment</label>
-              {environmentsQuery.isError ? (
-                <div className="context-area-error" role="alert">
-                  <p>{environmentsQuery.error instanceof ApiError && environmentsQuery.error.code === 'PROJECT_NOT_FOUND'
-                    ? 'Project is no longer available'
-                    : 'Unable to load environments'}</p>
-                  <button className="retry-button" type="button" onClick={() => environmentsQuery.refetch()}>Retry</button>
-                </div>
-              ) : (
-                <>
-                  <select
-                    id="context-environment"
-                    value={environmentId ?? ''}
-                    disabled={!environmentsQuery.isSuccess || environmentsQuery.data?.length === 0}
-                    onChange={(event) => setSelection({ projectId, environmentId: event.target.value })}
-                  >
-                    {!environmentsQuery.isSuccess ? <option value="">Loading environments…</option> : null}
-                    {environmentsQuery.isSuccess && environmentsQuery.data.length === 0 ? <option value="">No environments</option> : null}
-                    {environmentsQuery.data?.map((environment) => (
-                      <option key={environment.id} value={environment.id}>
-                        {environment.name} · {environment.kind}
-                      </option>
-                    ))}
-                  </select>
-                  {environmentsQuery.isSuccess && environmentId !== null ? (
-                    <small>{getEnvironmentKindLabel(environmentsQuery.data.find((environment) => environment.id === environmentId)?.kind ?? '')}</small>
-                  ) : null}
-                </>
-              )}
-            </div>
-          </div>
-          {environmentsQuery.isSuccess && environmentsQuery.data.length === 0 ? (
-            <p className="context-empty-inline">No environments configured for this project</p>
-          ) : null}
-          <div className="context-actions">
-            <button className="primary-button" type="button" disabled={environmentId === null} onClick={openInfrastructure}>
-              Open infrastructure
-            </button>
-            {isOwner ? <Link to={`/organizations/${encodeURIComponent(organizationId)}/projects/${encodeURIComponent(projectId)}/environments/new`}>Add environment</Link> : null}
-          </div>
-        </>
-      ) : null}
-    </section>
-  )
+  return <div className="workspace-split workspace-context" aria-label="Projects and environments">
+    <WorkspaceSection title="Projects" actions={isOwner ? <Link className="secondary-button" to={`${base}/projects/new`}>+ New project</Link> : null}>
+      {projectsQuery.isPending ? <div className="row-skeleton" aria-label="Loading projects"><span /><span /><span /></div> : null}
+      {projectsQuery.isError ? <div className="inline-error" role="alert">
+        {projectsQuery.error instanceof ApiError && projectsQuery.error.code === 'ORGANIZATION_NOT_FOUND'
+          ? 'Organization not found' : 'Unable to load projects'}
+        <button type="button" className="text-button" onClick={() => projectsQuery.refetch()}>Retry</button>
+      </div> : null}
+      {projectsQuery.isSuccess && projectsQuery.data.length === 0 ?
+        <EmptyWorkspaceState title="No projects configured" action={isOwner ? <Link to={`${base}/projects/new`}>Create project</Link> : undefined} /> : null}
+      {projectsQuery.isSuccess && projectsQuery.data.length > 0 ? <div className="master-list" aria-label="Projects">
+        {projectsQuery.data.map(project => <button type="button" aria-pressed={project.id === projectId}
+          className={`master-row ${project.id === projectId ? 'selected' : ''}`} key={project.id}
+          onClick={() => selectProject(project.id)}>
+          <span><strong>{project.name}</strong><small>{project.code}</small></span><span aria-hidden>›</span>
+        </button>)}
+      </div> : null}
+    </WorkspaceSection>
+    <WorkspaceSection title={selectedProject ? `Environments · ${selectedProject.name}` : 'Environments'}
+      actions={projectId && isOwner ? <Link className="secondary-button" to={`${base}/projects/${encodeURIComponent(projectId)}/environments/new`}>+ New environment</Link> : null}>
+      {!projectId ? <EmptyWorkspaceState title="Select a project" detail="Its environments will appear here." /> : null}
+      {environmentsQuery.isPending && projectId ? <div className="row-skeleton" aria-label="Loading environments"><span /><span /></div> : null}
+      {environmentsQuery.isError ? <div className="inline-error" role="alert">Unable to load environments
+        <button type="button" className="text-button" onClick={() => environmentsQuery.refetch()}>Retry</button></div> : null}
+      {environmentsQuery.isSuccess && environmentsQuery.data.length === 0 ?
+        <EmptyWorkspaceState title="No environments configured for this project"
+          action={isOwner ? <Link to={`${base}/projects/${encodeURIComponent(projectId ?? '')}/environments/new`}>Add environment</Link> : undefined} /> : null}
+      {environmentsQuery.isSuccess && environmentsQuery.data.length > 0 ? <div className="master-list" aria-label="Environments">
+        {environmentsQuery.data.map(environment => <button type="button" aria-pressed={environment.id === environmentId}
+          className={`master-row ${environment.id === environmentId ? 'selected' : ''}`}
+          key={environment.id} onClick={() => selectEnvironment(environment.id)}>
+          <span><strong>{environment.name}</strong><small>{getEnvironmentKindLabel(environment.kind)} · {environment.code}</small></span>
+          <span aria-hidden>›</span>
+        </button>)}
+      </div> : null}
+      {environmentId && projectId ? <div className="workspace-section-footer"><Link className="primary-button"
+        to={`${base}/environments/${encodeURIComponent(environmentId)}?project=${encodeURIComponent(projectId)}`}>
+        Open infrastructure</Link></div> : null}
+    </WorkspaceSection>
+  </div>
 }

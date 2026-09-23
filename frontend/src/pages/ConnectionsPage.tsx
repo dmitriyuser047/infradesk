@@ -1,10 +1,13 @@
-import { Link, useParams } from 'react-router-dom'
+import { useState } from 'react'
+import { Link, useLocation, useParams } from 'react-router-dom'
 
 import { useConnections } from '../api/connections'
 import { useMyOrganizations } from '../api/auth'
 import { ApiError } from '../api/httpClient'
 import { ConnectionList } from '../components/connections/ConnectionList'
+import { filterConnections } from '../components/connections/connectionFilters'
 import { AppShell } from '../components/layout/AppShell'
+import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
 export function ConnectionsPage() {
@@ -19,27 +22,27 @@ export function ConnectionsPage() {
 
 function ConnectionsContent({ organizationId }: { organizationId: string }) {
   const connectionsQuery = useConnections(organizationId)
+  const location = useLocation()
   const membership = useMyOrganizations()
   const isOwner = membership.data?.find(value => value.id === organizationId)?.role === 'OWNER'
+  const [search, setSearch] = useState('')
+  const [type, setType] = useState('ALL')
+  const [status, setStatus] = useState('ALL')
+  const filtered = filterConnections(connectionsQuery.data ?? [], search, type, status)
 
   return (
     <AppShell>
-      <div className="connections-page">
-        <header className="page-header connections-page-header">
-          <div>
-            <p className="eyebrow">Operations</p>
-            <h1>Connections</h1>
-            <p className="page-subtitle">Infrastructure integrations and synchronization status</p>
-          </div>
-          {isOwner ? <Link className="retry-button" to={`/organizations/${organizationId}/connections/new`}>Add SSH connection</Link> : null}
-        </header>
-        <section className="content-panel connections-panel" aria-labelledby="connections-list-heading">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Integrations</p>
-              <h2 id="connections-list-heading">Configured connections</h2>
-            </div>
-            {connectionsQuery.data !== undefined ? <span className="resource-count">{connectionsQuery.data.length} connections</span> : null}
+      <div className="workspace-page">
+        <WorkspaceHeader title="Connections" subtitle="Infrastructure integrations and synchronization"
+          actions={isOwner ? <Link className="primary-button" to={`/organizations/${organizationId}/connections/new${location.search}`}>+ New connection</Link> : null} />
+        <WorkspaceSection title="Configured connections" actions={connectionsQuery.data ? <span className="resource-count">{filtered.length} of {connectionsQuery.data.length}</span> : null}>
+          <div className="filter-bar">
+            <label>Search<input type="search" value={search} placeholder="Name or code" onChange={event => setSearch(event.target.value)} /></label>
+            <label>Type<select value={type} onChange={event => setType(event.target.value)}><option value="ALL">All</option>
+              <option value="SSH">SSH</option><option value="DOCKER">Docker</option></select></label>
+            <label>Status<select value={status} onChange={event => setStatus(event.target.value)}><option value="ALL">All</option>
+              <option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>
+            <button className="secondary-button" type="button" onClick={() => connectionsQuery.refetch()}>Refresh</button>
           </div>
           {connectionsQuery.isPending ? <ConnectionsListSkeleton /> : null}
           {connectionsQuery.isError ? (
@@ -50,15 +53,14 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
             </div>
           ) : null}
           {!connectionsQuery.isPending && !connectionsQuery.isError && connectionsQuery.data?.length === 0 ? (
-            <div className="connection-state">
-              <h3>No connections configured</h3>
-              <p>Infrastructure connections will appear here once they are configured.</p>
-            </div>
+            <EmptyWorkspaceState title="No connections configured" detail="Add a connection to synchronize infrastructure."
+              action={isOwner ? <Link to={`/organizations/${organizationId}/connections/new${location.search}`}>New connection</Link> : undefined} />
           ) : null}
           {!connectionsQuery.isPending && !connectionsQuery.isError && connectionsQuery.data !== undefined && connectionsQuery.data.length > 0 ? (
-            <ConnectionList organizationId={organizationId} connections={connectionsQuery.data} />
+            filtered.length ? <ConnectionList organizationId={organizationId} connections={filtered} /> :
+              <EmptyWorkspaceState title="No connections match these filters" />
           ) : null}
-        </section>
+        </WorkspaceSection>
       </div>
     </AppShell>
   )

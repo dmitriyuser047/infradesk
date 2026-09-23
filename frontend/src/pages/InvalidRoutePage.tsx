@@ -1,12 +1,14 @@
 import { AppShell } from '../components/layout/AppShell'
+import { Link } from 'react-router-dom'
+import { EmptyWorkspaceState, WorkspaceHeader } from '../components/layout/WorkspacePrimitives'
 
 export function InvalidRoutePage() {
   return (
     <AppShell>
-      <section className="content-panel state-message">
-        <h1>Environment context is missing</h1>
-        <p>Open this page with an organization and environment identifier in the URL.</p>
-      </section>
+      <div className="workspace-page"><WorkspaceHeader title="Page unavailable" />
+        <EmptyWorkspaceState title="This route or workspace context is unavailable"
+          action={<Link to="/organizations">Choose an organization</Link>} />
+      </div>
     </AppShell>
   )
 }

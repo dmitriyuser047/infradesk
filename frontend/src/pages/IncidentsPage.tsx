@@ -3,6 +3,7 @@ import { useSearchParams, useParams } from 'react-router-dom'
 import { ApiError } from '../api/httpClient'
 import { useIncidents } from '../api/incidents'
 import { AppShell } from '../components/layout/AppShell'
+import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { IncidentList } from '../components/incidents/IncidentList'
 import { IncidentStatus, type KnownIncidentStatus } from '../types/incident'
 import { InvalidRoutePage } from './InvalidRoutePage'
@@ -24,31 +25,19 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
   const incidentsQuery = useIncidents(organizationId, queryStatus)
 
   const selectFilter = (next: 'OPEN' | 'RESOLVED' | 'ALL') => {
-    setSearchParams({ status: next })
+    setSearchParams(previous => { const updated = new URLSearchParams(previous); updated.set('status', next); return updated })
   }
 
   return (
     <AppShell>
-      <div className="incidents-page">
-        <header className="page-header incidents-page-header">
-          <div>
-            <p className="eyebrow">Operations</p>
-            <h1>Incidents</h1>
-            <p className="page-subtitle">Persisted infrastructure events for this organization</p>
-          </div>
-        </header>
-        <div className="incident-filters" aria-label="Incident status filter">
-          <FilterButton active={filter === 'OPEN'} onClick={() => selectFilter('OPEN')}>Open</FilterButton>
-          <FilterButton active={filter === 'RESOLVED'} onClick={() => selectFilter('RESOLVED')}>Resolved</FilterButton>
-          <FilterButton active={filter === 'ALL'} onClick={() => selectFilter('ALL')}>All</FilterButton>
-        </div>
-        <section className="content-panel incidents-panel" aria-labelledby="incident-list-heading">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">{filter === 'OPEN' ? 'Needs attention' : 'History'}</p>
-              <h2 id="incident-list-heading">{filterLabel(filter)} incidents</h2>
-            </div>
-            {incidentsQuery.data !== undefined ? <span className="resource-count">{incidentsQuery.data.length} incidents</span> : null}
+      <div className="workspace-page">
+        <WorkspaceHeader title="Incidents" subtitle="Infrastructure events for this organization" />
+        <WorkspaceSection title={`${filterLabel(filter)} incidents`} actions={incidentsQuery.data ? <span className="resource-count">{incidentsQuery.data.length} incidents</span> : null}>
+          <div className="filter-bar" aria-label="Incident status filter">
+            <label>Status<select value={filter} onChange={event => selectFilter(event.target.value as 'OPEN' | 'RESOLVED' | 'ALL')}>
+              <option value="OPEN">Open</option><option value="RESOLVED">Resolved</option><option value="ALL">All</option>
+            </select></label>
+            <button className="secondary-button" type="button" onClick={() => incidentsQuery.refetch()}>Refresh</button>
           </div>
           {incidentsQuery.isPending ? <IncidentListSkeleton /> : null}
           {incidentsQuery.isError ? (
@@ -59,22 +48,15 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
             </div>
           ) : null}
           {!incidentsQuery.isPending && !incidentsQuery.isError && incidentsQuery.data?.length === 0 ? (
-            <div className="incident-state">
-              <h3>{emptyTitle(filter)}</h3>
-              <p>{emptyDescription(filter)}</p>
-            </div>
+            <EmptyWorkspaceState title={emptyTitle(filter)} detail={emptyDescription(filter)} />
           ) : null}
           {!incidentsQuery.isPending && !incidentsQuery.isError && incidentsQuery.data !== undefined && incidentsQuery.data.length > 0 ? (
             <IncidentList organizationId={organizationId} incidents={incidentsQuery.data} />
           ) : null}
-        </section>
+        </WorkspaceSection>
       </div>
     </AppShell>
   )
-}
-
-function FilterButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
-  return <button className={`incident-filter ${active ? 'incident-filter-active' : ''}`} type="button" aria-pressed={active} onClick={onClick}>{children}</button>
 }
 
 function parseFilter(value: string | null): 'OPEN' | 'RESOLVED' | 'ALL' {

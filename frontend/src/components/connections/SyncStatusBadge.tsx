@@ -1,5 +1,6 @@
 import { SyncStatus } from '../../types/connection'
 import { getSyncStatusLabel } from './connectionPresentation'
+import { StatusIndicator } from '../layout/WorkspacePrimitives'
 
 export function SyncStatusBadge({ status }: { status: string }) {
   const variant = status === SyncStatus.completed
@@ -10,5 +11,6 @@ export function SyncStatusBadge({ status }: { status: string }) {
         ? 'running'
         : 'unknown'
 
-  return <span className={`sync-status sync-status-${variant}`}>{getSyncStatusLabel(status)}</span>
+  return <StatusIndicator label={getSyncStatusLabel(status)}
+    tone={variant === 'completed' ? 'success' : variant === 'failed' ? 'danger' : variant === 'running' ? 'info' : 'neutral'} />
 }

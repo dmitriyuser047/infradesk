@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { Box, ChevronDown, ChevronRight, Server } from 'lucide-react'
 
 import type { ResourceTreeNode } from './resourceTreeModel'
+import { StatusIndicator } from '../layout/WorkspacePrimitives'
 
 interface ResourceTreeItemProps {
   node: ResourceTreeNode
@@ -18,6 +19,7 @@ export function ResourceTreeItem({
   environmentId,
 }: ResourceTreeItemProps) {
   const [expanded, setExpanded] = useState(true)
+  const location = useLocation()
   const hasChildren = node.children.length > 0
   const isNode = node.resource.resourceTypeCode === 'NODE'
   const Icon = isNode ? Server : Box
@@ -40,14 +42,18 @@ export function ResourceTreeItem({
         )}
         <Link
           className="resource-link"
-          to={`/organizations/${organizationId}/environments/${environmentId}/resources/${node.resource.id}`}
+          to={`/organizations/${organizationId}/environments/${environmentId}/resources/${node.resource.id}${location.search}`}
         >
           <Icon className="resource-icon" aria-hidden size={16} />
           <span className="resource-name">{node.resource.name}</span>
           <span className="resource-code">{node.resource.code}</span>
-          <span className={`resource-badge resource-badge-${isNode ? 'node' : 'container'}`}>
-            {node.resource.resourceTypeCode}
-          </span>
+          <span className="resource-type-cell">{node.resource.resourceTypeCode}</span>
+          <span className="resource-state-cell">{node.resource.data.kind === 'NODE' ?
+            <StatusIndicator label={node.resource.data.status?.online === true ? 'Online' :
+              node.resource.data.status?.online === false ? 'Offline' : 'Unknown'}
+              tone={node.resource.data.status?.online === true ? 'success' :
+                node.resource.data.status?.online === false ? 'danger' : 'neutral'} /> :
+            <StatusIndicator label={node.resource.data.status?.state ?? 'Unknown'} />}</span>
         </Link>
       </div>
       {hasChildren && expanded ? (

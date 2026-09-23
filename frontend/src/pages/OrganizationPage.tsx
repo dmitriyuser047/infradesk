@@ -4,6 +4,7 @@ import { ApiError } from '../api/httpClient'
 import { useMyOrganizations } from '../api/auth'
 import { useOrganization, useProjects } from '../api/navigation'
 import { AppShell } from '../components/layout/AppShell'
+import { WorkspaceHeader } from '../components/layout/WorkspacePrimitives'
 import { ContextSelector } from '../components/navigation/ContextSelector'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
@@ -25,14 +26,14 @@ function OrganizationContent({ organizationId }: { organizationId: string }) {
 
   return (
     <AppShell>
-      <div className="organization-page">
+      <div className="workspace-page">
         {organizationQuery.isPending ? (
           <div className="organization-skeleton" aria-label="Loading organization">
             <span /><span />
           </div>
         ) : null}
         {organizationQuery.isError ? (
-          <section className="content-panel organization-state" role="alert">
+          <section className="inline-error" role="alert">
             {organizationQuery.error instanceof ApiError && organizationQuery.error.code === 'ORGANIZATION_NOT_FOUND' ? (
               <h1>Organization not found</h1>
             ) : (
@@ -45,14 +46,8 @@ function OrganizationContent({ organizationId }: { organizationId: string }) {
         ) : null}
         {organizationQuery.isSuccess && organizationQuery.data !== undefined ? (
           <>
-            <header className="page-header organization-header">
-              <div>
-                <p className="eyebrow">{organizationQuery.data.code}</p>
-                <h1>{organizationQuery.data.name}</h1>
-                <p className="page-subtitle">Infrastructure workspace</p>
-              </div>
-              {isOwner ? <Link className="primary-button" to={`/organizations/${encodeURIComponent(organizationId)}/projects/new`}>Create project</Link> : null}
-            </header>
+            <WorkspaceHeader title={organizationQuery.data.name} subtitle={`Organization · ${organizationQuery.data.code}`}
+              actions={isOwner ? <Link className="primary-button" to={`/organizations/${encodeURIComponent(organizationId)}/projects/new`}>+ New project</Link> : null} />
             <ContextSelector organizationId={organizationId} projectsQuery={projectsQuery} isOwner={isOwner} />
           </>
         ) : null}

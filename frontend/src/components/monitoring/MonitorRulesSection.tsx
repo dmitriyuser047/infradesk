@@ -9,6 +9,7 @@ import {
 import type { MonitorRuleRequest, MonitorRuleResponse } from '../../types/monitorRule'
 import { MonitorRuleDialog } from './MonitorRuleDialog'
 import { MonitorRuleRow } from './MonitorRuleRow'
+import { EmptyWorkspaceState, WorkspaceSection } from '../layout/WorkspacePrimitives'
 
 interface MonitorRulesSectionProps {
   organizationId: string
@@ -58,14 +59,7 @@ export function MonitorRulesSection({ organizationId, resourceId }: MonitorRules
   const mutationError = createMutation.error ?? updateMutation.error
 
   return (
-    <section className="content-panel monitor-rules-section" aria-labelledby="monitor-rules-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Policy</p>
-          <h2 id="monitor-rules-heading">Monitor rules</h2>
-        </div>
-        <button className="primary-button" type="button" onClick={openCreate}>+ Add rule</button>
-      </div>
+    <WorkspaceSection title="Monitor rules" actions={<button className="primary-button" type="button" onClick={openCreate}>+ Add rule</button>}>
       {rulesQuery.isPending ? <RulesSkeleton /> : null}
       {rulesQuery.isError ? (
         <div className="monitor-rules-error" role="alert">
@@ -75,15 +69,13 @@ export function MonitorRulesSection({ organizationId, resourceId }: MonitorRules
         </div>
       ) : null}
       {!rulesQuery.isPending && !rulesQuery.isError && rulesQuery.data?.length === 0 ? (
-        <div className="monitor-rules-empty">
-          <strong>No monitor rules configured</strong>
-          <span>Add a rule to watch this resource's metrics.</span>
-        </div>
+        <EmptyWorkspaceState title="No monitor rules configured" detail="Add a rule to watch this resource's metrics." />
       ) : null}
       {!rulesQuery.isPending && !rulesQuery.isError && rulesQuery.data !== undefined && rulesQuery.data.length > 0 ? (
-        <div className="monitor-rules-list">
-          {rulesQuery.data.map((rule) => <MonitorRuleRow key={rule.id} rule={rule} onEdit={openEdit} />)}
-        </div>
+        <div className="table-scroll"><table className="data-grid">
+          <thead><tr><th>Metric</th><th>Condition</th><th>Threshold</th><th>Duration</th><th>State</th><th>Action</th></tr></thead>
+          <tbody>{rulesQuery.data.map(rule => <MonitorRuleRow key={rule.id} rule={rule} onEdit={openEdit} />)}</tbody>
+        </table></div>
       ) : null}
       {dialogOpen ? (
         <MonitorRuleDialog
@@ -94,7 +86,7 @@ export function MonitorRulesSection({ organizationId, resourceId }: MonitorRules
           onClose={closeDialog}
         />
       ) : null}
-    </section>
+    </WorkspaceSection>
   )
 }
 

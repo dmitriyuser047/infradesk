@@ -1,31 +1,27 @@
-import { Cable } from 'lucide-react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useState } from 'react'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
-import { useConnection, useConnectionSyncSessions, useDeactivateConnection, useRunConnectionSync } from '../api/connections'
 import { useMyOrganizations } from '../api/auth'
+import { useConnection, useConnectionSyncSessions, useDeactivateConnection, useRunConnectionSync } from '../api/connections'
 import { ApiError } from '../api/httpClient'
 import { ConnectionStatusBadge } from '../components/connections/ConnectionStatusBadge'
-import {
-  formatConnectionDateTime,
-  formatScheduleInterval,
-  formatSyncDuration,
-  getSyncFailureMessage,
-  getConnectionScopeLabel,
-  getConnectorTypeLabel,
-  shortConnectionIdentifier,
-} from '../components/connections/connectionPresentation'
+import { formatConnectionDateTime, formatScheduleInterval, formatSyncDuration, getConnectionScopeLabel,
+  getConnectorTypeLabel, getSyncFailureMessage, shortConnectionIdentifier } from '../components/connections/connectionPresentation'
 import { SyncStatusBadge } from '../components/connections/SyncStatusBadge'
 import { AppShell } from '../components/layout/AppShell'
+import { EmptyWorkspaceState, PropertyGrid, WorkspaceHeader, WorkspaceSection, WorkspaceTabs } from '../components/layout/WorkspacePrimitives'
+import { contextSearch } from '../components/layout/workspaceNavigation'
 import { ConnectionScopeType, SyncStatus, type ConnectionResponse } from '../types/connection'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
+type Tab = 'overview' | 'synchronization'
+const tabs: { id: Tab; label: string }[] = [
+  { id: 'overview', label: 'Overview' }, { id: 'synchronization', label: 'Synchronization' },
+]
+
 export function ConnectionPage() {
   const { organizationId, connectionId } = useParams()
-
-  if (organizationId === undefined || connectionId === undefined) {
-    return <InvalidRoutePage />
-  }
-
+  if (!organizationId || !connectionId) return <InvalidRoutePage />
   return <ConnectionContent organizationId={organizationId} connectionId={connectionId} />
 }
 
@@ -34,170 +30,107 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
   const membership = useMyOrganizations()
   const deactivate = useDeactivateConnection(organizationId, connectionId)
   const sync = useRunConnectionSync(organizationId, connectionId)
+  const [tab, setTab] = useState<Tab>('overview')
   const navigate = useNavigate()
-  const isOwner = membership.data?.find(value => value.id === organizationId)?.role === 'OWNER'
-  const connectionsPath = `/organizations/${organizationId}/connections`
+  const location = useLocation()
+  const context = contextSearch(new URLSearchParams(location.search))
+  const isOwner = membership.data?.some(value => value.id === organizationId && value.role === 'OWNER')
+  const connectionBase = `/organizations/${encodeURIComponent(organizationId)}/connections`
+  const back = `${connectionBase}${context}`
 
-  if (connectionQuery.isPending) {
-    return <AppShell><div className="detail-skeleton" aria-label="Loading connection"><span /><span /><span /></div></AppShell>
-  }
-
-  if (connectionQuery.isError || connectionQuery.data === undefined) {
+  if (connectionQuery.isPending) return <AppShell><div className="row-skeleton" aria-label="Loading connection"><span /><span /><span /></div></AppShell>
+  if (connectionQuery.isError || !connectionQuery.data) {
     const notFound = connectionQuery.error instanceof ApiError && connectionQuery.error.code === 'CONNECTION_NOT_FOUND'
-    return (
-      <AppShell>
-        <section className="content-panel connection-state" role="alert">
-          <h1>{notFound ? 'Connection not found' : 'Unable to load connection'}</h1>
-          <p>{notFound ? 'This connection is unavailable in the current organization.' : safeErrorMessage(connectionQuery.error)}</p>
-          <div className="state-actions">
-            <Link className="back-link" to={connectionsPath}>Back to connections</Link>
-            {!notFound ? <button className="retry-button" type="button" onClick={() => connectionQuery.refetch()}>Retry</button> : null}
-          </div>
-        </section>
-      </AppShell>
-    )
+    return <AppShell><div className="inline-error" role="alert">{notFound ? 'Connection not found' : 'Unable to load connection'}
+      {!notFound ? <button className="text-button" type="button" onClick={() => connectionQuery.refetch()}>Retry</button> : null}</div></AppShell>
   }
-
   const connection = connectionQuery.data
 
-  return (
-    <AppShell>
-      <div className="detail-page connection-detail-page">
-        <Link className="back-link" to={connectionsPath}>← Back to connections</Link>
-        <header className="resource-header connection-header">
-          <div className="resource-header-icon"><Cable aria-hidden size={23} /></div>
-          <div>
-            <p className="eyebrow">Connection</p>
-            <h1>{connection.name}</h1>
-            <p className="page-subtitle">{getConnectorTypeLabel(connection.connectorType)} · {connection.code}</p>
-          </div>
-          <div className="connection-header-status"><ConnectionStatusBadge active={connection.active} /></div>
-          {isOwner && connection.active && connection.connectorType === 'SSH' ? <div className="state-actions">
-            <Link className="retry-button" to={`/organizations/${organizationId}/connections/${connectionId}/edit`}>Edit</Link>
-            <button type="button" disabled={deactivate.isPending} onClick={() => {
+  return <AppShell><div className="workspace-page">
+    <WorkspaceHeader title={connection.name}
+      subtitle={`${getConnectorTypeLabel(connection.connectorType)} · ${getConnectionScopeLabel(connection.scope)} · ${connection.code}`}
+      back={{ label: 'Connections', to: back }} status={<ConnectionStatusBadge active={connection.active} />}
+      actions={<>
+        {isOwner && connection.active ? <button className="primary-button" type="button"
+          disabled={sync.isPending || connection.lastSync?.status === SyncStatus.running}
+          onClick={() => sync.mutate()}>{sync.isPending ? 'Synchronizing…' : 'Sync now'}</button> : null}
+        {isOwner && connection.active && connection.connectorType === 'SSH' ? <>
+          <Link className="secondary-button" to={`${connectionBase}/${encodeURIComponent(connectionId)}/edit${context}`}>Edit</Link>
+          <details className="toolbar-overflow"><summary aria-label="More connection actions" title="More actions">⋯</summary>
+            <button type="button" className="danger-action" disabled={deactivate.isPending} onClick={() => {
               if (window.confirm('Deactivate this connection? Scheduled sync will stop.')) {
-                deactivate.mutate(undefined, { onSuccess: () => navigate(connectionsPath) })
+                deactivate.mutate(undefined, { onSuccess: () => navigate(back) })
               }
             }}>Deactivate</button>
-          </div> : null}
-          {isOwner && connection.active ? <button type="button"
-            disabled={sync.isPending || connection.lastSync?.status === SyncStatus.running}
-            onClick={() => sync.mutate()}>
-            {sync.isPending ? 'Synchronizing…' : connection.lastSync?.status === SyncStatus.running ? 'Synchronization running' : 'Sync now'}
-          </button> : null}
-        </header>
-        {deactivate.isError ? <p role="alert">{safeErrorMessage(deactivate.error)}</p> : null}
-        {sync.isError ? <p role="alert">{sync.error instanceof ApiError && sync.error.code === 'SYNC_ALREADY_RUNNING'
-          ? 'Synchronization is already running.' : safeErrorMessage(sync.error)}</p> : null}
-        {sync.isSuccess ? <p role="status">{sync.data.status === SyncStatus.failed
-          ? getSyncFailureMessage(sync.data.errorMessage) : 'Synchronization completed'}</p> : null}
-        <ConnectionOverview connection={connection} />
-        <ConnectionSynchronization connection={connection} />
-        <ConnectionSyncHistory organizationId={organizationId} connectionId={connectionId} />
-        <ConnectionSchedule connection={connection} />
-        {connection.ssh ? <section className="content-panel connection-section"><h2>SSH</h2><dl className="summary-grid connection-summary-grid">
-          <DetailItem label="Host" value={connection.ssh.host} />
-          <DetailItem label="Port" value={String(connection.ssh.port)} />
-          <DetailItem label="Username" value={connection.ssh.username} />
-          <DetailItem label="Host key fingerprint" value={connection.ssh.hostKeyFingerprint ?? 'Not pinned'} />
-          <DetailItem label="Credentials" value={connection.ssh.credentialConfigured ? 'Configured' : 'Missing'} />
-        </dl></section> : null}
-      </div>
-    </AppShell>
-  )
-}
-
-function ConnectionSyncHistory({ organizationId, connectionId }: { organizationId: string; connectionId: string }) {
-  const history = useConnectionSyncSessions(organizationId, connectionId)
-  return <section className="content-panel connection-section" aria-labelledby="sync-history-heading">
-    <div className="panel-heading"><div><p className="eyebrow">Executions</p>
-      <h2 id="sync-history-heading">Synchronization history</h2></div></div>
-    {history.isPending ? <div className="connection-skeleton" aria-label="Loading synchronization history"><span /><span /></div> : null}
-    {history.isError ? <div className="connection-state" role="alert"><p>Unable to load synchronization history</p>
-      <button type="button" className="retry-button" onClick={() => history.refetch()}>Retry</button></div> : null}
-    {history.data?.length === 0 ? <p className="connection-section-empty">No synchronization runs yet</p> : null}
-    {history.data?.map(session => <Link className="sync-history-row" key={session.id}
-      to={`/organizations/${organizationId}/connections/${connectionId}/sync-sessions/${session.id}`}>
-      <SyncStatusBadge status={session.status} />
-      <span>{formatConnectionDateTime(session.startedAt)}</span>
-      <span>{formatSyncDuration(session.startedAt, session.finishedAt)}</span>
-    </Link>)}
-  </section>
+          </details>
+        </> : null}
+      </>} />
+    {deactivate.isError ? <p className="inline-error" role="alert">{safeErrorMessage(deactivate.error)}</p> : null}
+    {sync.isError ? <p className="inline-error" role="alert">{sync.error instanceof ApiError && sync.error.code === 'SYNC_ALREADY_RUNNING'
+      ? 'Synchronization is already running.' : safeErrorMessage(sync.error)}</p> : null}
+    {sync.isSuccess ? <p className="inline-feedback" role="status">{sync.data.status === SyncStatus.failed
+      ? getSyncFailureMessage(sync.data.errorMessage) : 'Synchronization completed'}</p> : null}
+    <WorkspaceTabs tabs={tabs} active={tab} onChange={setTab} />
+    <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+      {tab === 'overview' ? <ConnectionOverview connection={connection} /> :
+        <ConnectionSyncHistory organizationId={organizationId} connectionId={connectionId} context={context} />}
+    </div>
+  </div></AppShell>
 }
 
 function ConnectionOverview({ connection }: { connection: ConnectionResponse }) {
-  return (
-    <section className="content-panel connection-section" aria-labelledby="connection-overview-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Connection</p>
-          <h2 id="connection-overview-heading">Overview</h2>
-        </div>
-      </div>
-      <dl className="summary-grid connection-summary-grid">
-        <DetailItem label="Code" value={connection.code} />
-        <DetailItem label="Type" value={getConnectorTypeLabel(connection.connectorType)} />
-        <DetailItem label="Scope" value={getConnectionScopeLabel(connection.scope)} />
-        {connection.scope.type === ConnectionScopeType.project || connection.scope.type === ConnectionScopeType.environment ? (
-          <DetailItem label="Project ID" value={shortConnectionIdentifier(connection.scope.projectId)} />
-        ) : null}
-        {connection.scope.type === ConnectionScopeType.environment ? (
-          <DetailItem label="Environment ID" value={shortConnectionIdentifier(connection.scope.environmentId)} />
-        ) : null}
-      </dl>
-    </section>
-  )
+  const scopeItems = connection.scope.type === ConnectionScopeType.organization ? [] : [
+    { label: 'Project ID', value: shortConnectionIdentifier(connection.scope.projectId) },
+    ...(connection.scope.type === ConnectionScopeType.environment ?
+      [{ label: 'Environment ID', value: shortConnectionIdentifier(connection.scope.environmentId) }] : []),
+  ]
+  const latest = connection.lastSync
+  return <>
+    <div className="workspace-split detail-split">
+      <WorkspaceSection title="Connection"><PropertyGrid items={[
+        { label: 'Code', value: connection.code },
+        { label: 'Type', value: getConnectorTypeLabel(connection.connectorType) },
+        { label: 'Scope', value: getConnectionScopeLabel(connection.scope) },
+        ...scopeItems,
+        { label: 'Schedule', value: connection.schedule?.enabled ? formatScheduleInterval(connection.schedule.intervalSeconds) : 'Manual' },
+        ...(connection.schedule?.enabled ? [{ label: 'Next run', value: formatConnectionDateTime(connection.schedule.nextRunAt) }] : []),
+      ]} /></WorkspaceSection>
+      <WorkspaceSection title="Latest synchronization">{latest ? <PropertyGrid items={[
+        { label: 'Status', value: <SyncStatusBadge status={latest.status} /> },
+        { label: 'Started', value: formatConnectionDateTime(latest.startedAt) },
+        { label: 'Finished', value: latest.finishedAt ? formatConnectionDateTime(latest.finishedAt) : 'In progress' },
+        { label: 'Duration', value: formatSyncDuration(latest.startedAt, latest.finishedAt) },
+        ...(latest.status === SyncStatus.failed ? [{ label: 'Error', value: getSyncFailureMessage(latest.errorMessage) }] : []),
+      ]} /> : <EmptyWorkspaceState title="Never synchronized" />}</WorkspaceSection>
+    </div>
+    {connection.ssh ? <WorkspaceSection title="SSH settings"><PropertyGrid items={[
+      { label: 'Host', value: connection.ssh.host }, { label: 'Port', value: connection.ssh.port },
+      { label: 'Username', value: connection.ssh.username },
+      { label: 'Host key', value: connection.ssh.hostKeyFingerprint ?? 'Not pinned' },
+      { label: 'Credentials', value: connection.ssh.credentialConfigured ? 'Configured' : 'Missing' },
+    ]} /></WorkspaceSection> : null}
+  </>
 }
 
-function ConnectionSynchronization({ connection }: { connection: ConnectionResponse }) {
-  const lastSync = connection.lastSync
-
-  return (
-    <section className="content-panel connection-section" aria-labelledby="connection-sync-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Latest execution</p>
-          <h2 id="connection-sync-heading">Synchronization</h2>
-        </div>
-      </div>
-      {lastSync === null ? <p className="connection-section-empty">Never synchronized</p> : (
-        <dl className="summary-grid connection-summary-grid">
-          <div><dt>Status</dt><dd><SyncStatusBadge status={lastSync.status} /></dd></div>
-          <DetailItem label="Started" value={formatConnectionDateTime(lastSync.startedAt)} />
-          <DetailItem label="Finished" value={lastSync.finishedAt === null ? 'In progress' : formatConnectionDateTime(lastSync.finishedAt)} />
-          <DetailItem label="Duration" value={formatSyncDuration(lastSync.startedAt, lastSync.finishedAt)} />
-          {lastSync.status === SyncStatus.failed
-            ? <DetailItem label="Error" value={getSyncFailureMessage(lastSync.errorMessage)} /> : null}
-        </dl>
-      )}
-    </section>
-  )
-}
-
-function ConnectionSchedule({ connection }: { connection: ConnectionResponse }) {
-  const schedule = connection.schedule
-
-  return (
-    <section className="content-panel connection-section" aria-labelledby="connection-schedule-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Automation</p>
-          <h2 id="connection-schedule-heading">Schedule</h2>
-        </div>
-      </div>
-      {schedule === null ? <p className="connection-section-empty">Not configured</p> : schedule.enabled ? (
-        <dl className="summary-grid connection-summary-grid">
-          <DetailItem label="Status" value="Enabled" />
-          <DetailItem label="Interval" value={formatScheduleInterval(schedule.intervalSeconds)} />
-          <DetailItem label="Next run" value={formatConnectionDateTime(schedule.nextRunAt)} />
-        </dl>
-      ) : <p className="connection-section-empty">Disabled</p>}
-    </section>
-  )
-}
-
-function DetailItem({ label, value }: { label: string; value: string }) {
-  return <div><dt>{label}</dt><dd>{value}</dd></div>
+function ConnectionSyncHistory({ organizationId, connectionId, context }: { organizationId: string; connectionId: string; context: string }) {
+  const history = useConnectionSyncSessions(organizationId, connectionId)
+  return <WorkspaceSection title="Synchronization history" actions={history.data ? <span className="resource-count">{history.data.length} runs</span> : null}>
+    {history.isPending ? <div className="row-skeleton" aria-label="Loading synchronization history"><span /><span /></div> : null}
+    {history.isError ? <div className="inline-error" role="alert">Unable to load synchronization history
+      <button type="button" className="text-button" onClick={() => history.refetch()}>Retry</button></div> : null}
+    {history.data?.length === 0 ? <EmptyWorkspaceState title="No synchronization runs yet" /> : null}
+    {history.data && history.data.length > 0 ? <div className="table-scroll"><table className="data-grid">
+      <thead><tr><th>Status</th><th>Started</th><th>Finished</th><th>Duration</th><th>Error</th></tr></thead>
+      <tbody>{history.data.map(session => <tr key={session.id}>
+        <td><Link className="grid-link" to={`/organizations/${encodeURIComponent(organizationId)}/connections/${encodeURIComponent(connectionId)}/sync-sessions/${encodeURIComponent(session.id)}${context}`}>
+          <SyncStatusBadge status={session.status} /></Link></td>
+        <td>{formatConnectionDateTime(session.startedAt)}</td>
+        <td>{session.finishedAt ? formatConnectionDateTime(session.finishedAt) : '—'}</td>
+        <td>{formatSyncDuration(session.startedAt, session.finishedAt)}</td>
+        <td className="truncate-cell">{session.status === SyncStatus.failed ? getSyncFailureMessage(session.errorMessage) : '—'}</td>
+      </tr>)}</tbody>
+    </table></div> : null}
+  </WorkspaceSection>
 }
 
 function safeErrorMessage(error: Error | null): string {

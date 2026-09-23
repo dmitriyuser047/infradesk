@@ -5,6 +5,7 @@ import { useMyOrganizations } from '../api/auth'
 import { ApiError } from '../api/httpClient'
 import { useCreateEnvironment, useProjects } from '../api/navigation'
 import { AppShell } from '../components/layout/AppShell'
+import { WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { buildCreateEnvironmentRequest } from '../components/navigation/buildWorkspaceRequests'
 import { getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
 import { EnvironmentKind, type EnvironmentKindCode } from '../types/navigation'
@@ -40,22 +41,24 @@ function EnvironmentCreateForm({ organizationId, projectId }: { organizationId: 
     })
   }
 
-  return <AppShell><div className="detail-page">
-    <Link className="back-link" to={organizationPath}>← Back to organization</Link>
-    <header className="page-header"><div><p className="eyebrow">{project?.name ?? 'Workspace setup'}</p>
-      <h1>Create environment</h1></div></header>
+  return <AppShell><div className="workspace-page form-page">
+    <WorkspaceHeader title="Create environment" subtitle={project ? `Project · ${project.name}` : 'Workspace setup'}
+      back={{ label: 'Organization', to: organizationPath }} />
     {projects.isError ? <p role="alert">Unable to load project.</p> : null}
     {projects.isSuccess && !project ? <p role="alert">Project not found.</p> : null}
-    <form className="content-panel connection-form" onSubmit={submit}>
-      <label>Name <input required maxLength={255} value={name} onChange={event => setName(event.target.value)} /></label>
-      <label>Code <input required maxLength={64} value={code} onChange={event => setCode(event.target.value)} /></label>
-      <label>Kind <select value={kind} onChange={event => setKind(event.target.value as EnvironmentKindCode)}>
-        {Object.values(EnvironmentKind).map(value => <option key={value} value={value}>{getEnvironmentKindLabel(value)}</option>)}
-      </select></label>
-      {create.isError ? <p role="alert">{create.error instanceof ApiError ? create.error.message : 'Unable to create environment. Please try again.'}</p> : null}
-      <div className="state-actions"><button type="submit" disabled={create.isPending || !project}>
-        {create.isPending ? 'Creating…' : 'Create environment'}
-      </button></div>
+    <form className="workspace-form" onSubmit={submit}>
+      <WorkspaceSection title="Environment details"><div className="field-grid">
+        <label>Name <input required maxLength={255} value={name} onChange={event => setName(event.target.value)} /></label>
+        <label>Code <input required maxLength={64} value={code} onChange={event => setCode(event.target.value)} /></label>
+        <label>Kind <select value={kind} onChange={event => setKind(event.target.value as EnvironmentKindCode)}>
+          {Object.values(EnvironmentKind).map(value => <option key={value} value={value}>{getEnvironmentKindLabel(value)}</option>)}
+        </select></label>
+      </div></WorkspaceSection>
+      {create.isError ? <p className="inline-error" role="alert">{create.error instanceof ApiError ? create.error.message : 'Unable to create environment. Please try again.'}</p> : null}
+      <div className="form-toolbar"><Link className="secondary-button" to={organizationPath}>Cancel</Link>
+        <button className="primary-button" type="submit" disabled={create.isPending || !project}>
+          {create.isPending ? 'Creating…' : 'Create environment'}
+        </button></div>
     </form>
   </div></AppShell>
 }

@@ -1,9 +1,13 @@
-import { useParams } from 'react-router-dom'
+import { useState } from 'react'
+import { useParams, useSearchParams } from 'react-router-dom'
 
 import { ApiError } from '../api/httpClient'
 import { useEnvironmentResources } from '../api/resources'
+import { useEnvironments } from '../api/navigation'
 import { AppShell } from '../components/layout/AppShell'
+import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { ResourceTree } from '../components/resources/ResourceTree'
+import { filterResourcesForTree } from '../components/resources/filterResourcesForTree'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
 export function EnvironmentPage() {
@@ -23,37 +27,36 @@ interface EnvironmentContentProps {
 
 function EnvironmentContent({ organizationId, environmentId }: EnvironmentContentProps) {
   const resourcesQuery = useEnvironmentResources(organizationId, environmentId)
+  const [searchParams] = useSearchParams()
+  const projectId = searchParams.get('project')
+  const environments = useEnvironments(organizationId, projectId)
+  const environment = environments.data?.find(item => item.id === environmentId)
+  const [search, setSearch] = useState('')
+  const [type, setType] = useState('ALL')
+  const visibleResources = filterResourcesForTree(resourcesQuery.data ?? [], search, type)
 
   return (
     <AppShell>
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">InfraDesk</p>
-          <h1>Environment</h1>
-          <p className="page-subtitle">{shortId(environmentId)}</p>
-        </div>
-      </header>
-      <section className="content-panel" aria-labelledby="infrastructure-heading">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Inventory</p>
-            <h2 id="infrastructure-heading">Infrastructure</h2>
-          </div>
-          {resourcesQuery.data !== undefined ? (
-            <span className="resource-count">{resourcesQuery.data.length} resources</span>
-          ) : null}
+      <div className="workspace-page">
+      <WorkspaceHeader title="Infrastructure" subtitle={environment ? `${environment.name} · ${environment.kind}` : `Environment · ${shortId(environmentId)}`} />
+      <WorkspaceSection title="Resources" actions={resourcesQuery.data ? <span className="resource-count">{visibleResources.length} of {resourcesQuery.data.length}</span> : null}>
+        <div className="filter-bar">
+          <label>Search<input type="search" placeholder="Name or code" value={search} onChange={event => setSearch(event.target.value)} /></label>
+          <label>Type<select value={type} onChange={event => setType(event.target.value)}><option value="ALL">All</option>
+            <option value="NODE">Node</option><option value="CONTAINER">Container</option></select></label>
+          <button className="secondary-button" type="button" onClick={() => resourcesQuery.refetch()}>Refresh</button>
         </div>
         {resourcesQuery.isPending ? <ResourceTreeSkeleton /> : null}
         {resourcesQuery.isError ? <ResourceTreeError error={resourcesQuery.error} retry={resourcesQuery.refetch} /> : null}
         {resourcesQuery.data !== undefined && resourcesQuery.data.length === 0 ? <ResourceTreeEmpty /> : null}
         {resourcesQuery.data !== undefined && resourcesQuery.data.length > 0 ? (
-          <ResourceTree
-            resources={resourcesQuery.data}
+          visibleResources.length ? <div className="table-scroll"><div className="tree-grid-header"><span>Name</span><span>Type</span><span>Status</span></div><ResourceTree
+            resources={visibleResources}
             organizationId={organizationId}
             environmentId={environmentId}
-          />
+          /></div> : <EmptyWorkspaceState title="No resources match these filters" />
         ) : null}
-      </section>
+      </WorkspaceSection></div>
     </AppShell>
   )
 }
@@ -71,10 +74,7 @@ function ResourceTreeSkeleton() {
 
 function ResourceTreeEmpty() {
   return (
-    <div className="state-message">
-      <h3>No resources discovered yet</h3>
-      <p>Resources will appear here after an infrastructure connection is synchronized.</p>
-    </div>
+    <EmptyWorkspaceState title="No resources discovered yet" detail="Resources appear after a connection is synchronized." />
   )
 }
 

@@ -1,5 +1,6 @@
 import { IncidentStatus } from '../../types/incident'
 import { getIncidentStatusLabel } from './incidentPresentation'
+import { StatusIndicator } from '../layout/WorkspacePrimitives'
 
 export function IncidentStatusBadge({ status }: { status: string }) {
   const variant = status === IncidentStatus.open
@@ -8,5 +9,6 @@ export function IncidentStatusBadge({ status }: { status: string }) {
       ? 'resolved'
       : 'unknown'
 
-  return <span className={`incident-status incident-status-${variant}`}>{getIncidentStatusLabel(status)}</span>
+  return <StatusIndicator label={getIncidentStatusLabel(status)}
+    tone={variant === 'open' ? 'danger' : variant === 'resolved' ? 'success' : 'neutral'} />
 }

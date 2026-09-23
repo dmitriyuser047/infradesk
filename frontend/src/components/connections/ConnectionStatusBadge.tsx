@@ -1,7 +1,5 @@
+import { StatusIndicator } from '../layout/WorkspacePrimitives'
+
 export function ConnectionStatusBadge({ active }: { active: boolean }) {
-  return (
-    <span className={`connection-status connection-status-${active ? 'active' : 'inactive'}`}>
-      {active ? 'Active' : 'Inactive'}
-    </span>
-  )
+  return <StatusIndicator label={active ? 'Active' : 'Inactive'} tone={active ? 'success' : 'neutral'} />
 }
