@@ -15,7 +15,7 @@ import scala.util.Try
 final class IncidentRoutes[Tx[_]](get:GetIncident[Tx], list:ListIncidents[Tx], runner:TransactionRunner[IO,Tx]) {
  import HttpJsonCodecs._
  private def uuid(s:String,n:String)=Try(UUID.fromString(s)).toEither.leftMap(_=>ApiErrorResponse("INVALID_REQUEST",s"Invalid $n"))
- private def map(i:Incident)=IncidentResponse(i.id,i.monitorRuleId,i.resourceId,i.status.code,i.startedAt,i.openedAt,i.resolvedAt,i.createdAt,i.updatedAt)
+ private def map(i:Incident)=IncidentResponse(i.id,i.monitorRuleId,i.resourceId,i.status.code,i.reason.code,i.startedAt,i.openedAt,i.resolvedAt,i.createdAt,i.updatedAt)
  private val nf=ApiErrorResponse("INCIDENT_NOT_FOUND","Incident was not found")
  val routes=HttpRoutes.of[IO]{
   case req @ GET -> Root / "api" / "v1" / "organizations" / org / "incidents" => uuid(org,"organizationId") match { case Left(e)=>BadRequest(e); case Right(o)=>

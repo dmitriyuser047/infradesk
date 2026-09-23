@@ -5,6 +5,7 @@ import {
   formatIncidentDuration,
   getIncidentStatusLabel,
   shortIdentifier,
+  getIncidentReasonPresentation,
 } from './incidentPresentation'
 
 describe('incident presentation helpers', () => {
@@ -26,5 +27,11 @@ describe('incident presentation helpers', () => {
 
   it('returns a placeholder for an invalid timestamp', () => {
     expect(formatIncidentDateTime('not-a-timestamp')).toBe('—')
+  })
+
+  it('labels the incident reason with an existing tone', () => {
+    expect(getIncidentReasonPresentation('THRESHOLD')).toEqual({ label: 'Threshold violation', tone: 'danger' })
+    expect(getIncidentReasonPresentation('NO_DATA')).toEqual({ label: 'No data', tone: 'warning' })
+    expect(getIncidentReasonPresentation('FUTURE_REASON')).toEqual({ label: 'FUTURE_REASON', tone: 'neutral' })
   })
 })

@@ -1,19 +1,25 @@
 package ru.bitec.app.ops
 package infrastructure.http.mapper
-import domain.monitor.MonitorRule
+
+import application.monitor.MonitorRuleView
 import infrastructure.http.dto.MonitorRuleResponse
 
 object MonitorRuleHttpMapper {
-  def toResponse(rule: MonitorRule): MonitorRuleResponse =
+  def toResponse(view: MonitorRuleView): MonitorRuleResponse =
     MonitorRuleResponse(
-      rule.id,
-      rule.resourceId,
-      rule.metricCode.code,
-      rule.operator.code,
-      rule.threshold,
-      rule.forSeconds,
-      rule.enabled,
-      rule.createdAt,
-      rule.updatedAt
+      view.rule.id,
+      view.rule.resourceId,
+      view.rule.metricCode.code,
+      view.rule.operator.code,
+      view.rule.threshold,
+      view.rule.forSeconds,
+      view.rule.noDataSeconds,
+      view.rule.enabled,
+      view.status.map(_.code),
+      view.rule.createdAt,
+      view.rule.updatedAt
     )
+
+  def toResponse(rule: domain.monitor.MonitorRule): MonitorRuleResponse =
+    toResponse(MonitorRuleView(rule, None))
 }

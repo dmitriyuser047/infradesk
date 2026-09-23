@@ -4,9 +4,9 @@ import { ApiError } from '../api/httpClient'
 import { useIncident } from '../api/incidents'
 import { useResource } from '../api/resources'
 import { IncidentStatusBadge } from '../components/incidents/IncidentStatusBadge'
-import { formatIncidentDateTime, formatIncidentDuration, shortIdentifier } from '../components/incidents/incidentPresentation'
+import { formatIncidentDateTime, formatIncidentDuration, getIncidentReasonPresentation, shortIdentifier } from '../components/incidents/incidentPresentation'
 import { AppShell } from '../components/layout/AppShell'
-import { PropertyGrid, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
 export function IncidentPage() {
@@ -33,6 +33,8 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
     <div className="workspace-split detail-split">
       <WorkspaceSection title="Overview"><PropertyGrid items={[
         { label: 'Status', value: <IncidentStatusBadge status={incident.status} /> },
+        { label: 'Reason', value: <StatusIndicator label={getIncidentReasonPresentation(incident.reason).label}
+          tone={getIncidentReasonPresentation(incident.reason).tone} /> },
         { label: 'Violation started', value: formatIncidentDateTime(incident.startedAt) },
         { label: 'Opened', value: formatIncidentDateTime(incident.openedAt) },
         { label: 'Resolved', value: incident.resolvedAt ? formatIncidentDateTime(incident.resolvedAt) : '—' },

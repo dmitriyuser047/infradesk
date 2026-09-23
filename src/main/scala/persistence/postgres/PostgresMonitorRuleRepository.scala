@@ -23,6 +23,7 @@ final class PostgresMonitorRuleRepository extends MonitorRuleRepository[Connecti
                                            operator: String,
                                            threshold: BigDecimal,
                                            forSeconds: Long,
+                                           noDataSeconds: Long,
                                            enabled: Boolean,
                                            createdAt: Instant,
                                            updatedAt: Instant
@@ -39,6 +40,7 @@ final class PostgresMonitorRuleRepository extends MonitorRuleRepository[Connecti
         operator = typedOperator,
         threshold = threshold,
         forSeconds = forSeconds,
+        noDataSeconds = noDataSeconds,
         enabled = enabled,
         createdAt = createdAt,
         updatedAt = updatedAt
@@ -55,6 +57,7 @@ final class PostgresMonitorRuleRepository extends MonitorRuleRepository[Connecti
         operator,
         threshold,
         for_seconds,
+        no_data_seconds,
         enabled,
         created_at,
         updated_at
@@ -79,6 +82,7 @@ final class PostgresMonitorRuleRepository extends MonitorRuleRepository[Connecti
         operator,
         threshold,
         for_seconds,
+        no_data_seconds,
         enabled,
         created_at,
         updated_at
@@ -93,7 +97,7 @@ final class PostgresMonitorRuleRepository extends MonitorRuleRepository[Connecti
       .flatMap(_.traverse(row => row.toDomain.liftTo[ConnectionIO]))
 
   override def findByResource(organizationId: UUID, resourceId: UUID): ConnectionIO[List[MonitorRule]] =
-    sql"""select id, organization_id, resource_id, metric_code, operator, threshold, for_seconds, enabled, created_at, updated_at from monitor_rule where organization_id=$organizationId and resource_id=$resourceId order by created_at asc, id asc""".query[MonitorRuleRow].to[List].flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
+    sql"""select id, organization_id, resource_id, metric_code, operator, threshold, for_seconds, no_data_seconds, enabled, created_at, updated_at from monitor_rule where organization_id=$organizationId and resource_id=$resourceId order by created_at asc, id asc""".query[MonitorRuleRow].to[List].flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
 
   override def save(rule: MonitorRule): ConnectionIO[Unit] =
     sql"""
@@ -105,6 +109,7 @@ final class PostgresMonitorRuleRepository extends MonitorRuleRepository[Connecti
         operator,
         threshold,
         for_seconds,
+        no_data_seconds,
         enabled,
         created_at,
         updated_at
@@ -117,6 +122,7 @@ final class PostgresMonitorRuleRepository extends MonitorRuleRepository[Connecti
         ${rule.operator.code},
         ${rule.threshold},
         ${rule.forSeconds},
+        ${rule.noDataSeconds},
         ${rule.enabled},
         ${rule.createdAt},
         ${rule.updatedAt}
@@ -128,6 +134,7 @@ final class PostgresMonitorRuleRepository extends MonitorRuleRepository[Connecti
         operator = excluded.operator,
         threshold = excluded.threshold,
         for_seconds = excluded.for_seconds,
+        no_data_seconds = excluded.no_data_seconds,
         enabled = excluded.enabled,
         updated_at = excluded.updated_at
       where monitor_rule.organization_id = excluded.organization_id

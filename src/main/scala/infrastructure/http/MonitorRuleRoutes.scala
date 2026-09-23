@@ -1,12 +1,12 @@
 package ru.bitec.app.ops
 package infrastructure.http
 
-import application.monitor.{CreateMonitorRule, ListMonitorRules, UpdateMonitorRule}
+import application.monitor.{CreateMonitorRule, ListMonitorRules, MonitorRuleCommand, UpdateMonitorRule}
 import application.port.TransactionRunner
 import cats.effect.IO
 import cats.syntax.all._
 import domain.metric.MetricCode
-import domain.monitor.MonitorOperator
+import domain.monitor.{InvalidMonitorRule, MonitorOperator}
 import infrastructure.http.dto.{
   ApiErrorResponse,
   CreateMonitorRuleRequest,
@@ -56,25 +56,14 @@ final class MonitorRuleRoutes[Tx[_]](
           request.as[CreateMonitorRuleRequest].attempt.flatMap {
             case Left(_) => BadRequest(invalidRequest)
             case Right(body) =>
-              validate(body.metricCode, body.operator, body.forSeconds).fold(
+              command(body.metricCode, body.operator, body.threshold, body.forSeconds,
+                body.noDataSeconds, body.enabled).fold(
                 _ => BadRequest(invalidMonitorRule),
-                { case (metricCode, operator) =>
-                  transactionRunner.run(
-                    createMonitorRule.execute(
-                      organizationId,
-                      resourceId,
-                      metricCode,
-                      operator,
-                      body.threshold,
-                      body.forSeconds,
-                      body.enabled
-                    )
-                  ).attempt.flatMap {
-                    case Right(Some(rule)) => Created(MonitorRuleHttpMapper.toResponse(rule))
-                    case Right(None) => NotFound(resourceNotFound)
-                    case Left(_) => InternalServerError(internalError)
-                  }
-                }
+                value => respond(
+                  transactionRunner.run(createMonitorRule.execute(organizationId, resourceId, value)),
+                  rule => Created(MonitorRuleHttpMapper.toResponse(rule)),
+                  resourceNotFound
+                )
               )
           }
         case (Left(error), _) => BadRequest(error)
@@ -87,25 +76,14 @@ final class MonitorRuleRoutes[Tx[_]](
           request.as[UpdateMonitorRuleRequest].attempt.flatMap {
             case Left(_) => BadRequest(invalidRequest)
             case Right(body) =>
-              validate(body.metricCode, body.operator, body.forSeconds).fold(
+              command(body.metricCode, body.operator, body.threshold, body.forSeconds,
+                body.noDataSeconds, body.enabled).fold(
                 _ => BadRequest(invalidMonitorRule),
-                { case (metricCode, operator) =>
-                  transactionRunner.run(
-                    updateMonitorRule.execute(
-                      organizationId,
-                      monitorRuleId,
-                      metricCode,
-                      operator,
-                      body.threshold,
-                      body.forSeconds,
-                      body.enabled
-                    )
-                  ).attempt.flatMap {
-                    case Right(Some(rule)) => Ok(MonitorRuleHttpMapper.toResponse(rule))
-                    case Right(None) => NotFound(monitorRuleNotFound)
-                    case Left(_) => InternalServerError(internalError)
-                  }
-                }
+                value => respond(
+                  transactionRunner.run(updateMonitorRule.execute(organizationId, monitorRuleId, value)),
+                  rule => Ok(MonitorRuleHttpMapper.toResponse(rule)),
+                  monitorRuleNotFound
+                )
               )
           }
         case (Left(error), _) => BadRequest(error)
@@ -113,23 +91,34 @@ final class MonitorRuleRoutes[Tx[_]](
       }
   }
 
+  private def respond(
+    program: IO[Option[domain.monitor.MonitorRule]],
+    onFound: domain.monitor.MonitorRule => IO[org.http4s.Response[IO]],
+    onMissing: ApiErrorResponse
+  ): IO[org.http4s.Response[IO]] =
+    program.attempt.flatMap {
+      case Right(Some(rule)) => onFound(rule)
+      case Right(None) => NotFound(onMissing)
+      // Business validation lives in the application layer; it is still a client error here.
+      case Left(_: InvalidMonitorRule) => BadRequest(invalidMonitorRule)
+      case Left(_) => InternalServerError(internalError)
+    }
+
   private def parseUuid(value: String, fieldName: String): Either[ApiErrorResponse, UUID] =
     Try(UUID.fromString(value)).toEither.leftMap { _ =>
       ApiErrorResponse("INVALID_REQUEST", s"Invalid $fieldName")
     }
 
-  private def validate(
+  private def command(
     metricCode: String,
     operator: String,
-    forSeconds: Long
-  ): Either[IllegalArgumentException, (MetricCode, MonitorOperator)] =
+    threshold: BigDecimal,
+    forSeconds: Long,
+    noDataSeconds: Long,
+    enabled: Boolean
+  ): Either[IllegalArgumentException, MonitorRuleCommand] =
     for {
       parsedMetricCode <- MetricCode.fromCode(metricCode)
       parsedOperator <- MonitorOperator.fromCode(operator)
-      _ <- Either.cond(
-        forSeconds >= 0,
-        (),
-        new IllegalArgumentException("forSeconds must not be negative")
-      )
-    } yield parsedMetricCode -> parsedOperator
+    } yield MonitorRuleCommand(parsedMetricCode, parsedOperator, threshold, forSeconds, noDataSeconds, enabled)
 }

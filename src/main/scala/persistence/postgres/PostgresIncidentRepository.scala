@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package persistence.postgres
 
 import application.port.IncidentRepository
-import domain.incident.{Incident, IncidentStatus}
+import domain.incident.{Incident, IncidentReason, IncidentStatus}
 
 import cats.syntax.all._
 import org.typelevel.doobie.ConnectionIO
@@ -16,7 +16,7 @@ import java.util.UUID
 import PostgresIncidentRepository.IncidentRow
 
 final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] {
-  private val selectColumns = fr"select id, organization_id, monitor_rule_id, resource_id, status, started_at, opened_at, resolved_at, created_at, updated_at from incident"
+  private val selectColumns = fr"select id, organization_id, monitor_rule_id, resource_id, status, reason, started_at, opened_at, resolved_at, created_at, updated_at from incident"
   private def rows(query: Query0[IncidentRow]): ConnectionIO[List[Incident]] = query.to[List].flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
 
   override def findOpenByRule(
@@ -30,6 +30,7 @@ final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] 
         monitor_rule_id,
         resource_id,
         status,
+        reason,
         started_at,
         opened_at,
         resolved_at,
@@ -62,20 +63,21 @@ final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] 
 
   override def saveAll(incidents: List[Incident]): ConnectionIO[Unit] =
     if (incidents.isEmpty) ().pure[ConnectionIO]
-    else Update[(UUID, UUID, UUID, UUID, String, Instant, Instant, Option[Instant], Instant, Instant)]("""
+    else Update[(UUID, UUID, UUID, UUID, String, String, Instant, Instant, Option[Instant], Instant, Instant)]("""
       insert into incident (
         id,
         organization_id,
         monitor_rule_id,
         resource_id,
         status,
+        reason,
         started_at,
         opened_at,
         resolved_at,
         created_at,
         updated_at
       )
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       on conflict (id)
       do update set
         status = excluded.status,
@@ -84,8 +86,8 @@ final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] 
       where incident.organization_id = excluded.organization_id
     """).updateMany(incidents.map(incident =>
       (incident.id, incident.organizationId, incident.monitorRuleId, incident.resourceId,
-        incident.status.code, incident.startedAt, incident.openedAt, incident.resolvedAt,
-        incident.createdAt, incident.updatedAt)
+        incident.status.code, incident.reason.code, incident.startedAt, incident.openedAt,
+        incident.resolvedAt, incident.createdAt, incident.updatedAt)
     )).flatMap { rows =>
       if (rows == incidents.size) ().pure[ConnectionIO]
       else new IllegalStateException(
@@ -102,6 +104,7 @@ object PostgresIncidentRepository {
                                                    monitorRuleId: UUID,
                                                    resourceId: UUID,
                                                    status: String,
+                                                   reason: String,
                                                    startedAt: Instant,
                                                    openedAt: Instant,
                                                    resolvedAt: Option[Instant],
@@ -109,19 +112,21 @@ object PostgresIncidentRepository {
                                                    updatedAt: Instant
                                                  ) {
     def toDomain: Either[IllegalArgumentException, Incident] =
-      IncidentStatus.fromCode(status).map { typedStatus =>
-        Incident(
+      for {
+        typedStatus <- IncidentStatus.fromCode(status)
+        typedReason <- IncidentReason.fromCode(reason)
+      } yield Incident(
           id,
           organizationId,
           monitorRuleId,
           resourceId,
           typedStatus,
+          typedReason,
           startedAt,
           openedAt,
           resolvedAt,
           createdAt,
           updatedAt
         )
-      }
   }
 }

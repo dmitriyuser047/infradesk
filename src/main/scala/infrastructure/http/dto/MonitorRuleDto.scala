@@ -11,7 +11,9 @@ final case class MonitorRuleResponse(
   operator: String,
   threshold: BigDecimal,
   forSeconds: Long,
+  noDataSeconds: Long,
   enabled: Boolean,
+  status: Option[String],
   createdAt: Instant,
   updatedAt: Instant
 )
@@ -21,6 +23,7 @@ final case class CreateMonitorRuleRequest(
   operator: String,
   threshold: BigDecimal,
   forSeconds: Long,
+  noDataSeconds: Long,
   enabled: Boolean
 )
 
@@ -29,5 +32,6 @@ final case class UpdateMonitorRuleRequest(
   operator: String,
   threshold: BigDecimal,
   forSeconds: Long,
+  noDataSeconds: Long,
   enabled: Boolean
 )

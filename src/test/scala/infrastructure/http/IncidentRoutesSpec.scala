@@ -6,7 +6,7 @@ import application.port.{IncidentRepository, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
-import domain.incident.{Incident, IncidentStatus}
+import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import io.circe.Json
 import munit.FunSuite
 import org.http4s.{Method, Request, Status, Uri}
@@ -22,6 +22,11 @@ final class IncidentRoutesSpec extends FunSuite {
   test("validates list status and returns empty list") {
     val invalid=run(fixture(List.empty),s"/api/v1/organizations/$Org/incidents?status=BAD"); val empty=run(fixture(List.empty),s"/api/v1/organizations/$Org/incidents")
     assertEquals(invalid._1.status,Status.BadRequest); assertEquals(invalid._2.hcursor.get[String]("code"),Right("INVALID_REQUEST")); assertEquals(empty._2.asArray,Some(Vector.empty))
+  }
+  test("exposes the incident reason") {
+    val f=fixture(List(open,noData)); val all=run(f,s"/api/v1/organizations/$Org/incidents")
+    val reasons=all._2.asArray.getOrElse(Vector.empty).flatMap(_.hcursor.get[String]("reason").toOption)
+    assertEquals(reasons.toSet,Set("THRESHOLD","NO_DATA"))
   }
   test("returns detail and hides foreign incident") {
     val f=fixture(List(open)); val ok=run(f,s"/api/v1/organizations/$Org/incidents/${open.id}"); val foreign=run(f,s"/api/v1/organizations/$Other/incidents/${open.id}"); val absent=run(f,s"/api/v1/organizations/$Org/incidents/$OtherId")
@@ -42,5 +47,5 @@ final class IncidentRoutesSpec extends FunSuite {
     def saveAll(i:List[Incident])=IO.unit
   }
   private val Org=UUID.fromString("20000000-0000-0000-0000-000000000001");private val Other=UUID.fromString("20000000-0000-0000-0000-000000000002");private val OtherId=UUID.randomUUID();private val Now=Instant.parse("2026-09-22T10:00:00Z")
-  private val open=Incident(UUID.randomUUID(),Org,UUID.randomUUID(),UUID.randomUUID(),IncidentStatus.Open,Now,Now,None,Now,Now);private val resolved=open.copy(id=UUID.randomUUID(),status=IncidentStatus.Resolved,resolvedAt=Some(Now.plusSeconds(1)))
+  private val open=Incident(UUID.randomUUID(),Org,UUID.randomUUID(),UUID.randomUUID(),IncidentStatus.Open,IncidentReason.ThresholdViolation,Now,Now,None,Now,Now);private val resolved=open.copy(id=UUID.randomUUID(),status=IncidentStatus.Resolved,resolvedAt=Some(Now.plusSeconds(1)));private val noData=open.copy(id=UUID.randomUUID(),reason=IncidentReason.NoData)
 }

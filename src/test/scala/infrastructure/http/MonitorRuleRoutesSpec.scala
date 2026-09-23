@@ -2,12 +2,12 @@ package ru.bitec.app.ops
 package infrastructure.http
 
 import application.monitor.{CreateMonitorRule, ListMonitorRules, UpdateMonitorRule}
-import application.port.{IdGenerator, MonitorRuleRepository, ResourceRepository, TimeProvider, TransactionRunner}
+import application.port.{IdGenerator, MonitorRuleRepository, MonitorRuleStateRepository, ResourceRepository, TimeProvider, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.metric.MetricCode
-import domain.monitor.{MonitorOperator, MonitorRule}
+import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import domain.resource.Resource
 import io.circe.Json
 import munit.FunSuite
@@ -31,6 +31,30 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     assertEquals(fixture.resourceRepository.requests, List(OrganizationId -> ResourceId))
     assertEquals(fixture.monitorRuleRepository.findByResourceRequests, List(OrganizationId -> ResourceId))
     assertEquals(fixture.transactionRunner.calls, 1)
+  }
+
+  test("exposes the no-data timeout and the last evaluated status of each rule") {
+    val fixture = buildFixture(
+      List(enabledRule),
+      states = List(MonitorRuleState(OrganizationId, enabledRule.id, MonitorRuleStatus.NoData, None, Now))
+    )
+
+    val response = run(fixture, getRules(OrganizationId, ResourceId))
+    val rule = response._2.asArray.flatMap(_.headOption).getOrElse(Json.Null).hcursor
+
+    assertEquals(response._1.status, Status.Ok)
+    assertEquals(rule.get[Long]("noDataSeconds"), Right(600L))
+    assertEquals(rule.get[String]("operator"), Right("LESS_THAN"))
+    assertEquals(rule.get[Option[String]]("status"), Right(Some("NO_DATA")))
+  }
+
+  test("reports no status for a rule that was never evaluated") {
+    val fixture = buildFixture(List(enabledRule))
+
+    val response = run(fixture, getRules(OrganizationId, ResourceId))
+    val rule = response._2.asArray.flatMap(_.headOption).getOrElse(Json.Null).hcursor
+
+    assertEquals(rule.get[Option[String]]("status"), Right(None))
   }
 
   test("returns an empty list for an existing resource without monitor rules") {
@@ -71,20 +95,28 @@ final class MonitorRuleRoutesSpec extends FunSuite {
   }
 
   test("rejects unknown metric, unknown operator, negative duration, and malformed JSON") {
-    val unknownMetric = Json.obj(
-      "metricCode" -> Json.fromString("DISK_USAGE_PERCENT"),
+    val unknownMetric = validBody.deepMerge(Json.obj("metricCode" -> Json.fromString("DISK_USAGE_PERCENT")))
+    val unknownOperator = validBody.deepMerge(Json.obj("operator" -> Json.fromString("BETWEEN")))
+    val negativeDuration = validBody.deepMerge(Json.obj("forSeconds" -> Json.fromLong(-1)))
+    val negativeNoData = validBody.deepMerge(Json.obj("noDataSeconds" -> Json.fromLong(-1)))
+    val thresholdAbovePercent = validBody.deepMerge(Json.obj("threshold" -> Json.fromBigDecimal(BigDecimal("100.5"))))
+    val missingNoData = Json.obj(
+      "metricCode" -> Json.fromString("CPU_USAGE_PERCENT"),
       "operator" -> Json.fromString("GREATER_THAN"),
       "threshold" -> Json.fromBigDecimal(BigDecimal(90)),
       "forSeconds" -> Json.fromLong(0),
       "enabled" -> Json.fromBoolean(true)
     )
-    val unknownOperator = validBody.deepMerge(Json.obj("operator" -> Json.fromString("LESS_THAN")))
-    val negativeDuration = validBody.deepMerge(Json.obj("forSeconds" -> Json.fromLong(-1)))
 
     List(
       postRule(OrganizationId, ResourceId, unknownMetric),
       postRule(OrganizationId, ResourceId, unknownOperator),
       postRule(OrganizationId, ResourceId, negativeDuration),
+      postRule(OrganizationId, ResourceId, negativeNoData),
+      postRule(OrganizationId, ResourceId, thresholdAbovePercent),
+      postRule(OrganizationId, ResourceId, missingNoData),
+      putRule(OrganizationId, enabledRule.id, negativeNoData),
+      putRule(OrganizationId, enabledRule.id, thresholdAbovePercent),
       Request[IO](Method.POST, rulesUri(OrganizationId, ResourceId)).withEntity("{")
     ).foreach { request =>
       val response = run(buildFixture(List.empty), request)
@@ -107,9 +139,10 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     val fixture = buildFixture(List(enabledRule))
     val body = Json.obj(
       "metricCode" -> Json.fromString("MEMORY_USAGE_PERCENT"),
-      "operator" -> Json.fromString("GREATER_THAN"),
+      "operator" -> Json.fromString("GREATER_THAN_OR_EQUAL"),
       "threshold" -> Json.fromBigDecimal(BigDecimal(80)),
       "forSeconds" -> Json.fromLong(300),
+      "noDataSeconds" -> Json.fromLong(1200),
       "enabled" -> Json.fromBoolean(false)
     )
 
@@ -124,6 +157,8 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     assertEquals(saved.metricCode, MetricCode.MemoryUsagePercent)
     assertEquals(saved.threshold, BigDecimal(80))
     assertEquals(saved.forSeconds, 300L)
+    assertEquals(saved.noDataSeconds, 1200L)
+    assertEquals(saved.operator, MonitorOperator.GreaterThanOrEqual)
     assertEquals(saved.enabled, false)
     assertEquals(saved.updatedAt, Now)
     assertEquals(fixture.transactionRunner.calls, 1)
@@ -158,15 +193,17 @@ final class MonitorRuleRoutesSpec extends FunSuite {
 
   private def buildFixture(
     initialRules: List[MonitorRule],
-    failure: Option[Throwable] = None
+    failure: Option[Throwable] = None,
+    states: List[MonitorRuleState] = List.empty
   ): RouteFixture = {
     val resourceRepository = new InMemoryResourceRepository(Map(ResourceId -> resource))
     val monitorRuleRepository = new InMemoryMonitorRuleRepository(initialRules, failure)
+    val monitorRuleStateRepository = new InMemoryMonitorRuleStateRepository(states)
     val idGenerator = new FixedIdGenerator(GeneratedRuleId)
     val timeProvider = new FixedTimeProvider(Now)
     val transactionRunner = new RecordingTransactionRunner
     val routes = new MonitorRuleRoutes[IO](
-      ListMonitorRules(resourceRepository, monitorRuleRepository),
+      ListMonitorRules(resourceRepository, monitorRuleRepository, monitorRuleStateRepository),
       CreateMonitorRule(resourceRepository, monitorRuleRepository, idGenerator, timeProvider),
       UpdateMonitorRule(monitorRuleRepository, timeProvider),
       transactionRunner
@@ -237,6 +274,22 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     ): IO[Unit] = IO.unit
   }
 
+  private final class InMemoryMonitorRuleStateRepository(initial: List[MonitorRuleState])
+    extends MonitorRuleStateRepository[IO] {
+    var findByResourceRequests: List[(UUID, UUID)] = List.empty
+
+    override def findByRuleId(organizationId: UUID, monitorRuleId: UUID): IO[Option[MonitorRuleState]] =
+      IO.pure(initial.find(state => state.organizationId == organizationId && state.monitorRuleId == monitorRuleId))
+
+    override def findByResource(organizationId: UUID, resourceId: UUID): IO[List[MonitorRuleState]] =
+      IO { findByResourceRequests = findByResourceRequests :+ (organizationId -> resourceId) } *>
+        IO.pure(initial.filter(_.organizationId == organizationId))
+
+    override def save(state: MonitorRuleState): IO[Unit] = IO.unit
+
+    override def saveAll(states: List[MonitorRuleState]): IO[Unit] = IO.unit
+  }
+
   private final class InMemoryMonitorRuleRepository(
     initialRules: List[MonitorRule],
     failure: Option[Throwable]
@@ -298,6 +351,7 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     MonitorOperator.GreaterThan,
     BigDecimal(80),
     60,
+    900,
     enabled = false,
     Earlier,
     Earlier
@@ -308,9 +362,10 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     OrganizationId,
     ResourceId,
     MetricCode.CpuUsagePercent,
-    MonitorOperator.GreaterThan,
+    MonitorOperator.LessThan,
     BigDecimal(90),
     0,
+    600,
     enabled = true,
     Now,
     Now
@@ -321,6 +376,7 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     "operator" -> Json.fromString("GREATER_THAN"),
     "threshold" -> Json.fromBigDecimal(BigDecimal(90)),
     "forSeconds" -> Json.fromLong(0),
+    "noDataSeconds" -> Json.fromLong(900),
     "enabled" -> Json.fromBoolean(true)
   )
 }

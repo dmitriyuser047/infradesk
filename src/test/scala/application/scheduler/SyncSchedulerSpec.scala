@@ -57,11 +57,12 @@ final class SyncSchedulerSpec extends FunSuite {
     assertEquals(fixture.evaluator.calledOutsideTransaction, false)
   }
 
-  test("schedules next run after a failed sync") {
+  test("schedules next run after a failed sync and still evaluates monitoring") {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     val finishedAt = now.plusSeconds(5)
     val due = schedule(nextRunAt = now, intervalSeconds = 300)
-    val fixture = buildFixture(List(due), List(finishedAt), failingConnectionIds = Set(due.connectionId))
+    val fixture = buildFixture(List(due), List(now.plusSeconds(1), finishedAt),
+      failingConnectionIds = Set(due.connectionId))
 
     fixture.scheduler.tick(limit = 10).unsafeRunSync()
 
@@ -70,14 +71,17 @@ final class SyncSchedulerSpec extends FunSuite {
       fixture.repository.scheduledNext,
       List((due.organizationId, due.connectionId, finishedAt.plusSeconds(300), 1L))
     )
-    assertEquals(fixture.evaluator.calls, 0)
+    // A connection that cannot be reached is exactly when rules have to notice missing data.
+    assertEquals(fixture.evaluator.calls, 1)
+    assertEquals(fixture.evaluator.calledOutsideTransaction, false)
   }
 
   test("second failure waits 15 minutes and later failures wait 30 minutes") {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     for ((oldFailures, delay) <- List(1L -> 900L, 2L -> 1800L, 4L -> 1800L, 20L -> 1800L)) {
       val due = schedule(nextRunAt = now, intervalSeconds = 300, consecutiveFailures = oldFailures)
-      val fixture = buildFixture(List(due), List(now.plusSeconds(5)), failingConnectionIds = Set(due.connectionId))
+      val fixture = buildFixture(List(due), List(now.plusSeconds(1), now.plusSeconds(5)),
+        failingConnectionIds = Set(due.connectionId))
       fixture.scheduler.tick(limit = 10).unsafeRunSync()
       assertEquals(fixture.repository.scheduledNext,
         List((due.organizationId, due.connectionId, now.plusSeconds(5 + delay), oldFailures + 1)))
@@ -491,7 +495,7 @@ final class SyncSchedulerSpec extends FunSuite {
     var calls = 0
     var calledOutsideTransaction = false
 
-    override def execute(resources: List[Resource], evaluatedAt: Instant): IO[List[application.monitor.MonitorTransition]] =
+    override def execute(organizationId: UUID, connectionId: UUID, evaluatedAt: Instant): IO[List[application.monitor.MonitorTransition]] =
       IO {
         calls += 1
         calledOutsideTransaction ||= !transactionRunner.inTransaction

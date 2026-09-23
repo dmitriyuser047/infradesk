@@ -77,7 +77,8 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
       }
     }
     val evaluator = new MonitorRuleEvaluator[IO] {
-      override def execute(resources: List[Resource], evaluatedAt: Instant): IO[List[application.monitor.MonitorTransition]] = IO { evaluations += 1; List.empty }
+      override def execute(organizationId: UUID, evaluatedConnectionId: UUID, evaluatedAt: Instant): IO[List[application.monitor.MonitorTransition]] =
+        IO { evaluations += 1; List.empty }
     }
     val clock = new TimeProvider[IO] { override def now: IO[Instant] = IO.pure(at) }
     val shared = new RunConnectionSync[IO, IO](synchronizer, evaluator, f.transactionRunner, clock,
@@ -92,13 +93,14 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
     val log = new RecordingLogger
       val sessionId = UUID.randomUUID()
       val incidentId = UUID.randomUUID()
-      val transition = MonitorTransition.Opened(org, UUID.randomUUID(), UUID.randomUUID(), incidentId, at)
+      val transition = MonitorTransition.Opened(org, UUID.randomUUID(), UUID.randomUUID(), incidentId,
+        _root_.ru.bitec.app.ops.domain.incident.IncidentReason.ThresholdViolation, at)
       val synchronizer = new ConnectionSynchronizer[IO] {
         override def execute(organizationId: UUID, requestedConnectionId: UUID): IO[ConnectionSyncResult] =
           IO.pure(ConnectionSyncResult(sessionId, Nil))
       }
       val evaluator = new MonitorRuleEvaluator[IO] {
-        override def execute(resources: List[Resource], evaluatedAt: Instant): IO[List[MonitorTransition]] =
+        override def execute(organizationId: UUID, evaluatedConnectionId: UUID, evaluatedAt: Instant): IO[List[MonitorTransition]] =
           IO.pure(List(transition))
       }
       val clock = new TimeProvider[IO] { override def now: IO[Instant] = IO.pure(at) }
@@ -120,14 +122,74 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
       assertEquals(log.infoMessages.count(_.startsWith("incident.opened")), 1)
   }
 
+  test("evaluates monitoring after a failed synchronization without masking the failure") {
+    val log = new RecordingLogger
+    val sessionId = UUID.randomUUID()
+    val failure = ConnectionSyncExecutionFailed(sessionId, new IllegalStateException("ssh timeout"))
+    var evaluatedFor: List[(UUID, UUID, Instant)] = Nil
+    val synchronizer = new ConnectionSynchronizer[IO] {
+      override def execute(organizationId: UUID, requestedConnectionId: UUID): IO[ConnectionSyncResult] =
+        IO.raiseError(failure)
+    }
+    val evaluator = new MonitorRuleEvaluator[IO] {
+      override def execute(organizationId: UUID, evaluatedConnectionId: UUID, evaluatedAt: Instant): IO[List[MonitorTransition]] =
+        IO {
+          evaluatedFor = evaluatedFor :+ ((organizationId, evaluatedConnectionId, evaluatedAt))
+          List(MonitorTransition.Opened(organizationId, UUID.randomUUID(), UUID.randomUUID(),
+            UUID.randomUUID(), _root_.ru.bitec.app.ops.domain.incident.IncidentReason.NoData, evaluatedAt))
+        }
+    }
+    val clock = new TimeProvider[IO] { override def now: IO[Instant] = IO.pure(at) }
+    val runner = new TransactionRunner[IO, IO] { override def run[A](program: IO[A]): IO[A] = program }
+
+    val thrown = intercept[ConnectionSyncExecutionFailed](
+      new RunConnectionSync[IO, IO](synchronizer, evaluator, runner, clock, log)
+        .execute(org, connectionId).unsafeRunSync()
+    )
+
+    assertEquals(thrown, failure)
+    assertEquals(evaluatedFor, List((org, connectionId, at)))
+    assertEquals(log.infoMessages.count(message => message.startsWith("incident.opened") && message.contains("reason=NO_DATA")), 1)
+  }
+
+  test("a failing monitor evaluation keeps the original outcome of the synchronization") {
+    val log = new RecordingLogger
+    val sessionId = UUID.randomUUID()
+    val evaluator = new MonitorRuleEvaluator[IO] {
+      override def execute(organizationId: UUID, evaluatedConnectionId: UUID, evaluatedAt: Instant): IO[List[MonitorTransition]] =
+        IO.raiseError(new IllegalStateException("projection failed"))
+    }
+    val clock = new TimeProvider[IO] { override def now: IO[Instant] = IO.pure(at) }
+    val runner = new TransactionRunner[IO, IO] { override def run[A](program: IO[A]): IO[A] = program }
+    val succeeding = new ConnectionSynchronizer[IO] {
+      override def execute(organizationId: UUID, requestedConnectionId: UUID): IO[ConnectionSyncResult] =
+        IO.pure(ConnectionSyncResult(sessionId, Nil))
+    }
+    val failing = new ConnectionSynchronizer[IO] {
+      override def execute(organizationId: UUID, requestedConnectionId: UUID): IO[ConnectionSyncResult] =
+        IO.raiseError(ConnectionSyncExecutionFailed(sessionId, new IllegalStateException("ssh timeout")))
+    }
+
+    val result = new RunConnectionSync[IO, IO](succeeding, evaluator, runner, clock, log)
+      .execute(org, connectionId).unsafeRunSync()
+    assertEquals(result.sessionId, sessionId)
+
+    intercept[ConnectionSyncExecutionFailed](
+      new RunConnectionSync[IO, IO](failing, evaluator, runner, clock, log)
+        .execute(org, connectionId).unsafeRunSync()
+    )
+    assertEquals(log.errorMessages.count(_.startsWith("monitor.evaluation.failed")), 2)
+  }
+
   private final class RecordingLogger extends Logger[IO] {
     var infoMessages: List[String] = Nil
+    var errorMessages: List[String] = Nil
     override def info(message: => String): IO[Unit] = IO { infoMessages = infoMessages :+ message }
-    override def error(message: => String): IO[Unit] = IO.unit
+    override def error(message: => String): IO[Unit] = IO { errorMessages = errorMessages :+ message }
     override def warn(message: => String): IO[Unit] = IO.unit
     override def debug(message: => String): IO[Unit] = IO.unit
     override def trace(message: => String): IO[Unit] = IO.unit
-    override def error(t: Throwable)(message: => String): IO[Unit] = IO.unit
+    override def error(t: Throwable)(message: => String): IO[Unit] = error(message)
     override def warn(t: Throwable)(message: => String): IO[Unit] = IO.unit
     override def info(t: Throwable)(message: => String): IO[Unit] = info(message)
     override def debug(t: Throwable)(message: => String): IO[Unit] = IO.unit

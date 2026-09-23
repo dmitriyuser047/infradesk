@@ -151,7 +151,11 @@ object ApplicationModule {
         GetResourceMetricHistory[ConnectionIO](resourceRepository, metricObservationRepository),
       getIncident = GetIncident[ConnectionIO](incidentRepository),
       listIncidents = ListIncidents[ConnectionIO](incidentRepository),
-      listMonitorRules = ListMonitorRules[ConnectionIO](resourceRepository, monitorRuleRepository),
+      listMonitorRules = ListMonitorRules[ConnectionIO](
+        resourceRepository,
+        monitorRuleRepository,
+        monitorRuleStateRepository
+      ),
       createMonitorRule = CreateMonitorRule[ConnectionIO](
         resourceRepository,
         monitorRuleRepository,

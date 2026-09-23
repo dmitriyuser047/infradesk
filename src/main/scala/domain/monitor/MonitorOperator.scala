@@ -16,11 +16,31 @@ object MonitorOperator {
       value > threshold
   }
 
+  case object GreaterThanOrEqual extends MonitorOperator {
+    override val code: String = "GREATER_THAN_OR_EQUAL"
+
+    override def matches(value: BigDecimal, threshold: BigDecimal): Boolean =
+      value >= threshold
+  }
+
+  case object LessThan extends MonitorOperator {
+    override val code: String = "LESS_THAN"
+
+    override def matches(value: BigDecimal, threshold: BigDecimal): Boolean =
+      value < threshold
+  }
+
+  case object LessThanOrEqual extends MonitorOperator {
+    override val code: String = "LESS_THAN_OR_EQUAL"
+
+    override def matches(value: BigDecimal, threshold: BigDecimal): Boolean =
+      value <= threshold
+  }
+
+  val All: List[MonitorOperator] =
+    List(GreaterThan, GreaterThanOrEqual, LessThan, LessThanOrEqual)
+
   def fromCode(code: String): Either[IllegalArgumentException, MonitorOperator] =
-    code match {
-      case GreaterThan.code =>
-        Right(GreaterThan)
-      case unknown =>
-        Left(new IllegalArgumentException(s"Unsupported monitor operator '$unknown'"))
-    }
+    All.find(_.code == code)
+      .toRight(new IllegalArgumentException(s"Unsupported monitor operator '$code'"))
 }

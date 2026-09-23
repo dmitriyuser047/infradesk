@@ -1,4 +1,5 @@
-import { IncidentStatus } from '../../types/incident'
+import type { StatusTone } from '../layout/WorkspacePrimitives'
+import { IncidentReason, IncidentStatus } from '../../types/incident'
 
 export function getIncidentStatusLabel(status: string): string {
   switch (status) {
@@ -8,6 +9,17 @@ export function getIncidentStatusLabel(status: string): string {
       return 'Resolved'
     default:
       return status
+  }
+}
+
+export function getIncidentReasonPresentation(reason: string): { label: string; tone: StatusTone } {
+  switch (reason) {
+    case IncidentReason.threshold:
+      return { label: 'Threshold violation', tone: 'danger' }
+    case IncidentReason.noData:
+      return { label: 'No data', tone: 'warning' }
+    default:
+      return { label: reason, tone: 'neutral' }
   }
 }
 

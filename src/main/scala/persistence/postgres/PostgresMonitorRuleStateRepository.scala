@@ -57,6 +57,28 @@ final class PostgresMonitorRuleStateRepository extends MonitorRuleStateRepositor
           none[MonitorRuleState].pure[ConnectionIO]
       }
 
+  override def findByResource(
+                               organizationId: UUID,
+                               resourceId: UUID
+                             ): ConnectionIO[List[MonitorRuleState]] =
+    sql"""
+      select
+        state.organization_id,
+        state.monitor_rule_id,
+        state.status,
+        state.pending_since,
+        state.updated_at
+      from monitor_rule_state state
+      join monitor_rule rule
+        on rule.id = state.monitor_rule_id
+       and rule.organization_id = state.organization_id
+      where state.organization_id = $organizationId
+        and rule.resource_id = $resourceId
+    """
+      .query[MonitorRuleStateRow]
+      .to[List]
+      .flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
+
   override def save(state: MonitorRuleState): ConnectionIO[Unit] =
     saveAll(List(state))
 

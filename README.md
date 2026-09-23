@@ -61,6 +61,23 @@ component records exist only for assembly; business objects receive the individu
 need. Migration runs before any business runtime, and the scheduler runs inside the HTTP server
 resource scope, so shutdown releases the server and then the database pool.
 
+## Monitoring
+
+A monitor rule watches one metric of one resource: `metric + operator + threshold + for duration +
+no-data timeout`. Operators are `>`, `>=`, `<` and `<=`; thresholds of percentage metrics must be
+between 0 and 100. The no-data timeout is how old the latest observation may become before the rule
+reports that it cannot judge the resource; `0` turns that detection off.
+
+Rule states: `OK`, `PENDING` (the condition is violated but not yet for the configured duration),
+`FIRING` and `NO_DATA`. A rule has at most one open incident, and an incident records why it was
+opened: `THRESHOLD` or `NO_DATA`. When the reason changes, the open incident is resolved and a new
+one is opened in the same transaction.
+
+Rules are evaluated after every synchronization of the connection that discovered the resource,
+including a failed one, so a connection that stopped answering turns its rules into `NO_DATA`
+instead of leaving them on stale data. The evaluation is a secondary step: it never changes the
+outcome the synchronization itself reports.
+
 Frontend: `cd frontend`, then `npm ci`, `npm test`, `npm run build`, or `npm run dev`.
 
 Applied Flyway migrations are immutable. Add a new versioned migration instead of modifying an applied one. An existing non-empty database without Flyway history is not auto-baselined; assess it before switching startup to Flyway.

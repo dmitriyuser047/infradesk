@@ -10,7 +10,7 @@ export function IncidentList({
 }) {
   return (
     <div className="table-scroll"><table className="data-grid">
-      <thead><tr><th>Status</th><th>Resource</th><th>Opened</th><th>Resolved</th></tr></thead>
+      <thead><tr><th>Status</th><th>Resource</th><th>Reason</th><th>Opened</th><th>Resolved</th></tr></thead>
       <tbody>
       {incidents.map((incident) => (
         <IncidentRow key={incident.id} organizationId={organizationId} incident={incident} />

@@ -5,7 +5,7 @@ import application.monitor.MonitorEvaluationInput
 import application.port.MonitorEvaluationQuery
 import cats.data.NonEmptyList
 import cats.syntax.all._
-import domain.incident.{Incident, IncidentStatus}
+import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.metric.{MetricCode, MetricObservation}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import org.typelevel.doobie.{ConnectionIO, Fragments}
@@ -24,6 +24,7 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
     ruleOperator: String,
     ruleThreshold: BigDecimal,
     ruleForSeconds: Long,
+    ruleNoDataSeconds: Long,
     ruleEnabled: Boolean,
     ruleCreatedAt: Instant,
     ruleUpdatedAt: Instant,
@@ -43,6 +44,7 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
     incidentRuleId: Option[UUID],
     incidentResourceId: Option[UUID],
     incidentStatus: Option[String],
+    incidentReason: Option[String],
     incidentStartedAt: Option[Instant],
     incidentOpenedAt: Option[Instant],
     incidentResolvedAt: Option[Instant],
@@ -58,7 +60,7 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
         incident <- optionalIncident
       } yield MonitorEvaluationInput(
         MonitorRule(ruleId, ruleOrganizationId, ruleResourceId, metricCode, operator,
-          ruleThreshold, ruleForSeconds, ruleEnabled, ruleCreatedAt, ruleUpdatedAt),
+          ruleThreshold, ruleForSeconds, ruleNoDataSeconds, ruleEnabled, ruleCreatedAt, ruleUpdatedAt),
         observation,
         state,
         incident
@@ -97,11 +99,13 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
           resourceId <- required(incidentResourceId, "incident.resourceId")
           statusRaw <- required(incidentStatus, "incident.status")
           status <- IncidentStatus.fromCode(statusRaw)
+          reasonRaw <- required(incidentReason, "incident.reason")
+          reason <- IncidentReason.fromCode(reasonRaw)
           startedAt <- required(incidentStartedAt, "incident.startedAt")
           openedAt <- required(incidentOpenedAt, "incident.openedAt")
           createdAt <- required(incidentCreatedAt, "incident.createdAt")
           updatedAt <- required(incidentUpdatedAt, "incident.updatedAt")
-        } yield Some(Incident(id, organizationId, monitorRuleId, resourceId, status,
+        } yield Some(Incident(id, organizationId, monitorRuleId, resourceId, status, reason,
           startedAt, openedAt, incidentResolvedAt, createdAt, updatedAt))
       }
 
@@ -109,26 +113,29 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
       value.toRight(new IllegalArgumentException(s"Monitor evaluation row is missing $field"))
   }
 
-  override def findEnabledForResources(
+  override def findEnabledForConnection(
     organizationId: UUID,
-    resourceIds: List[UUID]
+    connectionId: UUID,
+    resourceTypeCodes: List[String]
   ): ConnectionIO[List[MonitorEvaluationInput]] =
-    NonEmptyList.fromList(resourceIds.distinct) match {
+    NonEmptyList.fromList(resourceTypeCodes.distinct) match {
       case None => List.empty[MonitorEvaluationInput].pure[ConnectionIO]
-      case Some(ids) =>
+      case Some(codes) =>
         val query =
           fr"""
             select
               mr.id, mr.organization_id, mr.resource_id, mr.metric_code, mr.operator,
-              mr.threshold, mr.for_seconds, mr.enabled, mr.created_at, mr.updated_at,
+              mr.threshold, mr.for_seconds, mr.no_data_seconds, mr.enabled, mr.created_at, mr.updated_at,
               mo.id, mo.organization_id, mo.resource_id, mo.metric_code, mo.value, mo.observed_at,
               mrs.organization_id, mrs.monitor_rule_id, mrs.status, mrs.pending_since, mrs.updated_at,
-              i.id, i.organization_id, i.monitor_rule_id, i.resource_id, i.status,
+              i.id, i.organization_id, i.monitor_rule_id, i.resource_id, i.status, i.reason,
               i.started_at, i.opened_at, i.resolved_at, i.created_at, i.updated_at
             from monitor_rule mr
             join resource r
               on r.id = mr.resource_id
              and r.organization_id = mr.organization_id
+            join resource_type rt
+              on rt.id = r.resource_type_id
             left join lateral (
               select observation.id, observation.organization_id, observation.resource_id,
                      observation.metric_code, observation.value, observation.observed_at
@@ -136,7 +143,6 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
               where observation.organization_id = mr.organization_id
                 and observation.resource_id = mr.resource_id
                 and observation.metric_code = mr.metric_code
-                and observation.observed_at >= r.updated_at
               order by observation.observed_at desc, observation.id desc
               limit 1
             ) mo on true
@@ -149,8 +155,16 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
              and i.status = 'OPEN'
             where mr.organization_id = $organizationId
               and mr.enabled = true
+              and r.is_active = true
+              and exists (
+                select 1
+                from external_ref er
+                where er.organization_id = mr.organization_id
+                  and er.resource_id = mr.resource_id
+                  and er.connection_id = $connectionId
+              )
               and
-          """ ++ Fragments.in(fr"mr.resource_id", ids) ++ fr"order by mr.id"
+          """ ++ Fragments.in(fr"rt.code", codes) ++ fr"order by mr.id"
 
         query.query[EvaluationRow].to[List]
           .flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))

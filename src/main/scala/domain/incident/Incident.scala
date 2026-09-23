@@ -10,6 +10,7 @@ final case class Incident(
                            monitorRuleId: UUID,
                            resourceId: UUID,
                            status: IncidentStatus,
+                           reason: IncidentReason,
                            startedAt: Instant,
                            openedAt: Instant,
                            resolvedAt: Option[Instant],

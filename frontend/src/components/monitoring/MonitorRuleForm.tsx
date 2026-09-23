@@ -28,6 +28,8 @@ interface FormState {
   threshold: string
   durationValue: string
   durationUnit: DurationUnit
+  noDataValue: string
+  noDataUnit: DurationUnit
   enabled: boolean
 }
 
@@ -37,6 +39,8 @@ const defaultState: FormState = {
   threshold: '80',
   durationValue: '5',
   durationUnit: 'minutes',
+  noDataValue: '15',
+  noDataUnit: 'minutes',
   enabled: true,
 }
 
@@ -65,13 +69,22 @@ export function MonitorRuleForm({
     }
     const threshold = Number(form.threshold)
     const durationValue = Number(form.durationValue)
+    const noDataValue = Number(form.noDataValue)
 
     if (form.threshold.trim() === '' || !Number.isFinite(threshold)) {
       setValidationError('Enter a finite threshold.')
       return
     }
+    if (threshold < 0 || threshold > 100) {
+      setValidationError('Threshold must be between 0 and 100 percent.')
+      return
+    }
     if (form.durationValue.trim() === '' || !Number.isFinite(durationValue) || durationValue < 0) {
       setValidationError('Duration must be zero or greater.')
+      return
+    }
+    if (form.noDataValue.trim() === '' || !Number.isFinite(noDataValue) || noDataValue < 0) {
+      setValidationError('No data timeout must be zero or greater.')
       return
     }
 
@@ -80,6 +93,7 @@ export function MonitorRuleForm({
       operator: form.operator,
       threshold,
       forSeconds: durationToSeconds(durationValue, form.durationUnit),
+      noDataSeconds: durationToSeconds(noDataValue, form.noDataUnit),
       enabled: form.enabled,
     })
   }
@@ -133,6 +147,20 @@ export function MonitorRuleForm({
           </select>
         </label>
       </div>
+      <div className="duration-fields">
+        <label>
+          No data for
+          <input type="number" min="0" step="1" value={form.noDataValue} onChange={(event) => update('noDataValue', event.target.value)} />
+        </label>
+        <label>
+          Unit
+          <select value={form.noDataUnit} onChange={(event) => update('noDataUnit', event.target.value as DurationUnit)}>
+            <option value="seconds">Seconds</option>
+            <option value="minutes">Minutes</option>
+            <option value="hours">Hours</option>
+          </select>
+        </label>
+      </div>
       <label className="checkbox-field">
         <input type="checkbox" checked={form.enabled} onChange={(event) => update('enabled', event.target.checked)} />
         Enabled
@@ -154,6 +182,7 @@ function stateFromRule(rule: MonitorRuleResponse): FormState | null {
   }
 
   const duration = secondsToDurationInput(rule.forSeconds)
+  const noData = secondsToDurationInput(rule.noDataSeconds)
 
   return {
     metricCode: rule.metricCode,
@@ -161,6 +190,8 @@ function stateFromRule(rule: MonitorRuleResponse): FormState | null {
     threshold: String(rule.threshold),
     durationValue: String(duration.value),
     durationUnit: duration.unit,
+    noDataValue: String(noData.value),
+    noDataUnit: noData.unit,
     enabled: rule.enabled,
   }
 }

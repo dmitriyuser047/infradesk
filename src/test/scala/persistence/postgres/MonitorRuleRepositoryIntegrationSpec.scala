@@ -5,11 +5,12 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.metric.{MetricCode, MetricObservation}
-import domain.incident.{Incident, IncidentStatus}
+import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
+import application.monitor.EvaluateMonitorRules
 import domain.resource.{Resource, ResourceData}
 import domain.resource.node.{NodeSpec, NodeStatus}
-import infrastructure.database.{Database, DatabaseConfig, DoobieTransactionRunner}
+import infrastructure.database.{ConnectionIOIdGenerator, Database, DatabaseConfig, DoobieTransactionRunner}
 import munit.FunSuite
 import org.typelevel.doobie.ConnectionIO
 import org.typelevel.doobie.implicits._
@@ -59,6 +60,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         operator = MonitorOperator.GreaterThan,
         threshold = BigDecimal(90),
         forSeconds = 300,
+        noDataSeconds = 900,
         enabled = true,
         createdAt = Now,
         updatedAt = Now
@@ -135,9 +137,10 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         OrganizationId,
         ids.resourceId,
         MetricCode.CpuUsagePercent,
-        MonitorOperator.GreaterThan,
+        MonitorOperator.LessThanOrEqual,
         BigDecimal(90),
         300,
+        900,
         enabled = true,
         Now,
         Now
@@ -148,6 +151,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         ids.ruleId,
         ids.resourceId,
         IncidentStatus.Open,
+        IncidentReason.NoData,
         Now,
         Now,
         None,
@@ -202,12 +206,12 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
         ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
       val rule = MonitorRule(ids.ruleId, OrganizationId, ids.resourceId, MetricCode.CpuUsagePercent,
-        MonitorOperator.GreaterThan, BigDecimal(90), 300, enabled = true, Now, Now)
+        MonitorOperator.GreaterThan, BigDecimal(90), 300, 900, enabled = true, Now, Now)
       val memoryRule = rule.copy(id = UUID.randomUUID(), metricCode = MetricCode.MemoryUsagePercent)
       val disabledRule = rule.copy(id = UUID.randomUUID(), enabled = false)
       val state = MonitorRuleState(OrganizationId, ids.ruleId, MonitorRuleStatus.Firing, Some(Now), Now)
       val incident = Incident(ids.incidentId, OrganizationId, ids.ruleId, ids.resourceId,
-        IncidentStatus.Open, Now, Now, None, Now, Now)
+        IncidentStatus.Open, IncidentReason.ThresholdViolation, Now, Now, None, Now, Now)
       val resolvedIncident = incident.copy(id = ids.secondIncidentId, status = IncidentStatus.Resolved,
         resolvedAt = Some(Now.plusSeconds(1)), updatedAt = Now.plusSeconds(1))
       val observations = List(
@@ -229,8 +233,15 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         _ <- runner.run(metrics.insertAll(observations))
         _ <- runner.run(states.saveAll(List(state)))
         _ <- runner.run(incidents.saveAll(List(incident, resolvedIncident)))
-        loaded <- runner.run(projection.findEnabledForResources(OrganizationId, List(ids.resourceId)))
-        foreign <- runner.run(projection.findEnabledForResources(UUID.randomUUID(), List(ids.resourceId)))
+        _ <- runner.run(linkResourceToConnection(ids))
+        loaded <- runner.run(projection.findEnabledForConnection(
+          OrganizationId, ConnectionId, List("NODE")))
+        foreign <- runner.run(projection.findEnabledForConnection(
+          UUID.randomUUID(), ConnectionId, List("NODE")))
+        otherConnection <- runner.run(projection.findEnabledForConnection(
+          OrganizationId, UUID.randomUUID(), List("NODE")))
+        otherType <- runner.run(projection.findEnabledForConnection(
+          OrganizationId, ConnectionId, List("CONTAINER")))
         persistedMetrics <- runner.run(metrics.findByResourceAndPeriod(
           OrganizationId, ids.resourceId, Now.minusSeconds(2), Now.plusSeconds(3)))
         indexNames <- runner.run(sql"""
@@ -241,20 +252,27 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
               'ix_monitor_rule_enabled_resource'
             )
         """.query[String].to[List])
-      } yield (loaded, foreign, persistedMetrics, indexNames)
+      } yield (loaded, foreign, otherConnection, otherType, persistedMetrics, indexNames)
 
       program.guarantee(runner.run(cleanup(ids)).attempt.void).flatMap {
-        case (loaded, foreign, persistedMetrics, indexNames) => IO {
+        case (loaded, foreign, otherConnection, otherType, persistedMetrics, indexNames) => IO {
         assertEquals(loaded.map(_.rule.id).toSet, Set(rule.id, memoryRule.id))
         val cpu = loaded.find(_.rule.id == rule.id).get
         val memory = loaded.find(_.rule.id == memoryRule.id).get
+        assertEquals(cpu.rule.noDataSeconds, 900L)
         assertEquals(cpu.observation.map(_.value), Some(BigDecimal(99)))
         assertEquals(cpu.state, Some(state))
         assertEquals(cpu.openIncident, Some(incident))
-        assertEquals(memory.observation, None)
+        assertEquals(cpu.openIncident.map(_.reason), Some(IncidentReason.ThresholdViolation))
+        // The latest observation is chosen per resource and metric, so the memory rule sees its
+        // own older sample instead of the CPU one.
+        assertEquals(memory.observation.map(_.value), Some(BigDecimal(77)))
+        assertEquals(memory.observation.map(_.metricCode), Some(MetricCode.MemoryUsagePercent))
         assertEquals(memory.state, None)
         assertEquals(memory.openIncident, None)
         assertEquals(foreign, List.empty)
+        assertEquals(otherConnection, List.empty)
+        assertEquals(otherType, List.empty)
         assertEquals(persistedMetrics.map(_.id).toSet, observations.map(_.id).toSet)
         assertEquals(indexNames.toSet, Set(
           "ix_metric_observation_resource_metric_observed_at",
@@ -264,8 +282,91 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     }.unsafeRunSync()
   }
 
+  test("evaluates a stale rule end to end and moves it from NO_DATA to FIRING when data returns") {
+    assume(
+      sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
+      "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests"
+    )
+
+    val ids = TestIds.random()
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+      val runner = new DoobieTransactionRunner(xa)
+      val resources = ProductionResourceCodec.resourceRepository
+      val rules = new PostgresMonitorRuleRepository
+      val states = new PostgresMonitorRuleStateRepository
+      val incidents = new PostgresIncidentRepository
+      val metrics = new PostgresMetricObservationRepository
+      val evaluator = new EvaluateMonitorRules[ConnectionIO](
+        new PostgresMonitorEvaluationQuery, states, incidents, new ConnectionIOIdGenerator
+      )
+      val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
+        ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
+      val rule = MonitorRule(ids.ruleId, OrganizationId, ids.resourceId, MetricCode.CpuUsagePercent,
+        MonitorOperator.GreaterThan, BigDecimal(90), 0, 600, enabled = true, Now.minusSeconds(7200), Now)
+      val stale = MetricObservation(UUID.randomUUID(), OrganizationId, ids.resourceId,
+        MetricCode.CpuUsagePercent, BigDecimal(10), Now.minusSeconds(3600))
+      val fresh = MetricObservation(UUID.randomUUID(), OrganizationId, ids.resourceId,
+        MetricCode.CpuUsagePercent, BigDecimal(95), Now)
+
+      val program = for {
+        _ <- runner.run(resources.save(resource))
+        _ <- runner.run(rules.save(rule))
+        _ <- runner.run(linkResourceToConnection(ids))
+        _ <- runner.run(metrics.insertAll(List(stale)))
+        storedRule <- runner.run(rules.findById(OrganizationId, ids.ruleId))
+        noDataTransitions <- runner.run(evaluator.execute(OrganizationId, ConnectionId, Now))
+        noDataState <- runner.run(states.findByRuleId(OrganizationId, ids.ruleId))
+        noDataIncident <- runner.run(incidents.findOpenByRule(OrganizationId, ids.ruleId))
+        _ <- runner.run(metrics.insertAll(List(fresh)))
+        firingTransitions <- runner.run(evaluator.execute(OrganizationId, ConnectionId, Now))
+        firingState <- runner.run(states.findByRuleId(OrganizationId, ids.ruleId))
+        firingIncident <- runner.run(incidents.findOpenByRule(OrganizationId, ids.ruleId))
+        allIncidents <- runner.run(incidents.findByOrganization(OrganizationId, None))
+        statesOfResource <- runner.run(states.findByResource(OrganizationId, ids.resourceId))
+      } yield (storedRule, noDataTransitions, noDataState, noDataIncident, firingTransitions,
+        firingState, firingIncident, allIncidents.filter(_.monitorRuleId == ids.ruleId), statesOfResource)
+
+      program.guarantee(runner.run(cleanup(ids)).attempt.void).flatMap {
+        case (storedRule, noDataTransitions, noDataState, noDataIncident, firingTransitions,
+              firingState, firingIncident, ruleIncidents, statesOfResource) => IO {
+          assertEquals(storedRule.map(_.noDataSeconds), Some(600L))
+          assertEquals(noDataState.map(_.status), Some(MonitorRuleStatus.NoData))
+          assertEquals(noDataState.flatMap(_.pendingSince), None)
+          assertEquals(noDataIncident.map(_.reason), Some(IncidentReason.NoData))
+          assertEquals(noDataTransitions.map(t => (t.eventName, t.reason)),
+            List(("incident.opened", IncidentReason.NoData)))
+
+          assertEquals(firingState.map(_.status), Some(MonitorRuleStatus.Firing))
+          assertEquals(firingIncident.map(_.reason), Some(IncidentReason.ThresholdViolation))
+          assertEquals(firingTransitions.map(t => (t.eventName, t.reason)), List(
+            ("incident.resolved", IncidentReason.NoData),
+            ("incident.opened", IncidentReason.ThresholdViolation)
+          ))
+
+          // The database allows only one OPEN incident per rule, so the no-data incident has to be
+          // resolved in the same transaction that opens the threshold incident.
+          assertEquals(ruleIncidents.count(_.status == IncidentStatus.Open), 1)
+          assertEquals(ruleIncidents.size, 2)
+          assertEquals(statesOfResource.map(_.monitorRuleId), List(ids.ruleId))
+        }
+      }
+    }.unsafeRunSync()
+  }
+
+  private def linkResourceToConnection(ids: TestIds): ConnectionIO[Unit] =
+    sql"""
+      insert into external_ref (id, organization_id, connection_id, external_type, external_id, resource_id)
+      values (${ids.externalRefId}, $OrganizationId, $ConnectionId, 'NODE', ${ids.resourceCode}, ${ids.resourceId})
+      on conflict do nothing
+    """.update.run.void
+
   private def cleanup(ids: TestIds): ConnectionIO[Unit] =
     for {
+      _ <- sql"""
+        delete from external_ref
+        where organization_id = $OrganizationId
+          and resource_id = ${ids.resourceId}
+      """.update.run
       _ <- sql"""
         delete from metric_observation
         where organization_id = $OrganizationId
@@ -298,6 +399,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
                                     ruleId: UUID,
                                     incidentId: UUID,
                                     secondIncidentId: UUID,
+                                    externalRefId: UUID,
                                     resourceCode: String
                                   )
 
@@ -310,6 +412,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         ruleId = UUID.randomUUID(),
         incidentId = UUID.randomUUID(),
         secondIncidentId = UUID.randomUUID(),
+        externalRefId = UUID.randomUUID(),
         resourceCode = s"monitor-rule-$suffix"
       )
     }
@@ -318,5 +421,6 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
   private val NodeResourceTypeId = UUID.fromString("10000000-0000-0000-0000-000000000001")
+  private val ConnectionId = UUID.fromString("60000000-0000-0000-0000-000000000003")
   private val Now = Instant.parse("2026-09-22T10:00:00Z")
 }

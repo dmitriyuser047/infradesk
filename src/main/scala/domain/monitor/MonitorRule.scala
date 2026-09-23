@@ -14,6 +14,7 @@ final case class MonitorRule(
                               operator: MonitorOperator,
                               threshold: BigDecimal,
                               forSeconds: Long,
+                              noDataSeconds: Long,
                               enabled: Boolean,
                               createdAt: Instant,
                               updatedAt: Instant
