@@ -8,11 +8,35 @@ import infrastructure.database.DoobieTransactionRunner
 import munit.FunSuite
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
+import org.typelevel.doobie.free.connection
 
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import scala.concurrent.duration._
 
 final class ConnectionScheduleClaimIntegrationSpec extends FunSuite {
+  test("claimDue skips rows locked by a concurrent transaction") {
+    assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"), "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true")
+    val org = UUID.randomUUID(); val ids = List.fill(4)(UUID.randomUUID()); val ownerA = UUID.randomUUID(); val ownerB = UUID.randomUUID(); val due = Instant.parse("2026-09-23T10:00:00Z")
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+      val runner = new DoobieTransactionRunner(xa); val schedules = new PostgresConnectionScheduleRepository
+      val setup = for {
+        _ <- sql"insert into organization (id, code, name) values ($org, ${org.toString}, 'skip locked')".update.run
+        _ <- ids.traverse_(id => sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($id, $org, 'ORGANIZATION', 'SSH', ${id.toString}, 'Claim')".update.run *> sql"insert into connection_schedule (organization_id, connection_id, enabled, interval_seconds, next_run_at, consecutive_failures) values ($org, $id, true, 60, $due, 0)".update.run)
+      } yield ()
+      val started = new CountDownLatch(1); val release = new CountDownLatch(1)
+      val heldClaim = schedules.claimDue(ownerA, 2, 900).flatTap(_ => connection.delay(started.countDown())) *> connection.delay(release.await())
+      runner.run(setup) *> (for {
+        fiber <- heldClaim.transact(xa).start
+        _ <- IO.blocking(started.await())
+        rowsB <- runner.run(schedules.claimDue(ownerB, 2, 900)).timeout(3.seconds)
+        _ <- IO { assertEquals(rowsB.size, 2); assert(rowsB.forall(_.claimedBy == ownerB)) }
+        _ <- IO(release.countDown()) *> fiber.joinWithNever
+      } yield ()).guarantee(runner.run(sql"delete from organization where id = $org".update.run.void))
+    }.unsafeRunSync()
+  }
+
   test("leases persist, expire, and fence stale completion") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"), "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true")
     val org = UUID.randomUUID(); val connection = UUID.randomUUID(); val ownerA = UUID.randomUUID(); val ownerB = UUID.randomUUID()

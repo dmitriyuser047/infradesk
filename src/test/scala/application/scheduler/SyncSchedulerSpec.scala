@@ -237,9 +237,10 @@ final class SyncSchedulerSpec extends FunSuite {
 
   private final class RecordingLogger extends Logger[IO] {
     var errors: List[(String, Option[Throwable])] = Nil
+    var warnings: List[String] = Nil
     override def error(message: => String): IO[Unit] = IO { errors = errors :+ (message -> None) }
     override def error(t: Throwable)(message: => String): IO[Unit] = IO { errors = errors :+ (message -> Some(t)) }
-    override def warn(message: => String): IO[Unit] = IO.unit
+    override def warn(message: => String): IO[Unit] = IO { warnings = warnings :+ message }
     override def info(message: => String): IO[Unit] = IO.unit
     override def debug(message: => String): IO[Unit] = IO.unit
     override def trace(message: => String): IO[Unit] = IO.unit
@@ -247,6 +248,25 @@ final class SyncSchedulerSpec extends FunSuite {
     override def info(t: Throwable)(message: => String): IO[Unit] = IO.unit
     override def debug(t: Throwable)(message: => String): IO[Unit] = IO.unit
     override def trace(t: Throwable)(message: => String): IO[Unit] = IO.unit
+  }
+
+  test("lost claim is diagnosed and does not stop the next worker item") {
+    val at = Instant.parse("2026-09-21T10:00:00Z")
+    val first = schedule(connectionId = UUID.randomUUID(), nextRunAt = at)
+    val second = schedule(connectionId = UUID.randomUUID(), nextRunAt = at)
+    val logger = new RecordingLogger
+    val completed = Ref.of[IO, List[UUID]](Nil).unsafeRunSync()
+    val repository = new ConnectionScheduleRepository[IO] {
+      def save(s: ConnectionSchedule) = IO.unit; def findByConnection(o: UUID, c: UUID) = IO.pure(None)
+      def claimDue(owner: UUID, limit: Int, lease: Long) = IO.pure(List(first, second).map(s => ClaimedConnectionSchedule(s, owner, at.plusSeconds(900))))
+      def completeClaimedRun(o: UUID, c: UUID, owner: UUID, next: Instant, failures: Long) = completed.update(_ :+ c).as(c != first.connectionId)
+    }
+    val runner = new ConnectionSyncRunner[IO] { def execute(o: UUID, c: UUID) = IO.pure(ConnectionSyncResult(UUID.randomUUID(), Nil)) }
+    val tx = new TransactionRunner[IO, IO] { def run[A](a: IO[A]) = a }
+    val clock = new TimeProvider[IO] { def now = IO.pure(at) }
+    new SyncScheduler[IO, IO](repository, runner, tx, clock, logger, 1, UUID.randomUUID(), 15.minutes).tick(10).unsafeRunSync()
+    assertEquals(completed.get.unsafeRunSync(), List(first.connectionId, second.connectionId))
+    assert(logger.warnings.exists(_.startsWith("scheduler.claim.lost")))
   }
 
   test("continues with later schedules when one sync fails") {
