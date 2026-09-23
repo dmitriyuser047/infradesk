@@ -41,7 +41,6 @@ final class SyncScheduler[F[_]: Async, Tx[_]: MonadThrow](
 
   private def tickWith(limit: Int): F[Unit] =
     for {
-      _ <- timeProvider.now
       claimedSchedules <- transactionRunner.run(
         connectionScheduleRepository.claimDue(schedulerInstanceId, limit, claimLease.toSeconds)
       )

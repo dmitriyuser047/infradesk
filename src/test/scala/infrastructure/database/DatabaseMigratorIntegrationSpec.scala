@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V13 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V14 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 13)
-        assertEquals(first.currentVersion, "13")
+        assertEquals(first.migrationsApplied, 14)
+        assertEquals(first.currentVersion, "14")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "13")
+        assertEquals(second.currentVersion, "14")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -63,7 +63,7 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         try {
           val statement = connection.createStatement()
           try assertEquals(statement.executeUpdate(
-            "update flyway_schema_history set checksum = checksum + 1 where version = '13'"
+            "update flyway_schema_history set checksum = checksum + 1 where version = '14'"
           ), 1)
           finally statement.close()
         } finally connection.close()

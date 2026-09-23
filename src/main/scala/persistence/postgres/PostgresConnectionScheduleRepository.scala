@@ -42,48 +42,6 @@ final class PostgresConnectionScheduleRepository extends ConnectionScheduleRepos
       .query[ConnectionSchedule]
       .option
 
-  override def findDue(now: Instant, limit: Int): ConnectionIO[List[ConnectionSchedule]] =
-    sql"""
-      select
-        organization_id,
-        connection_id,
-        enabled,
-        interval_seconds,
-        next_run_at,
-        consecutive_failures
-      from connection_schedule
-      where enabled
-        and next_run_at <= $now
-      order by next_run_at
-      limit $limit
-    """
-      .query[ConnectionSchedule]
-      .to[List]
-
-  override def updateAfterRun(
-                               organizationId: UUID,
-                               connectionId: UUID,
-                               nextRunAt: Instant,
-                               consecutiveFailures: Long
-                             ): ConnectionIO[Unit] =
-    sql"""
-      update connection_schedule
-      set next_run_at = $nextRunAt,
-          consecutive_failures = $consecutiveFailures
-      where organization_id = $organizationId
-        and connection_id = $connectionId
-    """
-      .update
-      .run
-      .flatMap {
-        case 1 =>
-          ().pure[ConnectionIO]
-        case rows =>
-          new IllegalStateException(
-            s"Expected to schedule 1 connection row, affected: $rows"
-          ).raiseError[ConnectionIO, Unit]
-      }
-
   override def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long): ConnectionIO[List[ClaimedConnectionSchedule]] =
     sql"""
       with due as (

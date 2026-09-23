@@ -14,17 +14,7 @@ trait ConnectionScheduleRepository[F[_]] {
     connectionId: UUID
   ): F[Option[ConnectionSchedule]]
 
-  def findDue(now: Instant, limit: Int): F[List[ConnectionSchedule]]
-
-  def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long): F[List[ClaimedConnectionSchedule]] =
-    throw new UnsupportedOperationException("claimDue is not implemented")
-
-  def updateAfterRun(
-                      organizationId: UUID,
-                      connectionId: UUID,
-                      nextRunAt: Instant,
-                      consecutiveFailures: Long
-                    ): F[Unit]
+  def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long): F[List[ClaimedConnectionSchedule]]
 
   def completeClaimedRun(
                           organizationId: UUID,
@@ -32,5 +22,5 @@ trait ConnectionScheduleRepository[F[_]] {
                           claimedBy: UUID,
                           nextRunAt: Instant,
                           consecutiveFailures: Long
-                        ): F[Boolean] = throw new UnsupportedOperationException("completeClaimedRun is not implemented")
+                        ): F[Boolean]
 }

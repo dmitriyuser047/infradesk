@@ -279,14 +279,8 @@ final class ConnectionRoutesSpec extends FunSuite {
         schedule.organizationId == organizationId && schedule.connectionId == connectionId
       ))
 
-    override def findDue(now: Instant, limit: Int): IO[List[ConnectionSchedule]] = IO.pure(List.empty)
-
-    override def updateAfterRun(
-      organizationId: UUID,
-      connectionId: UUID,
-      nextRunAt: Instant,
-      consecutiveFailures: Long
-    ): IO[Unit] = IO.unit
+    override def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long) = IO.pure(Nil)
+    override def completeClaimedRun(organizationId: UUID, connectionId: UUID, claimedBy: UUID, nextRunAt: Instant, consecutiveFailures: Long) = IO.pure(true)
   }
 
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")

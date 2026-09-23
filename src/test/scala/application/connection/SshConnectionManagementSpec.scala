@@ -179,9 +179,8 @@ final class SshConnectionManagementSpec extends FunSuite {
       override def save(value: ConnectionSchedule): IO[Unit] = IO { savedSchedule = Some(value) }
       override def findByConnection(organizationId: UUID, connectionId: UUID): IO[Option[ConnectionSchedule]] =
         IO.pure(savedSchedule.filter(s => s.organizationId == organizationId && s.connectionId == connectionId))
-      override def findDue(now: Instant, limit: Int): IO[List[ConnectionSchedule]] = IO.pure(Nil)
-      override def updateAfterRun(organizationId: UUID, connectionId: UUID, nextRunAt: Instant,
-                                  consecutiveFailures: Long): IO[Unit] = IO.unit
+      override def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long) = IO.pure(Nil)
+      override def completeClaimedRun(organizationId: UUID, connectionId: UUID, claimedBy: UUID, nextRunAt: Instant, consecutiveFailures: Long) = IO.pure(true)
     }
     val secrets = new ConnectionSecretRepository[IO] {
       override def save(value: ConnectionSecret): IO[Unit] = IO { savedSecret = Some(value) }
