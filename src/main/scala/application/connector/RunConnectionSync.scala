@@ -20,8 +20,11 @@ final class RunConnectionSync[F[_]: MonadThrow, Tx[_]](
   override def execute(organizationId: UUID, connectionId: UUID): F[ConnectionSyncResult] =
     synchronizer.execute(organizationId, connectionId).flatTap { result =>
       timeProvider.now.flatMap(now => runner.run(evaluator.execute(result.resources, now)))
+        .flatMap(_.traverse_(transition =>
+          logger.info(transition.logMessage).handleErrorWith(_ => ().pure[F])
+        ))
         .handleErrorWith(error =>
-          logger.error(s"monitor.evaluation.failed organizationId=$organizationId connectionId=$connectionId syncSessionId=${result.sessionId} errorType=${error.getClass.getSimpleName}")
+          logger.error(error)(s"monitor.evaluation.failed organizationId=$organizationId connectionId=$connectionId syncSessionId=${result.sessionId} errorType=${error.getClass.getSimpleName}")
             .handleErrorWith(_ => ().pure[F])
         )
     }

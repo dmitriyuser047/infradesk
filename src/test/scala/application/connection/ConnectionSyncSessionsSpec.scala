@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package application.connection
 
 import application.connector.{ConnectionSyncExecutionFailed, ConnectionSyncInactive, ConnectionSyncNotFound, RunConnectionSync, SyncAlreadyRunning}
-import application.monitor.MonitorRuleEvaluator
+import application.monitor.{MonitorRuleEvaluator, MonitorTransition}
 import application.port.{ConnectionRepository, ConnectionSyncResult, ConnectionSyncRunner, ConnectionSynchronizer, ResourceConnectorFailure, ResourceConnectorFailureCode, SyncSessionRepository, TimeProvider, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -14,6 +14,7 @@ import io.circe.Json
 import munit.FunSuite
 import org.http4s.{Method, Request, Status, Uri}
 import org.http4s.circe.CirceEntityDecoder._
+import org.typelevel.log4cats.Logger
 
 import java.time.Instant
 import java.util.UUID
@@ -76,7 +77,7 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
       }
     }
     val evaluator = new MonitorRuleEvaluator[IO] {
-      override def execute(resources: List[Resource], evaluatedAt: Instant): IO[Unit] = IO { evaluations += 1 }
+      override def execute(resources: List[Resource], evaluatedAt: Instant): IO[List[application.monitor.MonitorTransition]] = IO { evaluations += 1; List.empty }
     }
     val clock = new TimeProvider[IO] { override def now: IO[Instant] = IO.pure(at) }
     val shared = new RunConnectionSync[IO, IO](synchronizer, evaluator, f.transactionRunner, clock,
@@ -85,6 +86,52 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
       .execute(org, connectionId).unsafeRunSync()
     assertEquals(result.id, id)
     assertEquals(evaluations, 1)
+  }
+
+  test("incident transitions are logged only after the monitor transaction commits") {
+    val log = new RecordingLogger
+      val sessionId = UUID.randomUUID()
+      val incidentId = UUID.randomUUID()
+      val transition = MonitorTransition.Opened(org, UUID.randomUUID(), UUID.randomUUID(), incidentId, at)
+      val synchronizer = new ConnectionSynchronizer[IO] {
+        override def execute(organizationId: UUID, requestedConnectionId: UUID): IO[ConnectionSyncResult] =
+          IO.pure(ConnectionSyncResult(sessionId, Nil))
+      }
+      val evaluator = new MonitorRuleEvaluator[IO] {
+        override def execute(resources: List[Resource], evaluatedAt: Instant): IO[List[MonitorTransition]] =
+          IO.pure(List(transition))
+      }
+      val clock = new TimeProvider[IO] { override def now: IO[Instant] = IO.pure(at) }
+      var committed = false
+      val rolledBack = new TransactionRunner[IO, IO] {
+        override def run[A](program: IO[A]): IO[A] =
+          program.flatMap(_ => IO.raiseError[A](new IllegalStateException("commit failed")))
+      }
+      new RunConnectionSync[IO, IO](synchronizer, evaluator, rolledBack, clock, log)
+        .execute(org, connectionId).unsafeRunSync()
+      assertEquals(log.infoMessages.count(_.startsWith("incident.opened")), 0)
+
+      val committedRunner = new TransactionRunner[IO, IO] {
+        override def run[A](program: IO[A]): IO[A] = program.flatMap(value => IO { committed = true; value })
+      }
+      new RunConnectionSync[IO, IO](synchronizer, evaluator, committedRunner, clock, log)
+        .execute(org, connectionId).unsafeRunSync()
+      assert(committed)
+      assertEquals(log.infoMessages.count(_.startsWith("incident.opened")), 1)
+  }
+
+  private final class RecordingLogger extends Logger[IO] {
+    var infoMessages: List[String] = Nil
+    override def info(message: => String): IO[Unit] = IO { infoMessages = infoMessages :+ message }
+    override def error(message: => String): IO[Unit] = IO.unit
+    override def warn(message: => String): IO[Unit] = IO.unit
+    override def debug(message: => String): IO[Unit] = IO.unit
+    override def trace(message: => String): IO[Unit] = IO.unit
+    override def error(t: Throwable)(message: => String): IO[Unit] = IO.unit
+    override def warn(t: Throwable)(message: => String): IO[Unit] = IO.unit
+    override def info(t: Throwable)(message: => String): IO[Unit] = info(message)
+    override def debug(t: Throwable)(message: => String): IO[Unit] = IO.unit
+    override def trace(t: Throwable)(message: => String): IO[Unit] = IO.unit
   }
 
   test("manual execution failure returns the exact FAILED session with safe metadata") {

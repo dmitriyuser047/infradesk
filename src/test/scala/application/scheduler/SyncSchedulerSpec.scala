@@ -12,7 +12,7 @@ import application.port.{
   TransactionRunner
 }
 import application.monitor.MonitorRuleEvaluator
-import application.connector.{RunConnectionSync, SyncAlreadyRunning}
+import application.connector.{ConnectionSyncExecutionFailed, RunConnectionSync, SyncAlreadyRunning}
 import cats.effect.{Deferred, IO}
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -20,6 +20,7 @@ import domain.connection.ConnectionSchedule
 import domain.resource.Resource
 import munit.FunSuite
 import org.typelevel.log4cats.slf4j.Slf4jLogger
+import org.typelevel.log4cats.Logger
 import ch.qos.logback.classic.{Logger => LogbackLogger}
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
@@ -122,6 +123,38 @@ final class SyncSchedulerSpec extends FunSuite {
       List((due.organizationId, due.connectionId, now.plusSeconds(900), 2L)))
   }
 
+  test("failed scheduled sync includes session ID without exposing connector cause") {
+    val now = Instant.parse("2026-09-21T10:00:00Z")
+    val due = schedule(nextRunAt = now)
+    val sessionId = UUID.randomUUID()
+    val failure = ResourceConnectorFailure(ResourceConnectorFailureCode.SshConnectTimeout,
+      "SSH connection timed out", new IllegalStateException("secret remote detail"))
+    val recordingLogger = new RecordingLogger
+      val fixture = buildFixture(List(due), List(now, now),
+        failures = Map(due.connectionId -> ConnectionSyncExecutionFailed(sessionId, failure)),
+        overrideLogger = recordingLogger)
+      fixture.scheduler.tick(10).unsafeRunSync()
+      val failed = recordingLogger.errors.find(_._1.startsWith("scheduler.sync.failed")).get
+      assert(failed._1.contains(s"syncSessionId=$sessionId"))
+      assert(failed._1.contains("errorCode=SSH_CONNECT_TIMEOUT"))
+      assertEquals(failed._2, None)
+      assert(!failed._1.contains("secret remote detail"))
+  }
+
+  private final class RecordingLogger extends Logger[IO] {
+    var errors: List[(String, Option[Throwable])] = Nil
+    override def error(message: => String): IO[Unit] = IO { errors = errors :+ (message -> None) }
+    override def error(t: Throwable)(message: => String): IO[Unit] = IO { errors = errors :+ (message -> Some(t)) }
+    override def warn(message: => String): IO[Unit] = IO.unit
+    override def info(message: => String): IO[Unit] = IO.unit
+    override def debug(message: => String): IO[Unit] = IO.unit
+    override def trace(message: => String): IO[Unit] = IO.unit
+    override def warn(t: Throwable)(message: => String): IO[Unit] = IO.unit
+    override def info(t: Throwable)(message: => String): IO[Unit] = IO.unit
+    override def debug(t: Throwable)(message: => String): IO[Unit] = IO.unit
+    override def trace(t: Throwable)(message: => String): IO[Unit] = IO.unit
+  }
+
   test("continues with later schedules when one sync fails") {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     val first = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000010"), nextRunAt = now)
@@ -216,7 +249,8 @@ final class SyncSchedulerSpec extends FunSuite {
                        failingConnectionIds: Set[UUID] = Set.empty,
                        failures: Map[UUID, Throwable] = Map.empty,
                        failingEvaluator: Boolean = false,
-                       failingUpdateIds: Set[UUID] = Set.empty
+                       failingUpdateIds: Set[UUID] = Set.empty,
+                       overrideLogger: Logger[IO] = logger
   ): SchedulerFixture = {
     val transactionRunner = new RecordingTransactionRunner
     val repository = new RecordingConnectionScheduleRepository(schedules, failingUpdateIds)
@@ -225,14 +259,14 @@ final class SyncSchedulerSpec extends FunSuite {
     val evaluator = new RecordingMonitorRuleEvaluator(transactionRunner, failingEvaluator)
     val timeProvider = new SequenceTimeProvider(times)
     val runConnectionSync = new RunConnectionSync[IO, IO](
-      synchronizer, evaluator, transactionRunner, timeProvider, logger
+      synchronizer, evaluator, transactionRunner, timeProvider, overrideLogger
     )
     val scheduler = new SyncScheduler[IO, IO](
       repository,
       runConnectionSync,
       transactionRunner,
       timeProvider,
-      logger
+      overrideLogger
     )
 
     SchedulerFixture(scheduler, repository, synchronizer, evaluator)
@@ -327,7 +361,7 @@ final class SyncSchedulerSpec extends FunSuite {
     var calls = 0
     var calledOutsideTransaction = false
 
-    override def execute(resources: List[Resource], evaluatedAt: Instant): IO[Unit] =
+    override def execute(resources: List[Resource], evaluatedAt: Instant): IO[List[application.monitor.MonitorTransition]] =
       IO {
         calls += 1
         calledOutsideTransaction ||= !transactionRunner.inTransaction
@@ -335,7 +369,7 @@ final class SyncSchedulerSpec extends FunSuite {
         if (failing)
           IO.raiseError(new IllegalStateException("Simulated evaluator failure"))
         else
-          IO.unit
+          IO.pure(List.empty)
       }
   }
 

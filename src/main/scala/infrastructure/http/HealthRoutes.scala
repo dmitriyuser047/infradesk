@@ -19,7 +19,7 @@ final class HealthRoutes(readiness: ReadinessCheck[IO], logger: Logger[IO]) {
       readiness.check.attempt.flatMap {
         case Right(_) => Ok(Json.obj("status" -> Json.fromString("READY")))
         case Left(error) =>
-          logger.error(s"readiness.failed errorType=${error.getClass.getSimpleName}").handleErrorWith(_ => IO.unit) *>
+          logger.error(error)(s"readiness.failed errorType=${error.getClass.getSimpleName}").handleErrorWith(_ => IO.unit) *>
             ServiceUnavailable(Json.obj("status" -> Json.fromString("NOT_READY")))
       }
   }

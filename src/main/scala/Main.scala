@@ -98,7 +98,7 @@ object Main extends IOApp.Simple {
         val healthLogger = Slf4jLogger.getLoggerFromName[IO]("infrastructure.http.health")
         val syncLogger = Slf4jLogger.getLoggerFromName[IO]("application.connector.SyncConnection")
         val schedulerLogger = Slf4jLogger.getLoggerFromName[IO]("application.scheduler.SyncScheduler")
-        val monitorLogger = Slf4jLogger.getLoggerFromName[ConnectionIO]("application.monitor.EvaluateMonitorRules")
+        val monitorLogger = Slf4jLogger.getLoggerFromName[IO]("application.monitor.EvaluateMonitorRules")
         val resourceRepository =
           new PostgresResourceRepository
 
@@ -187,8 +187,7 @@ object Main extends IOApp.Simple {
             monitorRuleStateRepository,
             metricObservationRepository,
             incidentRepository,
-            transactionIdGenerator,
-            monitorLogger
+            transactionIdGenerator
           )
 
         val getResource =
@@ -301,7 +300,7 @@ object Main extends IOApp.Simple {
           )
 
         val runConnectionSync = new RunConnectionSync[IO, ConnectionIO](
-          syncConnectionById, evaluateMonitorRules, transactionRunner, timeProvider, syncLogger
+          syncConnectionById, evaluateMonitorRules, transactionRunner, timeProvider, monitorLogger
         )
 
         val connectionSyncRoutes = new ConnectionSyncRoutes[ConnectionIO](

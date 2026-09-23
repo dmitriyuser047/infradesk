@@ -5,6 +5,7 @@ import application.connector.{ConnectionSyncExecutionFailed, SyncAlreadyRunning,
 import application.port.{
   ConnectionScheduleRepository,
   ConnectionSyncRunner,
+  ResourceConnectorFailure,
   TimeProvider,
   TransactionRunner
 }
@@ -36,7 +37,7 @@ final class SyncScheduler[F[_]: Temporal, Tx[_]: MonadThrow](
 
   def run(pollInterval: FiniteDuration, limit: Int): F[Nothing] =
     (tick(limit).handleErrorWith(error =>
-      logError(s"scheduler.tick.failed errorType=${error.getClass.getSimpleName}")
+      logError(s"scheduler.tick.failed errorType=${error.getClass.getSimpleName}", error)
     ) *> Temporal[F].sleep(pollInterval)).foreverM
 
   private def syncSchedule(schedule: ConnectionSchedule): F[Unit] = {
@@ -61,8 +62,16 @@ final class SyncScheduler[F[_]: Temporal, Tx[_]: MonadThrow](
               case wrapped: ConnectionSyncExecutionFailed => wrapped.underlying
               case other => other
             }
+            val sessionContext = error match {
+              case wrapped: ConnectionSyncExecutionFailed => s" syncSessionId=${wrapped.sessionId}"
+              case _ => ""
+            }
             val failure = SyncFailure.from(underlying)
-            logError(s"scheduler.sync.failed $context errorCode=${failure.code} errorType=${underlying.getClass.getSimpleName} consecutiveFailures=$failures nextDelaySeconds=$delay")
+            val message = s"scheduler.sync.failed $context$sessionContext errorCode=${failure.code} errorType=${underlying.getClass.getSimpleName} consecutiveFailures=$failures nextDelaySeconds=$delay"
+            underlying match {
+              case _: ResourceConnectorFailure => logError(message)
+              case _ => logError(message, underlying)
+            }
         }
         outcomeLog *> transactionRunner
           .run(
@@ -74,7 +83,7 @@ final class SyncScheduler[F[_]: Temporal, Tx[_]: MonadThrow](
             )
           )
           .handleErrorWith(error =>
-            logError(s"scheduler.schedule.update.failed $context errorType=${error.getClass.getSimpleName}")
+            logError(s"scheduler.schedule.update.failed $context errorType=${error.getClass.getSimpleName}", error)
           )
       }
     }
@@ -85,4 +94,7 @@ final class SyncScheduler[F[_]: Temporal, Tx[_]: MonadThrow](
 
   private def logError(message: String): F[Unit] =
     logger.error(message).handleErrorWith(_ => ().pure[F])
+
+  private def logError(message: String, error: Throwable): F[Unit] =
+    logger.error(error)(message).handleErrorWith(_ => ().pure[F])
 }
