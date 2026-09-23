@@ -4,9 +4,11 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useMyOrganizations } from '../api/auth'
 import { useConnection, useConnectionSyncSessions, useDeactivateConnection, useRunConnectionSync } from '../api/connections'
 import { ApiError } from '../api/httpClient'
+import { useEnvironments, useProjects } from '../api/navigation'
 import { ConnectionStatusBadge } from '../components/connections/ConnectionStatusBadge'
+import { environmentName, projectName } from '../components/connections/connectionContextPresentation'
 import { formatConnectionDateTime, formatScheduleInterval, formatSyncDuration, getConnectionScopeLabel,
-  getConnectorTypeLabel, getSyncFailureMessage, shortConnectionIdentifier } from '../components/connections/connectionPresentation'
+  getConnectorTypeLabel, getSyncFailureMessage } from '../components/connections/connectionPresentation'
 import { SyncStatusBadge } from '../components/connections/SyncStatusBadge'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, PropertyGrid, WorkspaceHeader, WorkspaceSection, WorkspaceTabs } from '../components/layout/WorkspacePrimitives'
@@ -27,6 +29,10 @@ export function ConnectionPage() {
 
 function ConnectionContent({ organizationId, connectionId }: { organizationId: string; connectionId: string }) {
   const connectionQuery = useConnection(organizationId, connectionId)
+  const projectsQuery = useProjects(organizationId)
+  const scope = connectionQuery.data?.scope
+  const scopedProjectId = scope && scope.type !== ConnectionScopeType.organization ? scope.projectId : null
+  const environmentsQuery = useEnvironments(organizationId, scopedProjectId)
   const membership = useMyOrganizations()
   const deactivate = useDeactivateConnection(organizationId, connectionId)
   const sync = useRunConnectionSync(organizationId, connectionId)
@@ -72,17 +78,22 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
       ? getSyncFailureMessage(sync.data.errorMessage) : 'Synchronization completed'}</p> : null}
     <WorkspaceTabs tabs={tabs} active={tab} onChange={setTab} />
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-      {tab === 'overview' ? <ConnectionOverview connection={connection} /> :
+      {tab === 'overview' ? <ConnectionOverview connection={connection}
+        projects={projectsQuery.data} environments={environmentsQuery.data} /> :
         <ConnectionSyncHistory organizationId={organizationId} connectionId={connectionId} context={context} />}
     </div>
   </div></AppShell>
 }
 
-function ConnectionOverview({ connection }: { connection: ConnectionResponse }) {
+function ConnectionOverview({ connection, projects, environments }: {
+  connection: ConnectionResponse
+  projects: ReturnType<typeof useProjects>['data']
+  environments: ReturnType<typeof useEnvironments>['data']
+}) {
   const scopeItems = connection.scope.type === ConnectionScopeType.organization ? [] : [
-    { label: 'Project ID', value: shortConnectionIdentifier(connection.scope.projectId) },
+    { label: 'Project', value: projectName(connection.scope.projectId, projects) },
     ...(connection.scope.type === ConnectionScopeType.environment ?
-      [{ label: 'Environment ID', value: shortConnectionIdentifier(connection.scope.environmentId) }] : []),
+      [{ label: 'Environment', value: environmentName(connection.scope.environmentId, environments) }] : []),
   ]
   const latest = connection.lastSync
   return <>
@@ -106,7 +117,8 @@ function ConnectionOverview({ connection }: { connection: ConnectionResponse }) 
     {connection.ssh ? <WorkspaceSection title="SSH settings"><PropertyGrid items={[
       { label: 'Host', value: connection.ssh.host }, { label: 'Port', value: connection.ssh.port },
       { label: 'Username', value: connection.ssh.username },
-      { label: 'Host key', value: connection.ssh.hostKeyFingerprint ?? 'Not pinned' },
+      { label: 'Host key', value: connection.ssh.hostKeyFingerprint
+        ? <code className="technical-value">{connection.ssh.hostKeyFingerprint}</code> : 'Not pinned' },
       { label: 'Credentials', value: connection.ssh.credentialConfigured ? 'Configured' : 'Missing' },
     ]} /></WorkspaceSection> : null}
   </>

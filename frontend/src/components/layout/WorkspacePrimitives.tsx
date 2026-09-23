@@ -54,9 +54,11 @@ export function WorkspaceTabs<T extends string>({ tabs, active, onChange }: {
   </div>
 }
 
+export type StatusTone = 'success' | 'danger' | 'info' | 'warning' | 'neutral'
+
 export function StatusIndicator({ label, tone = 'neutral' }: {
   label: string
-  tone?: 'success' | 'danger' | 'info' | 'warning' | 'neutral'
+  tone?: StatusTone
 }) {
   return <span className={`status-indicator status-${tone}`}><span className="status-dot" aria-hidden />{label}</span>
 }

@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { useQueries } from '@tanstack/react-query'
 import { Link, useLocation, useParams } from 'react-router-dom'
 
 import { useConnections } from '../api/connections'
 import { useMyOrganizations } from '../api/auth'
 import { ApiError } from '../api/httpClient'
+import { getEnvironments, useProjects } from '../api/navigation'
 import { ConnectionList } from '../components/connections/ConnectionList'
 import { filterConnections } from '../components/connections/connectionFilters'
 import { AppShell } from '../components/layout/AppShell'
@@ -22,6 +24,14 @@ export function ConnectionsPage() {
 
 function ConnectionsContent({ organizationId }: { organizationId: string }) {
   const connectionsQuery = useConnections(organizationId)
+  const projectsQuery = useProjects(organizationId)
+  const scopedProjectIds = [...new Set((connectionsQuery.data ?? []).flatMap(connection =>
+    connection.scope.type === 'ENVIRONMENT' ? [connection.scope.projectId] : []))]
+  const environmentQueries = useQueries({ queries: scopedProjectIds.map(projectId => ({
+    queryKey: ['environments', organizationId, projectId],
+    queryFn: () => getEnvironments(organizationId, projectId),
+  })) })
+  const environments = environmentQueries.flatMap(query => query.data ?? [])
   const location = useLocation()
   const membership = useMyOrganizations()
   const isOwner = membership.data?.find(value => value.id === organizationId)?.role === 'OWNER'
@@ -57,7 +67,8 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
               action={isOwner ? <Link to={`/organizations/${organizationId}/connections/new${location.search}`}>New connection</Link> : undefined} />
           ) : null}
           {!connectionsQuery.isPending && !connectionsQuery.isError && connectionsQuery.data !== undefined && connectionsQuery.data.length > 0 ? (
-            filtered.length ? <ConnectionList organizationId={organizationId} connections={filtered} /> :
+            filtered.length ? <ConnectionList organizationId={organizationId} connections={filtered}
+              projects={projectsQuery.data} environments={environments} /> :
               <EmptyWorkspaceState title="No connections match these filters" />
           ) : null}
         </WorkspaceSection>

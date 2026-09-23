@@ -4,6 +4,7 @@ import { Box, ChevronDown, ChevronRight, Server } from 'lucide-react'
 
 import type { ResourceTreeNode } from './resourceTreeModel'
 import { StatusIndicator } from '../layout/WorkspacePrimitives'
+import { containerStatusPresentation } from './resourceStatusPresentation'
 
 interface ResourceTreeItemProps {
   node: ResourceTreeNode
@@ -23,10 +24,13 @@ export function ResourceTreeItem({
   const hasChildren = node.children.length > 0
   const isNode = node.resource.resourceTypeCode === 'NODE'
   const Icon = isNode ? Server : Box
+  const destination = `/organizations/${organizationId}/environments/${environmentId}/resources/${node.resource.id}${location.search}`
+  const containerStatus = node.resource.data.kind === 'CONTAINER'
+    ? containerStatusPresentation(node.resource.data.status?.state) : null
 
   return (
     <div className="resource-tree-item" role="treeitem" aria-expanded={hasChildren ? expanded : undefined}>
-      <div className="resource-row" style={{ paddingInlineStart: `${depth * 22 + 10}px` }}>
+      <div className="resource-row">
         {hasChildren ? (
           <button
             className="tree-toggle"
@@ -35,25 +39,27 @@ export function ResourceTreeItem({
             aria-expanded={expanded}
             onClick={() => setExpanded((current) => !current)}
           >
-            {expanded ? <ChevronDown aria-hidden size={16} /> : <ChevronRight aria-hidden size={16} />}
+            {expanded ? <ChevronDown aria-hidden size={14} /> : <ChevronRight aria-hidden size={14} />}
           </button>
         ) : (
           <span className="tree-toggle-placeholder" aria-hidden />
         )}
         <Link
           className="resource-link"
-          to={`/organizations/${organizationId}/environments/${environmentId}/resources/${node.resource.id}${location.search}`}
+          to={destination}
         >
-          <Icon className="resource-icon" aria-hidden size={16} />
-          <span className="resource-name">{node.resource.name}</span>
-          <span className="resource-code">{node.resource.code}</span>
+          <span className="resource-name-cell" style={{ paddingInlineStart: `${depth * 20}px` }}>
+            <Icon className="resource-icon" aria-hidden size={14} />
+            <span className="resource-name-stack"><span className="resource-name">{node.resource.name}</span>
+              <small className="resource-code">{node.resource.code}</small></span>
+          </span>
           <span className="resource-type-cell">{node.resource.resourceTypeCode}</span>
           <span className="resource-state-cell">{node.resource.data.kind === 'NODE' ?
             <StatusIndicator label={node.resource.data.status?.online === true ? 'Online' :
               node.resource.data.status?.online === false ? 'Offline' : 'Unknown'}
               tone={node.resource.data.status?.online === true ? 'success' :
                 node.resource.data.status?.online === false ? 'danger' : 'neutral'} /> :
-            <StatusIndicator label={node.resource.data.status?.state ?? 'Unknown'} />}</span>
+            <StatusIndicator label={containerStatus?.label ?? 'Unknown'} tone={containerStatus?.tone} />}</span>
         </Link>
       </div>
       {hasChildren && expanded ? (

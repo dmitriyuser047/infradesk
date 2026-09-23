@@ -44,35 +44,33 @@ export function ContextSelector({ organizationId, projectsQuery, isOwner }: Cont
         <button type="button" className="text-button" onClick={() => projectsQuery.refetch()}>Retry</button>
       </div> : null}
       {projectsQuery.isSuccess && projectsQuery.data.length === 0 ?
-        <EmptyWorkspaceState title="No projects configured" action={isOwner ? <Link to={`${base}/projects/new`}>Create project</Link> : undefined} /> : null}
+        <EmptyWorkspaceState title="No projects configured" /> : null}
       {projectsQuery.isSuccess && projectsQuery.data.length > 0 ? <div className="master-list" aria-label="Projects">
         {projectsQuery.data.map(project => <button type="button" aria-pressed={project.id === projectId}
           className={`master-row ${project.id === projectId ? 'selected' : ''}`} key={project.id}
           onClick={() => selectProject(project.id)}>
-          <span><strong>{project.name}</strong><small>{project.code}</small></span><span aria-hidden>›</span>
+          <span><strong>{project.name}</strong><small>{project.code}</small></span>
         </button>)}
       </div> : null}
     </WorkspaceSection>
     <WorkspaceSection title={selectedProject ? `Environments · ${selectedProject.name}` : 'Environments'}
-      actions={projectId && isOwner ? <Link className="secondary-button" to={`${base}/projects/${encodeURIComponent(projectId)}/environments/new`}>+ New environment</Link> : null}>
+      actions={<span className="context-frame-actions">
+        {environmentId && projectId ? <Link className="primary-button" to={`${base}/environments/${encodeURIComponent(environmentId)}?project=${encodeURIComponent(projectId)}`}>Open infrastructure</Link> : null}
+        {projectId && isOwner ? <Link className="secondary-button" to={`${base}/projects/${encodeURIComponent(projectId)}/environments/new`}>+ New environment</Link> : null}
+      </span>}>
       {!projectId ? <EmptyWorkspaceState title="Select a project" detail="Its environments will appear here." /> : null}
       {environmentsQuery.isPending && projectId ? <div className="row-skeleton" aria-label="Loading environments"><span /><span /></div> : null}
       {environmentsQuery.isError ? <div className="inline-error" role="alert">Unable to load environments
         <button type="button" className="text-button" onClick={() => environmentsQuery.refetch()}>Retry</button></div> : null}
       {environmentsQuery.isSuccess && environmentsQuery.data.length === 0 ?
-        <EmptyWorkspaceState title="No environments configured for this project"
-          action={isOwner ? <Link to={`${base}/projects/${encodeURIComponent(projectId ?? '')}/environments/new`}>Add environment</Link> : undefined} /> : null}
+        <EmptyWorkspaceState title="No environments configured for this project" /> : null}
       {environmentsQuery.isSuccess && environmentsQuery.data.length > 0 ? <div className="master-list" aria-label="Environments">
         {environmentsQuery.data.map(environment => <button type="button" aria-pressed={environment.id === environmentId}
           className={`master-row ${environment.id === environmentId ? 'selected' : ''}`}
           key={environment.id} onClick={() => selectEnvironment(environment.id)}>
           <span><strong>{environment.name}</strong><small>{getEnvironmentKindLabel(environment.kind)} · {environment.code}</small></span>
-          <span aria-hidden>›</span>
         </button>)}
       </div> : null}
-      {environmentId && projectId ? <div className="workspace-section-footer"><Link className="primary-button"
-        to={`${base}/environments/${encodeURIComponent(environmentId)}?project=${encodeURIComponent(projectId)}`}>
-        Open infrastructure</Link></div> : null}
     </WorkspaceSection>
   </div>
 }

@@ -88,9 +88,10 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
           {environments.data?.map(environment => <option key={environment.id} value={environment.id}>{environment.name}</option>)}
         </select></label> : null}
       </div></WorkspaceSection>
-      <WorkspaceSection title="SSH"><div className="field-grid">
+      <WorkspaceSection title="SSH"><div className="field-grid host-port-grid">
         <label>Host <input required value={host} onChange={e => setHost(e.target.value)} /></label>
         <label>Port <input required type="number" min="1" max="65535" value={port} onChange={e => setPort(e.target.value)} /></label>
+      </div><div className="field-grid ssh-credentials-grid">
         <label>Username <input required value={username} onChange={e => setUsername(e.target.value)} /></label>
         <label>Password {existing ? '(leave blank to keep current)' : ''}
           <input type="password" required={!existing} autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} />

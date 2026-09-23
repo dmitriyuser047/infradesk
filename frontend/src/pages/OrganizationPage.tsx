@@ -1,4 +1,4 @@
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 
 import { ApiError } from '../api/httpClient'
 import { useMyOrganizations } from '../api/auth'
@@ -46,8 +46,7 @@ function OrganizationContent({ organizationId }: { organizationId: string }) {
         ) : null}
         {organizationQuery.isSuccess && organizationQuery.data !== undefined ? (
           <>
-            <WorkspaceHeader title={organizationQuery.data.name} subtitle={`Organization · ${organizationQuery.data.code}`}
-              actions={isOwner ? <Link className="primary-button" to={`/organizations/${encodeURIComponent(organizationId)}/projects/new`}>+ New project</Link> : null} />
+            <WorkspaceHeader title={organizationQuery.data.name} subtitle={`Organization · ${organizationQuery.data.code}`} />
             <ContextSelector organizationId={organizationId} projectsQuery={projectsQuery} isOwner={isOwner} />
           </>
         ) : null}

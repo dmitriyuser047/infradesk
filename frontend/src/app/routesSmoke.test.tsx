@@ -71,12 +71,29 @@ const pages = [
 describe('redesigned routes', () => {
   for (const page of pages) {
     it(`renders ${page.path}`, () => {
-      const html = renderToStaticMarkup(<QueryClientProvider client={queryClient()}>
-        <MemoryRouter initialEntries={[page.path]}><Routes>
-          <Route path={page.route} element={page.element} />
-        </Routes></MemoryRouter>
-      </QueryClientProvider>)
+      const html = renderPage(page)
       expect(html).toContain(page.title)
     })
   }
+
+  it('shows the project action only in its frame', () => {
+    const html = renderPage(pages.find(page => page.path === '/organizations/org')!)
+    expect(html.match(/\+ New project/g)).toHaveLength(1)
+  })
+
+  it('shows human project and environment names in connection overview', () => {
+    const html = renderPage(pages.find(page => page.path === '/organizations/org/connections/connection')!)
+    expect(html).toContain('<dt>Project</dt><dd>App</dd>')
+    expect(html).toContain('<dt>Environment</dt><dd>Production</dd>')
+    expect(html).not.toContain('Project ID')
+    expect(html).not.toContain('Environment ID')
+  })
 })
+
+function renderPage(page: (typeof pages)[number]): string {
+  return renderToStaticMarkup(<QueryClientProvider client={queryClient()}>
+    <MemoryRouter initialEntries={[page.path]}><Routes>
+      <Route path={page.route} element={page.element} />
+    </Routes></MemoryRouter>
+  </QueryClientProvider>)
+}
