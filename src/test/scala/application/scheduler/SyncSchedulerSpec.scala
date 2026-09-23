@@ -285,7 +285,7 @@ final class SyncSchedulerSpec extends FunSuite {
       }
       transactionRunner = new TransactionRunner[IO, IO] { def run[A](program: IO[A]): IO[A] = program }
       clock = new TimeProvider[IO] { def now: IO[Instant] = IO.pure(Instant.parse("2026-09-21T10:00:00Z")) }
-      scheduler = new SyncScheduler[IO, IO](repository, runner, transactionRunner, clock, logger, maxConcurrency = 1)
+      scheduler = new SyncScheduler[IO, IO](repository, runner, transactionRunner, clock, logger, 1, UUID.randomUUID(), 15.minutes)
       fiber <- scheduler.run(1.millis, 10).start
       _ <- secondTick.get.timeout(3.seconds).guarantee(fiber.cancel)
     } yield ()).unsafeRunSync()
@@ -353,7 +353,7 @@ final class SyncSchedulerSpec extends FunSuite {
     val clock = new TimeProvider[IO] {
       override def now: IO[Instant] = IO.pure(at)
     }
-    new SyncScheduler[IO, IO](repository, runner, transactionRunner, clock, logger, maxConcurrency)
+    new SyncScheduler[IO, IO](repository, runner, transactionRunner, clock, logger, maxConcurrency, UUID.randomUUID(), 15.minutes)
   }
 
   private def buildFixture(
@@ -367,12 +367,12 @@ final class SyncSchedulerSpec extends FunSuite {
                        maxConcurrency: Int = 1
   ): SchedulerFixture = {
     val transactionRunner = new RecordingTransactionRunner
-    val repository = new RecordingConnectionScheduleRepository(schedules, failingUpdateIds)
+    val repository = new RecordingConnectionScheduleRepository(schedules, failingUpdateIds, times.head)
     val synchronizer = new RecordingConnectionSynchronizer(transactionRunner,
       failingConnectionIds.map(_ -> new IllegalStateException("Simulated sync failure")).toMap ++ failures)
     val evaluator = new RecordingMonitorRuleEvaluator(transactionRunner, failingEvaluator)
     // Claims use the database clock; preserve the pre-claim test clock value for the sync flow.
-    val timeProvider = new SequenceTimeProvider(times.headOption.toList ++ times)
+    val timeProvider = new SequenceTimeProvider(times)
     val runConnectionSync = new RunConnectionSync[IO, IO](
       synchronizer, evaluator, transactionRunner, timeProvider, overrideLogger
     )
@@ -382,7 +382,9 @@ final class SyncSchedulerSpec extends FunSuite {
       transactionRunner,
       timeProvider,
       overrideLogger,
-      maxConcurrency
+      maxConcurrency,
+      UUID.randomUUID(),
+      15.minutes
     )
 
     SchedulerFixture(scheduler, repository, synchronizer, evaluator)
@@ -412,7 +414,8 @@ final class SyncSchedulerSpec extends FunSuite {
 
   private final class RecordingConnectionScheduleRepository(
                                                              schedules: List[ConnectionSchedule],
-                                                             failingUpdateIds: Set[UUID]
+                                                             failingUpdateIds: Set[UUID],
+                                                             claimNow: Instant
                                                            ) extends ConnectionScheduleRepository[IO] {
     override def save(schedule: ConnectionSchedule): IO[Unit] = IO.unit
     var scheduledNext: List[(UUID, UUID, Instant, Long)] = List.empty
@@ -426,7 +429,7 @@ final class SyncSchedulerSpec extends FunSuite {
       ))
 
     override def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long) =
-      IO.pure(schedules.filter(s => s.enabled && !s.nextRunAt.isAfter(Instant.parse("2026-09-21T10:00:00Z"))).map(s => ClaimedConnectionSchedule(s, claimedBy, Instant.now.plusSeconds(leaseSeconds))))
+      IO.pure(schedules.filter(s => s.enabled && !s.nextRunAt.isAfter(claimNow)).map(s => ClaimedConnectionSchedule(s, claimedBy, claimNow.plusSeconds(leaseSeconds))))
     override def completeClaimedRun(organizationId: UUID, connectionId: UUID, claimedBy: UUID, nextRunAt: Instant, consecutiveFailures: Long): IO[Boolean] =
       IO { if (failingUpdateIds.contains(connectionId)) throw new IllegalStateException("update failed"); scheduledNext = scheduledNext :+ (organizationId, connectionId, nextRunAt, consecutiveFailures); true }
   }

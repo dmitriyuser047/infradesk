@@ -25,8 +25,8 @@ final class SyncScheduler[F[_]: Async, Tx[_]: MonadThrow](
                                                                timeProvider: TimeProvider[F],
                                                                logger: Logger[F],
                                                                maxConcurrency: Int,
-                                                               schedulerInstanceId: java.util.UUID = new java.util.UUID(0L, 0L),
-                                                               claimLease: FiniteDuration = scala.concurrent.duration.FiniteDuration(15, scala.concurrent.duration.MINUTES)
+                                                               schedulerInstanceId: java.util.UUID,
+                                                               claimLease: FiniteDuration
                                                              ) {
 
   require(maxConcurrency > 0, "maxConcurrency must be positive")
