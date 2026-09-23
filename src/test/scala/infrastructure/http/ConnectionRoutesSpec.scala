@@ -277,10 +277,11 @@ final class ConnectionRoutesSpec extends FunSuite {
 
     override def findDue(now: Instant, limit: Int): IO[List[ConnectionSchedule]] = IO.pure(List.empty)
 
-    override def scheduleNext(
+    override def updateAfterRun(
       organizationId: UUID,
       connectionId: UUID,
-      nextRunAt: Instant
+      nextRunAt: Instant,
+      consecutiveFailures: Long
     ): IO[Unit] = IO.unit
   }
 
@@ -374,7 +375,7 @@ final class ConnectionRoutesSpec extends FunSuite {
   private val runningSync = latestCompletedSync.copy(status = SyncSessionStatus.Running, finishedAt = None)
   private val foreignSync = latestCompletedSync.copy(organizationId = OtherOrganizationId)
 
-  private val enabledSchedule = ConnectionSchedule(OrganizationId, sshConnection.id, enabled = true, 60, Now.plusSeconds(60))
+  private val enabledSchedule = ConnectionSchedule(OrganizationId, sshConnection.id, enabled = true, 60, Now.plusSeconds(60), 0L)
   private val disabledSchedule = enabledSchedule.copy(enabled = false)
   private val foreignSchedule = enabledSchedule.copy(organizationId = OtherOrganizationId)
 }

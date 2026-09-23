@@ -45,7 +45,8 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
       connection = Connection(id, orgId, request.scope, "SSH", request.code.trim, request.name.trim,
         SshConnectionSettings.toConnectionConfig(ssh.copy(hostKeyFingerprint = Some(fingerprint))),
         Some(s"db:$secretId"), true, now, now)
-      schedule = ConnectionSchedule(orgId, id, request.schedule.enabled, request.schedule.intervalSeconds, now)
+      schedule = ConnectionSchedule(orgId, id, request.schedule.enabled, request.schedule.intervalSeconds,
+        now.plusSeconds(request.schedule.intervalSeconds), 0L)
       _ <- runner.run(for {
         existing <- connections.findByOrganization(orgId)
         _ <- if (existing.exists(_.code.equalsIgnoreCase(connection.code)))
@@ -90,7 +91,9 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
       scheduleChanged = !old._2.exists(previous =>
         previous.enabled == request.schedule.enabled && previous.intervalSeconds == request.schedule.intervalSeconds)
       schedule = ConnectionSchedule(orgId, id, request.schedule.enabled, request.schedule.intervalSeconds,
-        if (request.schedule.enabled && scheduleChanged) now else old._2.map(_.nextRunAt).getOrElse(now))
+        if (request.schedule.enabled && scheduleChanged) now.plusSeconds(request.schedule.intervalSeconds)
+        else old._2.map(_.nextRunAt).getOrElse(now.plusSeconds(request.schedule.intervalSeconds)),
+        old._2.map(_.consecutiveFailures).getOrElse(0L))
       _ <- runner.run(for {
         current <- connections.findById(orgId, id)
         _ <- if (current.isEmpty) MonadThrow[Tx].raiseError[Unit](ConnectionManagementError("CONNECTION_NOT_FOUND", "Connection was not found"))
@@ -101,7 +104,7 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
         else MonadThrow[Tx].unit
         _ <- newSecret.fold(MonadThrow[Tx].unit)(secrets.save)
         _ <- connections.save(next)
-        _ <- schedules.save(schedule)
+        _ <- if (scheduleChanged) schedules.save(schedule) else MonadThrow[Tx].unit
         _ <- if (newSecret.nonEmpty) connection.secretRef.flatMap(raw => SecretRef.parse(raw).toOption) match {
           case Some(SecretRef.Database(oldSecretId)) => secrets.delete(orgId, oldSecretId)
           case _ => MonadThrow[Tx].unit
@@ -140,7 +143,7 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
     for {
       _ <- check(code.trim.nonEmpty && code.trim.length <= 64, "INVALID_REQUEST", "Invalid connection code")
       _ <- check(name.trim.nonEmpty && name.trim.length <= 255, "INVALID_REQUEST", "Invalid connection name")
-      _ <- check(schedule.intervalSeconds > 0, "INVALID_REQUEST", "Schedule interval must be positive")
+      _ <- check(schedule.intervalSeconds >= 300, "INVALID_REQUEST", "SSH sync interval must be at least 300 seconds")
     } yield ()
 
   private def validateSsh(value: SshConnectionSettings): Either[ConnectionManagementError, SshConnectionSettings] =

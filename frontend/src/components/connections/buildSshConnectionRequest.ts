@@ -13,7 +13,13 @@ export interface SshConnectionFormValues {
   intervalSeconds: string
 }
 
+export const MIN_SSH_SYNC_INTERVAL_SECONDS = 300
+
 export function buildSshConnectionRequest(values: SshConnectionFormValues): SaveSshConnectionRequest {
+  const intervalSeconds = Number(values.intervalSeconds)
+  if (!Number.isSafeInteger(intervalSeconds) || intervalSeconds < MIN_SSH_SYNC_INTERVAL_SECONDS) {
+    throw new Error('SSH sync interval must be at least 300 seconds')
+  }
   return {
     connectorType: 'SSH',
     code: values.code.trim(),
@@ -23,6 +29,6 @@ export function buildSshConnectionRequest(values: SshConnectionFormValues): Save
       : values.projectId ? { type: 'PROJECT', projectId: values.projectId } : { type: 'ORGANIZATION' },
     ssh: { host: values.host.trim(), port: Number(values.port), username: values.username.trim() },
     ...(values.password ? { credentials: { type: 'PASSWORD' as const, password: values.password } } : {}),
-    schedule: { enabled: values.scheduleEnabled, intervalSeconds: Number(values.intervalSeconds) },
+    schedule: { enabled: values.scheduleEnabled, intervalSeconds },
   }
 }

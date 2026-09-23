@@ -15,9 +15,10 @@ trait ConnectionScheduleRepository[F[_]] {
 
   def findDue(now: Instant, limit: Int): F[List[ConnectionSchedule]]
 
-  def scheduleNext(
-                    organizationId: UUID,
-                    connectionId: UUID,
-                    nextRunAt: Instant
-                  ): F[Unit]
+  def updateAfterRun(
+                      organizationId: UUID,
+                      connectionId: UUID,
+                      nextRunAt: Instant,
+                      consecutiveFailures: Long
+                    ): F[Unit]
 }

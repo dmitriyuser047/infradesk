@@ -9,7 +9,7 @@ import application.port.{
   TransactionRunner
 }
 import application.monitor.MonitorRuleEvaluator
-import application.connector.RunConnectionSync
+import application.connector.{RunConnectionSync, SyncAlreadyRunning}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -35,7 +35,7 @@ final class SyncSchedulerSpec extends FunSuite {
   test("invokes a due connection outside transactions and schedules its next run after success") {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     val finishedAt = now.plusSeconds(3)
-    val due = schedule(nextRunAt = now)
+    val due = schedule(nextRunAt = now, intervalSeconds = 600, consecutiveFailures = 2)
     val fixture = buildFixture(List(due), List(now, now.plusSeconds(2), finishedAt))
 
     fixture.scheduler.tick(limit = 10).unsafeRunSync()
@@ -43,7 +43,7 @@ final class SyncSchedulerSpec extends FunSuite {
     assertEquals(fixture.synchronizer.calls, List(due.connectionId))
     assertEquals(
       fixture.repository.scheduledNext,
-      List((due.organizationId, due.connectionId, finishedAt.plusSeconds(due.intervalSeconds)))
+      List((due.organizationId, due.connectionId, finishedAt.plusSeconds(600), 0L))
     )
     assertEquals(fixture.synchronizer.calledInsideTransaction, false)
     assertEquals(fixture.evaluator.calls, 1)
@@ -53,7 +53,7 @@ final class SyncSchedulerSpec extends FunSuite {
   test("schedules next run after a failed sync") {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     val finishedAt = now.plusSeconds(5)
-    val due = schedule(nextRunAt = now)
+    val due = schedule(nextRunAt = now, intervalSeconds = 300)
     val fixture = buildFixture(List(due), List(now, finishedAt), failingConnectionIds = Set(due.connectionId))
 
     fixture.scheduler.tick(limit = 10).unsafeRunSync()
@@ -61,9 +61,42 @@ final class SyncSchedulerSpec extends FunSuite {
     assertEquals(fixture.synchronizer.calls, List(due.connectionId))
     assertEquals(
       fixture.repository.scheduledNext,
-      List((due.organizationId, due.connectionId, finishedAt.plusSeconds(due.intervalSeconds)))
+      List((due.organizationId, due.connectionId, finishedAt.plusSeconds(300), 1L))
     )
     assertEquals(fixture.evaluator.calls, 0)
+  }
+
+  test("second failure waits 15 minutes and later failures wait 30 minutes") {
+    val now = Instant.parse("2026-09-21T10:00:00Z")
+    for ((oldFailures, delay) <- List(1L -> 900L, 2L -> 1800L, 4L -> 1800L, 20L -> 1800L)) {
+      val due = schedule(nextRunAt = now, intervalSeconds = 300, consecutiveFailures = oldFailures)
+      val fixture = buildFixture(List(due), List(now, now.plusSeconds(5)), failingConnectionIds = Set(due.connectionId))
+      fixture.scheduler.tick(limit = 10).unsafeRunSync()
+      assertEquals(fixture.repository.scheduledNext,
+        List((due.organizationId, due.connectionId, now.plusSeconds(5 + delay), oldFailures + 1)))
+    }
+  }
+
+  test("backoff never retries sooner than the configured interval and count saturates") {
+    val now = Instant.parse("2026-09-21T10:00:00Z")
+    for (oldFailures <- List(0L, 1L, 2L, Long.MaxValue)) {
+      val due = schedule(nextRunAt = now, intervalSeconds = 3600, consecutiveFailures = oldFailures)
+      val fixture = buildFixture(List(due), List(now, now), failingConnectionIds = Set(due.connectionId))
+      fixture.scheduler.tick(limit = 10).unsafeRunSync()
+      assertEquals(fixture.repository.scheduledNext,
+        List((due.organizationId, due.connectionId, now.plusSeconds(3600),
+          SyncBackoffPolicy.nextFailureCount(oldFailures))))
+    }
+  }
+
+  test("already-running attempt keeps failure count and schedules normal interval") {
+    val now = Instant.parse("2026-09-21T10:00:00Z")
+    val due = schedule(nextRunAt = now, intervalSeconds = 300, consecutiveFailures = 2)
+    val fixture = buildFixture(List(due), List(now, now),
+      failures = Map(due.connectionId -> SyncAlreadyRunning()))
+    fixture.scheduler.tick(limit = 10).unsafeRunSync()
+    assertEquals(fixture.repository.scheduledNext,
+      List((due.organizationId, due.connectionId, now.plusSeconds(300), 2L)))
   }
 
   test("continues with later schedules when one sync fails") {
@@ -98,7 +131,7 @@ final class SyncSchedulerSpec extends FunSuite {
     assertEquals(fixture.evaluator.calls, 1)
     assertEquals(
       fixture.repository.scheduledNext,
-      List((due.organizationId, due.connectionId, finishedAt.plusSeconds(due.intervalSeconds)))
+      List((due.organizationId, due.connectionId, finishedAt.plusSeconds(due.intervalSeconds), 0L))
     )
   }
 
@@ -106,11 +139,13 @@ final class SyncSchedulerSpec extends FunSuite {
                        schedules: List[ConnectionSchedule],
                        times: List[Instant],
                        failingConnectionIds: Set[UUID] = Set.empty,
+                       failures: Map[UUID, Throwable] = Map.empty,
                        failingEvaluator: Boolean = false
   ): SchedulerFixture = {
     val transactionRunner = new RecordingTransactionRunner
     val repository = new RecordingConnectionScheduleRepository(schedules)
-    val synchronizer = new RecordingConnectionSynchronizer(transactionRunner, failingConnectionIds)
+    val synchronizer = new RecordingConnectionSynchronizer(transactionRunner,
+      failingConnectionIds.map(_ -> new IllegalStateException("Simulated sync failure")).toMap ++ failures)
     val evaluator = new RecordingMonitorRuleEvaluator(transactionRunner, failingEvaluator)
     val timeProvider = new SequenceTimeProvider(times)
     val runConnectionSync = new RunConnectionSync[IO, IO](
@@ -128,14 +163,17 @@ final class SyncSchedulerSpec extends FunSuite {
 
   private def schedule(
                         connectionId: UUID = UUID.fromString("60000000-0000-0000-0000-000000000003"),
-                        nextRunAt: Instant
+                        nextRunAt: Instant,
+                        intervalSeconds: Long = 60,
+                        consecutiveFailures: Long = 0L
                       ): ConnectionSchedule =
     ConnectionSchedule(
       organizationId = OrganizationId,
       connectionId = connectionId,
       enabled = true,
-      intervalSeconds = 60,
-      nextRunAt = nextRunAt
+      intervalSeconds = intervalSeconds,
+      nextRunAt = nextRunAt,
+      consecutiveFailures = consecutiveFailures
     )
 
   private final case class SchedulerFixture(
@@ -149,7 +187,7 @@ final class SyncSchedulerSpec extends FunSuite {
                                                              schedules: List[ConnectionSchedule]
                                                            ) extends ConnectionScheduleRepository[IO] {
     override def save(schedule: ConnectionSchedule): IO[Unit] = IO.unit
-    var scheduledNext: List[(UUID, UUID, Instant)] = List.empty
+    var scheduledNext: List[(UUID, UUID, Instant, Long)] = List.empty
 
     override def findByConnection(
                                    organizationId: UUID,
@@ -162,19 +200,20 @@ final class SyncSchedulerSpec extends FunSuite {
     override def findDue(now: Instant, limit: Int): IO[List[ConnectionSchedule]] =
       IO.pure(schedules.filter(schedule => schedule.enabled && !schedule.nextRunAt.isAfter(now)).take(limit))
 
-    override def scheduleNext(
+    override def updateAfterRun(
                                organizationId: UUID,
                                connectionId: UUID,
-                               nextRunAt: Instant
+                               nextRunAt: Instant,
+                               consecutiveFailures: Long
                              ): IO[Unit] =
       IO {
-        scheduledNext = scheduledNext :+ (organizationId, connectionId, nextRunAt)
+        scheduledNext = scheduledNext :+ (organizationId, connectionId, nextRunAt, consecutiveFailures)
       }
   }
 
   private final class RecordingConnectionSynchronizer(
                                                         transactionRunner: RecordingTransactionRunner,
-                                                        failingConnectionIds: Set[UUID]
+                                                        failures: Map[UUID, Throwable]
                                                       ) extends ConnectionSynchronizer[IO] {
     var calls: List[UUID] = List.empty
     var calledInsideTransaction = false
@@ -184,10 +223,10 @@ final class SyncSchedulerSpec extends FunSuite {
         calls = calls :+ connectionId
         calledInsideTransaction ||= transactionRunner.inTransaction
       } *> {
-        if (failingConnectionIds.contains(connectionId))
-          IO.raiseError(new IllegalStateException(s"Simulated sync failure for $connectionId"))
-        else
-          IO.pure(ConnectionSyncResult(UUID.randomUUID(), List.empty))
+        failures.get(connectionId) match {
+          case Some(error) => IO.raiseError(error)
+          case None => IO.pure(ConnectionSyncResult(UUID.randomUUID(), List.empty))
+        }
       }
   }
 

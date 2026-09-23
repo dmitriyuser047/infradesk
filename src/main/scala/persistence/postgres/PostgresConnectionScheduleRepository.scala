@@ -15,10 +15,11 @@ import java.util.UUID
 final class PostgresConnectionScheduleRepository extends ConnectionScheduleRepository[ConnectionIO] {
 
   override def save(schedule: ConnectionSchedule): ConnectionIO[Unit] =
-    sql"""insert into connection_schedule (organization_id, connection_id, enabled, interval_seconds, next_run_at)
-           values (${schedule.organizationId}, ${schedule.connectionId}, ${schedule.enabled}, ${schedule.intervalSeconds}, ${schedule.nextRunAt})
+    sql"""insert into connection_schedule (organization_id, connection_id, enabled, interval_seconds, next_run_at, consecutive_failures)
+           values (${schedule.organizationId}, ${schedule.connectionId}, ${schedule.enabled}, ${schedule.intervalSeconds}, ${schedule.nextRunAt}, ${schedule.consecutiveFailures})
            on conflict (organization_id, connection_id) do update set
-             enabled = excluded.enabled, interval_seconds = excluded.interval_seconds, next_run_at = excluded.next_run_at"""
+             enabled = excluded.enabled, interval_seconds = excluded.interval_seconds,
+             next_run_at = excluded.next_run_at, consecutive_failures = excluded.consecutive_failures"""
       .update.run.void
 
   override def findByConnection(
@@ -31,7 +32,8 @@ final class PostgresConnectionScheduleRepository extends ConnectionScheduleRepos
         connection_id,
         enabled,
         interval_seconds,
-        next_run_at
+        next_run_at,
+        consecutive_failures
       from connection_schedule
       where organization_id = $organizationId
         and connection_id = $connectionId
@@ -46,7 +48,8 @@ final class PostgresConnectionScheduleRepository extends ConnectionScheduleRepos
         connection_id,
         enabled,
         interval_seconds,
-        next_run_at
+        next_run_at,
+        consecutive_failures
       from connection_schedule
       where enabled
         and next_run_at <= $now
@@ -56,14 +59,16 @@ final class PostgresConnectionScheduleRepository extends ConnectionScheduleRepos
       .query[ConnectionSchedule]
       .to[List]
 
-  override def scheduleNext(
-                             organizationId: UUID,
-                             connectionId: UUID,
-                             nextRunAt: Instant
-                           ): ConnectionIO[Unit] =
+  override def updateAfterRun(
+                               organizationId: UUID,
+                               connectionId: UUID,
+                               nextRunAt: Instant,
+                               consecutiveFailures: Long
+                             ): ConnectionIO[Unit] =
     sql"""
       update connection_schedule
-      set next_run_at = $nextRunAt
+      set next_run_at = $nextRunAt,
+          consecutive_failures = $consecutiveFailures
       where organization_id = $organizationId
         and connection_id = $connectionId
     """

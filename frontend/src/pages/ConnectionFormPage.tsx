@@ -6,7 +6,7 @@ import { useConnection, useCreateConnection, useTestSshConnection, useUpdateConn
 import { useEnvironments, useProjects } from '../api/navigation'
 import { ApiError } from '../api/httpClient'
 import { AppShell } from '../components/layout/AppShell'
-import { buildSshConnectionRequest } from '../components/connections/buildSshConnectionRequest'
+import { buildSshConnectionRequest, MIN_SSH_SYNC_INTERVAL_SECONDS } from '../components/connections/buildSshConnectionRequest'
 import type { ConnectionResponse } from '../types/connection'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
@@ -43,7 +43,8 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
   const [port, setPort] = useState(String(existing?.ssh?.port ?? 22))
   const [username, setUsername] = useState(existing?.ssh?.username ?? '')
   const [password, setPassword] = useState('')
-  const [intervalSeconds, setIntervalSeconds] = useState(String(existing?.schedule?.intervalSeconds ?? 60))
+  const [intervalSeconds, setIntervalSeconds] = useState(String(existing?.schedule?.intervalSeconds ?? 600))
+  const [validationError, setValidationError] = useState<string | null>(null)
   const [scheduleEnabled, setScheduleEnabled] = useState(existing?.schedule?.enabled ?? true)
   const [testedFingerprint, setTestedFingerprint] = useState<string | null>(null)
   const environments = useEnvironments(organizationId, projectId || null)
@@ -65,9 +66,14 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    const body = buildSshConnectionRequest({ code, name, projectId, environmentId, host, port,
-      username, password, scheduleEnabled, intervalSeconds })
-    save.submit(body, connection => navigate(`/organizations/${organizationId}/connections/${connection.id}`))
+    try {
+      const body = buildSshConnectionRequest({ code, name, projectId, environmentId, host, port,
+        username, password, scheduleEnabled, intervalSeconds })
+      setValidationError(null)
+      save.submit(body, connection => navigate(`/organizations/${organizationId}/connections/${connection.id}`))
+    } catch (error) {
+      setValidationError(error instanceof Error ? error.message : 'Invalid sync interval')
+    }
   }
 
   return <AppShell><div className="detail-page connection-detail-page">
@@ -92,8 +98,9 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
       <label>Password {existing ? '(leave blank to keep current)' : ''}
         <input type="password" required={!existing} autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} />
       </label>
-      <label>Sync interval (seconds) <input required type="number" min="1" value={intervalSeconds} onChange={e => setIntervalSeconds(e.target.value)} /></label>
+      <label>Sync interval (seconds) <input required type="number" min={MIN_SSH_SYNC_INTERVAL_SECONDS} value={intervalSeconds} onChange={e => setIntervalSeconds(e.target.value)} /></label>
       <label><input type="checkbox" checked={scheduleEnabled} onChange={e => setScheduleEnabled(e.target.checked)} /> Enable scheduled sync</label>
+      {validationError ? <p role="alert">{validationError}</p> : null}
       {testedFingerprint ? <p role="status">SSH verified · {testedFingerprint}</p> : null}
       {test.isError ? <p role="alert">{errorText(test.error)}</p> : null}
       {save.isError ? <p role="alert">{errorText(save.error)}</p> : null}

@@ -9,5 +9,6 @@ final case class ConnectionSchedule(
                                      connectionId: UUID,
                                      enabled: Boolean,
                                      intervalSeconds: Long,
-                                     nextRunAt: Instant
+                                     nextRunAt: Instant,
+                                     consecutiveFailures: Long
                                    )

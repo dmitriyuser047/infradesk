@@ -5,7 +5,7 @@ import { buildSshConnectionRequest, type SshConnectionFormValues } from './build
 const base: SshConnectionFormValues = {
   code: ' prod-vps ', name: ' Production VPS ', projectId: 'project', environmentId: 'environment',
   host: '  example.org ', port: '22', username: ' root ', password: 'secret',
-  scheduleEnabled: true, intervalSeconds: '60',
+  scheduleEnabled: true, intervalSeconds: '600',
 }
 
 describe('SSH connection request builder', () => {
@@ -20,5 +20,11 @@ describe('SSH connection request builder', () => {
     const result = buildSshConnectionRequest({ ...base, environmentId: '', password: '' })
     expect(result.scope).toEqual({ type: 'PROJECT', projectId: 'project' })
     expect(result).not.toHaveProperty('credentials')
+  })
+
+  it('rejects intervals below 300 seconds and accepts 300 or 600', () => {
+    expect(() => buildSshConnectionRequest({ ...base, intervalSeconds: '299' })).toThrow(/300 seconds/)
+    expect(buildSshConnectionRequest({ ...base, intervalSeconds: '300' }).schedule.intervalSeconds).toBe(300)
+    expect(buildSshConnectionRequest(base).schedule.intervalSeconds).toBe(600)
   })
 })

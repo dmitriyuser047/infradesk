@@ -1,6 +1,7 @@
 package ru.bitec.app.ops
 package application.scheduler
 
+import application.connector.SyncAlreadyRunning
 import application.port.{
   ConnectionScheduleRepository,
   ConnectionSyncRunner,
@@ -35,20 +36,28 @@ final class SyncScheduler[F[_]: Temporal, Tx[_]: MonadThrow](
     (tick(limit).attempt.void *> Temporal[F].sleep(pollInterval)).foreverM
 
   private def syncSchedule(schedule: ConnectionSchedule): F[Unit] =
-    connectionSyncRunner
-      .execute(schedule.organizationId, schedule.connectionId)
-      .attempt
-      .void *>
+    connectionSyncRunner.execute(schedule.organizationId, schedule.connectionId).attempt.flatMap { result =>
       timeProvider.now.flatMap { finishedAt =>
+        val failures = result match {
+          case Right(_) => 0L
+          case Left(_: SyncAlreadyRunning) => schedule.consecutiveFailures
+          case Left(_) => SyncBackoffPolicy.nextFailureCount(schedule.consecutiveFailures)
+        }
+        val delay = result match {
+          case Right(_) | Left(_: SyncAlreadyRunning) => schedule.intervalSeconds
+          case Left(_) => SyncBackoffPolicy.delaySeconds(schedule.intervalSeconds, failures)
+        }
         transactionRunner
           .run(
-            connectionScheduleRepository.scheduleNext(
+            connectionScheduleRepository.updateAfterRun(
               schedule.organizationId,
               schedule.connectionId,
-              finishedAt.plusSeconds(schedule.intervalSeconds)
+              finishedAt.plusSeconds(delay),
+              failures
             )
           )
           .attempt
           .void
       }
+    }
 }
