@@ -24,7 +24,7 @@ final class SshConnectionManagementSpec extends FunSuite {
   import CirceEntityEncoder._
   private val org = UUID.randomUUID()
   private val key = Base64.getEncoder.encodeToString(Array.fill[Byte](32)(7))
-  private val cipher = ConnectionSecretCipher.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> key)).toOption.get
+  private val cipher = ConnectionSecretCipher.fromConfig(SecretEncryptionConfig.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> key)).toOption.get)
   private val request = CreateSshConnectionCommand("prod-vps", "Production VPS",
     ConnectionScope.Organization,
     SshConnectionSettings("example.org", 22, "root", None, 10, 30),

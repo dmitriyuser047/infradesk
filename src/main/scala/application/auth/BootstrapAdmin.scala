@@ -9,7 +9,9 @@ import domain.auth.{OrganizationMembership, OrganizationRole, UserAccount}
 import java.time.Instant
 import java.util.UUID
 
-final case class BootstrapConfig(email: String, password: String, organizationId: UUID, displayName: String)
+final case class BootstrapConfig(email: String, password: String, organizationId: UUID, displayName: String) {
+  override def toString: String = s"BootstrapConfig(email=$email, password=<redacted>, organizationId=$organizationId, displayName=$displayName)"
+}
 
 object BootstrapConfig {
   def fromEnvironment(values: Map[String, String]): Either[IllegalArgumentException, Option[BootstrapConfig]] = {
@@ -19,10 +21,10 @@ object BootstrapConfig {
     )
     if (keys.forall(key => !values.contains(key))) Right(None)
     else if (keys.exists(key => values.get(key).forall(_.trim.isEmpty)))
-      Left(new IllegalArgumentException("All bootstrap settings must be configured together"))
+      Left(new IllegalArgumentException(s"Invalid ${keys.find(key => values.get(key).forall(_.trim.isEmpty)).get}: all bootstrap settings must be configured together"))
     else {
       scala.util.Try(UUID.fromString(values("INFRADESK_BOOTSTRAP_ORGANIZATION_ID")))
-        .toEither.leftMap(_ => new IllegalArgumentException("Invalid bootstrap organization ID"))
+        .toEither.leftMap(_ => new IllegalArgumentException("Invalid INFRADESK_BOOTSTRAP_ORGANIZATION_ID: expected UUID"))
         .map(id => Some(BootstrapConfig(
           UserAccount.normalizeEmail(values("INFRADESK_BOOTSTRAP_EMAIL")),
           values("INFRADESK_BOOTSTRAP_PASSWORD"), id,

@@ -31,6 +31,7 @@ import infrastructure.runtime.{
 }
 import integration.ssh.{
   EnvironmentSshAuthenticationProvider,
+  EnvironmentSecrets,
   SshConnector,
   SshjClient
 }
@@ -60,7 +61,7 @@ object DevSshSync extends IOApp.Simple {
     UUID.fromString("60000000-0000-0000-0000-000000000003")
 
   override def run: IO[Unit] =
-    DatabaseConfig.load.flatMap { databaseConfig =>
+    IO.fromEither(DatabaseConfig.fromEnvironment(sys.env)).flatMap { databaseConfig =>
       Database.transactor(databaseConfig).use { xa =>
         val resourceRepository =
           new PostgresResourceRepository
@@ -127,7 +128,7 @@ object DevSshSync extends IOApp.Simple {
           new SshjClient[IO]
 
         val authenticationProvider =
-          new EnvironmentSshAuthenticationProvider[IO]
+          new EnvironmentSshAuthenticationProvider[IO](EnvironmentSecrets.fromEnvironment(sys.env))
 
         val sshConnector =
           new SshConnector[IO](

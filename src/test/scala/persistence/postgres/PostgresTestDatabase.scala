@@ -1,0 +1,37 @@
+package ru.bitec.app.ops
+package persistence.postgres
+
+import cats.effect.{IO, Resource}
+import cats.syntax.all._
+import infrastructure.database.{Database, DatabaseConfig, DatabaseMigrator}
+import infrastructure.database.DoobieTransactionRunner
+import org.typelevel.doobie.ConnectionIO
+import org.typelevel.doobie.hikari.HikariTransactor
+import org.typelevel.doobie.implicits._
+import org.typelevel.doobie.postgres.implicits._
+import org.typelevel.log4cats.slf4j.Slf4jLogger
+
+import java.util.UUID
+
+private[postgres] object PostgresTestDatabase {
+  def config: DatabaseConfig = DatabaseConfig.fromEnvironment(sys.env).fold(throw _, identity)
+
+  def transactor(config: DatabaseConfig): Resource[IO, HikariTransactor[IO]] =
+    Resource.eval(DatabaseMigrator.migrate(config,
+      Slf4jLogger.getLoggerFromName[IO]("test.database.migration"))) *>
+      Database.transactor(config).evalTap(ensureBaseFixtures)
+
+  private def ensureBaseFixtures(xa: HikariTransactor[IO]): IO[Unit] = {
+    val org = UUID.fromString("20000000-0000-0000-0000-000000000001")
+    val project = UUID.fromString("30000000-0000-0000-0000-000000000001")
+    val environment = UUID.fromString("40000000-0000-0000-0000-000000000001")
+    val connection = UUID.fromString("60000000-0000-0000-0000-000000000003")
+    val program: ConnectionIO[Unit] = for {
+      _ <- sql"insert into organization (id, code, name) values ($org, 'integration-fixture', 'Integration fixture') on conflict do nothing".update.run
+      _ <- sql"insert into project (id, organization_id, code, name) values ($project, $org, 'integration-fixture', 'Integration fixture') on conflict do nothing".update.run
+      _ <- sql"insert into environment (id, organization_id, project_id, code, name, kind) values ($environment, $org, $project, 'integration-fixture', 'Integration fixture', 'TEST') on conflict do nothing".update.run
+      _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($connection, $org, 'ORGANIZATION', 'SSH', 'integration-fixture', 'Integration fixture') on conflict do nothing".update.run
+    } yield ()
+    new DoobieTransactionRunner(xa).run(program)
+  }
+}

@@ -4,10 +4,12 @@ lazy val doobieVersion = "1.0.0-RC13"
 lazy val dockerVersion = "3.7.1"
 lazy val sshjVersion = "0.40.0"
 lazy val http4sVersion = "0.23.30"
+lazy val flywayVersion = "13.7.0"
 
 lazy val root = rootProject
   .settings(
     name := "infradesk",
+    Compile / run / fork := true,
     idePackagePrefix := Some("ru.bitec.app.ops"),
     libraryDependencies ++= Seq(
       //You can add library dependencies here, for example,
@@ -16,6 +18,8 @@ lazy val root = rootProject
       "org.typelevel" %% "cats-effect" % "3.7.0",
       "org.typelevel" %% "log4cats-slf4j" % "2.8.0",
       "ch.qos.logback" % "logback-classic" % "1.5.38",
+      "org.flywaydb" % "flyway-core" % flywayVersion,
+      "org.flywaydb" % "flyway-database-postgresql" % flywayVersion,
       "org.typelevel" %% "doobie-core"      % doobieVersion,
       "org.typelevel" %% "doobie-postgres"  % doobieVersion,
       "org.typelevel" %% "doobie-hikari"    % doobieVersion,

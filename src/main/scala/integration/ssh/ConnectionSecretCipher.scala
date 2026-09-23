@@ -5,7 +5,7 @@ import application.port.{ConnectionSecret, ConnectionSecretCryptography}
 
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
-import java.util.{Base64, UUID}
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.spec.{GCMParameterSpec, SecretKeySpec}
 
@@ -35,15 +35,6 @@ final class ConnectionSecretCipher private (key: Array[Byte]) extends Connection
 }
 
 object ConnectionSecretCipher {
-  def fromEnvironment(environment: Map[String, String]): Either[IllegalArgumentException, ConnectionSecretCipher] =
-    environment.get("INFRADESK_SECRET_MASTER_KEY_BASE64").toRight(
-      new IllegalArgumentException("INFRADESK_SECRET_MASTER_KEY_BASE64 is required")
-    ).flatMap { value =>
-      scala.util.Try(Base64.getDecoder.decode(value)).toEither.left.map(_ =>
-        new IllegalArgumentException("INFRADESK_SECRET_MASTER_KEY_BASE64 must be Base64")
-      ).flatMap { bytes =>
-        if (bytes.length == 32) Right(new ConnectionSecretCipher(bytes))
-        else Left(new IllegalArgumentException("INFRADESK_SECRET_MASTER_KEY_BASE64 must decode to 32 bytes"))
-      }
-    }
+  def fromConfig(config: SecretEncryptionConfig): ConnectionSecretCipher =
+    new ConnectionSecretCipher(config.keyBytes)
 }

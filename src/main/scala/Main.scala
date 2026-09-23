@@ -15,12 +15,11 @@ import application.monitor.EvaluateMonitorRules
 import application.connection.{GetConnection, ListConnections, SshConnectionManagement, ListConnectionSyncSessions, GetConnectionSyncSession, RunManualConnectionSync}
 import application.navigation.{GetOrganization, ListEnvironments, ListProjects}
 import application.workspace.{CreateEnvironment, CreateProject}
-import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, BootstrapConfig, Login, SessionTokens}
+import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, Login, SessionTokens}
 import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
 import application.scheduler.SyncScheduler
 import cats.data.Kleisli
 import cats.effect.{IO, IOApp}
-import com.comcast.ip4s.{Host, Port}
 import infrastructure.http.ResourceRoutes
 import infrastructure.http.IncidentRoutes
 import infrastructure.http.MonitorRuleRoutes
@@ -29,7 +28,7 @@ import infrastructure.http.ConnectionSyncRoutes
 import infrastructure.http.SshConnectionMutationRoutes
 import infrastructure.http.NavigationRoutes
 import infrastructure.http.WorkspaceMutationRoutes
-import infrastructure.http.{AuthBoundary, AuthRoutes, AuthSettings}
+import infrastructure.http.{AuthBoundary, AuthRoutes}
 import infrastructure.http.HealthRoutes
 import infrastructure.http.middleware.{HttpRequestLogging, RequestIdMiddleware}
 import application.monitor.{ListMonitorRules, CreateMonitorRule, UpdateMonitorRule}
@@ -41,7 +40,7 @@ import org.typelevel.log4cats.slf4j.Slf4jLogger
 import org.typelevel.doobie.ConnectionIO
 import infrastructure.database.{
   Database,
-  DatabaseConfig,
+  DatabaseMigrator,
   ConnectionIOIdGenerator,
   ConnectionIOTimeProvider,
   DoobieTransactionRunner,
@@ -81,19 +80,17 @@ import persistence.postgres.{
   PostgresOrganizationMembershipRepository,
   PostgresUserAccountRepository
 }
-
-import scala.concurrent.duration._
-import scala.util.Try
+import infrastructure.config.AppConfig
 
 object Main extends IOApp.Simple {
 
   override def run: IO[Unit] =
     for {
-      config <- DatabaseConfig.load
-      authSettings <- IO.fromEither(AuthSettings.fromEnvironment(sys.env))
-      bootstrapConfig <- IO.fromEither(BootstrapConfig.fromEnvironment(sys.env))
-      secretCipher <- IO.fromEither(ConnectionSecretCipher.fromEnvironment(sys.env))
-      _ <- Database.transactor(config).use { xa =>
+      config <- AppConfig.load
+      migrationLogger = Slf4jLogger.getLoggerFromName[IO]("infrastructure.database.DatabaseMigrator")
+      _ <- DatabaseMigrator.migrate(config.database, migrationLogger)
+      secretCipher = ConnectionSecretCipher.fromConfig(config.secretEncryption)
+      _ <- Database.transactor(config.database).use { xa =>
         val httpLogger = Slf4jLogger.getLoggerFromName[IO]("infrastructure.http.requests")
         val healthLogger = Slf4jLogger.getLoggerFromName[IO]("infrastructure.http.health")
         val syncLogger = Slf4jLogger.getLoggerFromName[IO]("application.connector.SyncConnection")
@@ -215,7 +212,7 @@ object Main extends IOApp.Simple {
         val connectionRoutes = new ConnectionRoutes[ConnectionIO](getConnection, listConnections, transactionRunner)
         val sshClient = new SshjClient[IO]
         val sshAuthenticationProvider = new CompositeSshAuthenticationProvider[ConnectionIO](
-          connectionSecretRepository, transactionRunner, secretCipher
+          connectionSecretRepository, transactionRunner, secretCipher, config.sshEnvironmentSecrets
         )
         val sshConnectionManagement = new SshConnectionManagement[ConnectionIO](
           connectionRepository, connectionScheduleRepository, connectionSecretRepository,
@@ -242,9 +239,9 @@ object Main extends IOApp.Simple {
         )
         val authRoutes = new AuthRoutes[ConnectionIO](
           new Login(userAccountRepository, authSessionRepository, transactionRunner,
-            passwordHasher, tokens, authSettings.ttlSeconds),
+            passwordHasher, tokens, config.auth.ttlSeconds),
           authentication,
-          authSettings
+          config.auth
         )
         val bootstrapAdmin = new BootstrapAdmin[ConnectionIO](
           userAccountRepository, membershipRepository, organizationRepository,
@@ -332,38 +329,15 @@ object Main extends IOApp.Simple {
             schedulerLogger
           )
 
-        bootstrapAdmin.run(bootstrapConfig).flatMap { _ =>
+        bootstrapAdmin.run(config.bootstrap).flatMap { _ =>
           EmberServerBuilder
             .default[IO]
-            .withHost(httpHost)
-            .withPort(httpPort)
+            .withHost(config.http.host)
+            .withPort(config.http.port)
             .withHttpApp(observedApp)
             .build
-            .use(_ => syncScheduler.run(1.second, limit = 100))
+            .use(_ => syncScheduler.run(config.scheduler.pollInterval, limit = config.scheduler.batchSize))
         }
       }
     } yield ()
-
-  private val httpHost: Host =
-    sys.env
-      .get("INFRADESK_HTTP_HOST")
-      .flatMap(Host.fromString)
-      .getOrElse(defaultHttpHost)
-
-  private val httpPort: Port =
-    sys.env
-      .get("INFRADESK_HTTP_PORT")
-      .flatMap(value => Try(value.toInt).toOption)
-      .flatMap(Port.fromInt)
-      .getOrElse(defaultHttpPort)
-
-  private lazy val defaultHttpHost: Host =
-    Host.fromString("0.0.0.0").getOrElse(
-      throw new IllegalStateException("Unable to construct default HTTP host")
-    )
-
-  private lazy val defaultHttpPort: Port =
-    Port.fromInt(8080).getOrElse(
-      throw new IllegalStateException("Unable to construct default HTTP port")
-    )
 }

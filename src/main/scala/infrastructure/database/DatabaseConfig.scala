@@ -1,38 +1,22 @@
 package ru.bitec.app.ops
 package infrastructure.database
 
-import cats.effect.IO
-
-final case class DatabaseConfig(
-                               url: String,
-                               user: String,
-                               password: String
-                               )
+final case class DatabaseConfig(url: String, user: String, password: String) {
+  override def toString: String = "DatabaseConfig(<redacted>)"
+}
 
 object DatabaseConfig {
 
-  def load: IO[DatabaseConfig] =
+  def fromEnvironment(values: Map[String, String]): Either[IllegalArgumentException, DatabaseConfig] = {
+    def required(key: String): Either[IllegalArgumentException, String] =
+      values.get(key).filter(_.trim.nonEmpty).toRight(
+        new IllegalArgumentException(s"$key is required")
+      )
+
     for {
-      url <- env("INFRADESK_DB_URL")
-      user <- env("INFRADESK_DB_USER")
-      password <- env("INFRADESK_DB_PASSWORD")
-    } yield DatabaseConfig(
-      url = url,
-      user = user,
-      password = password
-    )
-
-  private def env(name: String): IO[String] =
-    IO(sys.env.get(name)).flatMap {
-      case Some(value) =>
-        IO.pure(value)
-
-      case None =>
-        IO.raiseError(
-          new IllegalStateException(
-            s"Environment variable $name is not set"
-          )
-        )
-    }
-
+      url <- required("INFRADESK_DB_URL")
+      user <- required("INFRADESK_DB_USER")
+      password <- required("INFRADESK_DB_PASSWORD")
+    } yield DatabaseConfig(url, user, password)
+  }
 }

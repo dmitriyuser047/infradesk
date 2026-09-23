@@ -7,7 +7,7 @@ import cats.MonadThrow
 import cats.syntax.all._
 import ru.bitec.app.ops.integration.ssh.EnvironmentSshAuthenticationProvider.EnvironmentPrefix
 
-final class EnvironmentSshAuthenticationProvider[F[_]: MonadThrow]
+final class EnvironmentSshAuthenticationProvider[F[_]: MonadThrow](environmentSecrets: EnvironmentSecrets)
   extends SshAuthenticationProvider[F] {
 
   override def resolve(
@@ -43,9 +43,8 @@ final class EnvironmentSshAuthenticationProvider[F[_]: MonadThrow]
           s"SSH connection ${connection.id} has empty environment secret reference"
         ).raiseError[F, SshAuthentication]
       } else {
-        sys.env
+        environmentSecrets
           .get(variableName)
-          .filter(_.nonEmpty)
           .map[SshAuthentication] { password =>
             SshAuthentication.Password(password)
           }

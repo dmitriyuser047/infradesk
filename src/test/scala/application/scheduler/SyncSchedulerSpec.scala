@@ -21,10 +21,6 @@ import domain.resource.Resource
 import munit.FunSuite
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 import org.typelevel.log4cats.Logger
-import ch.qos.logback.classic.{Logger => LogbackLogger}
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
-import org.slf4j.LoggerFactory
 
 import java.time.Instant
 import java.util.UUID
@@ -203,24 +199,17 @@ final class SyncSchedulerSpec extends FunSuite {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     val first = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000020"), nextRunAt = now)
     val second = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000021"), nextRunAt = now)
-    val appender = new ListAppender[ILoggingEvent]
-    val underlying = LoggerFactory.getLogger("test.scheduler").asInstanceOf[LogbackLogger]
-    appender.start()
-    underlying.addAppender(appender)
-    try {
+    val recordingLogger = new RecordingLogger
       val fixture = buildFixture(List(first, second), List.fill(5)(now),
-        failingConnectionIds = Set(first.connectionId), failingUpdateIds = Set(first.connectionId))
+        failingConnectionIds = Set(first.connectionId), failingUpdateIds = Set(first.connectionId),
+        overrideLogger = recordingLogger)
       fixture.scheduler.tick(10).unsafeRunSync()
       assertEquals(fixture.synchronizer.calls, List(first.connectionId, second.connectionId))
       assertEquals(fixture.repository.scheduledNext.map(_._2), List(second.connectionId))
-      assert(appender.list.toArray.exists(_.asInstanceOf[ILoggingEvent].getFormattedMessage
+      assert(recordingLogger.errors.exists(_._1
         .contains(s"scheduler.sync.failed organizationId=$OrganizationId connectionId=${first.connectionId}")))
-      assert(appender.list.toArray.exists(_.asInstanceOf[ILoggingEvent].getFormattedMessage
+      assert(recordingLogger.errors.exists(_._1
         .contains(s"scheduler.schedule.update.failed organizationId=$OrganizationId connectionId=${first.connectionId}")))
-    } finally {
-      underlying.detachAppender(appender)
-      appender.stop()
-    }
   }
 
   test("schedules next run when evaluator fails after a successful sync") {

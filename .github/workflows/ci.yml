@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: infradesk_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d infradesk_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      INFRADESK_DB_URL: jdbc:postgresql://localhost:5432/infradesk_test
+      INFRADESK_DB_USER: postgres
+      INFRADESK_DB_PASSWORD: ci-postgres-password
+      INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: Wait for PostgreSQL
+        run: until pg_isready -h localhost -p 5432 -U postgres -d infradesk_test; do sleep 1; done
+        env:
+          PGPASSWORD: ci-postgres-password
+      - name: Generate test-only encryption key
+        run: echo "INFRADESK_SECRET_MASTER_KEY_BASE64=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+      - name: Compile backend
+        run: sbt compile
+      - name: Run backend and PostgreSQL integration tests
+        run: sbt testFull
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

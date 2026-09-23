@@ -30,10 +30,10 @@ final class SyncDiscoveredSnapshotRollbackIntegrationSpec extends FunSuite {
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests"
     )
 
-    val config = DatabaseConfig.load.unsafeRunSync()
+    val config = PostgresTestDatabase.config
     val ids = TestIds.random()
 
-    Database.transactor(config).use { xa =>
+    PostgresTestDatabase.transactor(config).use { xa =>
       val transactionRunner: TransactionRunner[IO, ConnectionIO] =
         new DoobieTransactionRunner(xa)
       val resourceRepository = new PostgresResourceRepository

@@ -30,7 +30,7 @@ final class WorkspaceRepositoryIntegrationSpec extends FunSuite {
     def environment(org: UUID, parent: UUID, code: String): Environment =
       Environment(UUID.randomUUID(), org, parent, code, code, EnvironmentKind.Prod, true, at, at)
 
-    Database.transactor(DatabaseConfig.load.unsafeRunSync()).use { xa =>
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
       val setup: ConnectionIO[Unit] = for {
         _ <- sql"insert into organization (id, code, name) values ($orgA, ${orgA.toString}, 'Workspace A')".update.run

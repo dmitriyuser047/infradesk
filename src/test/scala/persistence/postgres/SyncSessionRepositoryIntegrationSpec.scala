@@ -27,7 +27,7 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
     val foreignConnection = UUID.randomUUID()
     val at = Instant.parse("2026-09-23T10:00:00Z")
 
-    Database.transactor(DatabaseConfig.load.unsafeRunSync()).use { xa =>
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
       val sessions = new PostgresSyncSessionRepository
       val setup: ConnectionIO[Unit] = for {
@@ -96,7 +96,7 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
     val now = Instant.parse("2026-09-23T10:00:00Z")
     val staleBefore = now.minusSeconds(SyncSessionPolicy.StaleAfterSeconds)
 
-    Database.transactor(DatabaseConfig.load.unsafeRunSync()).use { xa =>
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
       val sessions = new PostgresSyncSessionRepository
       val setup: ConnectionIO[Unit] = for {

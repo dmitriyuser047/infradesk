@@ -10,14 +10,14 @@ import javax.crypto.AEADBadTagException
 
 final class ConnectionSecretCipherSpec extends FunSuite {
   private val key = Base64.getEncoder.encodeToString(Array.tabulate[Byte](32)(_.toByte))
-  private val cipher = ConnectionSecretCipher.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> key)).toOption.get
+  private val cipher = ConnectionSecretCipher.fromConfig(SecretEncryptionConfig.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> key)).toOption.get)
   private val org = UUID.randomUUID()
   private val id = UUID.randomUUID()
 
   test("requires a Base64-encoded 32-byte master key") {
-    assert(ConnectionSecretCipher.fromEnvironment(Map.empty).isLeft)
-    assert(ConnectionSecretCipher.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> "invalid")).isLeft)
-    assert(ConnectionSecretCipher.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> Base64.getEncoder.encodeToString(new Array[Byte](16)))).isLeft)
+    assert(SecretEncryptionConfig.fromEnvironment(Map.empty).isLeft)
+    assert(SecretEncryptionConfig.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> "invalid")).isLeft)
+    assert(SecretEncryptionConfig.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> Base64.getEncoder.encodeToString(new Array[Byte](16)))).isLeft)
   }
 
   test("AES-GCM uses fresh nonces and binds ciphertext to tenant, id and kind") {
