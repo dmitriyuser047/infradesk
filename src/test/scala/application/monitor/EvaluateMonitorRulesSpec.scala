@@ -9,11 +9,43 @@ import domain.incident.{Incident, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import domain.resource.{Resource, ResourceData}
 import munit.FunSuite
+import ch.qos.logback.classic.{Level, Logger => LogbackLogger}
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
+import org.slf4j.LoggerFactory
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import java.time.Instant
 import java.util.UUID
 
 final class EvaluateMonitorRulesSpec extends FunSuite {
+  private val logger = Slf4jLogger.getLoggerFromName[IO]("test.monitor")
+
+  test("logs only incident open and resolved transitions") {
+    val underlying = LoggerFactory.getLogger("test.monitor").asInstanceOf[LogbackLogger]
+    val previousLevel = underlying.getLevel
+    val appender = new ListAppender[ILoggingEvent]
+    underlying.setLevel(Level.INFO)
+    appender.start()
+    underlying.addAppender(appender)
+    try {
+      evaluate(cpuRule(forSeconds = 0), None, Some(observation(MetricCode.CpuUsagePercent, 95)))
+      evaluate(cpuRule(), Some(state(MonitorRuleStatus.Firing, Some(ObservedAt))),
+        Some(observation(MetricCode.CpuUsagePercent, 95)))
+      evaluate(cpuRule(), Some(state(MonitorRuleStatus.Firing, Some(ObservedAt))),
+        Some(observation(MetricCode.CpuUsagePercent, 40)))
+      val events = appender.list.toArray.map(_.asInstanceOf[ILoggingEvent].getFormattedMessage)
+      assertEquals(events.count(_.startsWith("incident.opened")), 1)
+      assertEquals(events.count(_.startsWith("incident.resolved")), 1)
+      assert(events.forall(_.contains(s"organizationId=$OrganizationId resourceId=$ResourceId monitorRuleId=$RuleId")))
+      assert(events.exists(_.contains(s"incidentId=$NewIncidentId")))
+      assert(events.exists(_.contains(s"incidentId=$IncidentId")))
+    } finally {
+      underlying.detachAppender(appender)
+      appender.stop()
+      underlying.setLevel(previousLevel)
+    }
+  }
 
   test("creates OK when a normal metric has no state") {
     val result = evaluate(cpuRule(), None, Some(observation(MetricCode.CpuUsagePercent, 40)))
@@ -125,7 +157,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
       stateRepository,
       metricRepository,
       new InMemoryIncidentRepository(List.empty),
-      new FixedIdGenerator
+      new FixedIdGenerator,
+      logger
     )
 
     evaluator.execute(List(nodeResource.copy(updatedAt = snapshotAt)), EvaluatedAt).unsafeRunSync()
@@ -147,7 +180,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
       stateRepository,
       metricRepository,
       new InMemoryIncidentRepository(List.empty),
-      new FixedIdGenerator
+      new FixedIdGenerator,
+      logger
     )
 
     intercept[IllegalStateException] {
@@ -167,7 +201,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
       stateRepository,
       metricRepository,
       new InMemoryIncidentRepository(List(openIncident(firingState = pending.copy(status = MonitorRuleStatus.Firing)))),
-      new FixedIdGenerator
+      new FixedIdGenerator,
+      logger
     )
 
     intercept[IllegalStateException] {
@@ -186,7 +221,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
       stateRepository,
       metricRepository,
       new InMemoryIncidentRepository(List(openIncident(state(MonitorRuleStatus.Firing, Some(ObservedAt))))),
-      new FixedIdGenerator
+      new FixedIdGenerator,
+      logger
     )
 
     intercept[IllegalStateException] {
@@ -203,7 +239,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
       stateRepository,
       metricRepository,
       new InMemoryIncidentRepository(List.empty),
-      new FixedIdGenerator
+      new FixedIdGenerator,
+      logger
     )
 
     evaluator.execute(List(containerResource), EvaluatedAt).unsafeRunSync()
@@ -230,7 +267,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
       stateRepository,
       metricRepository,
       new InMemoryIncidentRepository(List.empty),
-      new FixedIdGenerator
+      new FixedIdGenerator,
+      logger
     )
 
     evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()
@@ -261,7 +299,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
       stateRepository,
       metricRepository,
       incidentRepository,
-      new FixedIdGenerator
+      new FixedIdGenerator,
+      logger
     )
 
     evaluator.execute(List(nodeResource), EvaluatedAt).unsafeRunSync()

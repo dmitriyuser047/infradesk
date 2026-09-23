@@ -14,6 +14,8 @@ lazy val root = rootProject
       //"org.scalatest" %% "scalatest" % "3.2.19" % Test,
       "org.scalameta" %% "munit" % "1.2.3" % Test,
       "org.typelevel" %% "cats-effect" % "3.7.0",
+      "org.typelevel" %% "log4cats-slf4j" % "2.8.0",
+      "ch.qos.logback" % "logback-classic" % "1.5.38",
       "org.typelevel" %% "doobie-core"      % doobieVersion,
       "org.typelevel" %% "doobie-postgres"  % doobieVersion,
       "org.typelevel" %% "doobie-hikari"    % doobieVersion,

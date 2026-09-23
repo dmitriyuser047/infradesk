@@ -4,6 +4,7 @@ package application.scheduler
 import application.port.{
   ConnectionScheduleRepository,
   ConnectionSyncResult,
+  ConnectionSyncRunner,
   ConnectionSynchronizer,
   ResourceConnectorFailure,
   ResourceConnectorFailureCode,
@@ -12,17 +13,24 @@ import application.port.{
 }
 import application.monitor.MonitorRuleEvaluator
 import application.connector.{RunConnectionSync, SyncAlreadyRunning}
-import cats.effect.IO
+import cats.effect.{Deferred, IO}
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.connection.ConnectionSchedule
 import domain.resource.Resource
 import munit.FunSuite
+import org.typelevel.log4cats.slf4j.Slf4jLogger
+import ch.qos.logback.classic.{Logger => LogbackLogger}
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
+import org.slf4j.LoggerFactory
 
 import java.time.Instant
 import java.util.UUID
+import scala.concurrent.duration._
 
 final class SyncSchedulerSpec extends FunSuite {
+  private val logger = Slf4jLogger.getLoggerFromName[IO]("test.scheduler")
 
   test("does not invoke synchronizer for a schedule that is not due") {
     val now = Instant.parse("2026-09-21T10:00:00Z")
@@ -130,6 +138,58 @@ final class SyncSchedulerSpec extends FunSuite {
     assertEquals(fixture.repository.scheduledNext.map(_._2), List(first.connectionId, second.connectionId))
   }
 
+  test("a failed tick does not stop the next polling iteration") {
+    val observed = (for {
+      secondTick <- Deferred[IO, Unit]
+      repository = new ConnectionScheduleRepository[IO] {
+        private var calls = 0
+        def save(schedule: ConnectionSchedule): IO[Unit] = IO.unit
+        def findByConnection(organizationId: UUID, connectionId: UUID): IO[Option[ConnectionSchedule]] = IO.pure(None)
+        def findDue(now: Instant, limit: Int): IO[List[ConnectionSchedule]] = IO.defer {
+          calls += 1
+          if (calls == 1) IO.raiseError(new IllegalStateException("first tick failed"))
+          else secondTick.complete(()).as(List.empty[ConnectionSchedule])
+        }
+        def updateAfterRun(organizationId: UUID, connectionId: UUID, nextRunAt: Instant,
+                           consecutiveFailures: Long): IO[Unit] = IO.unit
+      }
+      runner = new ConnectionSyncRunner[IO] {
+        def execute(organizationId: UUID, connectionId: UUID): IO[ConnectionSyncResult] =
+          IO.raiseError(new IllegalStateException("should not sync"))
+      }
+      transactionRunner = new TransactionRunner[IO, IO] { def run[A](program: IO[A]): IO[A] = program }
+      clock = new TimeProvider[IO] { def now: IO[Instant] = IO.pure(Instant.parse("2026-09-21T10:00:00Z")) }
+      scheduler = new SyncScheduler[IO, IO](repository, runner, transactionRunner, clock, logger)
+      fiber <- scheduler.run(1.millis, 10).start
+      _ <- secondTick.get.timeout(3.seconds).guarantee(fiber.cancel)
+    } yield ()).unsafeRunSync()
+    assertEquals(observed, ())
+  }
+
+  test("sync and updateAfterRun failures are both logged without blocking later schedules") {
+    val now = Instant.parse("2026-09-21T10:00:00Z")
+    val first = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000020"), nextRunAt = now)
+    val second = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000021"), nextRunAt = now)
+    val appender = new ListAppender[ILoggingEvent]
+    val underlying = LoggerFactory.getLogger("test.scheduler").asInstanceOf[LogbackLogger]
+    appender.start()
+    underlying.addAppender(appender)
+    try {
+      val fixture = buildFixture(List(first, second), List.fill(5)(now),
+        failingConnectionIds = Set(first.connectionId), failingUpdateIds = Set(first.connectionId))
+      fixture.scheduler.tick(10).unsafeRunSync()
+      assertEquals(fixture.synchronizer.calls, List(first.connectionId, second.connectionId))
+      assertEquals(fixture.repository.scheduledNext.map(_._2), List(second.connectionId))
+      assert(appender.list.toArray.exists(_.asInstanceOf[ILoggingEvent].getFormattedMessage
+        .contains(s"scheduler.sync.failed organizationId=$OrganizationId connectionId=${first.connectionId}")))
+      assert(appender.list.toArray.exists(_.asInstanceOf[ILoggingEvent].getFormattedMessage
+        .contains(s"scheduler.schedule.update.failed organizationId=$OrganizationId connectionId=${first.connectionId}")))
+    } finally {
+      underlying.detachAppender(appender)
+      appender.stop()
+    }
+  }
+
   test("schedules next run when evaluator fails after a successful sync") {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     val finishedAt = now.plusSeconds(3)
@@ -155,22 +215,24 @@ final class SyncSchedulerSpec extends FunSuite {
                        times: List[Instant],
                        failingConnectionIds: Set[UUID] = Set.empty,
                        failures: Map[UUID, Throwable] = Map.empty,
-                       failingEvaluator: Boolean = false
+                       failingEvaluator: Boolean = false,
+                       failingUpdateIds: Set[UUID] = Set.empty
   ): SchedulerFixture = {
     val transactionRunner = new RecordingTransactionRunner
-    val repository = new RecordingConnectionScheduleRepository(schedules)
+    val repository = new RecordingConnectionScheduleRepository(schedules, failingUpdateIds)
     val synchronizer = new RecordingConnectionSynchronizer(transactionRunner,
       failingConnectionIds.map(_ -> new IllegalStateException("Simulated sync failure")).toMap ++ failures)
     val evaluator = new RecordingMonitorRuleEvaluator(transactionRunner, failingEvaluator)
     val timeProvider = new SequenceTimeProvider(times)
     val runConnectionSync = new RunConnectionSync[IO, IO](
-      synchronizer, evaluator, transactionRunner, timeProvider
+      synchronizer, evaluator, transactionRunner, timeProvider, logger
     )
     val scheduler = new SyncScheduler[IO, IO](
       repository,
       runConnectionSync,
       transactionRunner,
-      timeProvider
+      timeProvider,
+      logger
     )
 
     SchedulerFixture(scheduler, repository, synchronizer, evaluator)
@@ -199,7 +261,8 @@ final class SyncSchedulerSpec extends FunSuite {
                                            )
 
   private final class RecordingConnectionScheduleRepository(
-                                                             schedules: List[ConnectionSchedule]
+                                                             schedules: List[ConnectionSchedule],
+                                                             failingUpdateIds: Set[UUID]
                                                            ) extends ConnectionScheduleRepository[IO] {
     override def save(schedule: ConnectionSchedule): IO[Unit] = IO.unit
     var scheduledNext: List[(UUID, UUID, Instant, Long)] = List.empty
@@ -222,6 +285,7 @@ final class SyncSchedulerSpec extends FunSuite {
                                consecutiveFailures: Long
                              ): IO[Unit] =
       IO {
+        if (failingUpdateIds.contains(connectionId)) throw new IllegalStateException("update failed")
         scheduledNext = scheduledNext :+ (organizationId, connectionId, nextRunAt, consecutiveFailures)
       }
   }

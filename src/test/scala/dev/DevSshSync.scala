@@ -149,7 +149,8 @@ object DevSshSync extends IOApp.Simple {
             transactionRunner,
             idGenerator,
             timeProvider,
-            recordResourceObservations
+            recordResourceObservations,
+            _root_.org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("dev.ssh-sync")
           )
 
         val syncConnectionById =

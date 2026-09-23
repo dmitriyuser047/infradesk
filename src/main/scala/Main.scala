@@ -18,6 +18,7 @@ import application.workspace.{CreateEnvironment, CreateProject}
 import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, BootstrapConfig, Login, SessionTokens}
 import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
 import application.scheduler.SyncScheduler
+import cats.data.Kleisli
 import cats.effect.{IO, IOApp}
 import com.comcast.ip4s.{Host, Port}
 import infrastructure.http.ResourceRoutes
@@ -29,17 +30,22 @@ import infrastructure.http.SshConnectionMutationRoutes
 import infrastructure.http.NavigationRoutes
 import infrastructure.http.WorkspaceMutationRoutes
 import infrastructure.http.{AuthBoundary, AuthRoutes, AuthSettings}
+import infrastructure.http.HealthRoutes
+import infrastructure.http.middleware.{HttpRequestLogging, RequestIdMiddleware}
 import application.monitor.{ListMonitorRules, CreateMonitorRule, UpdateMonitorRule}
 import application.incident.{GetIncident, ListIncidents}
 import cats.syntax.semigroupk._
+import org.http4s.{HttpApp, Method, Request}
 import org.http4s.ember.server.EmberServerBuilder
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 import org.typelevel.doobie.ConnectionIO
 import infrastructure.database.{
   Database,
   DatabaseConfig,
   ConnectionIOIdGenerator,
   ConnectionIOTimeProvider,
-  DoobieTransactionRunner
+  DoobieTransactionRunner,
+  PostgresReadinessCheck
 }
 import infrastructure.runtime.{
   SystemIdGenerator,
@@ -88,6 +94,11 @@ object Main extends IOApp.Simple {
       bootstrapConfig <- IO.fromEither(BootstrapConfig.fromEnvironment(sys.env))
       secretCipher <- IO.fromEither(ConnectionSecretCipher.fromEnvironment(sys.env))
       _ <- Database.transactor(config).use { xa =>
+        val httpLogger = Slf4jLogger.getLoggerFromName[IO]("infrastructure.http.requests")
+        val healthLogger = Slf4jLogger.getLoggerFromName[IO]("infrastructure.http.health")
+        val syncLogger = Slf4jLogger.getLoggerFromName[IO]("application.connector.SyncConnection")
+        val schedulerLogger = Slf4jLogger.getLoggerFromName[IO]("application.scheduler.SyncScheduler")
+        val monitorLogger = Slf4jLogger.getLoggerFromName[ConnectionIO]("application.monitor.EvaluateMonitorRules")
         val resourceRepository =
           new PostgresResourceRepository
 
@@ -176,7 +187,8 @@ object Main extends IOApp.Simple {
             monitorRuleStateRepository,
             metricObservationRepository,
             incidentRepository,
-            transactionIdGenerator
+            transactionIdGenerator,
+            monitorLogger
           )
 
         val getResource =
@@ -277,7 +289,8 @@ object Main extends IOApp.Simple {
             transactionRunner,
             idGenerator,
             timeProvider,
-            recordResourceObservations
+            recordResourceObservations,
+            syncLogger
           )
 
         val syncConnectionById =
@@ -288,7 +301,7 @@ object Main extends IOApp.Simple {
           )
 
         val runConnectionSync = new RunConnectionSync[IO, ConnectionIO](
-          syncConnectionById, evaluateMonitorRules, transactionRunner, timeProvider
+          syncConnectionById, evaluateMonitorRules, transactionRunner, timeProvider, syncLogger
         )
 
         val connectionSyncRoutes = new ConnectionSyncRoutes[ConnectionIO](
@@ -302,13 +315,22 @@ object Main extends IOApp.Simple {
           monitorRuleRoutes.routes <+> connectionRoutes.routes <+> sshMutationRoutes.routes <+>
           connectionSyncRoutes.routes <+> navigationRoutes.routes <+> workspaceMutationRoutes.routes).orNotFound
         val protectedApp = new AuthBoundary(authRoutes, authentication, businessApp).app
+        val platformApp = new HealthRoutes(new PostgresReadinessCheck(xa), healthLogger).routes.orNotFound
+        val app: HttpApp[IO] = Kleisli { request: Request[IO] =>
+          val path = request.uri.path.renderString
+          if (request.method == Method.GET && (path == "/health" || path == "/ready"))
+            platformApp.run(request)
+          else protectedApp.run(request)
+        }
+        val observedApp = RequestIdMiddleware(HttpRequestLogging(app, httpLogger))
 
         val syncScheduler =
           new SyncScheduler[IO, ConnectionIO](
             connectionScheduleRepository,
             runConnectionSync,
             transactionRunner,
-            timeProvider
+            timeProvider,
+            schedulerLogger
           )
 
         bootstrapAdmin.run(bootstrapConfig).flatMap { _ =>
@@ -316,7 +338,7 @@ object Main extends IOApp.Simple {
             .default[IO]
             .withHost(httpHost)
             .withPort(httpPort)
-            .withHttpApp(protectedApp)
+            .withHttpApp(observedApp)
             .build
             .use(_ => syncScheduler.run(1.second, limit = 100))
         }

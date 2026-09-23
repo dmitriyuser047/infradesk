@@ -162,7 +162,8 @@ final class SyncConnectionFailureSpec extends FunSuite {
     // Discovery fails before these collaborators are touched in this focused failure-path test.
     val sync = new SyncConnection[IO, IO](new ResourceConnectorRegistry(List(connector)),
       null.asInstanceOf[SyncDiscoveredSnapshot[IO]], null, repository, runner, ids, clock,
-      null.asInstanceOf[RecordResourceObservations[IO]])
+      null.asInstanceOf[RecordResourceObservations[IO]],
+      _root_.org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.sync-failure"))
   }
 
   private final class Sessions extends SyncSessionRepository[IO] {

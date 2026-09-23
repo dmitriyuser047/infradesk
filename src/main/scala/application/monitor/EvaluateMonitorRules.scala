@@ -10,6 +10,7 @@ import domain.resource.node.NodeDefinition
 
 import cats.MonadThrow
 import cats.syntax.all._
+import org.typelevel.log4cats.Logger
 
 import java.time.{Duration, Instant}
 
@@ -18,7 +19,8 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
                                                      monitorRuleStateRepository: MonitorRuleStateRepository[Tx],
                                                      metricObservationRepository: MetricObservationRepository[Tx],
                                                      incidentRepository: IncidentRepository[Tx],
-                                                     idGenerator: IdGenerator[Tx]
+                                                     idGenerator: IdGenerator[Tx],
+                                                     logger: Logger[Tx]
                                                    ) extends MonitorRuleEvaluator[Tx] {
 
   override def execute(resources: List[Resource], evaluatedAt: Instant): Tx[Unit] =
@@ -172,7 +174,7 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
                     evaluatedAt,
                     evaluatedAt
                   )
-                )
+                ) *> logInfo(s"incident.opened organizationId=${rule.organizationId} resourceId=${rule.resourceId} monitorRuleId=${rule.id} incidentId=$incidentId evaluatedAt=$evaluatedAt")
               }
 
             case None =>
@@ -215,11 +217,14 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
               resolvedAt = Some(evaluatedAt),
               updatedAt = evaluatedAt
             )
-          )
+          ) *> logInfo(s"incident.resolved organizationId=${rule.organizationId} resourceId=${rule.resourceId} monitorRuleId=${rule.id} incidentId=${incident.id} evaluatedAt=$evaluatedAt")
 
         case None =>
           new IllegalStateException(
             s"Monitor rule ${rule.id} recovered from FIRING without an OPEN incident"
           ).raiseError[Tx, Unit]
       }
+
+  private def logInfo(message: String): Tx[Unit] =
+    logger.info(message).handleErrorWith(_ => ().pure[Tx])
 }

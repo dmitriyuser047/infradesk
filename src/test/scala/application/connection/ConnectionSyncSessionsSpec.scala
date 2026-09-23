@@ -79,7 +79,8 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
       override def execute(resources: List[Resource], evaluatedAt: Instant): IO[Unit] = IO { evaluations += 1 }
     }
     val clock = new TimeProvider[IO] { override def now: IO[Instant] = IO.pure(at) }
-    val shared = new RunConnectionSync[IO, IO](synchronizer, evaluator, f.transactionRunner, clock)
+    val shared = new RunConnectionSync[IO, IO](synchronizer, evaluator, f.transactionRunner, clock,
+      _root_.org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.sync-sessions"))
     val result = new RunManualConnectionSync[IO](shared, f.sessions, f.transactionRunner)
       .execute(org, connectionId).unsafeRunSync()
     assertEquals(result.id, id)

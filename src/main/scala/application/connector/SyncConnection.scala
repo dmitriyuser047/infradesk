@@ -17,6 +17,9 @@ import domain.sync.{SyncSession, SyncSessionStatus}
 
 import cats.MonadThrow
 import cats.syntax.all._
+import org.typelevel.log4cats.Logger
+
+import java.time.Duration
 
 final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
                                                      connectorRegistry: ResourceConnectorRegistry[F],
@@ -26,7 +29,8 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
                                                      transactionRunner: TransactionRunner[F, Tx],
                                                      idGenerator: IdGenerator[F],
                                                      timeProvider: TimeProvider[F],
-                                                     recordResourceObservations: RecordResourceObservations[Tx]
+                                                     recordResourceObservations: RecordResourceObservations[Tx],
+                                                     logger: Logger[F]
                                                    ) {
 
   def execute(
@@ -60,6 +64,7 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
         SyncFailure.Stale.message
       ))
       _ <- if (created) ().pure[F] else SyncAlreadyRunning().raiseError[F, Unit]
+      _ <- logInfo(s"sync.started organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=$syncSessionId connectorType=${connection.connectorType}")
 
       result <- syncDiscoveredResources(
         connection,
@@ -72,7 +77,7 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
           resources.pure[F]
 
         case Left(error) =>
-          failSync(connection, syncSessionId, error)
+          failSync(connection, syncSession, error)
       }
     } yield ConnectionSyncResult(syncSessionId, resources)
 
@@ -82,7 +87,12 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
                                        syncSession: SyncSession
                                      ): F[List[Resource]] =
     for {
-      discovery <- connector.discover(connection)
+      discovery <- connector.discover(connection).onError { case error =>
+        val failure = SyncFailure.from(error)
+        val event = if (connection.connectorType == "SSH") "ssh.connection.failed" else "connector.discovery.failed"
+        logError(s"$event organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} connectorType=${connection.connectorType} errorCode=${failure.code} errorType=${error.getClass.getSimpleName}")
+      }
+      _ <- logInfo(s"sync.discovery.completed organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} connectorType=${connection.connectorType} resourcesCount=${discovery.resources.size}")
 
       _ <- saveConnectionConfigIfChanged(connection, discovery.connectionConfig)
 
@@ -114,22 +124,27 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
           completedAt
         )
       )
+      _ <- logInfo(s"sync.snapshot.persisted organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} resourcesCount=${resources.size}")
+      _ <- logInfo(s"sync.completed organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} connectorType=${connection.connectorType} resourcesCount=${resources.size} durationMs=${Duration.between(syncSession.startedAt, completedAt).toMillis}")
     } yield resources
 
   private def failSync(
                        connection: Connection,
-                       syncSessionId: java.util.UUID,
+                       syncSession: SyncSession,
                        error: Throwable
                      ): F[List[Resource]] =
     timeProvider.now.flatMap { finishedAt =>
       val failure = SyncFailure.from(error)
+      logError(s"sync.failed organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} connectorType=${connection.connectorType} errorCode=${failure.code} errorType=${error.getClass.getSimpleName} durationMs=${Duration.between(syncSession.startedAt, finishedAt).toMillis}") *>
       transactionRunner
-        .run(syncSessionRepository.fail(connection.organizationId, syncSessionId, finishedAt,
+        .run(syncSessionRepository.fail(connection.organizationId, syncSession.id, finishedAt,
           failure.code, failure.message))
         .attempt
         .flatMap {
-          case Right(_) => ConnectionSyncExecutionFailed(syncSessionId, error).raiseError[F, List[Resource]]
-          case Left(persistenceError) => persistenceError.raiseError[F, List[Resource]]
+          case Right(_) => ConnectionSyncExecutionFailed(syncSession.id, error).raiseError[F, List[Resource]]
+          case Left(persistenceError) =>
+            logError(s"sync.failure.persistence.failed organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} errorType=${persistenceError.getClass.getSimpleName}") *>
+              persistenceError.raiseError[F, List[Resource]]
         }
     }
 
@@ -156,4 +171,10 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
         )
       } yield ()
     }
+
+  private def logInfo(message: String): F[Unit] =
+    logger.info(message).handleErrorWith(_ => ().pure[F])
+
+  private def logError(message: String): F[Unit] =
+    logger.error(message).handleErrorWith(_ => ().pure[F])
 }

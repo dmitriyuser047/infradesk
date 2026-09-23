@@ -5,6 +5,7 @@ import application.monitor.MonitorRuleEvaluator
 import application.port.{ConnectionSynchronizer, ConnectionSyncResult, ConnectionSyncRunner, TimeProvider, TransactionRunner}
 import cats.MonadThrow
 import cats.syntax.all._
+import org.typelevel.log4cats.Logger
 
 import java.util.UUID
 
@@ -13,11 +14,15 @@ final class RunConnectionSync[F[_]: MonadThrow, Tx[_]](
   synchronizer: ConnectionSynchronizer[F],
   evaluator: MonitorRuleEvaluator[Tx],
   runner: TransactionRunner[F, Tx],
-  timeProvider: TimeProvider[F]
+  timeProvider: TimeProvider[F],
+  logger: Logger[F]
 ) extends ConnectionSyncRunner[F] {
   override def execute(organizationId: UUID, connectionId: UUID): F[ConnectionSyncResult] =
     synchronizer.execute(organizationId, connectionId).flatTap { result =>
       timeProvider.now.flatMap(now => runner.run(evaluator.execute(result.resources, now)))
-        .attempt.void
+        .handleErrorWith(error =>
+          logger.error(s"monitor.evaluation.failed organizationId=$organizationId connectionId=$connectionId syncSessionId=${result.sessionId} errorType=${error.getClass.getSimpleName}")
+            .handleErrorWith(_ => ().pure[F])
+        )
     }
 }
