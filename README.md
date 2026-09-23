@@ -28,6 +28,30 @@ Legacy `env:` SSH secret references use environment variables snapshotted at sta
 
 Tests: `sbt testFull` runs the complete backend suite. PostgreSQL integration tests require `INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true` and a database user allowed to create temporary test databases. They use the production `DatabaseMigrator` and clean up their temporary migration-test database.
 
+## Application composition and startup lifecycle
+
+`Main` is only an entrypoint; the object graph is assembled in `src/main/scala/bootstrap`:
+
+| Unit | Responsibility |
+| --- | --- |
+| `InfraDeskApplication` | Startup and shutdown order, resource ownership |
+| `PersistenceModule` | Repositories, transaction runner and readiness check over one transactor |
+| `IntegrationModule` | SSH and Docker clients, secret cipher, connector registry |
+| `ApplicationModule` | Use cases, authentication, bootstrap admin, sync scheduler |
+| `HttpModule` | Routes, auth boundary, platform endpoints, request middleware |
+| `AppLoggers` | The named loggers injected into the components that emit events |
+
+Startup order:
+
+```
+config -> migrate -> database resource -> components -> bootstrap admin -> HTTP server -> scheduler
+```
+
+Wiring stays explicit constructor injection: no DI framework, no service locator, no reflection. The
+component records exist only for assembly; business objects receive the individual dependencies they
+need. Migration runs before any business runtime, and the scheduler runs inside the HTTP server
+resource scope, so shutdown releases the server and then the database pool.
+
 Frontend: `cd frontend`, then `npm ci`, `npm test`, `npm run build`, or `npm run dev`.
 
 Applied migration files (`V1` through `V12`) are immutable. Add a new versioned migration for schema changes. An existing non-empty database without Flyway history is not auto-baselined; assess it before switching startup to Flyway.
