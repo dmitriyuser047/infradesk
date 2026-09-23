@@ -27,13 +27,18 @@ final class ConnectionScheduleClaimIntegrationSpec extends FunSuite {
       } yield ()
       val started = new CountDownLatch(1); val release = new CountDownLatch(1)
       val heldClaim = schedules.claimDue(ownerA, 2, 900).flatTap(_ => connection.delay(started.countDown())) *> connection.delay(release.await())
+      val cleanup = for {
+        _ <- sql"delete from connection_schedule where organization_id = $org".update.run
+        _ <- sql"delete from connection where organization_id = $org".update.run
+        _ <- sql"delete from organization where id = $org".update.run
+      } yield ()
       runner.run(setup) *> (for {
         fiber <- heldClaim.transact(xa).start
         _ <- IO.blocking(started.await())
         rowsB <- runner.run(schedules.claimDue(ownerB, 2, 900)).timeout(3.seconds)
         _ <- IO { assertEquals(rowsB.size, 2); assert(rowsB.forall(_.claimedBy == ownerB)) }
         _ <- IO(release.countDown()) *> fiber.joinWithNever
-      } yield ()).guarantee(runner.run(sql"delete from organization where id = $org".update.run.void))
+      } yield ()).guarantee(runner.run(cleanup))
     }.unsafeRunSync()
   }
 
@@ -48,7 +53,11 @@ final class ConnectionScheduleClaimIntegrationSpec extends FunSuite {
         _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($connection, $org, 'ORGANIZATION', 'SSH', 'claim', 'Claim')".update.run
         _ <- sql"insert into connection_schedule (organization_id, connection_id, enabled, interval_seconds, next_run_at, consecutive_failures) values ($org, $connection, true, 60, $due, 0)".update.run
       } yield ()
-      val cleanup = sql"delete from organization where id = $org".update.run.void
+      val cleanup = for {
+        _ <- sql"delete from connection_schedule where organization_id = $org".update.run
+        _ <- sql"delete from connection where organization_id = $org".update.run
+        _ <- sql"delete from organization where id = $org".update.run
+      } yield ()
       runner.run(setup) *> (for {
         a <- runner.run(schedules.claimDue(ownerA, 2, 900)); _ <- IO(assertEquals(a.map(_.schedule.connectionId), List(connection)))
         blocked <- runner.run(schedules.claimDue(ownerB, 2, 900)); _ <- IO(assertEquals(blocked, Nil))
