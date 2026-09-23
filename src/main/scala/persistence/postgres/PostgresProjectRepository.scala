@@ -12,6 +12,13 @@ import java.util.UUID
 
 final class PostgresProjectRepository extends ProjectRepository[ConnectionIO] {
 
+  override def tryCreate(project: Project): ConnectionIO[Boolean] =
+    sql"""insert into project (id, organization_id, code, name, description, is_active, created_at, updated_at)
+           values (${project.id}, ${project.organizationId}, ${project.code}, ${project.name},
+                   ${project.description}, ${project.isActive}, ${project.createdAt}, ${project.updatedAt})
+           on conflict do nothing"""
+      .update.run.map(_ == 1)
+
   private final case class ProjectRow(
     id: UUID,
     organizationId: UUID,

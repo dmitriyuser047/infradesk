@@ -11,6 +11,8 @@ import { ConnectionsPage } from '../pages/ConnectionsPage'
 import { ConnectionFormPage } from '../pages/ConnectionFormPage'
 import { ConnectionSyncSessionPage } from '../pages/ConnectionSyncSessionPage'
 import { OrganizationPage } from '../pages/OrganizationPage'
+import { ProjectCreatePage } from '../pages/ProjectCreatePage'
+import { EnvironmentCreatePage } from '../pages/EnvironmentCreatePage'
 import { OrganizationsPage } from '../pages/OrganizationsPage'
 import { LoginPage } from '../pages/LoginPage'
 
@@ -24,6 +26,8 @@ export const router = createBrowserRouter([
     children: [
       { path: '/organizations', element: <OrganizationsPage /> },
       { path: '/organizations/:organizationId', element: <OrganizationPage /> },
+      { path: '/organizations/:organizationId/projects/new', element: <ProjectCreatePage /> },
+      { path: '/organizations/:organizationId/projects/:projectId/environments/new', element: <EnvironmentCreatePage /> },
       { path: '/organizations/:organizationId/connections/:connectionId', element: <ConnectionPage /> },
       { path: '/organizations/:organizationId/connections/:connectionId/sync-sessions/:sessionId', element: <ConnectionSyncSessionPage /> },
       { path: '/organizations/:organizationId/connections/:connectionId/edit', element: <ConnectionFormPage /> },

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 import { ApiError } from '../../api/httpClient'
 import { useEnvironments, useProjects } from '../../api/navigation'
@@ -8,9 +8,10 @@ import { getEnvironmentKindLabel, selectProject, validSelection, type ContextSel
 interface ContextSelectorProps {
   organizationId: string
   projectsQuery: ReturnType<typeof useProjects>
+  isOwner: boolean
 }
 
-export function ContextSelector({ organizationId, projectsQuery }: ContextSelectorProps) {
+export function ContextSelector({ organizationId, projectsQuery, isOwner }: ContextSelectorProps) {
   const navigate = useNavigate()
   const [selection, setSelection] = useState<ContextSelection>({ projectId: null, environmentId: null })
 
@@ -55,6 +56,7 @@ export function ContextSelector({ organizationId, projectsQuery }: ContextSelect
         <div className="context-empty">
           <h3>No projects configured</h3>
           <p>Projects will appear here once they are configured.</p>
+          {isOwner ? <Link to={`/organizations/${encodeURIComponent(organizationId)}/projects/new`}>Create project</Link> : null}
         </div>
       ) : null}
       {projectsQuery.isSuccess && projectId !== null ? (
@@ -108,6 +110,7 @@ export function ContextSelector({ organizationId, projectsQuery }: ContextSelect
             <button className="primary-button" type="button" disabled={environmentId === null} onClick={openInfrastructure}>
               Open infrastructure
             </button>
+            {isOwner ? <Link to={`/organizations/${encodeURIComponent(organizationId)}/projects/${encodeURIComponent(projectId)}/environments/new`}>Add environment</Link> : null}
           </div>
         </>
       ) : null}

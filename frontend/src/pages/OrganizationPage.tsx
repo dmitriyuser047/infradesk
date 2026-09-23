@@ -1,6 +1,7 @@
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 
 import { ApiError } from '../api/httpClient'
+import { useMyOrganizations } from '../api/auth'
 import { useOrganization, useProjects } from '../api/navigation'
 import { AppShell } from '../components/layout/AppShell'
 import { ContextSelector } from '../components/navigation/ContextSelector'
@@ -19,6 +20,8 @@ export function OrganizationPage() {
 function OrganizationContent({ organizationId }: { organizationId: string }) {
   const organizationQuery = useOrganization(organizationId)
   const projectsQuery = useProjects(organizationId)
+  const memberships = useMyOrganizations()
+  const isOwner = memberships.data?.some(value => value.id === organizationId && value.role === 'OWNER') ?? false
 
   return (
     <AppShell>
@@ -48,8 +51,9 @@ function OrganizationContent({ organizationId }: { organizationId: string }) {
                 <h1>{organizationQuery.data.name}</h1>
                 <p className="page-subtitle">Infrastructure workspace</p>
               </div>
+              {isOwner ? <Link className="primary-button" to={`/organizations/${encodeURIComponent(organizationId)}/projects/new`}>Create project</Link> : null}
             </header>
-            <ContextSelector organizationId={organizationId} projectsQuery={projectsQuery} />
+            <ContextSelector organizationId={organizationId} projectsQuery={projectsQuery} isOwner={isOwner} />
           </>
         ) : null}
       </div>

@@ -192,10 +192,12 @@ final class SshConnectionManagementSpec extends FunSuite {
       }
     }
     val projects = new ProjectRepository[IO] {
+      override def tryCreate(project: Project): IO[Boolean] = IO.pure(false)
       override def findActiveByOrganization(organizationId: UUID): IO[List[Project]] = IO.pure(Nil)
       override def findActiveById(organizationId: UUID, projectId: UUID): IO[Option[Project]] = IO.pure(None)
     }
     val environments = new EnvironmentRepository[IO] {
+      override def tryCreate(environment: Environment): IO[Boolean] = IO.pure(false)
       override def findActiveByProject(organizationId: UUID, projectId: UUID): IO[List[Environment]] = IO.pure(Nil)
     }
     val probe = new SshConnectionProbe[IO] {

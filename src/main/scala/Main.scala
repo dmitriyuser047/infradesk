@@ -14,6 +14,7 @@ import application.discovery.{
 import application.monitor.EvaluateMonitorRules
 import application.connection.{GetConnection, ListConnections, SshConnectionManagement, ListConnectionSyncSessions, GetConnectionSyncSession, RunManualConnectionSync}
 import application.navigation.{GetOrganization, ListEnvironments, ListProjects}
+import application.workspace.{CreateEnvironment, CreateProject}
 import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, BootstrapConfig, Login, SessionTokens}
 import application.resource.{GetResource, GetResourceMetricHistory, ListEnvironmentResources, PersistExternalResource, RecordResourceObservations}
 import application.scheduler.SyncScheduler
@@ -26,6 +27,7 @@ import infrastructure.http.ConnectionRoutes
 import infrastructure.http.ConnectionSyncRoutes
 import infrastructure.http.SshConnectionMutationRoutes
 import infrastructure.http.NavigationRoutes
+import infrastructure.http.WorkspaceMutationRoutes
 import infrastructure.http.{AuthBoundary, AuthRoutes, AuthSettings}
 import application.monitor.{ListMonitorRules, CreateMonitorRule, UpdateMonitorRule}
 import application.incident.{GetIncident, ListIncidents}
@@ -216,6 +218,11 @@ object Main extends IOApp.Simple {
           ListEnvironments(organizationRepository, projectRepository, environmentRepository),
           transactionRunner
         )
+        val workspaceMutationRoutes = new WorkspaceMutationRoutes[ConnectionIO](
+          new CreateProject(organizationRepository, projectRepository, transactionIdGenerator, transactionTimeProvider),
+          new CreateEnvironment(projectRepository, environmentRepository, transactionIdGenerator, transactionTimeProvider),
+          transactionRunner
+        )
 
         val passwordHasher = new BCryptPasswordHasher
         val tokens = new SessionTokens
@@ -293,7 +300,7 @@ object Main extends IOApp.Simple {
 
         val businessApp = (resourceRoutes.routes <+> incidentRoutes.routes <+>
           monitorRuleRoutes.routes <+> connectionRoutes.routes <+> sshMutationRoutes.routes <+>
-          connectionSyncRoutes.routes <+> navigationRoutes.routes).orNotFound
+          connectionSyncRoutes.routes <+> navigationRoutes.routes <+> workspaceMutationRoutes.routes).orNotFound
         val protectedApp = new AuthBoundary(authRoutes, authentication, businessApp).app
 
         val syncScheduler =

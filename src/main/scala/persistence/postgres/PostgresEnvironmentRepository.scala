@@ -13,6 +13,15 @@ import java.util.UUID
 
 final class PostgresEnvironmentRepository extends EnvironmentRepository[ConnectionIO] {
 
+  override def tryCreate(environment: Environment): ConnectionIO[Boolean] =
+    sql"""insert into environment (id, organization_id, project_id, code, name, kind,
+                                    is_active, created_at, updated_at)
+           values (${environment.id}, ${environment.organizationId}, ${environment.projectId},
+                   ${environment.code}, ${environment.name}, ${environment.kind.code},
+                   ${environment.isActive}, ${environment.createdAt}, ${environment.updatedAt})
+           on conflict do nothing"""
+      .update.run.map(_ == 1)
+
   private final case class EnvironmentRow(
     id: UUID,
     organizationId: UUID,

@@ -59,10 +59,10 @@ final class AuthBoundary[Tx[_]](
   }
 
   private def runForOrganization(context: OrganizationAccessContext, request: Request[IO]): IO[Response[IO]] =
-    if (isConnectionMutation(request) && context.role != OrganizationRole.Owner) Forbidden(forbidden)
+    if (isOwnerMutation(request) && context.role != OrganizationRole.Owner) Forbidden(forbidden)
     else organizationRoutes.run(request)
 
-  private def isConnectionMutation(request: Request[IO]): Boolean = {
+  private def isOwnerMutation(request: Request[IO]): Boolean = {
     val segments = request.uri.path.renderString.split('/').filter(_.nonEmpty).toList
     segments match {
       case List("api", "v1", "organizations", _, "connections") => request.method == POST
@@ -70,6 +70,8 @@ final class AuthBoundary[Tx[_]](
       case List("api", "v1", "organizations", _, "connections", _, "sync") => request.method == POST
       case List("api", "v1", "organizations", _, "connections", _) =>
         request.method == PUT || request.method == DELETE
+      case List("api", "v1", "organizations", _, "projects") => request.method == POST
+      case List("api", "v1", "organizations", _, "projects", _, "environments") => request.method == POST
       case _ => false
     }
   }

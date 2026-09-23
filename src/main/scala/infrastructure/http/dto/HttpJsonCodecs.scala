@@ -86,6 +86,12 @@ object HttpJsonCodecs {
       (value.id, value.status, value.startedAt, value.finishedAt, value.errorCode, value.errorMessage)
     }
 
+  implicit val createProjectRequestDecoder: Decoder[CreateProjectRequest] =
+    Decoder.forProduct3("code", "name", "description")(CreateProjectRequest.apply)
+
+  implicit val createEnvironmentRequestDecoder: Decoder[CreateEnvironmentRequest] =
+    Decoder.forProduct3("code", "name", "kind")(CreateEnvironmentRequest.apply)
+
   implicit val connectionScheduleResponseEncoder: Encoder[ConnectionScheduleResponse] =
     Encoder.forProduct3("enabled", "intervalSeconds", "nextRunAt") { value =>
       (value.enabled, value.intervalSeconds, value.nextRunAt)

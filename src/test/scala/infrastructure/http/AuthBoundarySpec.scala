@@ -155,6 +155,26 @@ final class AuthBoundarySpec extends FunSuite {
     assertEquals(fixture.app.run(cookieRequest(Method.POST, syncPath, raw)).unsafeRunSync().status, Status.Ok)
   }
 
+  test("workspace creation requires OWNER while MEMBER can list projects and environments") {
+    val fixture = new AuthFixture(secure = false)
+    val raw = tokens.generate()
+    fixture.sessions.values = List(AuthSession(UUID.randomUUID(), userId, tokens.hash(raw), now, now.plusSeconds(3600), None))
+    fixture.memberships.values = List(OrganizationMembership(userId, orgA, OrganizationRole.Member, true, now, now))
+    val projectsPath = s"/api/v1/organizations/$orgA/projects"
+    val environmentsPath = s"$projectsPath/${UUID.randomUUID()}/environments"
+
+    assertEquals(fixture.app.run(cookieRequest(Method.GET, projectsPath, raw)).unsafeRunSync().status, Status.Ok)
+    assertEquals(fixture.app.run(cookieRequest(Method.GET, environmentsPath, raw)).unsafeRunSync().status, Status.Ok)
+    for (path <- List(projectsPath, environmentsPath)) {
+      val denied = fixture.app.run(cookieRequest(Method.POST, path, raw)).unsafeRunSync()
+      assertEquals(denied.status, Status.Forbidden)
+      assertEquals(denied.as[Json].unsafeRunSync().hcursor.get[String]("code"), Right("FORBIDDEN"))
+    }
+    fixture.memberships.values = fixture.memberships.values.map(_.copy(role = OrganizationRole.Owner))
+    assertEquals(fixture.app.run(cookieRequest(Method.POST, projectsPath, raw)).unsafeRunSync().status, Status.Ok)
+    assertEquals(fixture.app.run(cookieRequest(Method.POST, environmentsPath, raw)).unsafeRunSync().status, Status.Ok)
+  }
+
   private def cookieRequest(method: Method, path: String, token: String): Request[IO] =
     Request[IO](method, Uri.unsafeFromString(path))
       .putHeaders(org.http4s.Header.Raw(CIString("Cookie"), s"infradesk_session=$token"))
@@ -172,6 +192,9 @@ final class AuthBoundarySpec extends FunSuite {
     val authRoutes = new AuthRoutes(loginService, authentication, AuthSettings(3600, secure))
     val business = HttpRoutes.of[IO] {
       case GET -> Root / "api" / "v1" / "organizations" / _ / "projects" => Ok("reached")
+      case POST -> Root / "api" / "v1" / "organizations" / _ / "projects" => Ok("reached")
+      case GET -> Root / "api" / "v1" / "organizations" / _ / "projects" / _ / "environments" => Ok("reached")
+      case POST -> Root / "api" / "v1" / "organizations" / _ / "projects" / _ / "environments" => Ok("reached")
       case GET -> Root / "api" / "v1" / "organizations" / _ / "connections" => Ok("reached")
       case POST -> Root / "api" / "v1" / "organizations" / _ / "connections" => Ok("reached")
       case POST -> Root / "api" / "v1" / "organizations" / _ / "connections" / _ / "sync" => Ok("reached")

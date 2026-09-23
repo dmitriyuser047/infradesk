@@ -1,7 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from './httpClient'
-import type { EnvironmentResponse, OrganizationResponse, ProjectResponse } from '../types/navigation'
+import type { CreateEnvironmentRequest, CreateProjectRequest, EnvironmentResponse, OrganizationResponse, ProjectResponse } from '../types/navigation'
 
 const organizationPath = (organizationId: string) =>
   `/api/v1/organizations/${encodeURIComponent(organizationId)}`
@@ -21,6 +21,36 @@ export function getEnvironments(
   return requestJson<EnvironmentResponse[]>(
     `${organizationPath(organizationId)}/projects/${encodeURIComponent(projectId)}/environments`,
   )
+}
+
+export function createProject(organizationId: string, body: CreateProjectRequest): Promise<ProjectResponse> {
+  return requestJson<ProjectResponse>(`${organizationPath(organizationId)}/projects`, {
+    method: 'POST', body: JSON.stringify(body),
+  })
+}
+
+export function createEnvironment(organizationId: string, projectId: string,
+  body: CreateEnvironmentRequest): Promise<EnvironmentResponse> {
+  return requestJson<EnvironmentResponse>(
+    `${organizationPath(organizationId)}/projects/${encodeURIComponent(projectId)}/environments`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+}
+
+export function useCreateProject(organizationId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: CreateProjectRequest) => createProject(organizationId, body),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['projects', organizationId] }) },
+  })
+}
+
+export function useCreateEnvironment(organizationId: string, projectId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: CreateEnvironmentRequest) => createEnvironment(organizationId, projectId, body),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['environments', organizationId, projectId] }) },
+  })
 }
 
 export function useOrganization(organizationId: string) {

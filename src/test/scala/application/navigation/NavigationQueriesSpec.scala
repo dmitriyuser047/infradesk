@@ -73,6 +73,7 @@ final class NavigationQueriesSpec extends FunSuite {
   private final class InMemoryProjectRepository(
     projects: List[Project]
   ) extends ProjectRepository[IO] {
+    override def tryCreate(project: Project): IO[Boolean] = IO.pure(false)
     override def findActiveByOrganization(organizationId: UUID): IO[List[Project]] =
       IO.pure(projects.filter(project => project.organizationId == organizationId && project.isActive))
 
@@ -88,6 +89,7 @@ final class NavigationQueriesSpec extends FunSuite {
   private final class InMemoryEnvironmentRepository(
     environments: List[Environment]
   ) extends EnvironmentRepository[IO] {
+    override def tryCreate(environment: Environment): IO[Boolean] = IO.pure(false)
     override def findActiveByProject(
       organizationId: UUID,
       projectId: UUID

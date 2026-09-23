@@ -28,3 +28,17 @@ export const EnvironmentKind = {
   prod: 'PROD',
   custom: 'CUSTOM',
 } as const
+
+export type EnvironmentKindCode = typeof EnvironmentKind[keyof typeof EnvironmentKind]
+
+export interface CreateProjectRequest {
+  code: string
+  name: string
+  description: string | null
+}
+
+export interface CreateEnvironmentRequest {
+  code: string
+  name: string
+  kind: EnvironmentKindCode
+}
