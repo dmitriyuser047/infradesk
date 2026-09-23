@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V14 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V15 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 14)
-        assertEquals(first.currentVersion, "14")
+        assertEquals(first.migrationsApplied, 15)
+        assertEquals(first.currentVersion, "15")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "14")
+        assertEquals(second.currentVersion, "15")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -55,6 +55,15 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               assert(result.next())
               (1 to 5).foreach(index => assert(result.getString(index) != null))
             } finally result.close()
+            val monitoringColumns = statement.executeQuery(
+              "select count(*) from information_schema.columns where table_schema = current_schema() " +
+                "and ((table_name = 'monitor_rule' and column_name = 'no_data_seconds') " +
+                "or (table_name = 'incident' and column_name = 'reason'))"
+            )
+            try {
+              assert(monitoringColumns.next())
+              assertEquals(monitoringColumns.getInt(1), 2)
+            } finally monitoringColumns.close()
           } finally statement.close()
         } finally connection.close()
       }
@@ -63,7 +72,7 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         try {
           val statement = connection.createStatement()
           try assertEquals(statement.executeUpdate(
-            "update flyway_schema_history set checksum = checksum + 1 where version = '14'"
+            "update flyway_schema_history set checksum = checksum + 1 where version = '15'"
           ), 1)
           finally statement.close()
         } finally connection.close()
