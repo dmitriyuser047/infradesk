@@ -99,6 +99,22 @@ final class PostgresSyncSessionRepository extends SyncSessionRepository[Connecti
            on conflict (organization_id, connection_id) where status = 'RUNNING' do nothing"""
       .update.run.map(_ == 1)
 
+  override def recoverStaleAndTryCreate(
+    session: SyncSession,
+    staleBefore: Instant,
+    recoveredAt: Instant,
+    errorCode: String,
+    errorMessage: String
+  ): ConnectionIO[Boolean] =
+    sql"""update sync_session
+           set finished_at = $recoveredAt, status = ${SyncSessionStatus.Failed.code},
+               error_code = $errorCode, error_message = $errorMessage
+           where organization_id = ${session.organizationId}
+             and connection_id = ${session.connectionId}
+             and status = ${SyncSessionStatus.Running.code}
+             and started_at < $staleBefore"""
+      .update.run.flatMap(_ => tryCreate(session))
+
   override def complete(
                         organizationId: UUID,
                         id: UUID,

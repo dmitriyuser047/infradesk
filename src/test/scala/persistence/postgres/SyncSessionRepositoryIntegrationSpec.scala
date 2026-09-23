@@ -1,6 +1,7 @@
 package ru.bitec.app.ops
 package persistence.postgres
 
+import application.connector.{SyncFailure, SyncSessionPolicy}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -73,6 +74,83 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
           assert(recent.forall(s => s.organizationId == org && s.connectionId == connection))
           assertEquals(recent.map(_.startedAt), recent.map(_.startedAt).sortWith(_.isAfter(_)))
           assertEquals(scoped, None)
+        }
+      } yield ()).guarantee(runner.run(cleanup))
+    }.unsafeRunSync()
+  }
+
+  test("PostgreSQL atomically recovers stale RUNNING and admits only one concurrent replacement") {
+    assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
+      "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
+
+    val org = UUID.randomUUID()
+    val staleConnection = UUID.randomUUID()
+    val boundaryConnection = UUID.randomUUID()
+    val terminalConnection = UUID.randomUUID()
+    val oldStaleId = UUID.randomUUID()
+    val oldBoundaryId = UUID.randomUUID()
+    val completedId = UUID.randomUUID()
+    val failedId = UUID.randomUUID()
+    val firstNewId = UUID.randomUUID()
+    val secondNewId = UUID.randomUUID()
+    val now = Instant.parse("2026-09-23T10:00:00Z")
+    val staleBefore = now.minusSeconds(SyncSessionPolicy.StaleAfterSeconds)
+
+    Database.transactor(DatabaseConfig.load.unsafeRunSync()).use { xa =>
+      val runner = new DoobieTransactionRunner(xa)
+      val sessions = new PostgresSyncSessionRepository
+      val setup: ConnectionIO[Unit] = for {
+        _ <- sql"insert into organization (id, code, name) values ($org, ${org.toString}, 'Stale recovery test')".update.run
+        _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($staleConnection, $org, 'ORGANIZATION', 'SSH', 'stale', 'Stale')".update.run
+        _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($boundaryConnection, $org, 'ORGANIZATION', 'SSH', 'boundary', 'Boundary')".update.run
+        _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($terminalConnection, $org, 'ORGANIZATION', 'SSH', 'terminal', 'Terminal')".update.run
+      } yield ()
+      val cleanup: ConnectionIO[Unit] = for {
+        _ <- sql"delete from sync_session where organization_id = $org".update.run
+        _ <- sql"delete from connection where organization_id = $org".update.run
+        _ <- sql"delete from organization where id = $org".update.run
+      } yield ()
+      def running(id: UUID, connectionId: UUID, startedAt: Instant): SyncSession =
+        SyncSession(id, org, connectionId, startedAt, None, SyncSessionStatus.Running)
+      def recover(session: SyncSession): IO[Boolean] =
+        runner.run(sessions.recoverStaleAndTryCreate(session, staleBefore, now,
+          SyncFailure.Stale.code, SyncFailure.Stale.message))
+
+      runner.run(setup) *> (for {
+        _ <- runner.run(sessions.tryCreate(running(oldStaleId, staleConnection, staleBefore.minusSeconds(1))))
+        _ <- runner.run(sessions.tryCreate(running(oldBoundaryId, boundaryConnection, staleBefore)))
+        _ <- runner.run(sessions.create(SyncSession(completedId, org, terminalConnection,
+          now.minusSeconds(2000), Some(now.minusSeconds(1999)), SyncSessionStatus.Completed)))
+        _ <- runner.run(sessions.tryCreate(running(failedId, terminalConnection, now.minusSeconds(1900))))
+        _ <- runner.run(sessions.fail(org, failedId, now.minusSeconds(1899),
+          SyncFailure.Generic.code, SyncFailure.Generic.message))
+
+        results <- (recover(running(firstNewId, staleConnection, now)),
+          recover(running(secondNewId, staleConnection, now))).parTupled
+        staleHistory <- runner.run(sessions.findRecentByConnection(org, staleConnection, 10))
+        activeCount <- runner.run(sql"select count(*) from sync_session where organization_id = $org and connection_id = $staleConnection and status = 'RUNNING'".query[Long].unique)
+        freshCreated <- recover(running(UUID.randomUUID(), boundaryConnection, now))
+        boundary <- runner.run(sessions.findById(org, boundaryConnection, oldBoundaryId))
+        terminalCreated <- recover(running(UUID.randomUUID(), terminalConnection, now))
+        completed <- runner.run(sessions.findById(org, terminalConnection, completedId))
+        failed <- runner.run(sessions.findById(org, terminalConnection, failedId))
+        _ <- IO {
+          assertEquals(List(results._1, results._2).sorted, List(false, true))
+          assertEquals(activeCount, 1L)
+          assertEquals(staleHistory.length, 2)
+          assert(staleHistory.exists(_.id == oldStaleId))
+          assertEquals(staleHistory.count(s => s.id == firstNewId || s.id == secondNewId), 1)
+          assertEquals(staleHistory.head.status, SyncSessionStatus.Running)
+          val recovered = staleHistory.find(_.id == oldStaleId).get
+          assertEquals(recovered.status, SyncSessionStatus.Failed)
+          assertEquals(recovered.finishedAt, Some(now))
+          assertEquals(recovered.errorCode, Some(SyncFailure.Stale.code))
+          assertEquals(recovered.errorMessage, Some(SyncFailure.Stale.message))
+          assertEquals(freshCreated, false)
+          assertEquals(boundary, Some(running(oldBoundaryId, boundaryConnection, staleBefore)))
+          assertEquals(terminalCreated, true)
+          assertEquals(completed.map(_.status), Some(SyncSessionStatus.Completed))
+          assertEquals(failed.flatMap(_.errorCode), Some(SyncFailure.Generic.code))
         }
       } yield ()).guarantee(runner.run(cleanup))
     }.unsafeRunSync()

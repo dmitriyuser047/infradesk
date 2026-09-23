@@ -273,6 +273,19 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
         s.status == SyncSessionStatus.Running)) false
       else { values = value :: values; true }
     }
+    override def recoverStaleAndTryCreate(value: SyncSession, staleBefore: Instant,
+                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[Boolean] = IO {
+      values = values.map { existing =>
+        if (existing.organizationId == value.organizationId && existing.connectionId == value.connectionId &&
+          existing.status == SyncSessionStatus.Running && existing.startedAt.isBefore(staleBefore))
+          existing.copy(status = SyncSessionStatus.Failed, finishedAt = Some(recoveredAt),
+            errorCode = Some(errorCode), errorMessage = Some(errorMessage))
+        else existing
+      }
+      if (values.exists(s => s.organizationId == value.organizationId && s.connectionId == value.connectionId &&
+        s.status == SyncSessionStatus.Running)) false
+      else { values = value :: values; true }
+    }
     override def complete(organizationId: UUID, id: UUID, finishedAt: Instant): IO[Unit] = IO.unit
     override def fail(organizationId: UUID, id: UUID, finishedAt: Instant, code: String, message: String): IO[Unit] = IO.unit
   }

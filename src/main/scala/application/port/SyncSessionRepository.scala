@@ -17,6 +17,13 @@ trait SyncSessionRepository[F[_]] {
 
   def create(session: SyncSession): F[Unit]
   def tryCreate(session: SyncSession): F[Boolean]
+  def recoverStaleAndTryCreate(
+    session: SyncSession,
+    staleBefore: Instant,
+    recoveredAt: Instant,
+    errorCode: String,
+    errorMessage: String
+  ): F[Boolean]
   def complete(organizationId: UUID, id: UUID, finishedAt: Instant): F[Unit]
   def fail(organizationId: UUID, id: UUID, finishedAt: Instant, errorCode: String, errorMessage: String): F[Unit]
 }

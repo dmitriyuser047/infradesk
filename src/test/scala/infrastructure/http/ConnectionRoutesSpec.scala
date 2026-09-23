@@ -251,6 +251,10 @@ final class ConnectionRoutesSpec extends FunSuite {
 
     override def tryCreate(session: SyncSession): IO[Boolean] = IO.pure(true)
 
+    override def recoverStaleAndTryCreate(session: SyncSession, staleBefore: Instant,
+                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[Boolean] =
+      IO.pure(true)
+
     override def findRecentByConnection(organizationId: UUID, connectionId: UUID, limit: Int): IO[List[SyncSession]] =
       IO.pure(sessions.filter(s => s.organizationId == organizationId && s.connectionId == connectionId)
         .sortBy(s => (s.startedAt, s.id.toString)).reverse.take(limit))

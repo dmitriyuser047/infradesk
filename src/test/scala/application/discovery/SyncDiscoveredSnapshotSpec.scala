@@ -309,6 +309,10 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     override def tryCreate(session: SyncSession): IO[Boolean] =
       create(session).map(_ => true)
 
+    override def recoverStaleAndTryCreate(session: SyncSession, staleBefore: Instant,
+                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[Boolean] =
+      tryCreate(session)
+
     override def findRecentByConnection(organizationId: UUID, connectionId: UUID, limit: Int): IO[List[SyncSession]] =
       IO.pure(state().sessions.values.filter(s => s.organizationId == organizationId && s.connectionId == connectionId)
         .toList.sortBy(s => (s.startedAt, s.id.toString)).reverse.take(limit))

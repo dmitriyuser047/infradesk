@@ -52,7 +52,13 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
         status = SyncSessionStatus.Running
       )
 
-      created <- transactionRunner.run(syncSessionRepository.tryCreate(syncSession))
+      created <- transactionRunner.run(syncSessionRepository.recoverStaleAndTryCreate(
+        syncSession,
+        startedAt.minusSeconds(SyncSessionPolicy.StaleAfterSeconds),
+        startedAt,
+        SyncFailure.Stale.code,
+        SyncFailure.Stale.message
+      ))
       _ <- if (created) ().pure[F] else SyncAlreadyRunning().raiseError[F, Unit]
 
       result <- syncDiscoveredResources(

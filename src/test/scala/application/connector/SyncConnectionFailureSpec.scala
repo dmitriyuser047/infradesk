@@ -2,10 +2,12 @@ package ru.bitec.app.ops
 package application.connector
 
 import application.discovery.SyncDiscoveredSnapshot
-import application.port.{IdGenerator, ResourceConnector, ResourceConnectorFailure, ResourceConnectorFailureCode, ResourceConnectorResult, SyncSessionRepository, TimeProvider, TransactionRunner}
+import application.connection.RunManualConnectionSync
+import application.port.{ConnectionSyncResult, ConnectionSyncRunner, IdGenerator, ResourceConnector, ResourceConnectorFailure, ResourceConnectorFailureCode, ResourceConnectorResult, SyncSessionRepository, TimeProvider, TransactionRunner}
 import application.resource.RecordResourceObservations
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all._
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
 import domain.sync.{SyncSession, SyncSessionStatus}
 import munit.FunSuite
@@ -57,24 +59,97 @@ final class SyncConnectionFailureSpec extends FunSuite {
 
   test("already RUNNING session rejects a second run before discovery") {
     val f = new FailureFixture
-    f.repository.current = Some(SyncSession(UUID.randomUUID(), org, connectionId, at, None, SyncSessionStatus.Running))
+    val fresh = SyncSession(UUID.randomUUID(), org, connectionId, at.minusSeconds(1), None, SyncSessionStatus.Running)
+    f.repository.current = Some(fresh)
     intercept[SyncAlreadyRunning] { f.sync.execute(connection).unsafeRunSync() }
     assertEquals(f.discoverCalls, 0)
-    assertEquals(f.repository.current.map(_.status), Some(SyncSessionStatus.Running))
+    assertEquals(f.repository.current, Some(fresh))
+  }
+
+  test("RUNNING session exactly at the TTL boundary is not stale") {
+    val f = new FailureFixture
+    val boundary = SyncSession(UUID.randomUUID(), org, connectionId,
+      at.minusSeconds(SyncSessionPolicy.StaleAfterSeconds), None, SyncSessionStatus.Running)
+    f.repository.current = Some(boundary)
+
+    intercept[SyncAlreadyRunning] { f.sync.execute(connection).unsafeRunSync() }
+
+    assertEquals(f.repository.values, List(boundary))
+    assertEquals(f.discoverCalls, 0)
+  }
+
+  test("stale RUNNING becomes FAILED before a new exact session starts outside transaction") {
+    val f = new FailureFixture
+    val stale = SyncSession(UUID.randomUUID(), org, connectionId,
+      at.minusSeconds(SyncSessionPolicy.StaleAfterSeconds + 1), None, SyncSessionStatus.Running)
+    f.repository.current = Some(stale)
+
+    val error = intercept[ConnectionSyncExecutionFailed] { f.sync.execute(connection).unsafeRunSync() }
+
+    assertEquals(error.sessionId, sessionId)
+    assertEquals(f.discoverCalls, 1)
+    assertEquals(f.discoveredInTransaction, false)
+    assertEquals(f.repository.values.map(_.id), List(sessionId, stale.id))
+    assertEquals(f.repository.findRecentByConnection(org, connectionId, 10).unsafeRunSync().map(_.id),
+      List(sessionId, stale.id))
+    val old = f.repository.values.find(_.id == stale.id).get
+    assertEquals(old.status, SyncSessionStatus.Failed)
+    assertEquals(old.finishedAt, Some(at))
+    assertEquals(old.errorCode, Some(SyncFailure.Stale.code))
+    assertEquals(old.errorMessage, Some(SyncFailure.Stale.message))
+    assertEquals(f.repository.values.head.status, SyncSessionStatus.Failed)
+  }
+
+  test("manual sync after stale recovery returns the new session, not the recovered one") {
+    val f = new FailureFixture
+    val oldId = UUID.randomUUID()
+    f.repository.current = Some(SyncSession(oldId, org, connectionId,
+      at.minusSeconds(SyncSessionPolicy.StaleAfterSeconds + 1), None, SyncSessionStatus.Running))
+    val sharedRunner = new ConnectionSyncRunner[IO] {
+      override def execute(organizationId: UUID, requestedConnectionId: UUID): IO[ConnectionSyncResult] =
+        f.sync.execute(connection)
+    }
+
+    val result = new RunManualConnectionSync[IO](sharedRunner, f.repository, f.runner)
+      .execute(org, connectionId).unsafeRunSync()
+
+    assertEquals(result.id, sessionId)
+    assertEquals(result.status, SyncSessionStatus.Failed)
+    assertEquals(f.repository.values.find(_.id == oldId).flatMap(_.errorCode), Some(SyncFailure.Stale.code))
+  }
+
+  test("completed and failed history is never changed by recovery") {
+    val f = new FailureFixture
+    val completed = SyncSession(UUID.randomUUID(), org, connectionId, at.minusSeconds(2000),
+      Some(at.minusSeconds(1999)), SyncSessionStatus.Completed)
+    val failed = SyncSession(UUID.randomUUID(), org, connectionId, at.minusSeconds(1900),
+      Some(at.minusSeconds(1899)), SyncSessionStatus.Failed,
+      Some(SyncFailure.Generic.code), Some(SyncFailure.Generic.message))
+    f.repository.values = List(completed, failed)
+
+    intercept[ConnectionSyncExecutionFailed] { f.sync.execute(connection).unsafeRunSync() }
+
+    assertEquals(f.repository.values.find(_.id == completed.id), Some(completed))
+    assertEquals(f.repository.values.find(_.id == failed.id), Some(failed))
+    assertEquals(f.discoverCalls, 1)
   }
 
   private final class FailureFixture(failure: Throwable = new IllegalStateException("raw password in SSH exception")) {
     var discoverCalls = 0
+    var discoveredInTransaction = false
+    var inTransaction = false
     val connector = new ResourceConnector[IO] {
       override val connectorType = "FAILING"
       override def discover(value: Connection): IO[ResourceConnectorResult] = IO {
         discoverCalls += 1
+        discoveredInTransaction ||= inTransaction
         throw failure
       }
     }
     val repository = new Sessions
     val runner = new TransactionRunner[IO, IO] {
-      override def run[A](program: IO[A]): IO[A] = program
+      override def run[A](program: IO[A]): IO[A] =
+        IO { inTransaction = true } *> program.guarantee(IO { inTransaction = false })
     }
     val ids = new IdGenerator[IO] { override def nextId: IO[UUID] = IO.pure(sessionId) }
     val clock = new TimeProvider[IO] {
@@ -91,21 +166,44 @@ final class SyncConnectionFailureSpec extends FunSuite {
   }
 
   private final class Sessions extends SyncSessionRepository[IO] {
-    var current: Option[SyncSession] = None
-    override def findLatestByConnection(organizationId: UUID, forConnection: UUID): IO[Option[SyncSession]] = IO.pure(current)
+    var values: List[SyncSession] = Nil
+    def current: Option[SyncSession] = values.headOption
+    def current_=(value: Option[SyncSession]): Unit = { values = value.toList }
+    override def findLatestByConnection(organizationId: UUID, forConnection: UUID): IO[Option[SyncSession]] =
+      IO.pure(values.filter(s => s.organizationId == organizationId && s.connectionId == forConnection)
+        .sortBy(_.startedAt).lastOption)
     override def findRecentByConnection(organizationId: UUID, forConnection: UUID, limit: Int): IO[List[SyncSession]] =
-      IO.pure(current.toList)
+      IO.pure(values.filter(s => s.organizationId == organizationId && s.connectionId == forConnection)
+        .sortBy(_.startedAt).reverse.take(limit))
     override def findById(organizationId: UUID, forConnection: UUID, id: UUID): IO[Option[SyncSession]] =
-      IO.pure(current.filter(s => s.organizationId == organizationId && s.connectionId == forConnection && s.id == id))
-    override def create(value: SyncSession): IO[Unit] = IO { current = Some(value) }
+      IO.pure(values.find(s => s.organizationId == organizationId && s.connectionId == forConnection && s.id == id))
+    override def create(value: SyncSession): IO[Unit] = IO { values = value :: values }
     override def tryCreate(value: SyncSession): IO[Boolean] = IO {
-      if (current.exists(_.status == SyncSessionStatus.Running)) false
-      else { current = Some(value); true }
+      if (values.exists(s => s.organizationId == value.organizationId && s.connectionId == value.connectionId &&
+        s.status == SyncSessionStatus.Running)) false
+      else { values = value :: values; true }
+    }
+    override def recoverStaleAndTryCreate(value: SyncSession, staleBefore: Instant,
+                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[Boolean] = IO {
+      values = values.map { existing =>
+        if (existing.organizationId == value.organizationId && existing.connectionId == value.connectionId &&
+          existing.status == SyncSessionStatus.Running && existing.startedAt.isBefore(staleBefore))
+          existing.copy(status = SyncSessionStatus.Failed, finishedAt = Some(recoveredAt),
+            errorCode = Some(errorCode), errorMessage = Some(errorMessage))
+        else existing
+      }
+      if (values.exists(s => s.organizationId == value.organizationId && s.connectionId == value.connectionId &&
+        s.status == SyncSessionStatus.Running)) false
+      else { values = value :: values; true }
     }
     override def complete(organizationId: UUID, id: UUID, finishedAt: Instant): IO[Unit] = IO.unit
     override def fail(organizationId: UUID, id: UUID, finishedAt: Instant, code: String, message: String): IO[Unit] = IO {
-      current = current.map(_.copy(status = SyncSessionStatus.Failed, finishedAt = Some(finishedAt),
-        errorCode = Some(code), errorMessage = Some(message)))
+      values = values.map { session =>
+        if (session.organizationId == organizationId && session.id == id && session.status == SyncSessionStatus.Running)
+          session.copy(status = SyncSessionStatus.Failed, finishedAt = Some(finishedAt),
+            errorCode = Some(code), errorMessage = Some(message))
+        else session
+      }
     }
   }
 }
