@@ -45,7 +45,10 @@ Resource types are registered once in `PersistenceModule.resourceTypeCodecs` and
 `ResourceDefinitionRegistry`. Generic persistence stores and reads whatever the registered typed
 codec produces and hardcodes no NODE or CONTAINER knowledge, so a new resource type is a definition,
 its codec and one registration line. A duplicate resource type code fails startup, and a type this
-version does not know is readable only while its stored payload is empty.
+version does not know is readable only while its stored payload is empty. The frontend mirrors this:
+a resource type is displayed by the presentation registered in
+`frontend/src/components/resources/presentation/resourcePresentations.ts`, and a type it does not know
+yet falls back to the common resource shell instead of failing.
 
 Startup order:
 

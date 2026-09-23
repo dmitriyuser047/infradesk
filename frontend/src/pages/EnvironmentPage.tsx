@@ -7,6 +7,7 @@ import { useEnvironments } from '../api/navigation'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { ResourceTree } from '../components/resources/ResourceTree'
+import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
 import { filterResourcesForTree } from '../components/resources/filterResourcesForTree'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
@@ -43,7 +44,8 @@ function EnvironmentContent({ organizationId, environmentId }: EnvironmentConten
         <div className="filter-bar">
           <label>Search<input type="search" placeholder="Name or code" value={search} onChange={event => setSearch(event.target.value)} /></label>
           <label>Type<select value={type} onChange={event => setType(event.target.value)}><option value="ALL">All</option>
-            <option value="NODE">Node</option><option value="CONTAINER">Container</option></select></label>
+            {resourcePresentationRegistry.list().map(presentation =>
+              <option key={presentation.code} value={presentation.code}>{presentation.label}</option>)}</select></label>
           <button className="secondary-button" type="button" onClick={() => resourcesQuery.refetch()}>Refresh</button>
         </div>
         {resourcesQuery.isPending ? <ResourceTreeSkeleton /> : null}

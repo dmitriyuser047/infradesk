@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { containerStatusPresentation } from './resourceStatusPresentation'
+import { containerStatusPresentation } from './containerStatusPresentation'
 
 describe('container status presentation', () => {
   it('uses the existing Docker state to choose a semantic tone', () => {

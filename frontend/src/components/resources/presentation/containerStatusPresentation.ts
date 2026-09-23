@@ -1,4 +1,4 @@
-import type { StatusTone } from '../layout/WorkspacePrimitives'
+import type { StatusTone } from '../../layout/WorkspacePrimitives'
 
 export function containerStatusPresentation(state: string | null | undefined): { label: string; tone: StatusTone } {
   const normalized = state?.trim().toLowerCase()

@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Box, ChevronDown, ChevronRight, Server } from 'lucide-react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 
 import type { ResourceTreeNode } from './resourceTreeModel'
 import { StatusIndicator } from '../layout/WorkspacePrimitives'
-import { containerStatusPresentation } from './resourceStatusPresentation'
+import { resourcePresentationRegistry } from './presentation/resourcePresentations'
 
 interface ResourceTreeItemProps {
   node: ResourceTreeNode
@@ -22,11 +22,10 @@ export function ResourceTreeItem({
   const [expanded, setExpanded] = useState(true)
   const location = useLocation()
   const hasChildren = node.children.length > 0
-  const isNode = node.resource.resourceTypeCode === 'NODE'
-  const Icon = isNode ? Server : Box
+  const presentation = resourcePresentationRegistry.resolve(node.resource.resourceTypeCode)
+  const Icon = presentation.Icon
   const destination = `/organizations/${organizationId}/environments/${environmentId}/resources/${node.resource.id}${location.search}`
-  const containerStatus = node.resource.data.kind === 'CONTAINER'
-    ? containerStatusPresentation(node.resource.data.status?.state) : null
+  const status = presentation.rowStatus(node.resource)
 
   return (
     <div className="resource-tree-item" role="treeitem" aria-expanded={hasChildren ? expanded : undefined}>
@@ -54,12 +53,8 @@ export function ResourceTreeItem({
               <small className="resource-code">{node.resource.code}</small></span>
           </span>
           <span className="resource-type-cell">{node.resource.resourceTypeCode}</span>
-          <span className="resource-state-cell">{node.resource.data.kind === 'NODE' ?
-            <StatusIndicator label={node.resource.data.status?.online === true ? 'Online' :
-              node.resource.data.status?.online === false ? 'Offline' : 'Unknown'}
-              tone={node.resource.data.status?.online === true ? 'success' :
-                node.resource.data.status?.online === false ? 'danger' : 'neutral'} /> :
-            <StatusIndicator label={containerStatus?.label ?? 'Unknown'} tone={containerStatus?.tone} />}</span>
+          <span className="resource-state-cell">
+            <StatusIndicator label={status.label} tone={status.tone} /></span>
         </Link>
       </div>
       {hasChildren && expanded ? (
