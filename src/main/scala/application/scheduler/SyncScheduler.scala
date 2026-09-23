@@ -9,12 +9,10 @@ import application.port.{
   TimeProvider,
   TransactionRunner
 }
-import domain.connection.ConnectionSchedule
-
 import cats.{MonadThrow, Parallel}
 import cats.effect.{Async, Temporal}
 import cats.effect.implicits._
-import cats.effect.std.{Queue, Semaphore}
+import cats.effect.std.Queue
 import cats.syntax.all._
 import org.typelevel.log4cats.Logger
 
@@ -26,58 +24,57 @@ final class SyncScheduler[F[_]: Async, Tx[_]: MonadThrow](
                                                                transactionRunner: TransactionRunner[F, Tx],
                                                                timeProvider: TimeProvider[F],
                                                                logger: Logger[F],
-                                                               maxConcurrency: Int
+                                                               maxConcurrency: Int,
+                                                               schedulerInstanceId: java.util.UUID = new java.util.UUID(0L, 0L),
+                                                               claimLease: FiniteDuration = scala.concurrent.duration.FiniteDuration(15, scala.concurrent.duration.MINUTES)
                                                              ) {
 
   require(maxConcurrency > 0, "maxConcurrency must be positive")
 
   def tick(limit: Int): F[Unit] =
-    Semaphore[F](maxConcurrency.toLong).flatMap(tickWith(_, limit))
+    tickWith(limit)
 
   def run(pollInterval: FiniteDuration, limit: Int): F[Nothing] =
-    Semaphore[F](maxConcurrency.toLong).flatMap[Nothing] { limiter =>
-      (tickWith(limiter, limit).handleErrorWith(error =>
-        logError(s"scheduler.tick.failed errorType=${error.getClass.getSimpleName}", error)
-      ) *> Temporal[F].sleep(pollInterval)).foreverM
-    }
+    (tickWith(limit).handleErrorWith(error =>
+      logError(s"scheduler.tick.failed schedulerInstanceId=$schedulerInstanceId errorType=${error.getClass.getSimpleName}", error)
+    ) *> Temporal[F].sleep(pollInterval)).foreverM
 
-  private def tickWith(limiter: Semaphore[F], limit: Int): F[Unit] =
+  private def tickWith(limit: Int): F[Unit] =
     for {
-      now <- timeProvider.now
-      dueSchedules <- transactionRunner.run(
-        connectionScheduleRepository.findDue(now, limit)
+      _ <- timeProvider.now
+      claimedSchedules <- transactionRunner.run(
+        connectionScheduleRepository.claimDue(schedulerInstanceId, limit, claimLease.toSeconds)
       )
-      _ <- processDueSchedules(limiter, dueSchedules)
+      _ <- processDueSchedules(claimedSchedules)
     } yield ()
 
   private def processDueSchedules(
-                                   limiter: Semaphore[F],
-                                   dueSchedules: List[ConnectionSchedule]
+                                   claimedSchedules: List[ClaimedConnectionSchedule]
                                  ): F[Unit] =
-    if (dueSchedules.isEmpty) ().pure[F]
+    if (claimedSchedules.isEmpty) ().pure[F]
     else {
-      val workerCount = math.min(maxConcurrency, dueSchedules.size)
+      val workerCount = math.min(maxConcurrency, claimedSchedules.size)
 
-      Queue.unbounded[F, Option[ConnectionSchedule]].flatMap { queue =>
-        dueSchedules.traverse_(schedule => queue.offer(Some(schedule))) *>
+      Queue.unbounded[F, Option[ClaimedConnectionSchedule]].flatMap { queue =>
+        claimedSchedules.traverse_(schedule => queue.offer(Some(schedule))) *>
           List.fill(workerCount)(()).traverse_(_ => queue.offer(None)) *>
-          Parallel.parTraverse_(List.fill(workerCount)(()))(_ => worker(queue, limiter))
+          Parallel.parTraverse_(List.fill(workerCount)(()))(_ => worker(queue))
       }
     }
 
   private def worker(
-                      queue: Queue[F, Option[ConnectionSchedule]],
-                      limiter: Semaphore[F]
+                      queue: Queue[F, Option[ClaimedConnectionSchedule]]
                     ): F[Unit] =
     queue.take.flatMap {
       case Some(schedule) =>
-        limiter.permit.use(_ => syncSchedule(schedule))
+        syncSchedule(schedule)
           .handleErrorWith(error => logUnexpectedScheduleFailure(schedule, error)) *>
-          worker(queue, limiter)
+          worker(queue)
       case None => ().pure[F]
     }
 
-  private def syncSchedule(schedule: ConnectionSchedule): F[Unit] = {
+  private def syncSchedule(claimed: ClaimedConnectionSchedule): F[Unit] = {
+    val schedule = claimed.schedule
     val context = s"organizationId=${schedule.organizationId} connectionId=${schedule.connectionId}"
     logInfo(s"scheduler.sync.started $context") *>
       connectionSyncRunner.execute(schedule.organizationId, schedule.connectionId).attempt.flatMap { result =>
@@ -112,16 +109,18 @@ final class SyncScheduler[F[_]: Async, Tx[_]: MonadThrow](
         }
         outcomeLog *> transactionRunner
           .run(
-            connectionScheduleRepository.updateAfterRun(
+            connectionScheduleRepository.completeClaimedRun(
               schedule.organizationId,
               schedule.connectionId,
+              claimed.claimedBy,
               finishedAt.plusSeconds(delay),
               failures
             )
           )
-          .handleErrorWith(error =>
-            logError(s"scheduler.schedule.update.failed $context errorType=${error.getClass.getSimpleName}", error)
-          )
+          .flatMap {
+            case true => ().pure[F]
+            case false => logger.warn(s"scheduler.claim.lost $context schedulerInstanceId=$schedulerInstanceId").handleErrorWith(_ => ().pure[F])
+          }.handleErrorWith(error => logError(s"scheduler.schedule.update.failed $context errorType=${error.getClass.getSimpleName}", error))
       }
     }
   }
@@ -135,9 +134,9 @@ final class SyncScheduler[F[_]: Async, Tx[_]: MonadThrow](
   private def logError(message: String, error: Throwable): F[Unit] =
     logger.error(error)(message).handleErrorWith(_ => ().pure[F])
 
-  private def logUnexpectedScheduleFailure(schedule: ConnectionSchedule, error: Throwable): F[Unit] =
+  private def logUnexpectedScheduleFailure(claimed: ClaimedConnectionSchedule, error: Throwable): F[Unit] =
     logError(
-      s"scheduler.sync.failed organizationId=${schedule.organizationId} connectionId=${schedule.connectionId} errorType=${error.getClass.getSimpleName}",
+      s"scheduler.sync.failed organizationId=${claimed.schedule.organizationId} connectionId=${claimed.schedule.connectionId} errorType=${error.getClass.getSimpleName}",
       error
     )
 }

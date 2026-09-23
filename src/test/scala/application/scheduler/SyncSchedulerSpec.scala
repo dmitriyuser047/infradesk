@@ -149,7 +149,7 @@ final class SyncSchedulerSpec extends FunSuite {
     assertEquals(observed._3.toSet, schedules.map(_.connectionId).toSet)
   }
 
-  test("a failed schedule releases its permit so a waiting schedule runs") {
+  test("a failed schedule frees a worker slot so a waiting schedule runs") {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     val failing = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000031"), nextRunAt = now)
     val waiting = schedule(connectionId = UUID.fromString("60000000-0000-0000-0000-000000000032"), nextRunAt = now)
@@ -277,6 +277,8 @@ final class SyncSchedulerSpec extends FunSuite {
           if (calls == 1) IO.raiseError(new IllegalStateException("first tick failed"))
           else secondTick.complete(()).as(List.empty[ConnectionSchedule])
         }
+        override def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long) =
+          findDue(Instant.now, limit).map(_.map(s => ClaimedConnectionSchedule(s, claimedBy, Instant.now.plusSeconds(leaseSeconds))))
         def updateAfterRun(organizationId: UUID, connectionId: UUID, nextRunAt: Instant,
                            consecutiveFailures: Long): IO[Unit] = IO.unit
       }
@@ -345,12 +347,16 @@ final class SyncSchedulerSpec extends FunSuite {
         ))
       override def findDue(at: Instant, limit: Int): IO[List[ConnectionSchedule]] =
         IO.pure(schedules.filter(schedule => !schedule.nextRunAt.isAfter(at)).take(limit))
+      override def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long) =
+        findDue(Instant.now, limit).map(_.map(s => ClaimedConnectionSchedule(s, claimedBy, Instant.now.plusSeconds(leaseSeconds))))
       override def updateAfterRun(
         organizationId: UUID,
         connectionId: UUID,
         nextRunAt: Instant,
         consecutiveFailures: Long
       ): IO[Unit] = updated.update(_ :+ connectionId)
+      override def completeClaimedRun(organizationId: UUID, connectionId: UUID, claimedBy: UUID, nextRunAt: Instant, consecutiveFailures: Long): IO[Boolean] =
+        updateAfterRun(organizationId, connectionId, nextRunAt, consecutiveFailures).as(true)
     }
     val transactionRunner = new TransactionRunner[IO, IO] {
       override def run[A](program: IO[A]): IO[A] = program
@@ -431,6 +437,8 @@ final class SyncSchedulerSpec extends FunSuite {
 
     override def findDue(now: Instant, limit: Int): IO[List[ConnectionSchedule]] =
       IO.pure(schedules.filter(schedule => schedule.enabled && !schedule.nextRunAt.isAfter(now)).take(limit))
+    override def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long) =
+      findDue(Instant.parse("2026-09-21T10:00:00Z"), limit).map(_.map(s => ClaimedConnectionSchedule(s, claimedBy, Instant.now.plusSeconds(leaseSeconds))))
 
     override def updateAfterRun(
                                organizationId: UUID,
@@ -442,6 +450,8 @@ final class SyncSchedulerSpec extends FunSuite {
         if (failingUpdateIds.contains(connectionId)) throw new IllegalStateException("update failed")
         scheduledNext = scheduledNext :+ (organizationId, connectionId, nextRunAt, consecutiveFailures)
       }
+    override def completeClaimedRun(organizationId: UUID, connectionId: UUID, claimedBy: UUID, nextRunAt: Instant, consecutiveFailures: Long): IO[Boolean] =
+      updateAfterRun(organizationId, connectionId, nextRunAt, consecutiveFailures).as(true)
   }
 
   private final class RecordingConnectionSynchronizer(

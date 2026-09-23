@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package persistence.postgres
 
 import application.port.ConnectionScheduleRepository
+import application.scheduler.ClaimedConnectionSchedule
 import domain.connection.ConnectionSchedule
 
 import cats.syntax.all._
@@ -82,4 +83,49 @@ final class PostgresConnectionScheduleRepository extends ConnectionScheduleRepos
             s"Expected to schedule 1 connection row, affected: $rows"
           ).raiseError[ConnectionIO, Unit]
       }
+
+  override def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long): ConnectionIO[List[ClaimedConnectionSchedule]] =
+    sql"""
+      with due as (
+        select organization_id, connection_id
+        from connection_schedule
+        where enabled
+          and next_run_at <= current_timestamp
+          and (claimed_until is null or claimed_until <= current_timestamp)
+        order by next_run_at, organization_id, connection_id
+        for update skip locked
+        limit $limit
+      )
+      update connection_schedule cs
+      set claimed_by = $claimedBy,
+          claimed_until = current_timestamp + ($leaseSeconds * interval '1 second')
+      from due
+      where cs.organization_id = due.organization_id
+        and cs.connection_id = due.connection_id
+      returning cs.organization_id, cs.connection_id, cs.enabled, cs.interval_seconds,
+                cs.next_run_at, cs.consecutive_failures, cs.claimed_by, cs.claimed_until
+    """
+      .query[(UUID, UUID, Boolean, Long, Instant, Long, UUID, Instant)]
+      .to[List]
+      .map(_.map { case (organizationId, connectionId, enabled, intervalSeconds, nextRunAt, failures, owner, until) =>
+        ClaimedConnectionSchedule(ConnectionSchedule(organizationId, connectionId, enabled, intervalSeconds, nextRunAt, failures), owner, until)
+      })
+
+  override def completeClaimedRun(
+                                   organizationId: UUID,
+                                   connectionId: UUID,
+                                   claimedBy: UUID,
+                                   nextRunAt: Instant,
+                                   consecutiveFailures: Long
+                                 ): ConnectionIO[Boolean] =
+    sql"""
+      update connection_schedule
+      set next_run_at = $nextRunAt,
+          consecutive_failures = $consecutiveFailures,
+          claimed_by = null,
+          claimed_until = null
+      where organization_id = $organizationId
+        and connection_id = $connectionId
+        and claimed_by = $claimedBy
+    """.update.run.map(_ == 1)
 }

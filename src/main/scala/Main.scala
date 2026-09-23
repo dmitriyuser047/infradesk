@@ -151,6 +151,7 @@ object Main extends IOApp.Simple {
 
         val idGenerator =
           new SystemIdGenerator
+        val schedulerInstanceId = java.util.UUID.randomUUID()
 
         val transactionIdGenerator =
           new ConnectionIOIdGenerator
@@ -332,7 +333,9 @@ object Main extends IOApp.Simple {
             transactionRunner,
             timeProvider,
             schedulerLogger,
-            config.scheduler.maxConcurrency
+            config.scheduler.maxConcurrency,
+            schedulerInstanceId,
+            config.scheduler.claimLease
           )
 
         bootstrapAdmin.run(config.bootstrap).flatMap { _ =>

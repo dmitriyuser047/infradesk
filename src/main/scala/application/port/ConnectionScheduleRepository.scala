@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package application.port
 
 import domain.connection.ConnectionSchedule
+import application.scheduler.ClaimedConnectionSchedule
 
 import java.time.Instant
 import java.util.UUID
@@ -15,10 +16,21 @@ trait ConnectionScheduleRepository[F[_]] {
 
   def findDue(now: Instant, limit: Int): F[List[ConnectionSchedule]]
 
+  def claimDue(claimedBy: UUID, limit: Int, leaseSeconds: Long): F[List[ClaimedConnectionSchedule]] =
+    throw new UnsupportedOperationException("claimDue is not implemented")
+
   def updateAfterRun(
                       organizationId: UUID,
                       connectionId: UUID,
                       nextRunAt: Instant,
                       consecutiveFailures: Long
                     ): F[Unit]
+
+  def completeClaimedRun(
+                          organizationId: UUID,
+                          connectionId: UUID,
+                          claimedBy: UUID,
+                          nextRunAt: Instant,
+                          consecutiveFailures: Long
+                        ): F[Boolean] = throw new UnsupportedOperationException("completeClaimedRun is not implemented")
 }
