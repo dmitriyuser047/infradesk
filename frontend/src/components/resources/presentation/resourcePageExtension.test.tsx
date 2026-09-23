@@ -59,7 +59,9 @@ describe('registering a new resource presentation', () => {
     expect(html).toContain('<dt>Test detail</dt><dd>test-code</dd>')
     expect(html).toContain('Test header status')
     expect(html).not.toContain('Details are not available for this resource type')
-    expect(html).not.toContain('Monitor rules')
+    // A new presentation does not make monitoring apply to the type: that is a feature rule.
+    expect(html).not.toContain('id="tab-metrics"')
+    expect(html).not.toContain('id="tab-rules"')
   })
 
   it('shows the new type through the generic infrastructure tree', () => {

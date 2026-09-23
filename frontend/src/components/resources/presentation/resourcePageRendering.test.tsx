@@ -47,7 +47,8 @@ describe('resource page presentation', () => {
     expect(html).toContain('<dt>CPU cores</dt><dd>4</dd>')
     expect(html).toContain('status-indicator status-success')
     expect(html).toContain('Online')
-    expect(html).toContain('Metrics')
+    expect(html).toContain('id="tab-metrics"')
+    expect(html).toContain('id="tab-rules"')
     expect(html).toContain('Monitor rules')
   })
 
@@ -56,7 +57,8 @@ describe('resource page presentation', () => {
 
     expect(html).toContain('<dt>Image</dt><dd>backend:2.0</dd>')
     expect(html).toContain('<dt>State</dt><dd>running</dd>')
-    expect(html).not.toContain('Monitor rules')
+    expect(html).not.toContain('id="tab-metrics"')
+    expect(html).not.toContain('id="tab-rules"')
     expect(html).not.toContain('status-indicator')
   })
 
@@ -66,7 +68,8 @@ describe('resource page presentation', () => {
     expect(html).toContain('Resource name')
     expect(html).toContain('NEW_SERVER_TYPE · resource-code')
     expect(html).toContain('Details are not available for this resource type')
-    expect(html).not.toContain('Monitor rules')
+    expect(html).not.toContain('id="tab-metrics"')
+    expect(html).not.toContain('id="tab-rules"')
   })
 
   it('keeps the common shell identical across resource types', () => {

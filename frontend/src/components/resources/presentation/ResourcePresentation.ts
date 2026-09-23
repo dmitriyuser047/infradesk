@@ -27,13 +27,11 @@ export interface ResourceRendering {
   /** Type-specific content of the Overview tab. */
   Overview: ComponentType<ResourcePresentationProps>
   /**
-   * Present when this kind of resource shows the metric and monitor rule tabs; the component is
-   * the type-specific metric summary above the charts. Monitoring itself is unchanged: only the
-   * kinds that showed those tabs before declare this.
+   * Type-specific summary rendered above the metric charts. Purely how this kind of resource is
+   * displayed; whether monitoring applies to it at all is a monitoring feature rule, not a
+   * presentation one.
    */
-  monitoring?: {
-    MetricSummary: ComponentType<ResourcePresentationProps>
-  }
+  MetricSummary?: ComponentType<ResourcePresentationProps>
 }
 
 export interface ResourcePresentation extends ResourceRendering {

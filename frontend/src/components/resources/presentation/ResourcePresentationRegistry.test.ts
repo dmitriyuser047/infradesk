@@ -29,7 +29,7 @@ describe('resource presentation registry', () => {
     expect(rendering.rowStatus(resource('NEW_SERVER_TYPE', { kind: 'NODE', spec: null, status: null })))
       .toEqual({ label: 'Unknown', tone: 'neutral' })
     expect(rendering.headerStatus).toBeUndefined()
-    expect(rendering.monitoring).toBeUndefined()
+    expect(rendering.MetricSummary).toBeUndefined()
   })
 
   it('refuses to register the same resource type code twice', () => {
@@ -50,9 +50,9 @@ describe('resource presentation registry', () => {
       .toEqual({ label: 'Unknown', tone: 'neutral' })
   })
 
-  it('declares the monitoring tabs only for the types that had them', () => {
-    expect(nodePresentation.monitoring).toBeDefined()
-    expect(containerPresentation.monitoring).toBeUndefined()
+  it('carries only the optional rendering pieces each type actually has', () => {
+    expect(nodePresentation.MetricSummary).toBeDefined()
+    expect(containerPresentation.MetricSummary).toBeUndefined()
     expect(nodePresentation.headerStatus).toBeDefined()
     expect(containerPresentation.headerStatus).toBeUndefined()
   })

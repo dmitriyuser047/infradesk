@@ -59,5 +59,5 @@ export const nodePresentation: ResourcePresentation = {
   rowStatus: nodeStatus,
   headerStatus: nodeStatus,
   Overview: NodeOverview,
-  monitoring: { MetricSummary: NodeMetricSummary },
+  MetricSummary: NodeMetricSummary,
 }

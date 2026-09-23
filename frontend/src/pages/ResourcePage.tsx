@@ -11,6 +11,7 @@ import { StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs } fro
 import { MetricChart } from '../components/metrics/MetricChart'
 import { filterMetricSeries } from '../components/metrics/metricSeries'
 import { MonitorRulesSection } from '../components/monitoring/MonitorRulesSection'
+import { supportsResourceMonitoring } from '../components/monitoring/resourceMonitoringSupport'
 import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
 import type { ResourcePresentationProps } from '../components/resources/presentation/ResourcePresentation'
 import { MetricCode, type MetricObservationResponse } from '../types/metric'
@@ -33,8 +34,9 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
   const [metricWindow, setMetricWindow] = useState(() => createLastHourWindow())
   const resourceQuery = useResource(organizationId, resourceId)
   const presentation = resourcePresentationRegistry.resolve(resourceQuery.data?.resourceTypeCode ?? '')
+  const monitored = supportsResourceMonitoring(resourceQuery.data?.resourceTypeCode)
   const metricsQuery = useResourceMetrics(organizationId, resourceId, metricWindow,
-    presentation.monitoring !== undefined && tab === 'metrics')
+    monitored && tab === 'metrics')
   const back = `/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(environmentId)}${location.search}`
 
   if (resourceQuery.isPending) return <AppShell><div className="row-skeleton" aria-label="Loading resource"><span /><span /></div></AppShell>
@@ -44,7 +46,7 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
       {!notFound ? <button className="text-button" type="button" onClick={() => resourceQuery.refetch()}>Retry</button> : null}</div></AppShell>
   }
   const resource = resourceQuery.data
-  const tabs: { id: Tab; label: string }[] = presentation.monitoring ? [
+  const tabs: { id: Tab; label: string }[] = monitored ? [
     { id: 'overview', label: 'Overview' }, { id: 'metrics', label: 'Metrics' }, { id: 'rules', label: 'Monitor rules' },
   ] : [{ id: 'overview', label: 'Overview' }]
   const status = presentation.headerStatus?.(resource)
@@ -57,11 +59,11 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
     <WorkspaceTabs tabs={tabs} active={tab} onChange={setTab} />
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
       {tab === 'overview' ? <Overview resource={resource} /> : null}
-      {tab === 'metrics' ? <MetricsSection resource={resource} Summary={presentation.monitoring?.MetricSummary}
+      {tab === 'metrics' && monitored ? <MetricsSection resource={resource} Summary={presentation.MetricSummary}
         isPending={metricsQuery.isPending} isError={metricsQuery.isError} error={metricsQuery.error}
         observations={metricsQuery.data} refresh={() => setMetricWindow(createLastHourWindow())}
         retry={metricsQuery.refetch} /> : null}
-      {tab === 'rules' && presentation.monitoring ?
+      {tab === 'rules' && monitored ?
         <MonitorRulesSection organizationId={organizationId} resourceId={resourceId} /> : null}
     </div>
   </div></AppShell>
@@ -77,12 +79,11 @@ function MetricsSection({ resource, Summary, isPending, isError, error, observat
   refresh: () => void
   retry: () => void
 }) {
-  if (!Summary) return null
   const cpuSeries = filterMetricSeries(observations ?? [], MetricCode.cpuUsagePercent)
   const memorySeries = filterMetricSeries(observations ?? [], MetricCode.memoryUsagePercent)
   return <WorkspaceSection title="Metrics · last 1 hour" actions={<button className="secondary-button" type="button" onClick={refresh}>
     <RefreshCw aria-hidden size={14} /> Refresh</button>}>
-    <Summary resource={resource} />
+    {Summary ? <Summary resource={resource} /> : null}
     {isPending ? <div className="row-skeleton" aria-label="Loading metrics"><span /><span /></div> : null}
     {isError ? <div className="inline-error" role="alert">Unable to load metrics. {error instanceof ApiError ? error.message : 'Please try again shortly.'}
       <button className="text-button" type="button" onClick={retry}>Retry</button></div> : null}
