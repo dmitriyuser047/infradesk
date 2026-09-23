@@ -5,16 +5,16 @@
   --surface-secondary: #f8fafc;
   --surface-toolbar: #f7f7f7;
   --surface-header: #f1f5f8;
-  --surface-selected: #c6d9f1;
-  --surface-hover: #eff8ff;
+  --surface-selected: #dbe8f3;
+  --surface-hover: #edf3f7;
   --border-subtle: #dce3e9;
   --border-strong: #cbd5de;
   --text-primary: #29343e;
   --text-secondary: #667480;
   --text-disabled: #8a969f;
-  --nav-primary: #f9f9f9;
-  --nav-primary-hover: #eff8ff;
-  --nav-primary-active: #e5f0fa;
+  --nav-primary: #e2eaf0;
+  --nav-primary-hover: #d6e2eb;
+  --nav-primary-active: #cbdce9;
   --primary: #517b9b;
   --primary-hover: #496f8c;
   --success: #46795a;
@@ -122,7 +122,7 @@ h3 { font-size: 13px; font-weight: 600; }
 .workspace-tabs { display: flex; align-items: stretch; gap: 2px; height: 37px; margin-bottom: 10px; border-bottom: 1px solid var(--border-subtle); }
 .workspace-tab { padding: 0 14px; border: 0; border-bottom: 2px solid transparent; color: var(--text-secondary); background: transparent; font-size: 13px; }
 .workspace-tab:hover { color: var(--text-primary); background: var(--surface-hover); }
-.workspace-tab.active { border-bottom-color: var(--primary); border-radius: var(--radius-small) var(--radius-small) 0 0; color: var(--text-primary); background: var(--surface-primary); font-weight: 600; }
+.workspace-tab.active { border-bottom-color: var(--primary); border-radius: var(--radius-small) var(--radius-small) 0 0; color: var(--text-primary); background: var(--surface-hover); font-weight: 600; }
 .resource-count { color: var(--text-secondary); font-size: var(--font-size-secondary); white-space: nowrap; }
 .status-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .status-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
