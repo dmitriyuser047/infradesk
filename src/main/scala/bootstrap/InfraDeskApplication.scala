@@ -26,8 +26,10 @@ object InfraDeskApplication {
       _ <- DatabaseMigrator.migrate(config.database, loggers.migration)
       // Process identity for scheduler claims: created once per JVM run, never per tick or job.
       schedulerInstanceId <- IO(UUID.randomUUID())
+      // One registry per runtime; a duplicate resource type code fails startup here.
+      resourceTypes <- IO.fromEither(PersistenceModule.resourceDefinitionRegistry)
       _ <- Database.transactor(config.database).use { xa =>
-        val persistence = PersistenceModule.build(xa)
+        val persistence = PersistenceModule.build(xa, resourceTypes)
         val integrations = IntegrationModule.build(config, persistence)
         val application = ApplicationModule.build(config, persistence, integrations, loggers, schedulerInstanceId)
         val httpApp = HttpModule.build(persistence, application, config.auth, loggers)

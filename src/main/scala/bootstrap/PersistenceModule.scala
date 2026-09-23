@@ -27,6 +27,9 @@ import application.port.{
 import cats.effect.IO
 import infrastructure.database.{DoobieTransactionRunner, PostgresReadinessCheck}
 import org.typelevel.doobie.{ConnectionIO, Transactor}
+import serialization.resource.{ResourceDataCodec, ResourceDefinitionRegistry}
+import serialization.resource.container.ContainerResourceDataCodec
+import serialization.resource.node.NodeResourceDataCodec
 import persistence.postgres.{
   PostgresAuthSessionRepository,
   PostgresConnectionRepository,
@@ -46,7 +49,8 @@ import persistence.postgres.{
   PostgresResourceRepository,
   PostgresResourceTypeRepository,
   PostgresSyncSessionRepository,
-  PostgresUserAccountRepository
+  PostgresUserAccountRepository,
+  ResourceDataJsonCodec
 }
 
 /** Database-level dependencies shared by every consumer of a single transactor.
@@ -81,11 +85,24 @@ final case class PersistenceComponents(
 /** Builds every PostgreSQL-backed port on top of one transactor. */
 object PersistenceModule {
 
-  def build(xa: Transactor[IO]): PersistenceComponents =
+  /** The single registration point for resource types: one line per type, nothing else in the
+    * generic persistence path changes when a type is added.
+    */
+  val resourceTypeCodecs: List[ResourceDataCodec] =
+    List(
+      NodeResourceDataCodec,
+      ContainerResourceDataCodec
+    )
+
+  /** Built once per runtime, before the database pool is opened; duplicate codes fail startup. */
+  def resourceDefinitionRegistry: Either[IllegalArgumentException, ResourceDefinitionRegistry] =
+    ResourceDefinitionRegistry.build(resourceTypeCodecs)
+
+  def build(xa: Transactor[IO], resourceTypes: ResourceDefinitionRegistry): PersistenceComponents =
     PersistenceComponents(
       transactionRunner = new DoobieTransactionRunner(xa),
       readinessCheck = new PostgresReadinessCheck(xa),
-      resourceRepository = new PostgresResourceRepository,
+      resourceRepository = new PostgresResourceRepository(new ResourceDataJsonCodec(resourceTypes)),
       resourceTypeRepository = new PostgresResourceTypeRepository,
       organizationRepository = new PostgresOrganizationRepository,
       projectRepository = new PostgresProjectRepository,

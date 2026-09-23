@@ -36,7 +36,7 @@ final class SyncDiscoveredSnapshotRollbackIntegrationSpec extends FunSuite {
     PostgresTestDatabase.transactor(config).use { xa =>
       val transactionRunner: TransactionRunner[IO, ConnectionIO] =
         new DoobieTransactionRunner(xa)
-      val resourceRepository = new PostgresResourceRepository
+      val resourceRepository = ProductionResourceCodec.resourceRepository
       val resourceTypeRepository = new PostgresResourceTypeRepository
       val externalRefRepository = new PostgresExternalRefRepository
       val syncSessionRepository = new PostgresSyncSessionRepository

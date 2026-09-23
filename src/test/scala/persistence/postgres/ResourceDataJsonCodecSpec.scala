@@ -8,66 +8,118 @@ import munit.FunSuite
 
 final class ResourceDataJsonCodecSpec extends FunSuite {
 
-  private val codec = new ResourceDataJsonCodec
+  private val codec = ProductionResourceCodec.codec
 
-  test("round-trips ContainerSpec and ContainerStatus") {
-    val data = ResourceData(
-      Some(ContainerSpec(Some("backend:2.0"))),
-      Some(ContainerStatus(Some("exited")))
-    )
+  private val nodeData = ResourceData(
+    Some(NodeSpec("node-1", Some("Linux"), Some("x86_64"), Some(4), Some(8192))),
+    Some(NodeStatus(true, Some(BigDecimal("12.5")), Some(BigDecimal("37.5")), Some(123456)))
+  )
 
-    val encoded = codec.encode(ContainerDefinition.code, data).toOption.getOrElse(fail("Encode failed"))
-    val decoded = codec
-      .decode(ContainerDefinition.code, encoded.specJson, encoded.statusJson)
-      .toOption
-      .getOrElse(fail("Decode failed"))
+  private val containerData = ResourceData(
+    Some(ContainerSpec(Some("backend:2.0"))),
+    Some(ContainerStatus(Some("exited")))
+  )
 
-    assertEquals(decoded, data)
-  }
+  private def encoded(typeCode: String, data: ResourceData) =
+    codec.encode(typeCode, data).toOption.getOrElse(fail("Encode failed"))
 
-  test("rejects ResourceData that does not match CONTAINER") {
-    val mismatched = ResourceData(
-      Some(ContainerSpec(Some("backend:2.0"))),
-      None
-    )
-
-    val result = codec.encode(ContainerDefinition.code, mismatched)
-
-    assert(result.isLeft)
-    assert(result.swap.toOption.exists(_.getMessage.contains("CONTAINER requires")))
-  }
+  private def failure(result: Either[IllegalArgumentException, _]): String =
+    result.swap.toOption.getOrElse(fail("Expected a failure")).getMessage
 
   test("round-trips NodeSpec and NodeStatus") {
-    val data = ResourceData(
-      Some(NodeSpec("node-1", Some("Linux"), Some("x86_64"), Some(4), Some(8192))),
-      Some(NodeStatus(true, Some(BigDecimal("12.5")), Some(BigDecimal("37.5")), Some(123456)))
-    )
+    val stored = encoded(NodeDefinition.code, nodeData)
+    val decoded = codec.decode(NodeDefinition.code, stored.specJson, stored.statusJson)
 
-    val encoded = codec.encode(NodeDefinition.code, data).toOption.getOrElse(fail("Encode failed"))
-    val decoded = codec
-      .decode(NodeDefinition.code, encoded.specJson, encoded.statusJson)
-      .toOption
-      .getOrElse(fail("Decode failed"))
-
-    assertEquals(decoded, data)
+    assertEquals(decoded, Right(nodeData))
   }
 
-  test("rejects ContainerSpec and ContainerStatus for NODE") {
-    val mismatched = ResourceData(
-      Some(ContainerSpec(Some("backend:2.0"))),
-      Some(ContainerStatus(Some("running")))
-    )
+  test("round-trips ContainerSpec and ContainerStatus") {
+    val stored = encoded(ContainerDefinition.code, containerData)
+    val decoded = codec.decode(ContainerDefinition.code, stored.specJson, stored.statusJson)
 
-    val result = codec.encode(NodeDefinition.code, mismatched)
-
-    assert(result.isLeft)
-    assert(result.swap.toOption.exists(_.getMessage.contains("NODE requires")))
+    assertEquals(decoded, Right(containerData))
   }
 
-  test("rejects non-empty JSON for an unsupported resource type") {
-    val result = codec.decode("UNKNOWN", "{\"hostname\":\"node-1\"}", "{}")
+  test("round-trips empty resource data as empty JSON objects") {
+    List(NodeDefinition.code, ContainerDefinition.code, "UNKNOWN").foreach { typeCode =>
+      val stored = encoded(typeCode, ResourceData.empty)
 
-    assert(result.isLeft)
-    assert(result.swap.toOption.exists(_.getMessage.contains("UNKNOWN")))
+      assertEquals(stored.specJson, "{}")
+      assertEquals(stored.statusJson, "{}")
+      assertEquals(codec.decode(typeCode, stored.specJson, stored.statusJson), Right(ResourceData.empty))
+    }
+  }
+
+  test("rejects data of another resource type") {
+    assertEquals(
+      failure(codec.encode(NodeDefinition.code, containerData)),
+      "NODE requires NodeSpec and NodeStatus, got ContainerSpec and ContainerStatus"
+    )
+    assertEquals(
+      failure(codec.encode(ContainerDefinition.code, nodeData)),
+      "CONTAINER requires ContainerSpec and ContainerStatus, got NodeSpec and NodeStatus"
+    )
+  }
+
+  test("rejects half-filled resource data on encode") {
+    assert(failure(codec.encode(NodeDefinition.code, nodeData.copy(status = None)))
+      .contains("NODE requires NodeSpec and NodeStatus"))
+    assert(failure(codec.encode(NodeDefinition.code, nodeData.copy(spec = None)))
+      .contains("NODE requires NodeSpec and NodeStatus"))
+    assert(failure(codec.encode(ContainerDefinition.code, containerData.copy(status = None)))
+      .contains("CONTAINER requires ContainerSpec and ContainerStatus"))
+    assert(failure(codec.encode(ContainerDefinition.code, containerData.copy(spec = None)))
+      .contains("CONTAINER requires ContainerSpec and ContainerStatus"))
+  }
+
+  test("rejects half-filled stored payload on decode") {
+    val node = encoded(NodeDefinition.code, nodeData)
+    val container = encoded(ContainerDefinition.code, containerData)
+
+    assertEquals(
+      failure(codec.decode(NodeDefinition.code, node.specJson, "{}")),
+      "NODE requires both non-empty spec and non-empty status"
+    )
+    assertEquals(
+      failure(codec.decode(NodeDefinition.code, "{}", node.statusJson)),
+      "NODE requires both non-empty spec and non-empty status"
+    )
+    assertEquals(
+      failure(codec.decode(ContainerDefinition.code, container.specJson, "{}")),
+      "CONTAINER requires both non-empty spec and non-empty status"
+    )
+  }
+
+  test("reports malformed JSON with the resource type code and the field") {
+    assert(failure(codec.decode(NodeDefinition.code, "{oops", "{}")).startsWith(
+      "Resource type 'NODE' has invalid spec JSON:"
+    ))
+    assert(failure(codec.decode(NodeDefinition.code, "{}", "{oops")).startsWith(
+      "Resource type 'NODE' has invalid status JSON:"
+    ))
+  }
+
+  test("reports a spec that does not match the resource type schema") {
+    val status = encoded(NodeDefinition.code, nodeData).statusJson
+
+    assert(failure(codec.decode(NodeDefinition.code, """{"image":"backend:2.0"}""", status))
+      .startsWith("Invalid NODE spec JSON:"))
+    assert(failure(codec.decode(NodeDefinition.code, """{"hostname":42}""", status))
+      .startsWith("Invalid NODE spec JSON:"))
+  }
+
+  test("rejects non-empty payload for an unregistered resource type") {
+    assertEquals(
+      failure(codec.decode("UNKNOWN", """{"hostname":"node-1"}""", "{}")),
+      "Resource type 'UNKNOWN' has non-empty spec/status but no JSON codec"
+    )
+    assertEquals(
+      failure(codec.decode("UNKNOWN", "{}", """{"online":true}""")),
+      "Resource type 'UNKNOWN' has non-empty spec/status but no JSON codec"
+    )
+    assertEquals(
+      failure(codec.encode("UNKNOWN", nodeData)),
+      "Resource type 'UNKNOWN' has non-empty ResourceData but no JSON codec"
+    )
   }
 }

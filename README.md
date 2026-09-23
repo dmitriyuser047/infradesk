@@ -41,6 +41,12 @@ Tests: `sbt testFull` runs the complete backend suite. PostgreSQL integration te
 | `HttpModule` | Routes, auth boundary, platform endpoints, request middleware |
 | `AppLoggers` | The named loggers injected into the components that emit events |
 
+Resource types are registered once in `PersistenceModule.resourceTypeCodecs` and resolved through
+`ResourceDefinitionRegistry`. Generic persistence stores and reads whatever the registered typed
+codec produces and hardcodes no NODE or CONTAINER knowledge, so a new resource type is a definition,
+its codec and one registration line. A duplicate resource type code fails startup, and a type this
+version does not know is readable only while its stored payload is empty.
+
 Startup order:
 
 ```
@@ -54,4 +60,4 @@ resource scope, so shutdown releases the server and then the database pool.
 
 Frontend: `cd frontend`, then `npm ci`, `npm test`, `npm run build`, or `npm run dev`.
 
-Applied migration files (`V1` through `V12`) are immutable. Add a new versioned migration for schema changes. An existing non-empty database without Flyway history is not auto-baselined; assess it before switching startup to Flyway.
+Applied Flyway migrations are immutable. Add a new versioned migration instead of modifying an applied one. An existing non-empty database without Flyway history is not auto-baselined; assess it before switching startup to Flyway.

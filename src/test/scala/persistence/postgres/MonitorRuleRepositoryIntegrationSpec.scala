@@ -31,7 +31,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
 
     PostgresTestDatabase.transactor(config).use { xa =>
       val transactionRunner = new DoobieTransactionRunner(xa)
-      val resourceRepository = new PostgresResourceRepository
+      val resourceRepository = ProductionResourceCodec.resourceRepository
       val ruleRepository = new PostgresMonitorRuleRepository
       val stateRepository = new PostgresMonitorRuleStateRepository
       val resource = Resource(
@@ -113,7 +113,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
 
     PostgresTestDatabase.transactor(config).use { xa =>
       val transactionRunner = new DoobieTransactionRunner(xa)
-      val resourceRepository = new PostgresResourceRepository
+      val resourceRepository = ProductionResourceCodec.resourceRepository
       val ruleRepository = new PostgresMonitorRuleRepository
       val incidentRepository = new PostgresIncidentRepository
       val resource = Resource(
@@ -193,7 +193,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     val ids = TestIds.random()
     PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
-      val resources = new PostgresResourceRepository
+      val resources = ProductionResourceCodec.resourceRepository
       val rules = new PostgresMonitorRuleRepository
       val states = new PostgresMonitorRuleStateRepository
       val incidents = new PostgresIncidentRepository

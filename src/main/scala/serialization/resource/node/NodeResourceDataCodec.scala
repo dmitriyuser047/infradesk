@@ -1,0 +1,43 @@
+package ru.bitec.app.ops
+package serialization.resource.node
+
+import domain.resource.node.{NodeDefinition, NodeSpec, NodeStatus}
+import domain.resource.{ResourceSpec, ResourceStatus}
+import io.circe.{Decoder, Encoder}
+import serialization.resource.ResourceDataCodec
+import serialization.resource.node.NodeResourceJson._
+
+/** NODE serialization and validation: everything the generic codec used to know about nodes. */
+object NodeResourceDataCodec extends ResourceDataCodec.Typed[NodeSpec, NodeStatus](NodeDefinition) {
+
+  override protected val expectedTypes: String = "NodeSpec and NodeStatus"
+
+  override protected def narrow(
+    spec: ResourceSpec,
+    status: ResourceStatus
+  ): Option[(NodeSpec, NodeStatus)] =
+    (spec, status) match {
+      case (nodeSpec: NodeSpec, nodeStatus: NodeStatus) => Some((nodeSpec, nodeStatus))
+      case _ => None
+    }
+}
+
+/** The stored JSON shape of a NODE. Unchanged field names: this is existing persisted data. */
+private[node] object NodeResourceJson {
+
+  implicit val nodeSpecEncoder: Encoder[NodeSpec] =
+    Encoder.forProduct5("hostname", "operatingSystem", "architecture", "cpuCores", "memoryMb")(node =>
+      (node.hostname, node.operatingSystem, node.architecture, node.cpuCores, node.memoryMb)
+    )
+
+  implicit val nodeSpecDecoder: Decoder[NodeSpec] =
+    Decoder.forProduct5("hostname", "operatingSystem", "architecture", "cpuCores", "memoryMb")(NodeSpec.apply)
+
+  implicit val nodeStatusEncoder: Encoder[NodeStatus] =
+    Encoder.forProduct4("online", "cpuUsagePercent", "memoryUsagePercent", "uptimeSeconds")(node =>
+      (node.online, node.cpuUsagePercent, node.memoryUsagePercent, node.uptimeSeconds)
+    )
+
+  implicit val nodeStatusDecoder: Decoder[NodeStatus] =
+    Decoder.forProduct4("online", "cpuUsagePercent", "memoryUsagePercent", "uptimeSeconds")(NodeStatus.apply)
+}

@@ -39,8 +39,8 @@ import persistence.postgres.{
   PostgresConnectionRepository,
   PostgresExternalRefRepository,
   PostgresMetricObservationRepository,
-  PostgresResourceRepository,
   PostgresResourceTypeRepository,
+  ProductionResourceCodec,
   PostgresSyncSessionRepository
 }
 
@@ -64,7 +64,7 @@ object DevSshSync extends IOApp.Simple {
     IO.fromEither(DatabaseConfig.fromEnvironment(sys.env)).flatMap { databaseConfig =>
       Database.transactor(databaseConfig).use { xa =>
         val resourceRepository =
-          new PostgresResourceRepository
+          ProductionResourceCodec.resourceRepository
 
         val resourceTypeRepository =
           new PostgresResourceTypeRepository

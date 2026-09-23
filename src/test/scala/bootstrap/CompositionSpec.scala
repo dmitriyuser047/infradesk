@@ -39,7 +39,9 @@ final class CompositionSpec extends FunSuite {
     )
 
   private lazy val app: HttpApp[IO] = {
-    val persistence = PersistenceModule.build(unusableTransactor)
+    val resourceTypes = PersistenceModule.resourceDefinitionRegistry
+      .getOrElse(fail("Expected the shipped resource type registry to build"))
+    val persistence = PersistenceModule.build(unusableTransactor, resourceTypes)
     val integrations = IntegrationModule.build(config, persistence)
     val application =
       ApplicationModule.build(config, persistence, integrations, AppLoggers.slf4j, UUID.randomUUID())

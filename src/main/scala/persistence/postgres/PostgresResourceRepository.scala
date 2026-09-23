@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package persistence.postgres
 
 import application.port.ResourceRepository
-import domain.resource.{Resource, ResourceData}
+import domain.resource.Resource
 
 import cats.syntax.all._
 import org.typelevel.doobie.ConnectionIO
@@ -11,43 +11,43 @@ import org.typelevel.doobie.postgres.implicits._
 
 import java.util.UUID
 
-final class PostgresResourceRepository extends ResourceRepository[ConnectionIO] {
+private final case class ResourceRow(
+                                      id: UUID,
+                                      organizationId: UUID,
+                                      environmentId: UUID,
+                                      resourceTypeId: UUID,
+                                      parentResourceId: Option[UUID],
+                                      code: String,
+                                      name: String,
+                                      isActive: Boolean,
+                                      createdAt: java.time.Instant,
+                                      updatedAt: java.time.Instant,
+                                      resourceTypeCode: String,
+                                      specJson: String,
+                                      statusJson: String
+                                    ) {
+  def toDomain(codec: ResourceDataJsonCodec): Either[IllegalArgumentException, Resource] =
+    codec.decode(resourceTypeCode, specJson, statusJson).map { data =>
+      Resource(
+        id = id,
+        organizationId = organizationId,
+        environmentId = environmentId,
+        resourceTypeId = resourceTypeId,
+        parentResourceId = parentResourceId,
+        code = code,
+        name = name,
+        isActive = isActive,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        resourceTypeCode = resourceTypeCode,
+        data = data
+      )
+    }
+}
 
-  private final case class ResourceRow(
-                                        id: UUID,
-                                        organizationId: UUID,
-                                        environmentId: UUID,
-                                        resourceTypeId: UUID,
-                                        parentResourceId: Option[UUID],
-                                        code: String,
-                                        name: String,
-                                        isActive: Boolean,
-                                        createdAt: java.time.Instant,
-                                        updatedAt: java.time.Instant,
-                                        resourceTypeCode: String,
-                                        specJson: String,
-                                        statusJson: String
-                                      ) {
-    def toDomain(codec: ResourceDataJsonCodec): Either[IllegalArgumentException, Resource] =
-      codec.decode(resourceTypeCode, specJson, statusJson).map { data =>
-        Resource(
-          id = id,
-          organizationId = organizationId,
-          environmentId = environmentId,
-          resourceTypeId = resourceTypeId,
-          parentResourceId = parentResourceId,
-          code = code,
-          name = name,
-          isActive = isActive,
-          createdAt = createdAt,
-          updatedAt = updatedAt,
-          resourceTypeCode = resourceTypeCode,
-          data = data
-        )
-      }
-  }
-
-  private val resourceDataJsonCodec = new ResourceDataJsonCodec
+final class PostgresResourceRepository(
+                                        resourceDataJsonCodec: ResourceDataJsonCodec
+                                      ) extends ResourceRepository[ConnectionIO] {
 
   override def findById(organizationId: UUID, id: UUID): ConnectionIO[Option[Resource]] =
     sql"""
