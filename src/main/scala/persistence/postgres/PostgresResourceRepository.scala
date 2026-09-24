@@ -173,7 +173,7 @@ final class PostgresResourceRepository(
                                                    id: UUID,
                                                    connectionId: UUID,
                                                    now: java.time.Instant
-                                                 ): ConnectionIO[Unit] =
+                                                 ): ConnectionIO[Boolean] =
     sql"""
       update resource r
       set is_active = false, updated_at = $now
@@ -186,6 +186,6 @@ final class PostgresResourceRepository(
             and er.resource_id = r.id
             and er.connection_id <> $connectionId
         )
-    """.update.run.map(_ => ())
+    """.update.run.map(_ == 1)
 
 }

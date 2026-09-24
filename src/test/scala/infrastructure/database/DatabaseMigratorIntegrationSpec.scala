@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V19 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V20 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 19)
-        assertEquals(first.currentVersion, "19")
+        assertEquals(first.migrationsApplied, 20)
+        assertEquals(first.currentVersion, "20")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "19")
+        assertEquals(second.currentVersion, "20")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -120,6 +120,28 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               // The uniqueness that serializes remediation is the partial one, not a global one.
               assertEquals(operations.getBoolean(5), true)
             } finally operations.close()
+            val history = statement.executeQuery(
+              "select to_regclass('public.history_event'), " +
+                "(select count(*) from pg_indexes where schemaname = current_schema() " +
+                "and indexname in ('ix_history_event_organization_recent', " +
+                "'ix_history_event_resource_recent')), " +
+                "(select count(*) from information_schema.columns where table_schema = current_schema() " +
+                "and table_name = 'history_event' and column_name in ('organization_id', " +
+                "'event_type', 'source', 'resource_id', 'connection_id', 'incident_id', " +
+                "'operation_execution_id', 'sync_session_id', 'actor_user_id', 'occurred_at', " +
+                "'created_at')), " +
+                "(select count(*) from information_schema.table_constraints " +
+                "where table_schema = current_schema() and table_name = 'history_event' " +
+                "and constraint_name in ('ck_history_event_type', 'ck_history_event_source', " +
+                "'ck_history_event_actor'))"
+            )
+            try {
+              assert(history.next())
+              assert(history.getString(1) != null)
+              assertEquals(history.getInt(2), 2)
+              assertEquals(history.getInt(3), 11)
+              assertEquals(history.getInt(4), 3)
+            } finally history.close()
           } finally statement.close()
         } finally connection.close()
       }
@@ -128,7 +150,7 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         try {
           val statement = connection.createStatement()
           try assertEquals(statement.executeUpdate(
-            "update flyway_schema_history set checksum = checksum + 1 where version = '19'"
+            "update flyway_schema_history set checksum = checksum + 1 where version = '20'"
           ), 1)
           finally statement.close()
         } finally connection.close()

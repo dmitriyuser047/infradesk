@@ -10,9 +10,13 @@ import scala.concurrent.duration.FiniteDuration
 
 trait OperationExecutionRepository[F[_]] {
   def tryCreateRunning(execution: OperationExecution): F[Boolean]
-  /** Retires running executions whose own recovery deadline has passed, and only those. */
+  /** Retires running executions whose own recovery deadline has passed, and only those.
+    *
+    * Returns the retired executions themselves, so the caller can journal them without asking
+    * for each one again.
+    */
   def recoverStaleRunning(organizationId: UUID, resourceId: UUID, at: Instant,
-                          errorCode: String, errorMessage: String): F[List[UUID]]
+                          errorCode: String, errorMessage: String): F[List[OperationExecution]]
   def markSucceeded(organizationId: UUID, id: UUID, finishedAt: Instant): F[Boolean]
   def markFailed(organizationId: UUID, id: UUID, finishedAt: Instant,
                  errorCode: String, errorMessage: String): F[Boolean]

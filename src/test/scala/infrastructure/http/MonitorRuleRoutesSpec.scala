@@ -236,6 +236,7 @@ final class MonitorRuleRoutesSpec extends FunSuite {
         new application.notification.RecordNotificationDeliveries[IO](
           new NoNotificationDeliveryRepository, idGenerator, timeProvider, List.empty),
         auditRecorder,
+        support.TestHistoryRecorder.recording._2,
         timeProvider),
       transactionRunner,
       support.AuthorizationFixtures.authorization
@@ -305,7 +306,7 @@ final class MonitorRuleRoutesSpec extends FunSuite {
       id: UUID,
       connectionId: UUID,
       now: Instant
-    ): IO[Unit] = IO.unit
+    ): IO[Boolean] = IO.pure(false)
   }
 
   private final class InMemoryMonitorRuleStateRepository(initial: List[MonitorRuleState])

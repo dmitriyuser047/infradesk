@@ -10,6 +10,7 @@ import { AppShell } from '../components/layout/AppShell'
 import { StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs } from '../components/layout/WorkspacePrimitives'
 import { MetricChart } from '../components/metrics/MetricChart'
 import { filterMetricSeries } from '../components/metrics/metricSeries'
+import { ResourceActivitySection } from '../components/history/ResourceActivitySection'
 import { MonitorRulesSection } from '../components/monitoring/MonitorRulesSection'
 import { supportsResourceMonitoring } from '../components/monitoring/resourceMonitoringSupport'
 import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
@@ -19,7 +20,7 @@ import type { ResourceResponse } from '../types/resource'
 import { ResourceOperationsPanel } from '../components/resources/ResourceOperationsPanel'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
-type Tab = 'overview' | 'metrics' | 'rules'
+type Tab = 'overview' | 'metrics' | 'rules' | 'activity'
 
 export function ResourcePage() {
   const { organizationId, environmentId, resourceId } = useParams()
@@ -47,9 +48,10 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
       {!notFound ? <button className="text-button" type="button" onClick={() => resourceQuery.refetch()}>Retry</button> : null}</div></AppShell>
   }
   const resource = resourceQuery.data
-  const tabs: { id: Tab; label: string }[] = monitored ? [
-    { id: 'overview', label: 'Overview' }, { id: 'metrics', label: 'Metrics' }, { id: 'rules', label: 'Monitor rules' },
-  ] : [{ id: 'overview', label: 'Overview' }]
+  const tabs: { id: Tab; label: string }[] = (monitored ? [
+    { id: 'overview' as Tab, label: 'Overview' }, { id: 'metrics' as Tab, label: 'Metrics' },
+    { id: 'rules' as Tab, label: 'Monitor rules' },
+  ] : [{ id: 'overview' as Tab, label: 'Overview' }]).concat([{ id: 'activity', label: 'Activity' }])
   const status = presentation.headerStatus?.(resource)
   const Overview = presentation.Overview
 
@@ -67,6 +69,8 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
         retry={metricsQuery.refetch} /> : null}
       {tab === 'rules' && monitored ?
         <MonitorRulesSection organizationId={organizationId} resourceId={resourceId} /> : null}
+      {tab === 'activity' ?
+        <ResourceActivitySection organizationId={organizationId} resourceId={resourceId} /> : null}
     </div>
   </div></AppShell>
 }

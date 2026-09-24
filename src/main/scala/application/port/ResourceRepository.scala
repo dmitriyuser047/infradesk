@@ -15,11 +15,12 @@ trait ResourceRepository[F[_]] {
 
   def save(resource: Resource): F[Unit]
 
+  /** True when this call is what deactivated the resource, so the caller can journal the fact. */
   def deactivateIfExclusiveToConnection(
                                         organizationId: UUID,
                                         id: UUID,
                                         connectionId: UUID,
                                         now: Instant
-                                      ): F[Unit]
+                                      ): F[Boolean]
 
 }

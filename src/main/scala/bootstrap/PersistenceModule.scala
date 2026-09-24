@@ -3,6 +3,8 @@ package bootstrap
 
 import application.port.{
   AuditEventRepository,
+  HistoryEventQuery,
+  HistoryEventRepository,
   AuthSessionRepository,
   ConnectionRepository,
   ConnectionScheduleRepository,
@@ -36,6 +38,8 @@ import serialization.resource.container.ContainerResourceDataCodec
 import serialization.resource.node.NodeResourceDataCodec
 import persistence.postgres.{
   PostgresAuditEventRepository,
+  PostgresHistoryEventQuery,
+  PostgresHistoryEventRepository,
   PostgresAuthSessionRepository,
   PostgresConnectionRepository,
   PostgresConnectionScheduleRepository,
@@ -89,7 +93,9 @@ final case class PersistenceComponents(
   userAccountRepository: UserAccountRepository[ConnectionIO],
   authSessionRepository: AuthSessionRepository[ConnectionIO],
   membershipRepository: OrganizationMembershipRepository[ConnectionIO],
-  auditEventRepository: AuditEventRepository[ConnectionIO]
+  auditEventRepository: AuditEventRepository[ConnectionIO],
+  historyEventRepository: HistoryEventRepository[ConnectionIO],
+  historyEventQuery: HistoryEventQuery[ConnectionIO]
   ,operationExecutionRepository: OperationExecutionRepository[ConnectionIO]
   ,resourceOperationTargetQuery: ResourceOperationTargetQuery[ConnectionIO]
 )
@@ -135,6 +141,8 @@ object PersistenceModule {
       authSessionRepository = new PostgresAuthSessionRepository,
       membershipRepository = new PostgresOrganizationMembershipRepository,
       auditEventRepository = new PostgresAuditEventRepository,
+      historyEventRepository = new PostgresHistoryEventRepository,
+      historyEventQuery = new PostgresHistoryEventQuery,
       operationExecutionRepository = new PostgresOperationExecutionRepository,
       resourceOperationTargetQuery = new PostgresResourceOperationTargetQuery
     )

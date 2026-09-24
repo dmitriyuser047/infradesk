@@ -65,6 +65,26 @@ object HttpJsonCodecs {
     Encoder.forProduct6("id", "actorUserId", "action", "targetType", "targetId", "occurredAt") { value =>
       (value.id, value.actorUserId, value.action, value.targetType, value.targetId, value.occurredAt)
     }
+  implicit val historyResourceResponseEncoder: Encoder[HistoryResourceResponse] =
+    Encoder.forProduct3("id", "name", "resourceTypeCode")(v => (v.id, v.name, v.resourceTypeCode))
+  implicit val historyConnectionResponseEncoder: Encoder[HistoryConnectionResponse] =
+    Encoder.forProduct2("id", "name")(v => (v.id, v.name))
+  implicit val historyActorResponseEncoder: Encoder[HistoryActorResponse] =
+    Encoder.forProduct2("id", "displayName")(v => (v.id, v.displayName))
+  implicit val historyIncidentResponseEncoder: Encoder[HistoryIncidentResponse] =
+    Encoder.forProduct4("id", "status", "reason", "monitorRuleId")(v =>
+      (v.id, v.status, v.reason, v.monitorRuleId))
+  implicit val historyOperationResponseEncoder: Encoder[HistoryOperationResponse] =
+    Encoder.forProduct5("id", "operationCode", "status", "errorCode", "errorMessage")(v =>
+      (v.id, v.operationCode, v.status, v.errorCode, v.errorMessage))
+  implicit val historySyncResponseEncoder: Encoder[HistorySyncResponse] =
+    Encoder.forProduct3("id", "status", "errorCode")(v => (v.id, v.status, v.errorCode))
+  implicit val historyEventResponseEncoder: Encoder[HistoryEventResponse] =
+    Encoder.forProduct10("id", "eventType", "source", "occurredAt", "resource", "connection",
+      "actor", "incident", "operation", "sync")(v =>
+      (v.id, v.eventType, v.source, v.occurredAt, v.resource, v.connection, v.actor, v.incident,
+        v.operation, v.sync))
+
   implicit val createMonitorRuleDecoder: Decoder[CreateMonitorRuleRequest] = Decoder.forProduct6("metricCode","operator","threshold","forSeconds","noDataSeconds","enabled")(CreateMonitorRuleRequest.apply)
   implicit val updateMonitorRuleDecoder: Decoder[UpdateMonitorRuleRequest] = Decoder.forProduct6("metricCode","operator","threshold","forSeconds","noDataSeconds","enabled")(UpdateMonitorRuleRequest.apply)
 

@@ -2,6 +2,11 @@ package ru.bitec.app.ops
 package bootstrap
 
 import application.audit.{AuditRecorder, ListAuditEvents}
+import application.history.{
+  HistoryRecorder,
+  HistoryRecordingMonitorRuleEvaluator,
+  ListHistoryEvents
+}
 import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, Login, SessionTokens}
 import application.connection.{
   GetConnection,
@@ -71,6 +76,7 @@ final case class ApplicationComponents(
   authentication: Authentication[ConnectionIO],
   bootstrapAdmin: BootstrapAdmin[ConnectionIO],
   listAuditEvents: ListAuditEvents[ConnectionIO],
+  listHistoryEvents: ListHistoryEvents[ConnectionIO],
   resourceOperationPreparation: ResourceOperationPreparation[ConnectionIO],
   executeResourceOperation: ExecuteResourceOperation[ConnectionIO],
   listResourceOperationExecutions: ListResourceOperationExecutions[ConnectionIO],
@@ -108,6 +114,15 @@ object ApplicationModule {
         transactionTimeProvider
       )
 
+    // Every durable transition journals its facts through this recorder, inside the transaction
+    // that produced them.
+    val historyRecorder =
+      new HistoryRecorder[ConnectionIO](
+        historyEventRepository,
+        transactionIdGenerator,
+        transactionTimeProvider
+      )
+
     val persistExternalResource =
       new PersistExternalResource[ConnectionIO](resourceRepository, externalRefRepository)
 
@@ -131,7 +146,8 @@ object ApplicationModule {
         externalRefRepository,
         resourceRepository,
         syncSessionRepository,
-        recordResourceObservations
+        recordResourceObservations,
+        historyRecorder
       )
 
     // Only channels the deployment can actually deliver to are recorded.
@@ -149,14 +165,17 @@ object ApplicationModule {
     // The outbox rows are written inside the evaluation transaction, so an incident change and
     // the intent to report it commit together.
     val evaluateMonitorRules =
-      new NotificationRecordingMonitorRuleEvaluator[ConnectionIO](
-        new EvaluateMonitorRules[ConnectionIO](
-          monitorEvaluationQuery,
-          monitorRuleStateRepository,
-          incidentRepository,
-          transactionIdGenerator
+      new HistoryRecordingMonitorRuleEvaluator[ConnectionIO](
+        new NotificationRecordingMonitorRuleEvaluator[ConnectionIO](
+          new EvaluateMonitorRules[ConnectionIO](
+            monitorEvaluationQuery,
+            monitorRuleStateRepository,
+            incidentRepository,
+            transactionIdGenerator
+          ),
+          recordNotificationDeliveries
         ),
-        recordNotificationDeliveries
+        historyRecorder
       )
 
     val syncConnection =
@@ -169,6 +188,7 @@ object ApplicationModule {
         idGenerator,
         timeProvider,
         recordResourceObservations,
+        historyRecorder,
         loggers.sync
       )
 
@@ -188,7 +208,8 @@ object ApplicationModule {
     val sessionTokens = new SessionTokens
     val resourceOperationPreparation = new ResourceOperationPreparation[ConnectionIO](
       resourceOperationTargetQuery, operationExecutionRepository, transactionIdGenerator,
-      transactionTimeProvider, auditRecorder, integrations.resourceOperationBudget)
+      transactionTimeProvider, auditRecorder, historyRecorder,
+      integrations.resourceOperationBudget)
 
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
@@ -215,6 +236,7 @@ object ApplicationModule {
         incidentRepository,
         recordNotificationDeliveries,
         auditRecorder,
+        historyRecorder,
         transactionTimeProvider
       ),
       getConnection = GetConnection[ConnectionIO](
@@ -290,10 +312,12 @@ object ApplicationModule {
         passwordHasher
       ),
       listAuditEvents = new ListAuditEvents[ConnectionIO](auditEventRepository),
+      listHistoryEvents = new ListHistoryEvents[ConnectionIO](historyEventQuery),
       resourceOperationPreparation = resourceOperationPreparation,
       executeResourceOperation = new ExecuteResourceOperation[ConnectionIO](
         resourceOperationPreparation, operationExecutionRepository,
-        integrations.resourceOperationExecutor, transactionRunner, timeProvider, loggers.operation),
+        integrations.resourceOperationExecutor, transactionRunner, timeProvider, historyRecorder,
+        loggers.operation),
       listResourceOperationExecutions = new ListResourceOperationExecutions[ConnectionIO](
         resourceOperationTargetQuery, operationExecutionRepository),
       scheduler = new SyncScheduler[IO, ConnectionIO](

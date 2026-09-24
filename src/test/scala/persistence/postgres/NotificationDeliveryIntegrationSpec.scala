@@ -92,10 +92,13 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
         _ <- fixture.run(fixture.expireLease(DeliveryId))
         afterExpiry <- fixture.run(fixture.deliveries.claimPending(DispatcherB, 10, 60))
       } yield IO {
-        assertEquals(claimed.map(_.id), List(DeliveryId))
-        assertEquals(whileLeased, List.empty)
-        assertEquals(afterExpiry.map(delivery => (delivery.id, delivery.claimedBy)),
-          List((DeliveryId, Some(DispatcherB))))
+        // The claim query is deliberately tenant-wide, so a parallel suite may own rows of its
+        // own; only this fixture's delivery is assertable here.
+        assertEquals(claimed.map(_.id).filter(_ == DeliveryId), List(DeliveryId))
+        assertEquals(whileLeased.map(_.id).filter(_ == DeliveryId), List.empty[java.util.UUID])
+        assertEquals(afterExpiry.collect {
+          case delivery if delivery.id == DeliveryId => (delivery.id, delivery.claimedBy)
+        }, List((DeliveryId, Some(DispatcherB))))
       }
     }
   }

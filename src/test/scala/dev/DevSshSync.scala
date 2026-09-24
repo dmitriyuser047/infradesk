@@ -114,6 +114,13 @@ object DevSshSync extends IOApp.Simple {
             metricObservationRepository
           )
 
+        val historyRecorder =
+          new _root_.ru.bitec.app.ops.application.history.HistoryRecorder[ConnectionIO](
+            new _root_.ru.bitec.app.ops.persistence.postgres.PostgresHistoryEventRepository,
+            new _root_.ru.bitec.app.ops.infrastructure.database.ConnectionIOIdGenerator,
+            new _root_.ru.bitec.app.ops.infrastructure.database.ConnectionIOTimeProvider
+          )
+
         val syncDiscoveredSnapshot =
           new SyncDiscoveredSnapshot[ConnectionIO](
             createDiscoveredResource,
@@ -121,7 +128,8 @@ object DevSshSync extends IOApp.Simple {
             externalRefRepository,
             resourceRepository,
             syncSessionRepository,
-            recordResourceObservations
+            recordResourceObservations,
+            historyRecorder
           )
 
         val sshClient =
@@ -151,6 +159,7 @@ object DevSshSync extends IOApp.Simple {
             idGenerator,
             timeProvider,
             recordResourceObservations,
+            historyRecorder,
             _root_.org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("dev.ssh-sync")
           )
 

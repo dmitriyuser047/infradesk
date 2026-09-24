@@ -30,11 +30,14 @@ final class PostgresOperationExecutionRepository extends OperationExecutionRepos
       .update.run.map(_ == 1)
 
   override def recoverStaleRunning(organizationId: UUID, resourceId: UUID, at: Instant,
-    errorCode: String, errorMessage: String): ConnectionIO[List[UUID]] =
-    sql"""update operation_execution set status = 'UNKNOWN', finished_at = $at,
+    errorCode: String, errorMessage: String): ConnectionIO[List[OperationExecution]] =
+    // One statement retires the rows and hands them back, so journalling them costs no extra
+    // query per recovered execution.
+    (fr"""update operation_execution set status = 'UNKNOWN', finished_at = $at,
       error_code = $errorCode, error_message = $errorMessage, updated_at = $at
       where organization_id = $organizationId and resource_id = $resourceId
-        and status = 'RUNNING' and recover_after_at <= $at returning id""".query[UUID].to[List]
+        and status = 'RUNNING' and recover_after_at <= $at returning""" ++ columns)
+      .query[Row].to[List].flatMap(_.traverse(_.domain.liftTo[ConnectionIO]))
 
   override def markSucceeded(organizationId: UUID, id: UUID, finishedAt: Instant): ConnectionIO[Boolean] =
     sql"""update operation_execution set status = 'SUCCEEDED', finished_at = $finishedAt,

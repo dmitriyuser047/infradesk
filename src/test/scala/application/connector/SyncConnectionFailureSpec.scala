@@ -147,6 +147,8 @@ final class SyncConnectionFailureSpec extends FunSuite {
         throw failure
       }
     }
+    val historyEvents = new support.RecordingHistoryEventRepository
+    val history = support.TestHistoryRecorder(historyEvents)
     val repository = new Sessions
     val runner = new TransactionRunner[IO, IO] {
       override def run[A](program: IO[A]): IO[A] =
@@ -164,6 +166,7 @@ final class SyncConnectionFailureSpec extends FunSuite {
     val sync = new SyncConnection[IO, IO](new ResourceConnectorRegistry(List(connector)),
       null.asInstanceOf[SyncDiscoveredSnapshot[IO]], null, repository, runner, ids, clock,
       null.asInstanceOf[RecordResourceObservations[IO]],
+      history,
       _root_.org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.sync-failure"))
   }
 

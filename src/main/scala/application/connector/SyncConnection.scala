@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package application.connector
 
 import application.discovery.{PendingDiscoveredResource, SyncDiscoveredSnapshot}
+import application.history.{HistoryEntry, HistoryRecorder}
 import application.port.{
   ConnectionRepository,
   ConnectionSyncResult,
@@ -13,6 +14,7 @@ import application.port.{
 }
 import application.resource.{PendingMetricObservation, RecordResourceObservations}
 import domain.connection.{Connection, ConnectionConfig}
+import domain.history.HistoryEventType
 import domain.resource.Resource
 import domain.sync.{SyncSession, SyncSessionStatus}
 
@@ -31,6 +33,7 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
                                                      idGenerator: IdGenerator[F],
                                                      timeProvider: TimeProvider[F],
                                                      recordResourceObservations: RecordResourceObservations[Tx],
+                                                     historyRecorder: HistoryRecorder[Tx],
                                                      logger: Logger[F]
                                                    ) {
 
@@ -146,8 +149,13 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
       }
       failureLog *>
       transactionRunner
+        // The failed session and the fact that reports it are one commit; the safe error code
+        // stays in the session and is read through it.
         .run(syncSessionRepository.fail(connection.organizationId, syncSession.id, finishedAt,
-          failure.code, failure.message))
+          failure.code, failure.message) *>
+          historyRecorder.record(HistoryEntry
+            .system(connection.organizationId, HistoryEventType.SyncFailed, finishedAt)
+            .copy(connectionId = Some(connection.id), syncSessionId = Some(syncSession.id))))
         .attempt
         .flatMap {
           case Right(_) => ConnectionSyncExecutionFailed(syncSession.id, error).raiseError[F, List[Resource]]

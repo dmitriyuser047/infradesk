@@ -1,11 +1,16 @@
 package ru.bitec.app.ops
 package persistence.postgres
 
+import application.audit.AuditRecorder
+import application.auth.ActorContext
+import application.history.{HistoryEntry, HistoryRecorder}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
+import domain.audit.{AuditAction, AuditTargetType}
+import domain.history.HistoryEventType
 import domain.operation._
-import infrastructure.database.DoobieTransactionRunner
+import infrastructure.database.{ConnectionIOIdGenerator, ConnectionIOTimeProvider, DoobieTransactionRunner}
 import munit.FunSuite
 import org.typelevel.doobie.ConnectionIO
 import org.typelevel.doobie.implicits._
@@ -27,6 +32,10 @@ final class OperationExecutionRepositoryIntegrationSpec extends FunSuite {
     PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
       val repository = new PostgresOperationExecutionRepository
+      val auditRecorder = new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
+        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider)
+      val historyRecorder = new HistoryRecorder[ConnectionIO](new PostgresHistoryEventRepository,
+        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider)
       val targetQuery = new PostgresResourceOperationTargetQuery
       val setup = for {
         _ <- sql"insert into organization (id, code, name) values ($org, ${org.toString}, 'Operations')".update.run
@@ -40,6 +49,8 @@ final class OperationExecutionRepositoryIntegrationSpec extends FunSuite {
         _ <- sql"insert into external_ref (id, organization_id, connection_id, external_type, external_id, resource_id) values (${UUID.randomUUID()}, $org, $connection, 'CONTAINER', '73ac69cf50927aadda817a4a31fdcf6b56f2d3cfe782dabeab65b961c230fc6d', $resource)".update.run
       } yield ()
       val cleanup = for {
+        _ <- sql"delete from history_event where organization_id = $org".update.run
+        _ <- sql"delete from audit_event where organization_id = $org".update.run
         _ <- sql"delete from operation_execution where organization_id = $org".update.run
         _ <- sql"delete from external_ref where organization_id = $org".update.run
         _ <- sql"delete from resource where organization_id = $org".update.run
@@ -79,7 +90,9 @@ final class OperationExecutionRepositoryIntegrationSpec extends FunSuite {
         history <- runner.run(repository.listByResource(org, resource, None, 20))
         target <- runner.run(targetQuery.find(org, resource))
         _ <- IO {
-          assertEquals(notDue, List.empty); assertEquals(recovered, List(staleId)); assertEquals(stale.map(_.status), Some(OperationExecutionStatus.Unknown))
+          assertEquals(notDue.map(_.id), List.empty[UUID]); assertEquals(recovered.map(_.id), List(staleId))
+          // Recovery hands the retired rows back, so journalling them needs no extra query.
+          assertEquals(recovered.map(_.status), List(OperationExecutionStatus.Unknown)); assertEquals(stale.map(_.status), Some(OperationExecutionStatus.Unknown))
           assertEquals(stale.flatMap(_.errorCode), Some("OPERATION_RESULT_UNKNOWN"))
           assertEquals(history.map(_.startedAt), history.map(_.startedAt).sortWith(_.isAfter(_)))
           assertEquals(target.map(_.targets.size), Some(1))
@@ -112,11 +125,29 @@ final class OperationExecutionRepositoryIntegrationSpec extends FunSuite {
           assertEquals(foreignHistory, List.empty)
           assertEquals(foreignFind, None)
         }
+        // The prepare transaction writes the execution, the audit entry and the timeline entry;
+        // a failure anywhere in it must leave none of the three behind.
         rollbackId <- IO(UUID.randomUUID())
-        failed <- runner.run(repository.tryCreateRunning(running(rollbackId, resource, at.plusSeconds(3))) *>
-          new IllegalStateException("audit unavailable").raiseError[ConnectionIO, Unit]).attempt
+        failed <- runner.run(
+          repository.tryCreateRunning(running(rollbackId, resource, at.plusSeconds(3))) *>
+            auditRecorder.record(ActorContext(actor, org), AuditAction.ContainerRestartRequested,
+              AuditTargetType.Resource, Some(resource)) *>
+            historyRecorder.record(HistoryEntry.user(org, HistoryEventType.OperationRequested,
+              at.plusSeconds(3), actor).copy(resourceId = Some(resource),
+              operationExecutionId = Some(rollbackId))) *>
+            new IllegalStateException("history unavailable").raiseError[ConnectionIO, Unit]
+        ).attempt
         afterRollback <- runner.run(repository.findById(org, resource, rollbackId))
-        _ <- IO { assert(failed.isLeft); assertEquals(afterRollback, None) }
+        auditRows <- runner.run(
+          sql"select count(*) from audit_event where organization_id = $org".query[Int].unique)
+        historyRows <- runner.run(
+          sql"select count(*) from history_event where organization_id = $org".query[Int].unique)
+        _ <- IO {
+          assert(failed.isLeft)
+          assertEquals(afterRollback, None)
+          assertEquals(auditRows, 0)
+          assertEquals(historyRows, 0)
+        }
       } yield ()).guarantee(runner.run(cleanup))
     }.unsafeRunSync()
   }

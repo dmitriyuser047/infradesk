@@ -12,6 +12,7 @@ import infrastructure.http.{
   ConnectionRoutes,
   ConnectionSyncRoutes,
   HealthRoutes,
+  HistoryRoutes,
   IncidentRoutes,
   MonitorRuleRoutes,
   NavigationRoutes,
@@ -88,7 +89,9 @@ object HttpModule {
           transactionRunner,
           authorization
         ).routes <+>
-        new AuditRoutes(application.listAuditEvents, transactionRunner, authorization).routes
+        new AuditRoutes(application.listAuditEvents, transactionRunner, authorization).routes <+>
+        new HistoryRoutes(application.listHistoryEvents, persistence.resourceRepository,
+          transactionRunner, authorization).routes
     ).orNotFound
 
     val authRoutes = new AuthRoutes(application.login, application.authentication, authSettings)

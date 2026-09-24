@@ -6,6 +6,7 @@ import application.port._
 import cats.effect.{IO, Ref}
 import cats.effect.unsafe.implicits.global
 import domain.connection.{Connection, ConnectionScope, SshConnectionSettings}
+import domain.history.HistoryEventType
 import domain.operation._
 import munit.FunSuite
 import support.{FailingAuditEventRepository, RecordingAuditEventRepository, TestAuditRecorder}
@@ -28,6 +29,15 @@ final class ResourceOperationsSpec extends FunSuite {
     assertEquals(fixture.executor.calls.unsafeRunSync(), 1)
     assertEquals(fixture.auditRepository.toList.flatMap(_.recorded).map(_.action.code), List("CONTAINER_START_REQUESTED"))
     assertEquals(fixture.repository.values.head.status, OperationExecutionStatus.Succeeded)
+    // The request is a user fact of the prepare transaction; the outcome is a system fact of the
+    // completion transaction.
+    assertEquals(fixture.history.map(event => (event.eventType.code, event.source.code)),
+      List(("OPERATION_REQUESTED", "USER"), ("OPERATION_SUCCEEDED", "SYSTEM")))
+    assertEquals(fixture.history.map(_.operationExecutionId).distinct,
+      List(Some(fixture.repository.values.head.id)))
+    assertEquals(fixture.history.head.actorUserId, Some(actor.userId))
+    assertEquals(fixture.history.last.actorUserId, None)
+    assertEquals(fixture.history.last.occurredAt, now)
   }
 
   test("clear remote failure becomes FAILED with safe metadata and is not retried") {
@@ -36,6 +46,8 @@ final class ResourceOperationsSpec extends FunSuite {
     assertEquals(result.status, OperationExecutionStatus.Failed)
     assertEquals(result.errorCode, Some("DOCKER_OPERATION_FAILED"))
     assertEquals(fixture.executor.calls.unsafeRunSync(), 1)
+    assertEquals(fixture.history.map(_.eventType.code),
+      List("OPERATION_REQUESTED", "OPERATION_FAILED"))
   }
 
   test("duplicate running and ambiguous or unsupported targets never perform IO") {
@@ -60,6 +72,32 @@ final class ResourceOperationsSpec extends FunSuite {
       fixture.service.execute(actor, resource, ResourceOperationCode.ContainerRestart).unsafeRunSync()
     }
     assertEquals(fixture.executor.calls.unsafeRunSync(), 0)
+  }
+
+  test("a failing timeline aborts the request before any external work") {
+    val fixture = OpFixture(failingHistory = Some(HistoryEventType.OperationRequested))
+
+    intercept[IllegalStateException] {
+      fixture.service.execute(actor, resource, ResourceOperationCode.ContainerRestart).unsafeRunSync()
+    }
+
+    // The failure happens inside the prepare transaction, so no remote command is ever sent.
+    // That the execution and the audit entry roll back with it is proved against a real database
+    // in OperationExecutionRepositoryIntegrationSpec.
+    assertEquals(fixture.executor.calls.unsafeRunSync(), 0)
+  }
+
+  test("retiring an abandoned execution is journalled with the request that retired it") {
+    val fixture = OpFixture(commandTimeoutSeconds = 30)
+    fixture.repository.start(startedAt = now.minusSeconds(22 * 60), recoverAfterAt = now.minusSeconds(60))
+
+    fixture.service.execute(actor, resource, ResourceOperationCode.ContainerRestart).unsafeRunSync()
+
+    // One prepare transaction carries both facts, and the retired execution needed no extra read.
+    assertEquals(fixture.history.map(_.eventType.code),
+      List("OPERATION_UNKNOWN", "OPERATION_REQUESTED", "OPERATION_SUCCEEDED"))
+    assertEquals(fixture.history.head.operationExecutionId, Some(fixture.repository.recovered.head))
+    assertEquals(fixture.history.head.source.code, "SYSTEM")
   }
 
   test("an execution stores the deadline of the conditions it started under") {
@@ -114,7 +152,7 @@ final class ResourceOperationsSpec extends FunSuite {
 
   private final case class OpFixture(failure: Option[ResourceOperationFailure] = None,
     targetCount: Int = 1, resourceType: String = "CONTAINER", failingAudit: Boolean = false,
-    commandTimeoutSeconds: Int = 30) {
+    commandTimeoutSeconds: Int = 30, failingHistory: Option[HistoryEventType] = None) {
     val repository = new MemoryExecutions
     private val sshConfig = SshConnectionSettings.toConnectionConfig(
       SshConnectionSettings("node.example.test", 22, "root", None, 10, commandTimeoutSeconds))
@@ -129,12 +167,18 @@ final class ResourceOperationsSpec extends FunSuite {
     val auditRepository: Option[RecordingAuditEventRepository] = if (failingAudit) None else Some(new RecordingAuditEventRepository)
     val auditRecorder = TestAuditRecorder(auditRepository.getOrElse(new FailingAuditEventRepository))
     val budget = new SshTimeoutBudget
+    val historyRepository: Option[support.RecordingHistoryEventRepository] =
+      if (failingHistory.isDefined) None else Some(new support.RecordingHistoryEventRepository)
+    val historyRecorder = support.TestHistoryRecorder(historyRepository.getOrElse(
+      new support.FailingHistoryEventRepository(eventType => failingHistory.contains(eventType))))
     val preparation = new ResourceOperationPreparation[IO](query, repository, new FixedId,
-      new FixedTime, auditRecorder, budget)
+      new FixedTime, auditRecorder, historyRecorder, budget)
     val executor = new RecordingExecutor(failure)
     val service = new ExecuteResourceOperation[IO](preparation, repository, executor,
       new TransactionRunner[IO, IO] { def run[A](program: IO[A]): IO[A] = program }, new FixedTime,
-      Slf4jLogger.getLoggerFromName[IO]("test.operations"))
+      historyRecorder, Slf4jLogger.getLoggerFromName[IO]("test.operations"))
+
+    def history: List[domain.history.HistoryEvent] = historyRepository.toList.flatMap(_.recorded)
   }
 
   /** Mirrors the SSH adapter: the budget of a target is what its own connection allows. */
@@ -180,7 +224,9 @@ final class ResourceOperationsSpec extends FunSuite {
         else value)
       if (stale.nonEmpty) running = false
       recovered = recovered ++ stale.map(_.id)
-      stale.map(_.id)
+      // The retired rows themselves, so journalling them costs no extra query.
+      stale.map(_.copy(status = OperationExecutionStatus.Unknown, finishedAt = Some(at),
+        errorCode = Some(c), errorMessage = Some(m)))
     }
     def markSucceeded(o: UUID, id: UUID, at: Instant) = finish(id, OperationExecutionStatus.Succeeded, at, None, None)
     def markFailed(o: UUID, id: UUID, at: Instant, c: String, m: String) = finish(id, OperationExecutionStatus.Failed, at, Some(c), Some(m))

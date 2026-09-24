@@ -129,6 +129,25 @@ Recovery compares against that stored deadline, so reconfiguring the connection 
 retire a command that is still in flight; the recovered execution becomes `UNKNOWN`, since the
 backend cannot safely infer whether the remote command took effect. Owners see controls and history; members retain read-only history access.
 
+## Activity history
+
+InfraDesk keeps an append-only journal of what happened to the infrastructure: resources
+discovered and deactivated, incidents opened and resolved, controlled operations requested and
+finished, and failed synchronizations. It is a read model, not event sourcing — the resource,
+incident, execution and session tables remain the source of truth, and nothing is ever rebuilt
+from the journal.
+
+Each entry carries typed references and no rendered message, so the timeline is presented by the
+client and never repeats a detail the state already owns. An entry is written in the same
+transaction as the change it reports: if the journal write fails, the incident, the operation or
+the reconciliation fails with it. Metrics, notification deliveries and scheduler ticks are
+deliberately absent — they are telemetry, transport and logs. The audit journal stays separate and
+owner-only: it answers who changed the configuration, while this one answers what happened.
+
+`GET /api/v1/organizations/{id}/history-events` and
+`GET /api/v1/organizations/{id}/resources/{id}/history-events` return bounded, keyset-paginated
+pages to any member of the organization.
+
 Frontend: `cd frontend`, then `npm ci`, `npm test`, `npm run build`, or `npm run dev`.
 
 Applied Flyway migrations are immutable. Add a new versioned migration instead of modifying an applied one. An existing non-empty database without Flyway history is not auto-baselined; assess it before switching startup to Flyway.

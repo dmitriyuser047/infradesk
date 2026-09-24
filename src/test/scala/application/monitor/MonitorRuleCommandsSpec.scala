@@ -200,6 +200,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
     val incidents = new FakeIncidentRepository(initialIncidents)
 
     val (auditEvents, auditRecorder) = support.TestAuditRecorder.recording
+    val (historyEvents, historyRecorder) = support.TestHistoryRecorder.recording
 
     val create: CreateMonitorRule[IO] =
       CreateMonitorRule[IO](resources, rules, new FixedIdGenerator, new FixedTimeProvider,
@@ -214,6 +215,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
       new RecordNotificationDeliveries[IO](notificationDeliveries, new FixedIdGenerator,
         new FixedTimeProvider, List(NotificationChannel.Webhook)),
       auditRecorder,
+      historyRecorder,
       new FixedTimeProvider
     )
   }
@@ -227,7 +229,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
     override def save(resource: Resource): IO[Unit] = IO.unit
     override def deactivateIfExclusiveToConnection(
       organizationId: UUID, id: UUID, connectionId: UUID, now: Instant
-    ): IO[Unit] = IO.unit
+    ): IO[Boolean] = IO.pure(false)
   }
 
   private final class FakeMonitorRuleRepository(initial: List[MonitorRule]) extends MonitorRuleRepository[IO] {

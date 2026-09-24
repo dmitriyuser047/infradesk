@@ -3,11 +3,13 @@ package application.operation
 
 import application.audit.AuditRecorder
 import application.auth.ActorContext
+import application.history.{HistoryEntry, HistoryRecorder}
 import application.port._
 import cats.{Monad, MonadThrow}
 import cats.effect.IO
 import cats.syntax.all._
 import domain.audit.{AuditAction, AuditTargetType}
+import domain.history.HistoryEventType
 import domain.operation._
 import org.typelevel.log4cats.Logger
 
@@ -27,7 +29,7 @@ final case class ResourceOperationFailure(override val code: String, override va
 
 final case class AvailableResourceOperations(operations: List[ResourceOperationCode], unavailableReason: Option[String])
 final case class PreparedResourceOperation(execution: OperationExecution, target: ResourceOperationTarget,
-  recoveredExecutionIds: List[UUID])
+  recoveredExecutions: List[OperationExecution])
 
 object ResourceOperationPolicy {
   /** The floor: even a fast transport keeps its running operation for this long. */
@@ -52,7 +54,7 @@ object ResourceOperationPolicy {
 final class ResourceOperationPreparation[Tx[_]: MonadThrow](
   targets: ResourceOperationTargetQuery[Tx], executions: OperationExecutionRepository[Tx],
   ids: IdGenerator[Tx], time: TimeProvider[Tx], audit: AuditRecorder[Tx],
-  budget: ResourceOperationBudget
+  history: HistoryRecorder[Tx], budget: ResourceOperationBudget
 ) {
   def availability(organizationId: UUID, resourceId: UUID): Tx[AvailableResourceOperations] =
     targets.find(organizationId, resourceId).flatMap {
@@ -88,6 +90,18 @@ final class ResourceOperationPreparation[Tx[_]: MonadThrow](
       created <- executions.tryCreateRunning(execution)
       _ <- MonadThrow[Tx].raiseUnless(created)(OperationAlreadyRunning())
       _ <- audit.record(actor, auditAction(operation), AuditTargetType.Resource, Some(resourceId))
+      // Retired executions and this request are facts of the same transaction: if the journal
+      // cannot take them, nothing is created and no remote command is sent.
+      _ <- history.recordAll(
+        recovered.map(value =>
+          HistoryEntry.system(value.organizationId, HistoryEventType.OperationUnknown,
+            value.finishedAt.getOrElse(now))
+            .copy(resourceId = Some(value.resourceId), operationExecutionId = Some(value.id))
+        ) :+
+          HistoryEntry.user(actor.organizationId, HistoryEventType.OperationRequested,
+            execution.startedAt, actor.userId)
+            .copy(resourceId = Some(resourceId), operationExecutionId = Some(execution.id))
+      )
     } yield PreparedResourceOperation(execution, target, recovered)
 
   private def auditAction(value: ResourceOperationCode): AuditAction = value match {
@@ -97,10 +111,10 @@ final class ResourceOperationPreparation[Tx[_]: MonadThrow](
   }
 }
 
-final class ExecuteResourceOperation[Tx[_]](
+final class ExecuteResourceOperation[Tx[_]: Monad](
   preparation: ResourceOperationPreparation[Tx], executions: OperationExecutionRepository[Tx],
   executor: ResourceOperationExecutor[IO], runner: TransactionRunner[IO, Tx], time: TimeProvider[IO],
-  logger: Logger[IO]
+  history: HistoryRecorder[Tx], logger: Logger[IO]
 ) {
   def execute(actor: ActorContext, resourceId: UUID, operation: ResourceOperationCode): IO[OperationExecution] =
     runner.run(preparation.prepare(actor, resourceId, operation)).handleErrorWith { error =>
@@ -108,33 +122,55 @@ final class ExecuteResourceOperation[Tx[_]](
       logger.warn(s"operation.rejected organizationId=${actor.organizationId} resourceId=$resourceId " +
         s"operationCode=${operation.code} errorCode=$code").handleErrorWith(_ => IO.unit) *> IO.raiseError(error)
     }.flatTap(prepared =>
-      prepared.recoveredExecutionIds.traverse_(id =>
-        logger.warn(s"operation.unknown operationExecutionId=$id organizationId=${actor.organizationId} " +
+      prepared.recoveredExecutions.traverse_(recovered =>
+        logger.warn(s"operation.unknown operationExecutionId=${recovered.id} organizationId=${actor.organizationId} " +
           s"resourceId=$resourceId operationCode=${operation.code}").handleErrorWith(_ => IO.unit)
       ) *> logInfo("operation.requested", prepared.execution)
     ).flatMap { prepared =>
       (logInfo("operation.started", prepared.execution) *> executor.execute(prepared.target, operation)).attempt.flatMap { result =>
         time.now.flatMap { finishedAt =>
           result match {
-            case Right(_) => runner.run(executions.markSucceeded(actor.organizationId, prepared.execution.id, finishedAt))
+            case Right(_) => runner.run(complete(prepared.execution, finishedAt,
+              HistoryEventType.OperationSucceeded,
+              executions.markSucceeded(actor.organizationId, prepared.execution.id, finishedAt)))
               .flatMap(requireUpdated(prepared.execution)).as(prepared.execution.copy(status = OperationExecutionStatus.Succeeded,
                 finishedAt = Some(finishedAt), updatedAt = finishedAt)).flatTap(value => logInfo("operation.succeeded", value))
             case Left(failure: ResourceOperationFailure) =>
-              runner.run(executions.markFailed(actor.organizationId, prepared.execution.id, finishedAt,
-                failure.code, failure.safeMessage)).flatMap(requireUpdated(prepared.execution))
+              runner.run(complete(prepared.execution, finishedAt, HistoryEventType.OperationFailed,
+                executions.markFailed(actor.organizationId, prepared.execution.id, finishedAt,
+                  failure.code, failure.safeMessage))).flatMap(requireUpdated(prepared.execution))
                 .as(prepared.execution.copy(status = OperationExecutionStatus.Failed, finishedAt = Some(finishedAt),
                   errorCode = Some(failure.code), errorMessage = Some(failure.safeMessage), updatedAt = finishedAt))
                 .flatTap(value => logFailure(value, failure.code))
             case Left(error) =>
               val failure = ResourceOperationFailure("OPERATION_EXECUTION_FAILED", "Operation execution failed", error)
-              runner.run(executions.markFailed(actor.organizationId, prepared.execution.id, finishedAt,
-                failure.code, failure.safeMessage)).flatMap(requireUpdated(prepared.execution))
+              runner.run(complete(prepared.execution, finishedAt, HistoryEventType.OperationFailed,
+                executions.markFailed(actor.organizationId, prepared.execution.id, finishedAt,
+                  failure.code, failure.safeMessage))).flatMap(requireUpdated(prepared.execution))
                 .as(prepared.execution.copy(status = OperationExecutionStatus.Failed, finishedAt = Some(finishedAt),
                   errorCode = Some(failure.code), errorMessage = Some(failure.safeMessage), updatedAt = finishedAt))
                 .flatTap(value => logFailure(value, failure.code))
           }
         }
       }
+    }
+
+  /** The terminal update and its journal entry share one short transaction. The entry is only
+    * written when this instance still owned the running execution.
+    */
+  private def complete(
+    execution: OperationExecution,
+    finishedAt: Instant,
+    eventType: HistoryEventType,
+    update: Tx[Boolean]
+  ): Tx[Boolean] =
+    update.flatMap { updated =>
+      if (!updated) false.pure[Tx]
+      else
+        history.record(
+          HistoryEntry.system(execution.organizationId, eventType, finishedAt)
+            .copy(resourceId = Some(execution.resourceId), operationExecutionId = Some(execution.id))
+        ).as(true)
     }
 
   private def requireUpdated(execution: OperationExecution)(updated: Boolean): IO[Unit] =

@@ -374,7 +374,7 @@ final class ResourceRoutesSpec extends FunSuite {
                                                      id: UUID,
                                                      connectionId: UUID,
                                                      now: Instant
-                                                   ): IO[Unit] = IO.unit
+                                                   ): IO[Boolean] = IO.pure(false)
   }
 
   private final class RecordingMetricObservationRepository(initial: List[MetricObservation], failure: Option[Throwable]) extends MetricObservationRepository[IO] {

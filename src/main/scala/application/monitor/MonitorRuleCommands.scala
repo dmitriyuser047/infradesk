@@ -11,10 +11,12 @@ import application.port.{
 }
 import application.audit.AuditRecorder
 import application.auth.ActorContext
+import application.history.{HistoryEntry, HistoryRecorder}
 import application.notification.RecordNotificationDeliveries
 import cats.MonadThrow
 import cats.syntax.all._
 import domain.audit.{AuditAction, AuditTargetType}
+import domain.history.HistoryEventType
 import domain.incident.IncidentStatus
 import domain.metric.MetricCode
 import domain.monitor.{InvalidMonitorRule, MonitorOperator, MonitorRule, MonitorRuleStatus, MonitorRuleValidation}
@@ -121,6 +123,7 @@ final case class UpdateMonitorRule[Tx[_]: MonadThrow](
   incidentRepository: IncidentRepository[Tx],
   notificationRecorder: RecordNotificationDeliveries[Tx],
   auditRecorder: AuditRecorder[Tx],
+  historyRecorder: HistoryRecorder[Tx],
   timeProvider: TimeProvider[Tx]
 ) {
   def execute(
@@ -175,9 +178,16 @@ final case class UpdateMonitorRule[Tx[_]: MonadThrow](
         _ <- monitorRuleStateRepository.deleteByRuleId(updated.organizationId, updated.id)
         // Closing an incident here is the same business fact as closing one during an
         // evaluation, so it is reported through the same outbox, in this transaction.
-        _ <- notificationRecorder.record(openIncident.toList.map(incident =>
+        transitions = openIncident.toList.map(incident =>
           MonitorTransition.Resolved(updated.organizationId, updated.resourceId, updated.id,
-            incident.id, incident.reason, now)
+            incident.id, incident.reason, now))
+        _ <- notificationRecorder.record(transitions)
+        // Closing an incident is the same fact however it happened, so it reaches the timeline
+        // through this transaction as well.
+        _ <- historyRecorder.recordAll(transitions.map(transition =>
+          HistoryEntry.system(transition.organizationId, HistoryEventType.IncidentResolved,
+            transition.evaluatedAt)
+            .copy(resourceId = Some(transition.resourceId), incidentId = Some(transition.incidentId))
         ))
       } yield ()
 }

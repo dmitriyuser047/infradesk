@@ -1,6 +1,7 @@
 package ru.bitec.app.ops
 package persistence.postgres
 
+import application.history.HistoryRecorder
 import application.discovery.{CreateDiscoveredResource, DiscoveredResource, PendingDiscoveredResource, ReconcileDiscoveredResource, SyncDiscoveredSnapshot}
 import application.port.{MetricObservationRepository, TransactionRunner}
 import application.resource.{PendingMetricObservation, PersistExternalResource, RecordResourceObservations}
@@ -13,7 +14,7 @@ import domain.metric.{MetricCode, MetricObservation}
 import domain.resource.{Resource, ResourceData}
 import domain.resource.node.{NodeSpec, NodeStatus}
 import domain.sync.{SyncSession, SyncSessionStatus}
-import infrastructure.database.{Database, DatabaseConfig, DoobieTransactionRunner}
+import infrastructure.database.{ConnectionIOIdGenerator, ConnectionIOTimeProvider, Database, DatabaseConfig, DoobieTransactionRunner}
 import munit.FunSuite
 import org.typelevel.doobie.ConnectionIO
 import org.typelevel.doobie.implicits._
@@ -63,7 +64,9 @@ final class SyncDiscoveredSnapshotRollbackIntegrationSpec extends FunSuite {
         externalRefRepository,
         resourceRepository,
         syncSessionRepository,
-        recorder
+        recorder,
+        new HistoryRecorder[ConnectionIO](new PostgresHistoryEventRepository,
+          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider)
       )
 
       val before = nodeResource(ids, "node-before", NodeStatus(true, None, None, Some(1)))

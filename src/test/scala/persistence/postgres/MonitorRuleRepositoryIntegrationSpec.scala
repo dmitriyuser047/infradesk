@@ -8,6 +8,7 @@ import domain.metric.{MetricCode, MetricObservation}
 import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import application.audit.AuditRecorder
+import application.history.HistoryRecorder
 import application.auth.ActorContext
 import application.monitor.{EvaluateMonitorRules, MonitorEvaluationInput, MonitorRuleCommand, UpdateMonitorRule}
 import application.notification.RecordNotificationDeliveries
@@ -382,6 +383,8 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
         new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
           new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),
+        new HistoryRecorder[ConnectionIO](new PostgresHistoryEventRepository,
+          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),
         new ConnectionIOTimeProvider)
       val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
         ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
@@ -457,6 +460,8 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
         new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
           new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),
+        new HistoryRecorder[ConnectionIO](new PostgresHistoryEventRepository,
+          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),
         new ConnectionIOTimeProvider)
       val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
         ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
@@ -506,6 +511,8 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
       val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
         new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
+          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),
+        new HistoryRecorder[ConnectionIO](new PostgresHistoryEventRepository,
           new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),
         new ConnectionIOTimeProvider)
 

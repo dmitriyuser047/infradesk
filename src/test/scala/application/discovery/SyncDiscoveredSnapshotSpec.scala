@@ -76,6 +76,37 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     assertEquals(state.sessions.get(syncSessionId).map(_.status), Some(SyncSessionStatus.Completed))
   }
 
+  test("a new resource is discovered once, and seeing it again journals nothing") {
+    val (first, firstHistory) = runWithHistory(initialState, failNewResourceSave = false)
+    assert(first.isRight)
+
+    val known = first.toOption.getOrElse(fail("Snapshot should succeed"))
+    val (second, secondHistory) = runWithHistory(known, failNewResourceSave = false)
+
+    assert(second.isRight)
+    // The replacement is new the first time and already known the second, and the container the
+    // first run deactivated is not deactivated twice.
+    assertEquals(firstHistory, List(
+      ("RESOURCE_DISCOVERED", newResourceId),
+      ("RESOURCE_DEACTIVATED", oldResourceId)
+    ))
+    assertEquals(secondHistory, List.empty[(String, UUID)])
+  }
+
+  test("an authoritative empty snapshot journals the deactivation, a partial one journals nothing") {
+    val (authoritative, authoritativeHistory) = runWithHistory(initialState,
+      failNewResourceSave = false, completeExternalTypes = Set("NODE", "CONTAINER"),
+      discoveredResources = List.empty)
+    val (partial, partialHistory) = runWithHistory(initialState, failNewResourceSave = false,
+      completeExternalTypes = Set("NODE"), discoveredResources = List.empty)
+
+    assert(authoritative.isRight)
+    assert(partial.isRight)
+    assertEquals(authoritativeHistory, List(("RESOURCE_DEACTIVATED", oldResourceId)))
+    // Docker was unavailable: nothing was deactivated, so there is no fact to report.
+    assertEquals(partialHistory, List.empty[(String, UUID)])
+  }
+
   private def runSnapshot(
                           initial: SnapshotState,
                           failNewResourceSave: Boolean,
@@ -83,7 +114,18 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
                           discoveredResources: List[PendingDiscoveredResource] = List(replacement),
                           metricObservationRepository: MetricObservationRepository[IO] =
                             new NoopMetricObservationRepository
-                        ): Either[Throwable, SnapshotState] = {
+                        ): Either[Throwable, SnapshotState] = runWithHistory(initial,
+    failNewResourceSave, completeExternalTypes, discoveredResources, metricObservationRepository)._1
+
+  /** The same run, with the facts the reconciliation journalled in its transaction. */
+  private def runWithHistory(
+                          initial: SnapshotState,
+                          failNewResourceSave: Boolean,
+                          completeExternalTypes: Set[String] = Set("CONTAINER"),
+                          discoveredResources: List[PendingDiscoveredResource] = List(replacement),
+                          metricObservationRepository: MetricObservationRepository[IO] =
+                            new NoopMetricObservationRepository
+                        ): (Either[Throwable, SnapshotState], List[(String, UUID)]) = {
     var workingState = initial
 
     val resourceRepository = new SnapshotResourceRepository(
@@ -116,13 +158,15 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     val recordResourceObservations = new RecordResourceObservations[IO](
       metricObservationRepository
     )
+    val historyEvents = new support.RecordingHistoryEventRepository
     val snapshot = new SyncDiscoveredSnapshot[IO](
       create,
       reconcile,
       externalRefRepository,
       resourceRepository,
       syncSessionRepository,
-      recordResourceObservations
+      recordResourceObservations,
+      support.TestHistoryRecorder(historyEvents)
     )
 
     snapshot
@@ -135,7 +179,9 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
       )
       .attempt
       .unsafeRunSync()
-      .map(_ => workingState)
+      .map(_ => workingState) ->
+      historyEvents.recorded.map(event =>
+        (event.eventType.code, event.resourceId.getOrElse(fail("a lifecycle fact without a resource"))))
   }
 
   private val organizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
@@ -253,13 +299,16 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
                                                      id: UUID,
                                                      connectionId: UUID,
                                                      now: Instant
-                                                   ): IO[Unit] =
+                                                   ): IO[Boolean] =
       IO {
-        state().resources.get(id).foreach { resource =>
-          update(state().copy(resources = state().resources.updated(
-            id,
-            resource.copy(isActive = false, updatedAt = now)
-          )))
+        state().resources.get(id).filter(_.isActive) match {
+          case Some(resource) =>
+            update(state().copy(resources = state().resources.updated(
+              id,
+              resource.copy(isActive = false, updatedAt = now)
+            )))
+            true
+          case None => false
         }
       }
   }

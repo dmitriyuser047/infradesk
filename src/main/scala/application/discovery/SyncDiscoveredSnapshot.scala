@@ -1,10 +1,12 @@
 package ru.bitec.app.ops
 package application.discovery
 
+import application.history.{HistoryEntry, HistoryRecorder}
 import application.port.{ExternalRefRepository, ResourceRepository, SyncSessionRepository}
 import application.resource.{PendingMetricObservation, RecordResourceObservations}
 import domain.connection.Connection
 import domain.externalref.ExternalRef
+import domain.history.HistoryEventType
 import domain.resource.Resource
 import domain.sync.SyncSession
 
@@ -27,7 +29,8 @@ final class SyncDiscoveredSnapshot[Tx[_]: MonadThrow](
                                                         externalRefRepository: ExternalRefRepository[Tx],
                                                         resourceRepository: ResourceRepository[Tx],
                                                         syncSessionRepository: SyncSessionRepository[Tx],
-                                                        recordResourceObservations: RecordResourceObservations[Tx]
+                                                        recordResourceObservations: RecordResourceObservations[Tx],
+                                                        historyRecorder: HistoryRecorder[Tx]
                                                       ) {
 
   def execute(
@@ -62,18 +65,21 @@ final class SyncDiscoveredSnapshot[Tx[_]: MonadThrow](
           externalRef.resourceId
       }.distinct
 
-      _ <- missingResourceIds.traverse_ { resourceId =>
+      // Only a resource this call actually deactivated becomes a fact; a partial snapshot
+      // deactivates nothing and therefore journals nothing.
+      deactivatedResourceIds <- missingResourceIds.traverseFilter { resourceId =>
         resourceRepository.deactivateIfExclusiveToConnection(
           connection.organizationId,
           resourceId,
           connection.id,
           completedAt
-        )
+        ).map(deactivated => Option.when(deactivated)(resourceId))
       }
 
       resources <- discoveredResources.traverse { pending =>
+        val known = externalRefsByIdentity.get(identity(pending.discovered))
         val resource =
-          externalRefsByIdentity.get(identity(pending.discovered)) match {
+          known match {
           case Some(externalRef) =>
             reconcileDiscoveredResource.execute(
               connection,
@@ -103,12 +109,45 @@ final class SyncDiscoveredSnapshot[Tx[_]: MonadThrow](
         }
       }
 
+      newResourceIds = discoveredResources.collect {
+        case pending if !externalRefsByIdentity.contains(identity(pending.discovered)) =>
+          pending.resourceId
+      }
+
+      // Reconciliation decides what the facts are; the repositories only store rows. Both kinds
+      // of fact are written in this transaction, in one batch.
+      _ <- historyRecorder.recordAll(
+        newResourceIds.map(resourceId =>
+          lifecycleEntry(connection, syncSession, HistoryEventType.ResourceDiscovered, resourceId,
+            completedAt)
+        ) ++
+          deactivatedResourceIds.map(resourceId =>
+            lifecycleEntry(connection, syncSession, HistoryEventType.ResourceDeactivated,
+              resourceId, completedAt)
+          )
+      )
+
       _ <- syncSessionRepository.complete(
         connection.organizationId,
         syncSession.id,
         completedAt
       )
     } yield resources
+
+  private def lifecycleEntry(
+                              connection: Connection,
+                              syncSession: SyncSession,
+                              eventType: HistoryEventType,
+                              resourceId: UUID,
+                              occurredAt: Instant
+                            ): HistoryEntry =
+    HistoryEntry
+      .system(connection.organizationId, eventType, occurredAt)
+      .copy(
+        resourceId = Some(resourceId),
+        connectionId = Some(connection.id),
+        syncSessionId = Some(syncSession.id)
+      )
 
   private def validateUniqueIdentities(
                                         discoveredResources: List[PendingDiscoveredResource]

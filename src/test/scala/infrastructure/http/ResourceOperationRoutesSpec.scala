@@ -23,10 +23,11 @@ final class ResourceOperationRoutesSpec extends FunSuite {
     val repo = new Repo
     val query = new Query
     val preparation = new ResourceOperationPreparation[IO](query, repo, new Ids, new Clock,
-      TestAuditRecorder.recording._2, FixedBudget)
+      TestAuditRecorder.recording._2, support.TestHistoryRecorder.recording._2, FixedBudget)
     val execute = new ExecuteResourceOperation[IO](preparation, repo,
       new ResourceOperationExecutor[IO] { def execute(t: ResourceOperationTarget, o: ResourceOperationCode) = IO.unit },
-      Runner, new Clock, Slf4jLogger.getLoggerFromName[IO]("test.operations"))
+      Runner, new Clock, support.TestHistoryRecorder.recording._2,
+      Slf4jLogger.getLoggerFromName[IO]("test.operations"))
     val list = new ListResourceOperationExecutions[IO](query, repo)
     val app = new ResourceOperationRoutes(preparation, execute, list, Runner, AuthorizationFixtures.authorization).routes.orNotFound
     def request(code: String, role: OrganizationRole) = app.run(AuthorizationFixtures.as(Request[IO](Method.POST,
@@ -65,7 +66,8 @@ final class ResourceOperationRoutesSpec extends FunSuite {
   private final class Repo extends OperationExecutionRepository[IO] {
     private var values = List.empty[OperationExecution]
     def tryCreateRunning(v: OperationExecution) = IO { values ::= v; true }
-    def recoverStaleRunning(o: UUID, r: UUID, at: Instant, c: String, m: String) = IO.pure(List.empty[UUID])
+    def recoverStaleRunning(o: UUID, r: UUID, at: Instant, c: String, m: String) =
+      IO.pure(List.empty[OperationExecution])
     def markSucceeded(o: UUID, id: UUID, at: Instant) = IO { values = values.map(v => if(v.id == id) v.copy(status = OperationExecutionStatus.Succeeded, finishedAt = Some(at)) else v); true }
     def markFailed(o: UUID, id: UUID, at: Instant, c: String, m: String) = IO.pure(true)
     def findById(o: UUID, r: UUID, id: UUID) = IO.pure(values.find(_.id == id))

@@ -262,6 +262,16 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .operation-status-failed { color: var(--danger-text, #b42318); }
 .operation-status-running { color: var(--accent, #2563eb); }
 .operation-status-unknown { color: #7a5c00; }
+.activity-timeline { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; background: var(--border-subtle); }
+.activity-entry { display: grid; grid-template-columns: minmax(145px, 1.1fr) minmax(150px, 1.2fr) minmax(180px, 2fr) minmax(90px, .7fr); gap: 10px; align-items: baseline; padding: 8px 12px; background: var(--surface-primary); font-size: 13px; }
+.activity-time { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.activity-title { font-weight: 600; }
+.activity-detail { color: var(--text-secondary); }
+.activity-actor { color: var(--text-secondary); font-size: 12px; }
+.activity-positive .activity-title { color: var(--success-text, #237a45); }
+.activity-warning .activity-title { color: #7a5c00; }
+.activity-critical .activity-title { color: var(--danger-text, #b42318); }
+@media (max-width: 720px) { .activity-entry { grid-template-columns: 1fr; gap: 2px; } }
 .dialog-heading { display: flex; justify-content: space-between; align-items: center; min-height: 40px; padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-secondary); }
 .dialog-close { width: 26px; height: 26px; border: 0; color: var(--text-secondary); background: transparent; font-size: 22px; line-height: 1; }
 .monitor-rule-form { display: grid; gap: 10px; padding: 13px; }

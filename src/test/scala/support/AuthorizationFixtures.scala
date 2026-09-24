@@ -138,3 +138,50 @@ final class FixedConnectionRepository(connection: domain.connection.Connection)
     IO.pure(List(connection))
   override def save(value: domain.connection.Connection): IO[Unit] = IO.unit
 }
+
+/** An in-memory timeline that keeps what was recorded, in order. */
+final class RecordingHistoryEventRepository extends application.port.HistoryEventRepository[IO] {
+  private var events: List[domain.history.HistoryEvent] = List.empty
+
+  def recorded: List[domain.history.HistoryEvent] = synchronized(events)
+
+  override def save(event: domain.history.HistoryEvent): IO[Unit] = saveAll(List(event))
+
+  override def saveAll(values: List[domain.history.HistoryEvent]): IO[Unit] =
+    IO(synchronized { events = events ++ values })
+}
+
+/** A timeline whose insert always fails, for the tests that assert the transition rolls back. */
+final class FailingHistoryEventRepository(
+  failOn: domain.history.HistoryEventType => Boolean = _ => true
+) extends application.port.HistoryEventRepository[IO] {
+  override def save(event: domain.history.HistoryEvent): IO[Unit] = saveAll(List(event))
+  override def saveAll(values: List[domain.history.HistoryEvent]): IO[Unit] =
+    if (values.exists(value => failOn(value.eventType)))
+      IO.raiseError(new IllegalStateException("history unavailable"))
+    else IO.unit
+}
+
+object TestHistoryRecorder {
+
+  def apply(repository: application.port.HistoryEventRepository[IO]): application.history.HistoryRecorder[IO] =
+    new application.history.HistoryRecorder[IO](repository, new SequentialIdGenerator,
+      new FixedTimeProvider)
+
+  def recording: (RecordingHistoryEventRepository, application.history.HistoryRecorder[IO]) = {
+    val repository = new RecordingHistoryEventRepository
+    (repository, apply(repository))
+  }
+
+  val RecordedAt: Instant = TestAuditRecorder.RecordedAt
+
+  private final class SequentialIdGenerator extends IdGenerator[IO] {
+    private val counter = new java.util.concurrent.atomic.AtomicInteger(0)
+    override def nextId: IO[UUID] =
+      IO(UUID.fromString(f"d0000000-0000-0000-0000-${counter.incrementAndGet()}%012d"))
+  }
+
+  private final class FixedTimeProvider extends TimeProvider[IO] {
+    override def now: IO[Instant] = IO.pure(RecordedAt)
+  }
+}
