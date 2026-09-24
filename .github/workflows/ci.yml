@@ -182,17 +182,19 @@ jobs:
           live=""
           ready=""
           for _ in $(seq 1 12); do
+            # A readiness probe against a stopped database waits for the pool timeout and then
+            # for the proxy's; a curl failure is itself "not ready", never a reason to abort.
             live="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 \
-              http://127.0.0.1:8081/health)"
-            ready="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 \
-              http://127.0.0.1:8081/ready)"
+              http://127.0.0.1:8081/health || echo 000)"
+            ready="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 30 \
+              http://127.0.0.1:8081/ready || echo 000)"
             if [ "${live}" = "200" ] && [ "${ready}" != "200" ]; then break; fi
             sleep 5
           done
           # The process is alive, so liveness answers; it cannot serve data, so readiness does not.
           test "${live}" = "200"
           test "${ready}" != "200"
-          body="$(curl --silent --max-time 10 http://127.0.0.1:8081/ready)"
+          body="$(curl --silent --max-time 30 http://127.0.0.1:8081/ready || true)"
           # A failing dependency must not describe itself to the internet.
           for leak in password postgresql jdbc exception ru.bitec; do
             if printf '%s' "${body}" | grep -qi -- "${leak}"; then
