@@ -79,6 +79,16 @@ final class PostgresMonitorRuleStateRepository extends MonitorRuleStateRepositor
       .to[List]
       .flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
 
+  override def deleteByRuleId(
+                               organizationId: UUID,
+                               monitorRuleId: UUID
+                             ): ConnectionIO[Unit] =
+    sql"""
+      delete from monitor_rule_state
+      where organization_id = $organizationId
+        and monitor_rule_id = $monitorRuleId
+    """.update.run.void
+
   override def save(state: MonitorRuleState): ConnectionIO[Unit] =
     saveAll(List(state))
 

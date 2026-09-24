@@ -2,11 +2,12 @@ package ru.bitec.app.ops
 package infrastructure.http
 
 import application.monitor.{CreateMonitorRule, ListMonitorRules, UpdateMonitorRule}
-import application.port.{IdGenerator, MonitorRuleRepository, MonitorRuleStateRepository, ResourceRepository, TimeProvider, TransactionRunner}
+import application.port.{IdGenerator, IncidentRepository, MonitorRuleRepository, MonitorRuleStateRepository, ResourceRepository, TimeProvider, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.metric.MetricCode
+import domain.incident.{Incident, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import domain.resource.Resource
 import io.circe.Json
@@ -125,6 +126,16 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     }
   }
 
+  test("refuses a rule for a resource type monitoring does not support") {
+    val fixture = buildFixture(List.empty)
+
+    val response = run(fixture, postRule(OrganizationId, ContainerResourceId, validBody))
+
+    assertEquals(response._1.status, Status.BadRequest)
+    assertEquals(response._2.hcursor.get[String]("code"), Right("INVALID_REQUEST"))
+    assertEquals(fixture.monitorRuleRepository.rules, List.empty)
+  }
+
   test("returns not found when creating for an absent resource") {
     val fixture = buildFixture(List.empty)
 
@@ -196,16 +207,19 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     failure: Option[Throwable] = None,
     states: List[MonitorRuleState] = List.empty
   ): RouteFixture = {
-    val resourceRepository = new InMemoryResourceRepository(Map(ResourceId -> resource))
+    val resourceRepository = new InMemoryResourceRepository(
+      Map(ResourceId -> resource, ContainerResourceId -> containerResource)
+    )
     val monitorRuleRepository = new InMemoryMonitorRuleRepository(initialRules, failure)
     val monitorRuleStateRepository = new InMemoryMonitorRuleStateRepository(states)
+    val incidentRepository = new InMemoryIncidentRepository
     val idGenerator = new FixedIdGenerator(GeneratedRuleId)
     val timeProvider = new FixedTimeProvider(Now)
     val transactionRunner = new RecordingTransactionRunner
     val routes = new MonitorRuleRoutes[IO](
       ListMonitorRules(resourceRepository, monitorRuleRepository, monitorRuleStateRepository),
       CreateMonitorRule(resourceRepository, monitorRuleRepository, idGenerator, timeProvider),
-      UpdateMonitorRule(monitorRuleRepository, timeProvider),
+      UpdateMonitorRule(monitorRuleRepository, monitorRuleStateRepository, incidentRepository, timeProvider),
       transactionRunner
     )
 
@@ -277,6 +291,7 @@ final class MonitorRuleRoutesSpec extends FunSuite {
   private final class InMemoryMonitorRuleStateRepository(initial: List[MonitorRuleState])
     extends MonitorRuleStateRepository[IO] {
     var findByResourceRequests: List[(UUID, UUID)] = List.empty
+    var deleted: List[(UUID, UUID)] = List.empty
 
     override def findByRuleId(organizationId: UUID, monitorRuleId: UUID): IO[Option[MonitorRuleState]] =
       IO.pure(initial.find(state => state.organizationId == organizationId && state.monitorRuleId == monitorRuleId))
@@ -285,9 +300,23 @@ final class MonitorRuleRoutesSpec extends FunSuite {
       IO { findByResourceRequests = findByResourceRequests :+ (organizationId -> resourceId) } *>
         IO.pure(initial.filter(_.organizationId == organizationId))
 
+    override def deleteByRuleId(organizationId: UUID, monitorRuleId: UUID): IO[Unit] =
+      IO { deleted = deleted :+ ((organizationId, monitorRuleId)) }
+
     override def save(state: MonitorRuleState): IO[Unit] = IO.unit
 
     override def saveAll(states: List[MonitorRuleState]): IO[Unit] = IO.unit
+  }
+
+  private final class InMemoryIncidentRepository extends IncidentRepository[IO] {
+    var saved: List[Incident] = List.empty
+
+    override def findOpenByRule(organizationId: UUID, monitorRuleId: UUID): IO[Option[Incident]] = IO.pure(None)
+    override def findById(organizationId: UUID, incidentId: UUID): IO[Option[Incident]] = IO.pure(None)
+    override def findByOrganization(organizationId: UUID, status: Option[IncidentStatus]): IO[List[Incident]] =
+      IO.pure(List.empty)
+    override def save(incident: Incident): IO[Unit] = saveAll(List(incident))
+    override def saveAll(incidents: List[Incident]): IO[Unit] = IO { saved = saved ++ incidents }
   }
 
   private final class InMemoryMonitorRuleRepository(
@@ -321,6 +350,7 @@ final class MonitorRuleRoutesSpec extends FunSuite {
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
   private val OtherOrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000002")
   private val ResourceId = UUID.fromString("70000000-0000-0000-0000-000000000001")
+  private val ContainerResourceId = UUID.fromString("70000000-0000-0000-0000-000000000002")
   private val UnknownResourceId = UUID.fromString("70000000-0000-0000-0000-000000000099")
   private val ResourceTypeId = UUID.fromString("10000000-0000-0000-0000-000000000001")
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
@@ -341,6 +371,13 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     Earlier,
     Earlier,
     "NODE"
+  )
+
+  private val containerResource = resource.copy(
+    id = ContainerResourceId,
+    code = "container-1",
+    name = "container-1",
+    resourceTypeCode = "CONTAINER"
   )
 
   private val disabledRule = MonitorRule(

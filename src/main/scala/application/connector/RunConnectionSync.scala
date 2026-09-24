@@ -11,9 +11,11 @@ import java.util.UUID
 
 /** Shared execution semantics for scheduled and manually triggered runs.
   *
-  * Monitoring is evaluated after every run, successful or not: a connection that cannot be
-  * reached is exactly when rules have to notice that their data stopped arriving. The evaluation
-  * is a secondary, best-effort step and never changes the outcome the caller sees.
+  * Monitoring is evaluated after a run that actually reached the connection, successful or not:
+  * a connection that cannot be reached is exactly when rules have to notice that their data
+  * stopped arriving. A run that never started - unknown, inactive or already running connection -
+  * says nothing about the data, so it is skipped. The evaluation is a secondary, best-effort step
+  * and never changes the outcome the caller sees.
   */
 final class RunConnectionSync[F[_]: MonadThrow, Tx[_]](
   synchronizer: ConnectionSynchronizer[F],
@@ -25,7 +27,21 @@ final class RunConnectionSync[F[_]: MonadThrow, Tx[_]](
 
   override def execute(organizationId: UUID, connectionId: UUID): F[ConnectionSyncResult] =
     synchronizer.execute(organizationId, connectionId).attempt.flatMap { outcome =>
-      evaluateMonitoring(organizationId, connectionId, outcome) *> outcome.liftTo[F]
+      val monitoring =
+        if (startedSynchronizing(outcome)) evaluateMonitoring(organizationId, connectionId, outcome)
+        else ().pure[F]
+
+      monitoring *> outcome.liftTo[F]
+    }
+
+  /** True only when this run opened a synchronization session of its own: a skipped run leaves
+    * the data exactly as the run that is already in progress left it.
+    */
+  private def startedSynchronizing(outcome: Either[Throwable, ConnectionSyncResult]): Boolean =
+    outcome match {
+      case Right(_) => true
+      case Left(_: ConnectionSyncExecutionFailed) => true
+      case Left(_) => false
     }
 
   private def evaluateMonitoring(

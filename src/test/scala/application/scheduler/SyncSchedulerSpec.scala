@@ -61,8 +61,10 @@ final class SyncSchedulerSpec extends FunSuite {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     val finishedAt = now.plusSeconds(5)
     val due = schedule(nextRunAt = now, intervalSeconds = 300)
+    // A synchronization that reached the connection and failed there, not one that never started.
     val fixture = buildFixture(List(due), List(now.plusSeconds(1), finishedAt),
-      failingConnectionIds = Set(due.connectionId))
+      failures = Map(due.connectionId ->
+        ConnectionSyncExecutionFailed(UUID.randomUUID(), new IllegalStateException("Simulated sync failure"))))
 
     fixture.scheduler.tick(limit = 10).unsafeRunSync()
 
@@ -80,7 +82,7 @@ final class SyncSchedulerSpec extends FunSuite {
     val now = Instant.parse("2026-09-21T10:00:00Z")
     for ((oldFailures, delay) <- List(1L -> 900L, 2L -> 1800L, 4L -> 1800L, 20L -> 1800L)) {
       val due = schedule(nextRunAt = now, intervalSeconds = 300, consecutiveFailures = oldFailures)
-      val fixture = buildFixture(List(due), List(now.plusSeconds(1), now.plusSeconds(5)),
+      val fixture = buildFixture(List(due), List(now.plusSeconds(5)),
         failingConnectionIds = Set(due.connectionId))
       fixture.scheduler.tick(limit = 10).unsafeRunSync()
       assertEquals(fixture.repository.scheduledNext,

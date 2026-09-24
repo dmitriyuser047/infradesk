@@ -152,6 +152,40 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
     assertEquals(log.infoMessages.count(message => message.startsWith("incident.opened") && message.contains("reason=NO_DATA")), 1)
   }
 
+  test("a run that never started leaves monitoring alone") {
+    val log = new RecordingLogger
+    val clock = new TimeProvider[IO] { override def now: IO[Instant] = IO.pure(at) }
+    val runner = new TransactionRunner[IO, IO] { override def run[A](program: IO[A]): IO[A] = program }
+
+    val skipped: List[Throwable] = List(
+      SyncAlreadyRunning(),
+      ConnectionSyncInactive(),
+      ConnectionSyncNotFound()
+    )
+
+    skipped.foreach { failure =>
+      var evaluations = 0
+      val evaluator = new MonitorRuleEvaluator[IO] {
+        override def execute(organizationId: UUID, evaluatedConnectionId: UUID, evaluatedAt: Instant): IO[List[MonitorTransition]] =
+          IO { evaluations += 1; List.empty }
+      }
+      val synchronizer = new ConnectionSynchronizer[IO] {
+        override def execute(organizationId: UUID, requestedConnectionId: UUID): IO[ConnectionSyncResult] =
+          IO.raiseError(failure)
+      }
+
+      val thrown = intercept[RuntimeException](
+        new RunConnectionSync[IO, IO](synchronizer, evaluator, runner, clock, log)
+          .execute(org, connectionId).unsafeRunSync()
+      )
+
+      // A skipped run says nothing about the data: the run already in progress owns it.
+      assertEquals(thrown, failure, s"original failure changed for $failure")
+      assertEquals(evaluations, 0, s"monitoring evaluated for $failure")
+    }
+    assertEquals(log.errorMessages.count(_.startsWith("monitor.evaluation.failed")), 0)
+  }
+
   test("a failing monitor evaluation keeps the original outcome of the synchronization") {
     val log = new RecordingLogger
     val sessionId = UUID.randomUUID()

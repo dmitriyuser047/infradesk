@@ -1,12 +1,21 @@
 package ru.bitec.app.ops
 package application.monitor
 
-import application.port.{IdGenerator, MonitorRuleRepository, MonitorRuleStateRepository, ResourceRepository, TimeProvider}
+import application.port.{
+  IdGenerator,
+  IncidentRepository,
+  MonitorRuleRepository,
+  MonitorRuleStateRepository,
+  ResourceRepository,
+  TimeProvider
+}
 import cats.MonadThrow
 import cats.syntax.all._
+import domain.incident.IncidentStatus
 import domain.metric.MetricCode
-import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleStatus, MonitorRuleValidation}
+import domain.monitor.{InvalidMonitorRule, MonitorOperator, MonitorRule, MonitorRuleStatus, MonitorRuleValidation}
 
+import java.time.Instant
 import java.util.UUID
 
 /** A configured rule together with the status its last evaluation left behind, if any. */
@@ -64,6 +73,12 @@ final case class CreateMonitorRule[Tx[_]: MonadThrow](
       resourceRepository.findById(organizationId, resourceId).flatMap {
         case None =>
           none[MonitorRule].pure[Tx]
+        // The resource exists but monitoring does not apply to its type, so the rule would be
+        // stored and never evaluated. The backend rejects it instead of trusting the client.
+        case Some(resource) if !MonitoredResourceTypes.supports(resource.resourceTypeCode) =>
+          InvalidMonitorRule(
+            s"Monitoring is not supported for resource type '${resource.resourceTypeCode}'"
+          ).raiseError[Tx, Option[MonitorRule]]
         case Some(_) =>
           for {
             id <- idGenerator.nextId
@@ -87,8 +102,14 @@ final case class CreateMonitorRule[Tx[_]: MonadThrow](
     }
 }
 
+/** Updates a rule and, in the same transaction, drops the evaluation state the change
+  * invalidates: a disabled or reconfigured rule must not leave a FIRING state or an OPEN
+  * incident behind, because the evaluator only reads enabled rules and would never close them.
+  */
 final case class UpdateMonitorRule[Tx[_]: MonadThrow](
   monitorRuleRepository: MonitorRuleRepository[Tx],
+  monitorRuleStateRepository: MonitorRuleStateRepository[Tx],
+  incidentRepository: IncidentRepository[Tx],
   timeProvider: TimeProvider[Tx]
 ) {
   def execute(
@@ -111,8 +132,29 @@ final case class UpdateMonitorRule[Tx[_]: MonadThrow](
               enabled = valid.enabled,
               updatedAt = now
             )
-            monitorRuleRepository.save(updated).as(Some(updated))
+
+            monitorRuleRepository.save(updated) *>
+              resetEvaluationIfInvalidated(existing, updated, now).as(Some(updated))
           }
       }
     }
+
+  private def resetEvaluationIfInvalidated(
+    existing: MonitorRule,
+    updated: MonitorRule,
+    now: Instant
+  ): Tx[Unit] =
+    if (!MonitorRule.invalidatesEvaluation(existing, updated)) ().pure[Tx]
+    else
+      for {
+        openIncident <- incidentRepository.findOpenByRule(updated.organizationId, updated.id)
+        _ <- openIncident.traverse_(incident =>
+          incidentRepository.save(incident.copy(
+            status = IncidentStatus.Resolved,
+            resolvedAt = Some(now),
+            updatedAt = now
+          ))
+        )
+        _ <- monitorRuleStateRepository.deleteByRuleId(updated.organizationId, updated.id)
+      } yield ()
 }

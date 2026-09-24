@@ -304,6 +304,7 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
     var batches: List[List[MonitorRuleState]] = List.empty
     override def findByRuleId(organizationId: UUID, monitorRuleId: UUID): IO[Option[MonitorRuleState]] = IO.pure(None)
     override def findByResource(organizationId: UUID, resourceId: UUID): IO[List[MonitorRuleState]] = IO.pure(List.empty)
+    override def deleteByRuleId(organizationId: UUID, monitorRuleId: UUID): IO[Unit] = IO.unit
     override def save(value: MonitorRuleState): IO[Unit] = saveAll(List(value))
     override def saveAll(values: List[MonitorRuleState]): IO[Unit] = IO { batches = batches :+ values }
   }

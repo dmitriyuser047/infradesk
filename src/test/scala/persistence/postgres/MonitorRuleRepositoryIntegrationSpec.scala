@@ -7,10 +7,10 @@ import cats.syntax.all._
 import domain.metric.{MetricCode, MetricObservation}
 import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
-import application.monitor.EvaluateMonitorRules
+import application.monitor.{EvaluateMonitorRules, MonitorRuleCommand, UpdateMonitorRule}
 import domain.resource.{Resource, ResourceData}
 import domain.resource.node.{NodeSpec, NodeStatus}
-import infrastructure.database.{ConnectionIOIdGenerator, Database, DatabaseConfig, DoobieTransactionRunner}
+import infrastructure.database.{ConnectionIOIdGenerator, ConnectionIOTimeProvider, Database, DatabaseConfig, DoobieTransactionRunner}
 import munit.FunSuite
 import org.typelevel.doobie.ConnectionIO
 import org.typelevel.doobie.implicits._
@@ -348,6 +348,57 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
           assertEquals(ruleIncidents.count(_.status == IncidentStatus.Open), 1)
           assertEquals(ruleIncidents.size, 2)
           assertEquals(statesOfResource.map(_.monitorRuleId), List(ids.ruleId))
+        }
+      }
+    }.unsafeRunSync()
+  }
+
+  test("disabling a firing rule resolves its incident and clears its state in one transaction") {
+    assume(
+      sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
+      "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests"
+    )
+
+    val ids = TestIds.random()
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+      val runner = new DoobieTransactionRunner(xa)
+      val resources = ProductionResourceCodec.resourceRepository
+      val rules = new PostgresMonitorRuleRepository
+      val states = new PostgresMonitorRuleStateRepository
+      val incidents = new PostgresIncidentRepository
+      val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, new ConnectionIOTimeProvider)
+      val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
+        ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
+      val rule = MonitorRule(ids.ruleId, OrganizationId, ids.resourceId, MetricCode.CpuUsagePercent,
+        MonitorOperator.GreaterThan, BigDecimal(90), 300, 900, enabled = true, Now, Now)
+      val firing = MonitorRuleState(OrganizationId, ids.ruleId, MonitorRuleStatus.Firing, Some(Now), Now)
+      val incident = Incident(ids.incidentId, OrganizationId, ids.ruleId, ids.resourceId,
+        IncidentStatus.Open, IncidentReason.ThresholdViolation, Now, Now, None, Now, Now)
+      val disable = MonitorRuleCommand(MetricCode.CpuUsagePercent, MonitorOperator.GreaterThan,
+        BigDecimal(90), 300, 900, enabled = false)
+
+      val program = for {
+        _ <- runner.run(resources.save(resource))
+        _ <- runner.run(rules.save(rule))
+        _ <- runner.run(states.saveAll(List(firing)))
+        _ <- runner.run(incidents.saveAll(List(incident)))
+        // One transaction: the rule must never be stored as disabled while its incident stays open.
+        updated <- runner.run(update.execute(OrganizationId, ids.ruleId, disable))
+        reloadedRule <- runner.run(rules.findById(OrganizationId, ids.ruleId))
+        reloadedState <- runner.run(states.findByRuleId(OrganizationId, ids.ruleId))
+        openIncident <- runner.run(incidents.findOpenByRule(OrganizationId, ids.ruleId))
+        storedIncident <- runner.run(incidents.findById(OrganizationId, ids.incidentId))
+      } yield (updated, reloadedRule, reloadedState, openIncident, storedIncident)
+
+      program.guarantee(runner.run(cleanup(ids)).attempt.void).flatMap {
+        case (updated, reloadedRule, reloadedState, openIncident, storedIncident) => IO {
+          assertEquals(updated.map(_.enabled), Some(false))
+          assertEquals(reloadedRule.map(_.enabled), Some(false))
+          assertEquals(reloadedState, None)
+          assertEquals(openIncident, None)
+          assertEquals(storedIncident.map(_.status), Some(IncidentStatus.Resolved))
+          assertEquals(storedIncident.flatMap(_.resolvedAt).isDefined, true)
+          assertEquals(storedIncident.map(_.reason), Some(IncidentReason.ThresholdViolation))
         }
       }
     }.unsafeRunSync()

@@ -162,7 +162,12 @@ object ApplicationModule {
         transactionIdGenerator,
         transactionTimeProvider
       ),
-      updateMonitorRule = UpdateMonitorRule[ConnectionIO](monitorRuleRepository, transactionTimeProvider),
+      updateMonitorRule = UpdateMonitorRule[ConnectionIO](
+        monitorRuleRepository,
+        monitorRuleStateRepository,
+        incidentRepository,
+        transactionTimeProvider
+      ),
       getConnection = GetConnection[ConnectionIO](
         connectionRepository,
         syncSessionRepository,
