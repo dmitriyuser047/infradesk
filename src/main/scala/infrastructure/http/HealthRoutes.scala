@@ -19,7 +19,9 @@ final class HealthRoutes(readiness: ReadinessCheck[IO], logger: Logger[IO]) {
       readiness.check.attempt.flatMap {
         case Right(_) => Ok(Json.obj("status" -> Json.fromString("READY")))
         case Left(error) =>
-          logger.error(error)(s"readiness.failed errorType=${error.getClass.getSimpleName}").handleErrorWith(_ => IO.unit) *>
+          // JDBC exception messages can contain connection URLs. Readiness exposes and logs only
+          // the failure class; operators can inspect PostgreSQL separately without leaking it.
+          logger.error(s"readiness.failed errorType=${error.getClass.getSimpleName}").handleErrorWith(_ => IO.unit) *>
             ServiceUnavailable(Json.obj("status" -> Json.fromString("NOT_READY")))
       }
   }

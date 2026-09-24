@@ -12,6 +12,21 @@ import scala.concurrent.duration._
   */
 final class ApplicationLifecycleSpec extends FunSuite {
 
+  test("HTTP stays alive when scheduler and notifications are disabled") {
+    val program = for {
+      acquired <- Deferred[IO, Unit]
+      released <- Ref[IO].of(false)
+      server = Resource.make(acquired.complete(()).void)(_ => released.set(true))
+      fiber <- InfraDeskApplication.serve(server, Nil).start
+      _ <- acquired.get
+      beforeCancel <- released.get
+      _ <- fiber.cancel
+      afterCancel <- released.get
+    } yield (beforeCancel, afterCancel)
+
+    assertEquals(program.unsafeRunSync(), (false, true))
+  }
+
   test("cancelling the runtime releases the server resource") {
     val program = for {
       acquired <- Deferred[IO, Unit]

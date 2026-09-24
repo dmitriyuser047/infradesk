@@ -2,6 +2,9 @@
 
 Requirements: JDK 21, sbt 2, PostgreSQL 17 (or a compatible version), Node.js 24 LTS and npm for the frontend.
 
+For the Docker Compose production topology, HTTPS boundary, backup/restore and rollback runbooks,
+see [Running InfraDesk in production](docs/production.md).
+
 Backend startup:
 
 1. Create a PostgreSQL database and set the environment variables below (`.env.example` is a template, not automatically loaded).
@@ -13,15 +16,18 @@ Backend startup:
 | `INFRADESK_DB_URL` | Required | PostgreSQL JDBC URL |
 | `INFRADESK_DB_USER` | Required | Database user |
 | `INFRADESK_DB_PASSWORD` | Required | Database password |
+| `INFRADESK_DB_MAX_POOL_SIZE` | `10` | Maximum database connections per backend instance |
+| `INFRADESK_DB_CONNECTION_TIMEOUT_SECONDS` | `10` | Pool connection timeout |
 | `INFRADESK_SECRET_MASTER_KEY_BASE64` | Required | Base64-encoded 32-byte encryption key |
 | `INFRADESK_HTTP_HOST` | `0.0.0.0` | HTTP bind host |
 | `INFRADESK_HTTP_PORT` | `8080` | HTTP bind port |
 | `INFRADESK_AUTH_SESSION_TTL_SECONDS` | `604800` | Session lifetime |
 | `INFRADESK_AUTH_COOKIE_SECURE` | `false` | Secure cookie flag; set `true` behind HTTPS |
+| `INFRADESK_SCHEDULER_ENABLED` | `true` | Start the database-claimed synchronization scheduler |
 | `INFRADESK_SCHEDULER_POLL_INTERVAL_SECONDS` | `1` | Scheduler poll interval |
 | `INFRADESK_SCHEDULER_BATCH_SIZE` | `100` | Schedules per poll |
 | `INFRADESK_SCHEDULER_MAX_CONCURRENCY` | `5` | Maximum concurrently executing scheduled syncs |
-| `INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS` | `900` | Distributed scheduler lease; matches the 15-minute stale sync horizon |
+| `INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS` | `900` | Distributed scheduler claim lease |
 | `INFRADESK_NOTIFICATION_WEBHOOK_URL` | Optional | Webhook endpoint for incident events; absent disables notifications |
 | `INFRADESK_NOTIFICATION_POLL_INTERVAL_SECONDS` | `5` | Delivery dispatcher poll interval |
 | `INFRADESK_NOTIFICATION_BATCH_SIZE` | `50` | Deliveries a poll may handle, claimed in waves |

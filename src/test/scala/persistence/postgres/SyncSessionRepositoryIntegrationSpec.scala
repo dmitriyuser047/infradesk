@@ -45,7 +45,8 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
         _ <- sql"delete from organization where id in ($org, $foreignOrg)".update.run
       } yield ()
       def running(id: UUID, organizationId: UUID, connectionId: UUID, started: Instant) =
-        SyncSession(id, organizationId, connectionId, started, None, SyncSessionStatus.Running)
+        SyncSession(id, organizationId, connectionId, started, started.plusSeconds(900), None,
+          SyncSessionStatus.Running)
 
       runner.run(setup) *> (for {
         first <- IO(UUID.randomUUID())
@@ -67,7 +68,8 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
         more <- IO((1 to 22).map(_ => UUID.randomUUID()).toList)
         _ <- runner.run(more.zipWithIndex.traverse_ { case (id, index) =>
           sessions.create(SyncSession(id, org, connection, at.plusSeconds(index + 3),
-            Some(at.plusSeconds(index + 4)), SyncSessionStatus.Completed))
+            at.plusSeconds(index + 903), Some(at.plusSeconds(index + 4)),
+            SyncSessionStatus.Completed))
         })
         recent <- runner.run(sessions.findRecentByConnection(org, connection, 20))
         scoped <- runner.run(sessions.findById(org, connection, foreign))
@@ -96,8 +98,9 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
     val journalConnection = UUID.randomUUID()
     val firstNewId = UUID.randomUUID()
     val secondNewId = UUID.randomUUID()
+    val longRunningConnection = UUID.randomUUID()
+    val longRunningId = UUID.randomUUID()
     val now = Instant.parse("2026-09-23T10:00:00Z")
-    val staleBefore = now.minusSeconds(SyncSessionPolicy.StaleAfterSeconds)
 
     PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
@@ -108,25 +111,42 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
         _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($boundaryConnection, $org, 'ORGANIZATION', 'SSH', 'boundary', 'Boundary')".update.run
         _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($terminalConnection, $org, 'ORGANIZATION', 'SSH', 'terminal', 'Terminal')".update.run
         _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($journalConnection, $org, 'ORGANIZATION', 'SSH', 'journal', 'Journal')".update.run
+        _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($longRunningConnection, $org, 'ORGANIZATION', 'SSH', 'long-running', 'Long running')".update.run
       } yield ()
       val cleanup: ConnectionIO[Unit] = for {
         _ <- sql"delete from sync_session where organization_id = $org".update.run
         _ <- sql"delete from connection where organization_id = $org".update.run
         _ <- sql"delete from organization where id = $org".update.run
       } yield ()
-      def running(id: UUID, connectionId: UUID, startedAt: Instant): SyncSession =
-        SyncSession(id, org, connectionId, startedAt, None, SyncSessionStatus.Running)
+      /** A session with the deadline its own attempt was given when it started. */
+      def running(
+        id: UUID,
+        connectionId: UUID,
+        startedAt: Instant,
+        recoverAfterAt: Instant = now.plusSeconds(900)
+      ): SyncSession =
+        SyncSession(id, org, connectionId, startedAt, recoverAfterAt, None,
+          SyncSessionStatus.Running)
       def claim(session: SyncSession): IO[SyncSessionClaim] =
-        runner.run(sessions.recoverStaleAndTryCreate(session, staleBefore, now,
+        runner.run(sessions.recoverStaleAndTryCreate(session, now,
           SyncFailure.Stale.code, SyncFailure.Stale.message))
       def recover(session: SyncSession): IO[Boolean] = claim(session).map(_.created)
 
       runner.run(setup) *> (for {
-        _ <- runner.run(sessions.tryCreate(running(oldStaleId, staleConnection, staleBefore.minusSeconds(1))))
-        _ <- runner.run(sessions.tryCreate(running(oldBoundaryId, boundaryConnection, staleBefore)))
+        // Its deadline has passed.
+        _ <- runner.run(sessions.tryCreate(running(oldStaleId, staleConnection,
+          now.minusSeconds(1800), now.minusSeconds(1))))
+        // Its deadline falls exactly now: the boundary belongs to the session that holds it.
+        _ <- runner.run(sessions.tryCreate(running(oldBoundaryId, boundaryConnection,
+          now.minusSeconds(1800), now)))
+        // Started long ago but with a long budget of its own, as a slow SSH inventory has.
+        _ <- runner.run(sessions.tryCreate(running(longRunningId, longRunningConnection,
+          now.minusSeconds(1800), now.plusSeconds(600))))
         _ <- runner.run(sessions.create(SyncSession(completedId, org, terminalConnection,
-          now.minusSeconds(2000), Some(now.minusSeconds(1999)), SyncSessionStatus.Completed)))
-        _ <- runner.run(sessions.tryCreate(running(failedId, terminalConnection, now.minusSeconds(1900))))
+          now.minusSeconds(2000), now.minusSeconds(1100), Some(now.minusSeconds(1999)),
+          SyncSessionStatus.Completed)))
+        _ <- runner.run(sessions.tryCreate(running(failedId, terminalConnection,
+          now.minusSeconds(1900), now.minusSeconds(1000))))
         _ <- runner.run(sessions.fail(org, failedId, now.minusSeconds(1899),
           SyncFailure.Generic.code, SyncFailure.Generic.message))
 
@@ -137,6 +157,8 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
         activeCount <- runner.run(sql"select count(*) from sync_session where organization_id = $org and connection_id = $staleConnection and status = 'RUNNING'".query[Long].unique)
         freshCreated <- recover(running(UUID.randomUUID(), boundaryConnection, now))
         boundary <- runner.run(sessions.findById(org, boundaryConnection, oldBoundaryId))
+        longRunningRejected <- recover(running(UUID.randomUUID(), longRunningConnection, now))
+        longRunning <- runner.run(sessions.findById(org, longRunningConnection, longRunningId))
         terminalCreated <- recover(running(UUID.randomUUID(), terminalConnection, now))
         completed <- runner.run(sessions.findById(org, terminalConnection, completedId))
         failed <- runner.run(sessions.findById(org, terminalConnection, failedId))
@@ -144,10 +166,10 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
         // leaves the abandoned session running and creates no replacement.
         journalFailureId <- IO(UUID.randomUUID())
         _ <- runner.run(sessions.tryCreate(running(journalFailureId, journalConnection,
-          staleBefore.minusSeconds(60))))
+          now.minusSeconds(1800), now.minusSeconds(60))))
         rolledBack <- runner.run(
           sessions.recoverStaleAndTryCreate(running(UUID.randomUUID(), journalConnection, now),
-            staleBefore, now, SyncFailure.Stale.code, SyncFailure.Stale.message) *>
+            now, SyncFailure.Stale.code, SyncFailure.Stale.message) *>
             FC.raiseError[Unit](new IllegalStateException("history unavailable"))
         ).attempt
         afterRollback <- runner.run(sessions.findById(org, journalConnection, journalFailureId))
@@ -172,7 +194,12 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
           assertEquals(recovered.errorCode, Some(SyncFailure.Stale.code))
           assertEquals(recovered.errorMessage, Some(SyncFailure.Stale.message))
           assertEquals(freshCreated, false)
-          assertEquals(boundary, Some(running(oldBoundaryId, boundaryConnection, staleBefore)))
+          assertEquals(boundary.map(_.status), Some(SyncSessionStatus.Running))
+          // A session whose own budget still covers it is never retired, however long ago it
+          // started — this is what a twenty-minute SSH inventory relies on.
+          assertEquals(longRunningRejected, false)
+          assertEquals(longRunning.map(_.status), Some(SyncSessionStatus.Running))
+          assertEquals(longRunning.flatMap(_.errorCode), None)
           assertEquals(terminalCreated, true)
           assertEquals(completed.map(_.status), Some(SyncSessionStatus.Completed))
           assertEquals(failed.flatMap(_.errorCode), Some(SyncFailure.Generic.code))

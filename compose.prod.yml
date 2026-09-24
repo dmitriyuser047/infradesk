@@ -1,0 +1,116 @@
+# Production topology for a single host: nginx is the only service with a published port, the
+# backend and the database talk over the internal network. Every value comes from the environment
+# file described in docs/production.md; this file contains no secrets.
+
+name: infradesk
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${INFRADESK_DB_NAME:-infradesk}
+      POSTGRES_USER: ${INFRADESK_DB_USER:-infradesk}
+      POSTGRES_PASSWORD: ${INFRADESK_DB_PASSWORD:?INFRADESK_DB_PASSWORD is required}
+      TZ: UTC
+      PGTZ: UTC
+    # No published port: only the internal network reaches the database.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: ${INFRADESK_POSTGRES_MEMORY_LIMIT:-1g}
+
+  backend:
+    image: ${INFRADESK_BACKEND_IMAGE:-infradesk-backend:local}
+    build:
+      context: .
+      dockerfile: deploy/backend.Dockerfile
+      args:
+        INFRADESK_BUILD_VERSION: ${INFRADESK_BUILD_VERSION:-0.1.0-SNAPSHOT}
+        INFRADESK_GIT_SHA: ${INFRADESK_GIT_SHA:-unknown}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      INFRADESK_DB_URL: jdbc:postgresql://postgres:5432/${INFRADESK_DB_NAME:-infradesk}
+      INFRADESK_DB_USER: ${INFRADESK_DB_USER:-infradesk}
+      INFRADESK_DB_PASSWORD: ${INFRADESK_DB_PASSWORD:?INFRADESK_DB_PASSWORD is required}
+      INFRADESK_DB_MAX_POOL_SIZE: ${INFRADESK_DB_MAX_POOL_SIZE:-10}
+      INFRADESK_DB_CONNECTION_TIMEOUT_SECONDS: ${INFRADESK_DB_CONNECTION_TIMEOUT_SECONDS:-10}
+      INFRADESK_HTTP_HOST: 0.0.0.0
+      INFRADESK_HTTP_PORT: 8080
+      INFRADESK_AUTH_COOKIE_SECURE: ${INFRADESK_AUTH_COOKIE_SECURE:-true}
+      INFRADESK_AUTH_SESSION_TTL_SECONDS: ${INFRADESK_AUTH_SESSION_TTL_SECONDS:-604800}
+      # The key that decrypts connection secrets already stored: it is created once and kept.
+      INFRADESK_SECRET_MASTER_KEY_BASE64: ${INFRADESK_SECRET_MASTER_KEY_BASE64:?INFRADESK_SECRET_MASTER_KEY_BASE64 is required}
+      INFRADESK_BOOTSTRAP_EMAIL: ${INFRADESK_BOOTSTRAP_EMAIL:-}
+      INFRADESK_BOOTSTRAP_PASSWORD: ${INFRADESK_BOOTSTRAP_PASSWORD:-}
+      INFRADESK_BOOTSTRAP_ORGANIZATION_ID: ${INFRADESK_BOOTSTRAP_ORGANIZATION_ID:-}
+      INFRADESK_BOOTSTRAP_DISPLAY_NAME: ${INFRADESK_BOOTSTRAP_DISPLAY_NAME:-}
+      INFRADESK_NOTIFICATION_WEBHOOK_URL: ${INFRADESK_NOTIFICATION_WEBHOOK_URL:-}
+      INFRADESK_NOTIFICATION_POLL_INTERVAL_SECONDS: ${INFRADESK_NOTIFICATION_POLL_INTERVAL_SECONDS:-5}
+      INFRADESK_NOTIFICATION_BATCH_SIZE: ${INFRADESK_NOTIFICATION_BATCH_SIZE:-50}
+      INFRADESK_NOTIFICATION_MAX_CONCURRENCY: ${INFRADESK_NOTIFICATION_MAX_CONCURRENCY:-5}
+      INFRADESK_NOTIFICATION_CLAIM_LEASE_SECONDS: ${INFRADESK_NOTIFICATION_CLAIM_LEASE_SECONDS:-60}
+      INFRADESK_NOTIFICATION_REQUEST_TIMEOUT_SECONDS: ${INFRADESK_NOTIFICATION_REQUEST_TIMEOUT_SECONDS:-10}
+      INFRADESK_NOTIFICATION_MAX_ATTEMPTS: ${INFRADESK_NOTIFICATION_MAX_ATTEMPTS:-10}
+      INFRADESK_SCHEDULER_ENABLED: ${INFRADESK_SCHEDULER_ENABLED:-true}
+      INFRADESK_SCHEDULER_POLL_INTERVAL_SECONDS: ${INFRADESK_SCHEDULER_POLL_INTERVAL_SECONDS:-1}
+      INFRADESK_SCHEDULER_BATCH_SIZE: ${INFRADESK_SCHEDULER_BATCH_SIZE:-100}
+      INFRADESK_SCHEDULER_MAX_CONCURRENCY: ${INFRADESK_SCHEDULER_MAX_CONCURRENCY:-5}
+      INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS: ${INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS:-900}
+      INFRADESK_GIT_SHA: ${INFRADESK_GIT_SHA:-unknown}
+      INFRADESK_BUILD_VERSION: ${INFRADESK_BUILD_VERSION:-0.1.0-SNAPSHOT}
+    # No published port either: nginx is the only way in.
+    expose:
+      - "8080"
+    networks:
+      - internal
+    stop_grace_period: 45s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: ${INFRADESK_BACKEND_MEMORY_LIMIT:-1g}
+
+  proxy:
+    image: ${INFRADESK_FRONTEND_IMAGE:-infradesk-frontend:local}
+    build:
+      context: .
+      dockerfile: deploy/frontend.Dockerfile
+      args:
+        INFRADESK_GIT_SHA: ${INFRADESK_GIT_SHA:-unknown}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${INFRADESK_HTTP_PUBLISH:-127.0.0.1:8081}:80"
+    networks:
+      - internal
+    logging: *logging
+
+volumes:
+  postgres-data:
+
+networks:
+  internal:
+    driver: bridge

@@ -27,6 +27,8 @@ final case class SyncSession(
                               organizationId: UUID,
                               connectionId: UUID,
                               startedAt: Instant,
+                              /** When this attempt may be declared abandoned, fixed at its start. */
+                              recoverAfterAt: Instant,
                               finishedAt: Option[Instant],
                               status: SyncSessionStatus,
                               errorCode: Option[String] = None,

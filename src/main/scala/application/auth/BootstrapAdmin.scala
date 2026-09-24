@@ -19,7 +19,10 @@ object BootstrapConfig {
       "INFRADESK_BOOTSTRAP_EMAIL", "INFRADESK_BOOTSTRAP_PASSWORD",
       "INFRADESK_BOOTSTRAP_ORGANIZATION_ID", "INFRADESK_BOOTSTRAP_DISPLAY_NAME"
     )
-    if (keys.forall(key => !values.contains(key))) Right(None)
+    val configured = keys.filter(key => values.get(key).exists(_.trim.nonEmpty))
+    // Compose commonly supplies optional variables as empty strings. All-empty means disabled;
+    // once one value is present the contract remains fail-fast and requires the whole group.
+    if (configured.isEmpty) Right(None)
     else if (keys.exists(key => values.get(key).forall(_.trim.isEmpty)))
       Left(new IllegalArgumentException(s"Invalid ${keys.find(key => values.get(key).forall(_.trim.isEmpty)).get}: all bootstrap settings must be configured together"))
     else {

@@ -13,7 +13,13 @@ import scala.concurrent.duration._
 import scala.util.Try
 
 final case class HttpConfig(host: Host, port: Port)
-final case class SchedulerConfig(pollInterval: FiniteDuration, batchSize: Int, maxConcurrency: Int, claimLease: FiniteDuration)
+final case class SchedulerConfig(
+  enabled: Boolean,
+  pollInterval: FiniteDuration,
+  batchSize: Int,
+  maxConcurrency: Int,
+  claimLease: FiniteDuration
+)
 
 /** Outbound notifications. Without a webhook URL the subsystem is off: no deliveries are
   * recorded and no dispatcher runs.
@@ -148,10 +154,24 @@ object AppConfig {
       }
 
     for {
+      enabled <- parseBoolean(values, "INFRADESK_SCHEDULER_ENABLED", default = true)
       seconds <- positiveInt("INFRADESK_SCHEDULER_POLL_INTERVAL_SECONDS", 1)
       batchSize <- positiveInt("INFRADESK_SCHEDULER_BATCH_SIZE", 100)
       maxConcurrency <- positiveInt("INFRADESK_SCHEDULER_MAX_CONCURRENCY", 5)
       claimLeaseSeconds <- positiveInt("INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS", 900)
-    } yield SchedulerConfig(seconds.seconds, batchSize, maxConcurrency, claimLeaseSeconds.seconds)
+    } yield SchedulerConfig(enabled, seconds.seconds, batchSize, maxConcurrency,
+      claimLeaseSeconds.seconds)
   }
+
+  private def parseBoolean(
+    values: Map[String, String],
+    key: String,
+    default: Boolean
+  ): Either[IllegalArgumentException, Boolean] =
+    values.get(key).map(_.trim.toLowerCase) match {
+      case None => Right(default)
+      case Some("true") => Right(true)
+      case Some("false") => Right(false)
+      case Some(_) => Left(new IllegalArgumentException(s"Invalid $key: expected true or false"))
+    }
 }

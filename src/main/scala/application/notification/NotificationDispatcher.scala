@@ -72,8 +72,7 @@ final class NotificationDispatcher[F[_]: Async, Tx[_]: MonadThrow](
   def run(pollInterval: FiniteDuration, limit: Int): F[Nothing] =
     (tick(limit).handleErrorWith(error =>
       logError(
-        s"notification.dispatch.failed dispatcherInstanceId=$dispatcherInstanceId errorType=${error.getClass.getSimpleName}",
-        error
+        s"notification.dispatch.failed dispatcherInstanceId=$dispatcherInstanceId errorType=${error.getClass.getSimpleName}"
       )
     ) *> Temporal[F].sleep(pollInterval)).foreverM
 
@@ -81,8 +80,7 @@ final class NotificationDispatcher[F[_]: Async, Tx[_]: MonadThrow](
   private def dispatch(claimed: List[NotificationDelivery]): F[Unit] =
     Parallel.parTraverse_(claimed) { delivery =>
       deliver(delivery).handleErrorWith(error => logError(
-        s"notification.dispatch.failed ${context(delivery)} errorType=${error.getClass.getSimpleName}",
-        error
+        s"notification.dispatch.failed ${context(delivery)} errorType=${error.getClass.getSimpleName}"
       ))
     }
 
@@ -139,6 +137,6 @@ final class NotificationDispatcher[F[_]: Async, Tx[_]: MonadThrow](
   private def logWarn(message: String): F[Unit] =
     logger.warn(message).handleErrorWith(_ => ().pure[F])
 
-  private def logError(message: String, error: Throwable): F[Unit] =
-    logger.error(error)(message).handleErrorWith(_ => ().pure[F])
+  private def logError(message: String): F[Unit] =
+    logger.error(message).handleErrorWith(_ => ().pure[F])
 }

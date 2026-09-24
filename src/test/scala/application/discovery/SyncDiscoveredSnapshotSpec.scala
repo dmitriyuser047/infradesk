@@ -241,6 +241,7 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     organizationId = organizationId,
     connectionId = connectionId,
     startedAt = Instant.EPOCH,
+    recoverAfterAt = Instant.EPOCH.plusSeconds(900),
     finishedAt = None,
     status = SyncSessionStatus.Running
   )
@@ -371,8 +372,8 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     override def tryCreate(session: SyncSession): IO[Boolean] =
       create(session).map(_ => true)
 
-    override def recoverStaleAndTryCreate(session: SyncSession, staleBefore: Instant,
-                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[SyncSessionClaim] =
+    override def recoverStaleAndTryCreate(session: SyncSession, at: Instant,
+                                          errorCode: String, errorMessage: String): IO[SyncSessionClaim] =
       tryCreate(session).map(SyncSessionClaim(_, List.empty))
 
     override def findRecentByConnection(organizationId: UUID, connectionId: UUID, limit: Int): IO[List[SyncSession]] =

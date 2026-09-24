@@ -88,6 +88,7 @@ final class SyncDiscoveredSnapshotRollbackIntegrationSpec extends FunSuite {
         organizationId = OrganizationId,
         connectionId = ConnectionId,
         startedAt = ObservedAt,
+        recoverAfterAt = ObservedAt.plusSeconds(900),
         finishedAt = None,
         status = SyncSessionStatus.Running
       )

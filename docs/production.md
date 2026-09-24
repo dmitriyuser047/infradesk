@@ -1,0 +1,175 @@
+# Running InfraDesk in production
+
+This is what one person needs to deploy InfraDesk on a clean Linux host and keep it running. It
+assumes Docker with the Compose plugin, a domain name, and a TLS terminator in front of the host.
+
+## Topology
+
+```
+Internet → TLS terminator → proxy container (nginx)  ┐
+                                ├── /            static frontend bundle
+                                └── /api, /health, /ready → backend container
+                                                     backend → postgres container
+```
+
+Only the proxy publishes a port, and by default only on the loopback interface, so the TLS
+terminator in front of it is the single way in. The backend and the database are reachable on the
+internal Compose network and nowhere else — PostgreSQL has no published port at all.
+
+## Requirements
+
+* Docker Engine 24+ with the Compose plugin.
+* A host clock synchronized by NTP. The scheduler claims, the notification leases, the operation
+  and synchronization recovery deadlines and session expiry are all compared against timestamps:
+  a drifting clock retires work that is still running.
+* UTC. The containers set `TZ=UTC`; timestamps are stored as `timestamptz` and rendered in the
+  viewer's local time by the browser.
+* A TLS terminator (nginx, Caddy, Traefik or a cloud load balancer). InfraDesk sets an
+  authentication cookie and must not be reachable over plain HTTP: redirect port 80 to 443 and
+  forward `X-Forwarded-Proto: https`.
+
+## Configuration
+
+Everything is read from the environment at startup, and anything invalid stops the process before
+it serves a request: a missing database URL, user or password, a malformed port, a pool size
+outside 1–100, an unusable encryption key, a webhook URL that is not absolute `http`/`https`, or a
+notification lease shorter than its request timeout.
+
+Copy [`.env.production.example`](../.env.production.example) to a host path outside the
+repository — `/etc/infradesk/infradesk.env`, mode `600`, owned by root — and fill it in. The
+compose file reads it and contains no secrets itself:
+
+```bash
+docker compose --env-file /etc/infradesk/infradesk.env -f compose.prod.yml up -d
+```
+
+### The encryption key
+
+`INFRADESK_SECRET_MASTER_KEY_BASE64` decrypts the SSH credentials already stored in the database.
+Create it once:
+
+```bash
+openssl rand -base64 32
+```
+
+Then keep it. It is **not** regenerated per deploy, it is not derived from anything, and it is not
+part of a database dump. A restore without the original key gives you every row and no usable
+connection. Store it in a password manager or a secrets service, separately from the backups, and
+never log or echo it.
+
+## First deployment
+
+1. Install Docker and the Compose plugin; make sure NTP is running.
+2. Create `/opt/infradesk` and put `compose.prod.yml` and the `deploy/` directory there, or clone
+   the repository at the commit you are deploying.
+3. Create `/etc/infradesk/infradesk.env` from the template; set the database password and the
+   encryption key. Leave all four `INFRADESK_BOOTSTRAP_*` values empty for this first start.
+4. Point your TLS terminator at `INFRADESK_HTTP_PUBLISH` (`127.0.0.1:8081` by default).
+5. Build or pull the images, tagged by commit:
+   ```bash
+   docker build -f deploy/backend.Dockerfile  -t infradesk-backend:$(git rev-parse --short HEAD) \
+     --build-arg INFRADESK_GIT_SHA=$(git rev-parse HEAD) \
+     --build-arg INFRADESK_BUILD_VERSION=0.1.0-$(git rev-parse --short HEAD) .
+   docker build -f deploy/frontend.Dockerfile -t infradesk-frontend:$(git rev-parse --short HEAD) \
+     --build-arg INFRADESK_GIT_SHA=$(git rev-parse HEAD) .
+   ```
+6. Start once to create the schema:
+   `docker compose --env-file /etc/infradesk/infradesk.env -f compose.prod.yml up -d`.
+7. Wait for readiness: `scripts/check-production.sh https://infradesk.example.com`.
+8. Create the first organization. Keep the printed UUID:
+   ```bash
+   organization_id="$(uuidgen)"
+   docker compose --env-file /etc/infradesk/infradesk.env -f compose.prod.yml \
+     exec -T postgres sh -c \
+     "psql --username \"\$POSTGRES_USER\" --dbname \"\$POSTGRES_DB\" --set ON_ERROR_STOP=1 \
+       --command \"insert into organization (id, code, name) values ('$organization_id'::uuid, 'default', 'Default organization')\""
+   printf '%s\n' "$organization_id"
+   ```
+9. Put `INFRADESK_BOOTSTRAP_EMAIL`, `INFRADESK_BOOTSTRAP_PASSWORD`,
+   `INFRADESK_BOOTSTRAP_ORGANIZATION_ID` (the UUID above), and
+   `INFRADESK_BOOTSTRAP_DISPLAY_NAME` in the environment file, then recreate the backend:
+   `docker compose --env-file /etc/infradesk/infradesk.env -f compose.prod.yml up -d --force-recreate backend`.
+10. Wait for `/ready`, sign in as the bootstrap administrator, and change the password.
+11. Empty all four `INFRADESK_BOOTSTRAP_*` values and recreate the backend again. Bootstrap is
+    idempotent: it creates a missing account and membership, but never rewrites an existing
+    password.
+12. Create the first SSH connection and confirm a synchronization completes.
+
+## Upgrade
+
+1. The commit is green in CI.
+2. Note the currently deployed tag: `docker compose -f compose.prod.yml images`.
+3. Take a backup if the release contains a risky migration (see below).
+4. Pull or build the new images and set the new tags in the environment file.
+5. `docker compose --env-file … -f compose.prod.yml up -d`. The backend runs Flyway itself, and
+   HTTP, the scheduler and the notification dispatcher start only after the migration succeeded.
+6. `scripts/check-production.sh https://infradesk.example.com`
+7. `docker compose -f compose.prod.yml logs backend | head -50` — the first line reports the
+   version and commit that are actually running.
+
+### Migration policy
+
+Migrations are forward-only and, wherever possible, additive: add a table, add a nullable column,
+add an index. Applied migrations are never edited — Flyway verifies their checksums and refuses to
+start if one changed. A destructive change (drop, rename, narrowing type change) is done over two
+releases, expand then contract, so the previous image still runs against the new schema. There is
+no Flyway Undo: a rollback means going back to the previous image, not backwards through the
+schema.
+
+## Rollback
+
+1. Preserve the logs of the broken version: `docker compose -f compose.prod.yml logs backend > /tmp/broken.log`.
+2. Set the previous image tags in the environment file.
+3. `docker compose --env-file … -f compose.prod.yml up -d`
+4. `scripts/check-production.sh https://infradesk.example.com`
+
+This works while the new release's migrations were compatible with the old image, which the policy
+above is there to guarantee. If the migration itself is the problem, restore instead.
+
+## Backup
+
+```bash
+INFRADESK_ENV_FILE=/etc/infradesk/infradesk.env \
+  INFRADESK_BACKUP_DIR=/var/backups/infradesk scripts/backup-database.sh
+```
+
+The script writes `infradesk-<timestamp>.dump` (custom format, mode 600) through the compose
+service, so no database port is published and no password appears in an argument list, then
+deletes dumps older than `INFRADESK_BACKUP_RETENTION_DAYS` (14 by default). Run it from cron:
+
+```
+15 2 * * * cd /opt/infradesk && INFRADESK_ENV_FILE=/etc/infradesk/infradesk.env INFRADESK_BACKUP_DIR=/var/backups/infradesk scripts/backup-database.sh >> /var/log/infradesk-backup.log 2>&1
+```
+
+A backup on the same host protects against a bad migration, not against losing the host. Copy the
+dumps to object storage or another machine, and keep the encryption key somewhere else again.
+
+## Restore
+
+1. Stop the application: `docker compose -f compose.prod.yml stop backend proxy`.
+2. `INFRADESK_ENV_FILE=/etc/infradesk/infradesk.env scripts/restore-database.sh /var/backups/infradesk/infradesk-2026-09-24T020000Z.dump`
+3. Make sure the environment file carries the **same** `INFRADESK_SECRET_MASTER_KEY_BASE64` the
+   dump was taken under.
+4. `docker compose --env-file … -f compose.prod.yml up -d` — Flyway brings the restored schema to
+   the version this image needs.
+5. `scripts/check-production.sh` and then check that organizations, resources and connections are
+   present, and that a synchronization still authenticates.
+
+## Health, logs and limits
+
+* `GET /health` — liveness. No SQL, answers as long as the process is alive.
+* `GET /ready` — readiness. One lightweight database query; non-200 while PostgreSQL is
+  unavailable, which is exactly what makes a rolling restart wait.
+* Logs go to stdout and are collected by Docker; the compose file caps them at 5 × 10 MB per
+  service. Nothing writes application log files inside a container.
+* Memory limits are set per service in the compose file and can be tuned per host.
+
+## Troubleshooting
+
+| Symptom | Where to look |
+| --- | --- |
+| Backend restarts at startup | `docker compose logs backend` — configuration and migration failures are reported with the offending key, never with credentials. |
+| `/ready` non-200 | PostgreSQL container health, then `docker compose logs postgres`. |
+| Login returns 429 | The proxy rate-limits `/api/v1/auth/login` (10/min, burst 5) per address. |
+| A synchronization never finishes | It is retired only after its own deadline, computed from that connection's connect and command timeouts plus a minute. Check the connection's timeouts, then the Activity timeline for `SYNC_FAILED`. |
+| Connections fail to authenticate after a restore | The encryption key does not match the one the secrets were stored with. |

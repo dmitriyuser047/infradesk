@@ -189,6 +189,7 @@ object ApplicationModule {
         timeProvider,
         recordResourceObservations,
         historyRecorder,
+        integrations.connectionSyncBudget,
         loggers.sync
       )
 

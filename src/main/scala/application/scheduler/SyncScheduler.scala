@@ -5,7 +5,6 @@ import application.connector.{ConnectionSyncExecutionFailed, SyncAlreadyRunning,
 import application.port.{
   ConnectionScheduleRepository,
   ConnectionSyncRunner,
-  ResourceConnectorFailure,
   TimeProvider,
   TransactionRunner
 }
@@ -36,7 +35,7 @@ final class SyncScheduler[F[_]: Async, Tx[_]: MonadThrow](
 
   def run(pollInterval: FiniteDuration, limit: Int): F[Nothing] =
     (tickWith(limit).handleErrorWith(error =>
-      logError(s"scheduler.tick.failed schedulerInstanceId=$schedulerInstanceId errorType=${error.getClass.getSimpleName}", error)
+      logError(s"scheduler.tick.failed schedulerInstanceId=$schedulerInstanceId errorType=${error.getClass.getSimpleName}")
     ) *> Temporal[F].sleep(pollInterval)).foreverM
 
   private def tickWith(limit: Int): F[Unit] =
@@ -101,10 +100,7 @@ final class SyncScheduler[F[_]: Async, Tx[_]: MonadThrow](
             }
             val failure = SyncFailure.from(underlying)
             val message = s"scheduler.sync.failed $context$sessionContext errorCode=${failure.code} errorType=${underlying.getClass.getSimpleName} consecutiveFailures=$failures nextDelaySeconds=$delay"
-            underlying match {
-              case _: ResourceConnectorFailure => logError(message)
-              case _ => logError(message, underlying)
-            }
+            logError(message)
         }
         outcomeLog *> transactionRunner
           .run(
@@ -119,7 +115,7 @@ final class SyncScheduler[F[_]: Async, Tx[_]: MonadThrow](
           .flatMap {
             case true => ().pure[F]
             case false => logger.warn(s"scheduler.claim.lost $context schedulerInstanceId=$schedulerInstanceId").handleErrorWith(_ => ().pure[F])
-          }.handleErrorWith(error => logError(s"scheduler.schedule.update.failed $context errorType=${error.getClass.getSimpleName}", error))
+          }.handleErrorWith(error => logError(s"scheduler.schedule.update.failed $context errorType=${error.getClass.getSimpleName}"))
       }
     }
   }
@@ -130,12 +126,8 @@ final class SyncScheduler[F[_]: Async, Tx[_]: MonadThrow](
   private def logError(message: String): F[Unit] =
     logger.error(message).handleErrorWith(_ => ().pure[F])
 
-  private def logError(message: String, error: Throwable): F[Unit] =
-    logger.error(error)(message).handleErrorWith(_ => ().pure[F])
-
   private def logUnexpectedScheduleFailure(claimed: ClaimedConnectionSchedule, error: Throwable): F[Unit] =
     logError(
-      s"scheduler.sync.failed organizationId=${claimed.schedule.organizationId} connectionId=${claimed.schedule.connectionId} errorType=${error.getClass.getSimpleName}",
-      error
+      s"scheduler.sync.failed organizationId=${claimed.schedule.organizationId} connectionId=${claimed.schedule.connectionId} errorType=${error.getClass.getSimpleName}"
     )
 }

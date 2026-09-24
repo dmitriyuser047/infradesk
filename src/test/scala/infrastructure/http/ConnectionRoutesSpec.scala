@@ -252,8 +252,8 @@ final class ConnectionRoutesSpec extends FunSuite {
 
     override def tryCreate(session: SyncSession): IO[Boolean] = IO.pure(true)
 
-    override def recoverStaleAndTryCreate(session: SyncSession, staleBefore: Instant,
-                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[SyncSessionClaim] =
+    override def recoverStaleAndTryCreate(session: SyncSession, at: Instant,
+                                          errorCode: String, errorMessage: String): IO[SyncSessionClaim] =
       IO.pure(SyncSessionClaim(created = true, List.empty))
 
     override def findRecentByConnection(organizationId: UUID, connectionId: UUID, limit: Int): IO[List[SyncSession]] =
@@ -354,7 +354,8 @@ final class ConnectionRoutesSpec extends FunSuite {
     startedAt: Instant,
     finishedAt: Option[Instant]
   ): SyncSession =
-    SyncSession(id, organizationId, sshConnection.id, startedAt, finishedAt, status)
+    SyncSession(id, organizationId, sshConnection.id, startedAt, startedAt.plusSeconds(900),
+      finishedAt, status)
 
   private val olderCompletedSync = session(
     UUID.fromString("90000000-0000-0000-0000-000000000003"),

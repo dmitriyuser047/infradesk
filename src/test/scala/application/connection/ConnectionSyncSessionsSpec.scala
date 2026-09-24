@@ -3,6 +3,7 @@ package application.connection
 
 import application.connector.{ConnectionSyncExecutionFailed, ConnectionSyncInactive, ConnectionSyncNotFound, RunConnectionSync, SyncAlreadyRunning}
 import application.monitor.{MonitorRuleEvaluator, MonitorTransition}
+import application.connector.SyncSessionPolicy
 import application.port.{SyncSessionClaim, ConnectionRepository, ConnectionSyncResult, ConnectionSyncRunner, ConnectionSynchronizer, ResourceConnectorFailure, ResourceConnectorFailureCode, SyncSessionRepository, TimeProvider, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -386,7 +387,7 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
 
   private def session(id: UUID, organizationId: UUID, forConnection: UUID, started: Instant,
                       status: SyncSessionStatus): SyncSession =
-    SyncSession(id, organizationId, forConnection, started,
+    SyncSession(id, organizationId, forConnection, started, started.plusSeconds(900),
       if (status == SyncSessionStatus.Running) None else Some(started.plusSeconds(1)), status)
 
   private final class SyncFixture {
@@ -426,13 +427,14 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
         s.status == SyncSessionStatus.Running)) false
       else { values = value :: values; true }
     }
-    override def recoverStaleAndTryCreate(value: SyncSession, staleBefore: Instant,
-                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[SyncSessionClaim] = IO {
+    override def recoverStaleAndTryCreate(value: SyncSession, at: Instant,
+                                          errorCode: String, errorMessage: String): IO[SyncSessionClaim] = IO {
       val stale = values.filter(existing =>
         existing.organizationId == value.organizationId && existing.connectionId == value.connectionId &&
-          existing.status == SyncSessionStatus.Running && existing.startedAt.isBefore(staleBefore))
+          existing.status == SyncSessionStatus.Running &&
+          SyncSessionPolicy.isRecoverable(existing.recoverAfterAt, at))
       val recovered = stale.map(_.copy(status = SyncSessionStatus.Failed,
-        finishedAt = Some(recoveredAt), errorCode = Some(errorCode), errorMessage = Some(errorMessage)))
+        finishedAt = Some(at), errorCode = Some(errorCode), errorMessage = Some(errorMessage)))
       values = values.map(existing =>
         recovered.find(_.id == existing.id).getOrElse(existing))
       val created =

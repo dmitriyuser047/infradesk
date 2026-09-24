@@ -24,6 +24,17 @@ object InfraDeskApplication {
   def run(config: AppConfig): IO[Unit] = {
     val loggers = AppLoggers.slf4j
     for {
+      // The first line of a deployment's log says which build is running: an image tag can be
+      // wrong, the artifact cannot.
+      _ <- loggers.lifecycle.info(
+        s"application.starting version=${BuildInfo.version} gitSha=${BuildInfo.gitSha} " +
+          s"httpHost=${config.http.host} httpPort=${config.http.port} " +
+          s"dbMaxPoolSize=${config.database.maxPoolSize} " +
+          s"scheduler=${if (config.scheduler.enabled) "enabled" else "disabled"} " +
+          s"schedulerMaxConcurrency=${config.scheduler.maxConcurrency} " +
+          s"notifications=${if (config.notification.enabled) "enabled" else "disabled"}"
+      )
+      // Nothing that serves traffic starts before the schema is at the version this build needs.
       _ <- DatabaseMigrator.migrate(config.database, loggers.migration)
       // Process identity for scheduler claims: created once per JVM run, never per tick or job.
       schedulerInstanceId <- IO(UUID.randomUUID())
@@ -42,13 +53,20 @@ object InfraDeskApplication {
           schedulerInstanceId, notificationSender, dispatcherInstanceId)
         val httpApp = HttpModule.build(persistence, application, config.auth, loggers)
 
-        val workers =
-          application.scheduler.run(config.scheduler.pollInterval, limit = config.scheduler.batchSize) ::
-            application.notificationDispatcher.map(
-              _.run(config.notification.pollInterval, limit = config.notification.batchSize)
-            ).toList
+        val schedulerWorkers =
+          if (config.scheduler.enabled)
+            List(application.scheduler.run(config.scheduler.pollInterval,
+              limit = config.scheduler.batchSize))
+          else Nil
+        val workers = schedulerWorkers ++ application.notificationDispatcher.map(
+          _.run(config.notification.pollInterval, limit = config.notification.batchSize)
+        ).toList
 
         application.bootstrapAdmin.run(config.bootstrap) *>
+          loggers.lifecycle.info(
+            s"application.started version=${BuildInfo.version} gitSha=${BuildInfo.gitSha} " +
+              s"workers=${workers.size}"
+          ) *>
           serve(httpServer(config.http, httpApp), workers)
       }
     } yield ()
@@ -59,7 +77,10 @@ object InfraDeskApplication {
     * HTTP client and the database pool. A worker that fails cancels its siblings and the server.
     */
   private[bootstrap] def serve(server: Resource[IO, Any], workers: List[IO[Nothing]]): IO[Unit] =
-    server.use(_ => workers.parTraverse_(identity)).void
+    // The HTTP server is useful even when every optional background subsystem is disabled.
+    // The never-ending lifecycle fiber keeps its Resource scope open; a failed worker still
+    // cancels it and therefore releases the server, client and database resources in order.
+    server.use(_ => (IO.never[Unit] :: workers).parTraverse_(identity)).void
 
   private def httpServer(config: HttpConfig, app: HttpApp[IO]): Resource[IO, Server] =
     EmberServerBuilder

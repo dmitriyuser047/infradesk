@@ -26,6 +26,9 @@ object DatabaseMigrator {
           logger.info(s"database.migration.completed migrationsApplied=${result.migrationsApplied} currentVersion=${result.currentVersion}")
             .as(result)
         case Left(error) =>
-          logger.error(error)("database.migration.failed") *> IO.raiseError(error)
+          // Flyway/JDBC causes may carry a database URL. Keep startup failure observable without
+          // serializing the throwable or its connection details.
+          logger.error(s"database.migration.failed errorType=${error.getClass.getSimpleName}") *>
+            IO.raiseError(error)
       }
 }

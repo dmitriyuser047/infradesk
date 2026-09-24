@@ -7,9 +7,14 @@ lazy val http4sVersion = "0.23.30"
 lazy val flywayVersion = "13.7.0"
 
 lazy val root = rootProject
+  .enablePlugins(JavaAppPackaging)
   .settings(
     name := "infradesk",
     Compile / run / fork := true,
+    Compile / mainClass := Some("ru.bitec.app.ops.Main"),
+    // Production images run this artifact; the version carries the commit the image was built
+    // from, so a deployed container can be traced back to its source.
+    version := sys.env.getOrElse("INFRADESK_BUILD_VERSION", "0.1.0-SNAPSHOT"),
     idePackagePrefix := Some("ru.bitec.app.ops"),
     libraryDependencies ++= Seq(
       //You can add library dependencies here, for example,

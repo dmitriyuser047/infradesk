@@ -5,9 +5,9 @@ import application.discovery.{PendingDiscoveredResource, SyncDiscoveredSnapshot}
 import application.history.{HistoryEntry, HistoryRecorder}
 import application.port.{
   ConnectionRepository,
+  ConnectionSyncBudget,
   ConnectionSyncResult,
   IdGenerator,
-  ResourceConnectorFailure,
   SyncSessionRepository,
   TimeProvider,
   TransactionRunner
@@ -34,6 +34,7 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
                                                      timeProvider: TimeProvider[F],
                                                      recordResourceObservations: RecordResourceObservations[Tx],
                                                      historyRecorder: HistoryRecorder[Tx],
+                                                     syncBudget: ConnectionSyncBudget,
                                                      logger: Logger[F]
                                                    ) {
 
@@ -51,11 +52,15 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
 
       startedAt <- timeProvider.now
       syncSessionId <- idGenerator.nextId
+      // The deadline is a snapshot of the conditions this attempt starts under: changing the
+      // connection afterwards must not shorten the horizon of a run already in flight.
+      recoverAfter = SyncSessionPolicy.recoverAfter(syncBudget.maxAttemptDuration(connection))
       syncSession = SyncSession(
         id = syncSessionId,
         organizationId = connection.organizationId,
         connectionId = connection.id,
         startedAt = startedAt,
+        recoverAfterAt = startedAt.plusMillis(recoverAfter.toMillis),
         finishedAt = None,
         status = SyncSessionStatus.Running
       )
@@ -65,7 +70,6 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
       claim <- transactionRunner.run(
         syncSessionRepository.recoverStaleAndTryCreate(
           syncSession,
-          startedAt.minusSeconds(SyncSessionPolicy.StaleAfterSeconds),
           startedAt,
           SyncFailure.Stale.code,
           SyncFailure.Stale.message
@@ -107,10 +111,9 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
       discovery <- connector.discover(connection).onError { case error =>
         val failure = SyncFailure.from(error)
         val message = s"connector.discovery.failed organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} connectorType=${connection.connectorType} errorCode=${failure.code} errorType=${error.getClass.getSimpleName}"
-        error match {
-          case _: ResourceConnectorFailure => logError(message)
-          case _ => logError(message, error)
-        }
+        // Connector failures may wrap command output, host details or credentials. The typed
+        // class/code are enough to correlate the failure with the persisted safe metadata.
+        logError(message)
       }
       _ <- logInfo(s"sync.discovery.completed organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} connectorType=${connection.connectorType} resourcesCount=${discovery.resources.size}")
 
@@ -156,10 +159,7 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
     timeProvider.now.flatMap { finishedAt =>
       val failure = SyncFailure.from(error)
       val message = s"sync.failed organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} connectorType=${connection.connectorType} errorCode=${failure.code} errorType=${error.getClass.getSimpleName} durationMs=${Duration.between(syncSession.startedAt, finishedAt).toMillis}"
-      val failureLog = error match {
-        case _: ResourceConnectorFailure => logError(message)
-        case _ => logError(message, error)
-      }
+      val failureLog = logError(message)
       failureLog *>
       transactionRunner
         // The failed session and the fact that reports it are one commit; the safe error code
@@ -173,7 +173,7 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
         .flatMap {
           case Right(_) => ConnectionSyncExecutionFailed(syncSession.id, error).raiseError[F, List[Resource]]
           case Left(persistenceError) =>
-            logError(s"sync.failure.persistence.failed organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} errorType=${persistenceError.getClass.getSimpleName}", persistenceError) *>
+            logError(s"sync.failure.persistence.failed organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=${syncSession.id} errorType=${persistenceError.getClass.getSimpleName}") *>
               persistenceError.raiseError[F, List[Resource]]
         }
     }
@@ -208,6 +208,4 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
   private def logError(message: String): F[Unit] =
     logger.error(message).handleErrorWith(_ => ().pure[F])
 
-  private def logError(message: String, error: Throwable): F[Unit] =
-    logger.error(error)(message).handleErrorWith(_ => ().pure[F])
 }

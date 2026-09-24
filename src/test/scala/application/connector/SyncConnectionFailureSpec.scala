@@ -3,6 +3,7 @@ package application.connector
 
 import application.discovery.SyncDiscoveredSnapshot
 import application.connection.RunManualConnectionSync
+import application.connector.SyncSessionPolicy
 import application.port.{SyncSessionClaim, ConnectionSyncResult, ConnectionSyncRunner, IdGenerator, ResourceConnector, ResourceConnectorFailure, ResourceConnectorFailureCode, ResourceConnectorResult, SyncSessionRepository, TimeProvider, TransactionRunner}
 import application.resource.RecordResourceObservations
 import cats.effect.IO
@@ -11,9 +12,11 @@ import cats.syntax.all._
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
 import domain.sync.{SyncSession, SyncSessionStatus}
 import munit.FunSuite
+import org.typelevel.log4cats.Logger
 
 import java.time.Instant
 import java.util.UUID
+import scala.concurrent.duration._
 
 final class SyncConnectionFailureSpec extends FunSuite {
   private val org = UUID.randomUUID()
@@ -36,6 +39,9 @@ final class SyncConnectionFailureSpec extends FunSuite {
     assert(!f.repository.current.toString.contains("super-secret"))
     assert(!f.repository.current.toString.contains("10.0.0.1"))
     assertEquals(f.discoverCalls, 1)
+    assertEquals(f.logger.throwableErrors, 0)
+    assert(!f.logger.errors.mkString(" ").contains("super-secret"))
+    assert(!f.logger.errors.mkString(" ").contains("10.0.0.1"))
   }
 
   test("typed connector failure persists safe code and message while preserving original cause") {
@@ -59,7 +65,8 @@ final class SyncConnectionFailureSpec extends FunSuite {
 
   test("already RUNNING session rejects a second run before discovery") {
     val f = new FailureFixture
-    val fresh = SyncSession(UUID.randomUUID(), org, connectionId, at.minusSeconds(1), None, SyncSessionStatus.Running)
+    val fresh = SyncSession(UUID.randomUUID(), org, connectionId, at.minusSeconds(1),
+      at.plusSeconds(900), None, SyncSessionStatus.Running)
     f.repository.current = Some(fresh)
     intercept[SyncAlreadyRunning] { f.sync.execute(connection).unsafeRunSync() }
     assertEquals(f.discoverCalls, 0)
@@ -69,8 +76,9 @@ final class SyncConnectionFailureSpec extends FunSuite {
 
   test("RUNNING session exactly at the TTL boundary is not stale") {
     val f = new FailureFixture
-    val boundary = SyncSession(UUID.randomUUID(), org, connectionId,
-      at.minusSeconds(SyncSessionPolicy.StaleAfterSeconds), None, SyncSessionStatus.Running)
+    // Its deadline falls exactly now: the boundary belongs to the session that still holds it.
+    val boundary = SyncSession(UUID.randomUUID(), org, connectionId, at.minusSeconds(900),
+      at, None, SyncSessionStatus.Running)
     f.repository.current = Some(boundary)
 
     intercept[SyncAlreadyRunning] { f.sync.execute(connection).unsafeRunSync() }
@@ -81,10 +89,37 @@ final class SyncConnectionFailureSpec extends FunSuite {
     assertEquals(f.historyEvents.recorded, List.empty[domain.history.HistoryEvent])
   }
 
+  test("a long sync keeps its own deadline after the connection is reconfigured") {
+    // A started at 14:00 when the connection allowed twenty-minute commands, so its own budget
+    // reaches far beyond the former fixed fifteen minutes.
+    val f = new FailureFixture
+    val longRunning = SyncSession(UUID.randomUUID(), org, connectionId, at.minusSeconds(16 * 60),
+      at.plusSeconds(10 * 60), None, SyncSessionStatus.Running)
+    f.repository.current = Some(longRunning)
+
+    intercept[SyncAlreadyRunning] { f.sync.execute(connection).unsafeRunSync() }
+
+    // The connection may have been reconfigured to thirty-second commands since; the deadline of
+    // the attempt in flight does not move, so nothing is retired and nothing is started.
+    assertEquals(f.repository.values, List(longRunning))
+    assertEquals(f.discoverCalls, 0)
+    assertEquals(f.historyEvents.recorded, List.empty[domain.history.HistoryEvent])
+  }
+
+  test("a new session carries the deadline of the budget it was started with") {
+    val f = new FailureFixture(budget = 20.minutes)
+
+    intercept[ConnectionSyncExecutionFailed] { f.sync.execute(connection).unsafeRunSync() }
+
+    val created = f.repository.values.find(_.id == sessionId).get
+    // Twenty minutes of attempt plus the policy margin, measured from its own start.
+    assertEquals(created.recoverAfterAt, created.startedAt.plusSeconds(21 * 60))
+  }
+
   test("stale RUNNING becomes FAILED before a new exact session starts outside transaction") {
     val f = new FailureFixture
-    val stale = SyncSession(UUID.randomUUID(), org, connectionId,
-      at.minusSeconds(SyncSessionPolicy.StaleAfterSeconds + 1), None, SyncSessionStatus.Running)
+    val stale = SyncSession(UUID.randomUUID(), org, connectionId, at.minusSeconds(901),
+      at.minusSeconds(1), None, SyncSessionStatus.Running)
     f.repository.current = Some(stale)
 
     val error = intercept[ConnectionSyncExecutionFailed] { f.sync.execute(connection).unsafeRunSync() }
@@ -115,8 +150,8 @@ final class SyncConnectionFailureSpec extends FunSuite {
   test("manual sync after stale recovery returns the new session, not the recovered one") {
     val f = new FailureFixture
     val oldId = UUID.randomUUID()
-    f.repository.current = Some(SyncSession(oldId, org, connectionId,
-      at.minusSeconds(SyncSessionPolicy.StaleAfterSeconds + 1), None, SyncSessionStatus.Running))
+    f.repository.current = Some(SyncSession(oldId, org, connectionId, at.minusSeconds(901),
+      at.minusSeconds(1), None, SyncSessionStatus.Running))
     val sharedRunner = new ConnectionSyncRunner[IO] {
       override def execute(organizationId: UUID, requestedConnectionId: UUID): IO[ConnectionSyncResult] =
         f.sync.execute(connection)
@@ -134,9 +169,9 @@ final class SyncConnectionFailureSpec extends FunSuite {
   test("completed and failed history is never changed by recovery") {
     val f = new FailureFixture
     val completed = SyncSession(UUID.randomUUID(), org, connectionId, at.minusSeconds(2000),
-      Some(at.minusSeconds(1999)), SyncSessionStatus.Completed)
+      at.minusSeconds(1100), Some(at.minusSeconds(1999)), SyncSessionStatus.Completed)
     val failed = SyncSession(UUID.randomUUID(), org, connectionId, at.minusSeconds(1900),
-      Some(at.minusSeconds(1899)), SyncSessionStatus.Failed,
+      at.minusSeconds(1000), Some(at.minusSeconds(1899)), SyncSessionStatus.Failed,
       Some(SyncFailure.Generic.code), Some(SyncFailure.Generic.message))
     f.repository.values = List(completed, failed)
 
@@ -147,7 +182,10 @@ final class SyncConnectionFailureSpec extends FunSuite {
     assertEquals(f.discoverCalls, 1)
   }
 
-  private final class FailureFixture(failure: Throwable = new IllegalStateException("raw password in SSH exception")) {
+  private final class FailureFixture(
+    failure: Throwable = new IllegalStateException("raw password in SSH exception"),
+    budget: FiniteDuration = Duration.Zero
+  ) {
     var discoverCalls = 0
     var discoveredInTransaction = false
     var inTransaction = false
@@ -161,6 +199,7 @@ final class SyncConnectionFailureSpec extends FunSuite {
     }
     val historyEvents = new support.RecordingHistoryEventRepository
     val history = support.TestHistoryRecorder(historyEvents)
+    val logger = new RecordingLogger
     val repository = new Sessions
     val runner = new TransactionRunner[IO, IO] {
       override def run[A](program: IO[A]): IO[A] =
@@ -179,7 +218,25 @@ final class SyncConnectionFailureSpec extends FunSuite {
       null.asInstanceOf[SyncDiscoveredSnapshot[IO]], null, repository, runner, ids, clock,
       null.asInstanceOf[RecordResourceObservations[IO]],
       history,
-      _root_.org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.sync-failure"))
+      // Mirrors the SSH adapter without importing it: connect plus both sequential commands.
+      (_: domain.connection.Connection) => budget,
+      logger)
+  }
+
+  private final class RecordingLogger extends Logger[IO] {
+    var errors: List[String] = Nil
+    var throwableErrors = 0
+    override def error(message: => String): IO[Unit] = IO { errors = errors :+ message }
+    override def error(t: Throwable)(message: => String): IO[Unit] =
+      IO { throwableErrors += 1; errors = errors :+ message }
+    override def warn(message: => String): IO[Unit] = IO.unit
+    override def info(message: => String): IO[Unit] = IO.unit
+    override def debug(message: => String): IO[Unit] = IO.unit
+    override def trace(message: => String): IO[Unit] = IO.unit
+    override def warn(t: Throwable)(message: => String): IO[Unit] = warn(message)
+    override def info(t: Throwable)(message: => String): IO[Unit] = info(message)
+    override def debug(t: Throwable)(message: => String): IO[Unit] = debug(message)
+    override def trace(t: Throwable)(message: => String): IO[Unit] = trace(message)
   }
 
   private final class Sessions extends SyncSessionRepository[IO] {
@@ -200,13 +257,14 @@ final class SyncConnectionFailureSpec extends FunSuite {
         s.status == SyncSessionStatus.Running)) false
       else { values = value :: values; true }
     }
-    override def recoverStaleAndTryCreate(value: SyncSession, staleBefore: Instant,
-                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[SyncSessionClaim] = IO {
+    override def recoverStaleAndTryCreate(value: SyncSession, at: Instant,
+                                          errorCode: String, errorMessage: String): IO[SyncSessionClaim] = IO {
       val stale = values.filter(existing =>
         existing.organizationId == value.organizationId && existing.connectionId == value.connectionId &&
-          existing.status == SyncSessionStatus.Running && existing.startedAt.isBefore(staleBefore))
+          existing.status == SyncSessionStatus.Running &&
+          SyncSessionPolicy.isRecoverable(existing.recoverAfterAt, at))
       val recovered = stale.map(_.copy(status = SyncSessionStatus.Failed,
-        finishedAt = Some(recoveredAt), errorCode = Some(errorCode), errorMessage = Some(errorMessage)))
+        finishedAt = Some(at), errorCode = Some(errorCode), errorMessage = Some(errorMessage)))
       values = values.map(existing =>
         recovered.find(_.id == existing.id).getOrElse(existing))
       val created =

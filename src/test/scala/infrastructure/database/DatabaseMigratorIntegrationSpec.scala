@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V20 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V21 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 20)
-        assertEquals(first.currentVersion, "20")
+        assertEquals(first.migrationsApplied, 21)
+        assertEquals(first.currentVersion, "21")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "20")
+        assertEquals(second.currentVersion, "21")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -142,6 +142,24 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               assertEquals(history.getInt(3), 11)
               assertEquals(history.getInt(4), 3)
             } finally history.close()
+            val syncDeadline = statement.executeQuery(
+              "select (select count(*) from information_schema.columns " +
+                "where table_schema = current_schema() and table_name = 'sync_session' " +
+                "and column_name = 'recover_after_at' and is_nullable = 'NO'), " +
+                "(select count(*) from information_schema.table_constraints " +
+                "where table_schema = current_schema() and table_name = 'sync_session' " +
+                "and constraint_name = 'ck_sync_session_recover_after_at'), " +
+                "(select count(*) from pg_indexes where schemaname = current_schema() " +
+                "and indexname = 'ux_sync_session_running_connection')"
+            )
+            try {
+              assert(syncDeadline.next())
+              // Every session carries its own recovery deadline, and the running-slot invariant
+              // of stage 4 is untouched by adding it.
+              assertEquals(syncDeadline.getInt(1), 1)
+              assertEquals(syncDeadline.getInt(2), 1)
+              assertEquals(syncDeadline.getInt(3), 1)
+            } finally syncDeadline.close()
           } finally statement.close()
         } finally connection.close()
       }
@@ -150,7 +168,7 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         try {
           val statement = connection.createStatement()
           try assertEquals(statement.executeUpdate(
-            "update flyway_schema_history set checksum = checksum + 1 where version = '20'"
+            "update flyway_schema_history set checksum = checksum + 1 where version = '21'"
           ), 1)
           finally statement.close()
         } finally connection.close()

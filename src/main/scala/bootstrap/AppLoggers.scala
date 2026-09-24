@@ -11,6 +11,7 @@ import org.typelevel.log4cats.slf4j.Slf4jLogger
   * place instead of being rediscovered inside business operations.
   */
 final case class AppLoggers(
+  lifecycle: Logger[IO],
   migration: Logger[IO],
   httpRequests: Logger[IO],
   health: Logger[IO],
@@ -25,6 +26,7 @@ final case class AppLoggers(
 object AppLoggers {
 
   def slf4j: AppLoggers = AppLoggers(
+    lifecycle = named("bootstrap.InfraDeskApplication"),
     migration = named("infrastructure.database.DatabaseMigrator"),
     httpRequests = named("infrastructure.http.requests"),
     health = named("infrastructure.http.health"),

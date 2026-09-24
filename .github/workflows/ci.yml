@@ -60,3 +60,88 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  images:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend production image
+        run: |
+          docker build \
+            --file deploy/backend.Dockerfile \
+            --build-arg INFRADESK_GIT_SHA="${GITHUB_SHA}" \
+            --build-arg INFRADESK_BUILD_VERSION="0.1.0-${GITHUB_SHA::7}" \
+            --tag "infradesk-backend:${GITHUB_SHA::7}" \
+            .
+      - name: Build frontend production image
+        run: |
+          docker build \
+            --file deploy/frontend.Dockerfile \
+            --build-arg INFRADESK_GIT_SHA="${GITHUB_SHA}" \
+            --tag "infradesk-frontend:${GITHUB_SHA::7}" \
+            .
+      - name: Write the deployment environment
+        run: |
+          # Compose reads .env from the project directory, so every later step sees the same
+          # values without repeating them. This file is CI-only and never leaves the runner.
+          {
+            echo "INFRADESK_DB_PASSWORD=ci-compose-password"
+            echo "INFRADESK_SECRET_MASTER_KEY_BASE64=$(openssl rand -base64 32)"
+            echo "INFRADESK_BACKEND_IMAGE=infradesk-backend:${GITHUB_SHA::7}"
+            echo "INFRADESK_FRONTEND_IMAGE=infradesk-frontend:${GITHUB_SHA::7}"
+            echo "INFRADESK_GIT_SHA=${GITHUB_SHA}"
+            echo "INFRADESK_BUILD_VERSION=0.1.0-${GITHUB_SHA::7}"
+            echo "INFRADESK_HTTP_PUBLISH=127.0.0.1:8081"
+          } > .env
+      - name: Start the production topology
+        run: |
+          docker compose -f compose.prod.yml up -d
+          for _ in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then break; fi
+            sleep 5
+          done
+      - name: Smoke-test the deployment
+        run: ./scripts/check-production.sh http://127.0.0.1:8081
+      - name: Exercise production backup and restore
+        run: |
+          marker_id="00000000-0000-0000-0000-000000000014"
+          docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
+            --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
+          INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
+            ./scripts/backup-database.sh
+          dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
+          test -n "${dump}"
+          docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
+            --command "delete from organization where id = '${marker_id}'"
+          ./scripts/restore-database.sh "${dump}"
+          for _ in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then break; fi
+            sleep 5
+          done
+          restored="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from organization where id = '${marker_id}'")"
+          test "${restored}" = "1"
+          ./scripts/check-production.sh http://127.0.0.1:8081
+      - name: Assert the database and the backend are not published
+        run: |
+          # The proxy is the only service with a host port in the production topology.
+          if docker compose -f compose.prod.yml port postgres 5432 2>/dev/null; then
+            echo "postgres must not publish a host port" >&2
+            exit 1
+          fi
+          if docker compose -f compose.prod.yml port backend 8080 2>/dev/null; then
+            echo "backend must not publish a host port" >&2
+            exit 1
+          fi
+      - name: Assert the deployment reports the build it runs
+        run: docker compose -f compose.prod.yml logs backend | grep "application.started" | grep "gitSha=${GITHUB_SHA}"
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f compose.prod.yml logs --no-color --tail 200
+      - name: Stop the production topology
+        if: always()
+        run: docker compose -f compose.prod.yml down -v

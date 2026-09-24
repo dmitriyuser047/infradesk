@@ -15,6 +15,32 @@ final class AppConfigSpec extends FunSuite {
     "INFRADESK_SECRET_MASTER_KEY_BASE64" -> key
   )
 
+  test("the database pool is explicit, bounded and redacted") {
+    val defaults = AppConfig.fromEnvironment(minimal).toOption.get.database
+    val configured = AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_DB_MAX_POOL_SIZE" -> "24",
+      "INFRADESK_DB_CONNECTION_TIMEOUT_SECONDS" -> "5"
+    )).toOption.get.database
+
+    assertEquals(defaults.maxPoolSize, 10)
+    assertEquals(defaults.connectionTimeout, 10.seconds)
+    assertEquals(configured.maxPoolSize, 24)
+    assertEquals(configured.connectionTimeout, 5.seconds)
+    // The pool is part of the startup log line; the credentials are not.
+    assert(configured.toString.contains("maxPoolSize=24"))
+    assert(!configured.toString.contains("test-password"))
+    assert(!configured.toString.contains("localhost"))
+
+    List("0", "-1", "1000", "many", "").foreach { value =>
+      assert(
+        AppConfig.fromEnvironment(minimal + ("INFRADESK_DB_MAX_POOL_SIZE" -> value)).isLeft ||
+          value.isEmpty,
+        s"accepted pool size '$value'"
+      )
+    }
+    assert(AppConfig.fromEnvironment(minimal + ("INFRADESK_DB_CONNECTION_TIMEOUT_SECONDS" -> "0")).isLeft)
+  }
+
   test("minimal configuration parses with HTTP, auth and scheduler defaults") {
     val config = AppConfig.fromEnvironment(minimal).toOption.get
     assertEquals(config.database.user, "infradesk")
@@ -23,6 +49,7 @@ final class AppConfigSpec extends FunSuite {
     assertEquals(config.auth.ttlSeconds, 604800L)
     assertEquals(config.auth.secureCookie, false)
     assertEquals(config.bootstrap, None)
+    assertEquals(config.scheduler.enabled, true)
     assertEquals(config.scheduler.pollInterval, 1.second)
     assertEquals(config.scheduler.batchSize, 100)
     assertEquals(config.scheduler.maxConcurrency, 5)
@@ -123,6 +150,7 @@ final class AppConfigSpec extends FunSuite {
     assertInvalid("INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS", "0")
     assertInvalid("INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS", "-1")
     assertInvalid("INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS", "abc")
+    assertInvalid("INFRADESK_SCHEDULER_ENABLED", "sometimes")
   }
 
   test("explicit valid HTTP and scheduler values are retained") {
@@ -132,9 +160,11 @@ final class AppConfigSpec extends FunSuite {
       "INFRADESK_SCHEDULER_POLL_INTERVAL_SECONDS" -> "5",
       "INFRADESK_SCHEDULER_BATCH_SIZE" -> "17",
       "INFRADESK_SCHEDULER_MAX_CONCURRENCY" -> "8",
-      "INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS" -> "1200"
+      "INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS" -> "1200",
+      "INFRADESK_SCHEDULER_ENABLED" -> "false"
     )).toOption.get
     assertEquals(config.http.port.value, 5174)
+    assertEquals(config.scheduler.enabled, false)
     assertEquals(config.scheduler.pollInterval, 5.seconds)
     assertEquals(config.scheduler.batchSize, 17)
     assertEquals(config.scheduler.maxConcurrency, 8)

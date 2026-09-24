@@ -18,6 +18,12 @@ final class BootstrapAdminSpec extends FunSuite {
 
   test("bootstrap is optional and validates complete configuration") {
     assertEquals(BootstrapConfig.fromEnvironment(Map.empty), Right(None))
+    assertEquals(BootstrapConfig.fromEnvironment(Map(
+      "INFRADESK_BOOTSTRAP_EMAIL" -> "",
+      "INFRADESK_BOOTSTRAP_PASSWORD" -> " ",
+      "INFRADESK_BOOTSTRAP_ORGANIZATION_ID" -> "",
+      "INFRADESK_BOOTSTRAP_DISPLAY_NAME" -> ""
+    )), Right(None))
     assert(BootstrapConfig.fromEnvironment(Map("INFRADESK_BOOTSTRAP_EMAIL" -> "admin@example.com")).isLeft)
   }
 

@@ -1,0 +1,20 @@
+# The build context carries sources only: no local build output, no node_modules, no secrets.
+.git
+.github
+.idea
+.metals
+.vscode
+.bsp
+target
+**/target
+project/target
+project/project
+frontend/node_modules
+frontend/dist
+docs
+scripts
+backups
+*.dump
+.env
+.env.*
+!.env.production.example

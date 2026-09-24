@@ -3,6 +3,7 @@ package bootstrap
 
 import application.connector.ResourceConnectorRegistry
 import application.port.{
+  ConnectionSyncBudget,
   NotificationSender,
   ResourceOperationBudget,
   ResourceOperationExecutor,
@@ -20,6 +21,7 @@ import integration.ssh.{
   CompositeSshAuthenticationProvider,
   ConnectionSecretCipher,
   SshConnectionProbeAdapter,
+  SshConnectionSyncBudget,
   SshConnector,
   SshjClient
 }
@@ -37,6 +39,7 @@ final case class IntegrationComponents(
   sshPasswordResolver: SshPasswordResolver[IO],
   resourceOperationExecutor: ResourceOperationExecutor[IO],
   resourceOperationBudget: ResourceOperationBudget,
+  connectionSyncBudget: ConnectionSyncBudget,
   connectorRegistry: ResourceConnectorRegistry[IO]
 )
 
@@ -73,6 +76,7 @@ object IntegrationModule {
       sshPasswordResolver = sshAuthenticationProvider,
       resourceOperationExecutor = sshContainerOperations,
       resourceOperationBudget = sshContainerOperations,
+      connectionSyncBudget = new SshConnectionSyncBudget,
       connectorRegistry = connectorRegistry
     )
   }

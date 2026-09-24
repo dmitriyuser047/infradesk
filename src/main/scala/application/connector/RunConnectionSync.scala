@@ -55,7 +55,7 @@ final class RunConnectionSync[F[_]: MonadThrow, Tx[_]](
         logger.info(transition.logMessage).handleErrorWith(_ => ().pure[F])
       ))
       .handleErrorWith(error =>
-        logger.error(error)(
+        logger.error(
           s"monitor.evaluation.failed organizationId=$organizationId connectionId=$connectionId " +
             s"syncSessionId=${syncSessionId(outcome)} errorType=${error.getClass.getSimpleName}"
         ).handleErrorWith(_ => ().pure[F])

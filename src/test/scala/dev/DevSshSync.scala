@@ -160,6 +160,7 @@ object DevSshSync extends IOApp.Simple {
             timeProvider,
             recordResourceObservations,
             historyRecorder,
+            new _root_.ru.bitec.app.ops.integration.ssh.SshConnectionSyncBudget,
             _root_.org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("dev.ssh-sync")
           )
 

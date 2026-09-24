@@ -47,3 +47,13 @@ build/
 .bsp/
 .metals/
 .idea/
+
+### InfraDesk production ###
+.env
+.env.production
+.env.local
+*.dump
+backups/
+deploy/tls/
+*.pem
+*.key
