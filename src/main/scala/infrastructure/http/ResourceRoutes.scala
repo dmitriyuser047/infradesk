@@ -13,6 +13,8 @@ import org.http4s.HttpRoutes
 import org.http4s.dsl.io._
 import org.http4s.circe.CirceEntityEncoder._
 
+import domain.auth.OrganizationPermission
+
 import java.util.UUID
 import scala.util.Try
 
@@ -20,13 +22,15 @@ final class ResourceRoutes[Tx[_]](
                                     getResource: GetResource[Tx],
                                     listEnvironmentResources: ListEnvironmentResources[Tx],
                                     getResourceMetricHistory: GetResourceMetricHistory[Tx],
-                                    transactionRunner: TransactionRunner[IO, Tx]
+                                    transactionRunner: TransactionRunner[IO, Tx],
+                                    authorization: OrganizationAuthorization
                                   ) {
 
   import HttpJsonCodecs._
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     case request @ GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "resources" / resourceIdValue / "metrics" =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       (parseUuid(organizationIdValue, "organizationId"), parseUuid(resourceIdValue, "resourceId"), parseInstant(request.uri.query.params.get("from"), "from"), parseInstant(request.uri.query.params.get("to"), "to")) match {
         case (Left(e), _, _, _) => BadRequest(e); case (_, Left(e), _, _) => BadRequest(e); case (_, _, Left(e), _) => BadRequest(e); case (_, _, _, Left(e)) => BadRequest(e)
         case (Right(org), Right(resource), Right(from), Right(to)) =>
@@ -37,7 +41,10 @@ final class ResourceRoutes[Tx[_]](
             case Left(_) => internalServerError
           }
       }
-    case GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "resources" / resourceIdValue =>
+      }
+
+    case request @ GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "resources" / resourceIdValue =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       (parseUuid(organizationIdValue, "organizationId"), parseUuid(resourceIdValue, "resourceId")) match {
         case (Left(error), _) => BadRequest(error)
         case (_, Left(error)) => BadRequest(error)
@@ -55,8 +62,10 @@ final class ResourceRoutes[Tx[_]](
               case Left(_) => internalServerError
             }
       }
+      }
 
-    case GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "environments" / environmentIdValue / "resources" =>
+    case request @ GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "environments" / environmentIdValue / "resources" =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       (parseUuid(organizationIdValue, "organizationId"), parseUuid(environmentIdValue, "environmentId")) match {
         case (Left(error), _) => BadRequest(error)
         case (_, Left(error)) => BadRequest(error)
@@ -72,6 +81,7 @@ final class ResourceRoutes[Tx[_]](
                 }
               case Left(_) => internalServerError
             }
+      }
       }
   }
 

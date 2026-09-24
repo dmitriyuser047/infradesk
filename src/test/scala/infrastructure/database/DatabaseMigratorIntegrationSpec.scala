@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V16 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V17 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 16)
-        assertEquals(first.currentVersion, "16")
+        assertEquals(first.migrationsApplied, 17)
+        assertEquals(first.currentVersion, "17")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "16")
+        assertEquals(second.currentVersion, "17")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -74,6 +74,25 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               assert(outbox.getString(1) != null)
               assertEquals(outbox.getInt(2), 2)
             } finally outbox.close()
+            val audit = statement.executeQuery(
+              "select to_regclass('public.audit_event'), " +
+                "(select count(*) from pg_indexes where schemaname = current_schema() " +
+                "and indexname = 'ix_audit_event_organization_recent'), " +
+                "(select count(*) from information_schema.columns where table_schema = current_schema() " +
+                "and table_name = 'audit_event' " +
+                "and column_name in ('organization_id', 'actor_user_id', 'action', 'target_type', " +
+                "'target_id', 'occurred_at')), " +
+                "(select count(*) from information_schema.table_constraints " +
+                "where table_schema = current_schema() and table_name = 'audit_event' " +
+                "and constraint_name in ('ck_audit_event_action', 'ck_audit_event_target_type'))"
+            )
+            try {
+              assert(audit.next())
+              assert(audit.getString(1) != null)
+              assertEquals(audit.getInt(2), 1)
+              assertEquals(audit.getInt(3), 6)
+              assertEquals(audit.getInt(4), 2)
+            } finally audit.close()
           } finally statement.close()
         } finally connection.close()
       }
@@ -82,7 +101,7 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         try {
           val statement = connection.createStatement()
           try assertEquals(statement.executeUpdate(
-            "update flyway_schema_history set checksum = checksum + 1 where version = '16'"
+            "update flyway_schema_history set checksum = checksum + 1 where version = '17'"
           ), 1)
           finally statement.close()
         } finally connection.close()

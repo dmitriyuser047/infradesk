@@ -3,11 +3,11 @@ import { useQueries } from '@tanstack/react-query'
 import { Link, useLocation, useParams } from 'react-router-dom'
 
 import { useConnections } from '../api/connections'
-import { useMyOrganizations } from '../api/auth'
 import { ApiError } from '../api/httpClient'
 import { getEnvironments, useProjects } from '../api/navigation'
 import { ConnectionList } from '../components/connections/ConnectionList'
 import { filterConnections } from '../components/connections/connectionFilters'
+import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { InvalidRoutePage } from './InvalidRoutePage'
@@ -33,8 +33,8 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
   })) })
   const environments = environmentQueries.flatMap(query => query.data ?? [])
   const location = useLocation()
-  const membership = useMyOrganizations()
-  const isOwner = membership.data?.find(value => value.id === organizationId)?.role === 'OWNER'
+  const permissions = useOrganizationPermissions(organizationId)
+  const isOwner = permissions.can('manageConnections')
   const [search, setSearch] = useState('')
   const [type, setType] = useState('ALL')
   const [status, setStatus] = useState('ALL')

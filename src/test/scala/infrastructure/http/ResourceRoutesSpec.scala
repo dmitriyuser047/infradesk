@@ -297,10 +297,12 @@ final class ResourceRoutesSpec extends FunSuite {
       GetResource[IO](repository),
       ListEnvironmentResources[IO](repository),
       GetResourceMetricHistory[IO](repository, metricRepository),
-      transactionRunner
+      transactionRunner,
+      support.AuthorizationFixtures.authorization
     )
 
-    RouteFixture(routes.routes.orNotFound, repository, metricRepository, transactionRunner)
+    RouteFixture(support.AuthorizationFixtures.authorized(routes.routes.orNotFound), repository, metricRepository,
+      transactionRunner)
   }
 
   private def request(organizationId: UUID, resourceId: UUID): Request[IO] =

@@ -7,7 +7,7 @@ import { formatNoDataTimeout, formatRuleDuration, getMetricLabel, getMonitorRule
 
 export function MonitorRuleRow({ rule, onEdit }: {
   rule: MonitorRuleResponse
-  onEdit: (rule: MonitorRuleResponse) => void
+  onEdit?: (rule: MonitorRuleResponse) => void
 }) {
   const editable = isSupportedMetricCode(rule.metricCode) && isSupportedOperator(rule.operator)
   const state = getMonitorRuleStatusPresentation(rule.status, rule.enabled)
@@ -17,9 +17,9 @@ export function MonitorRuleRow({ rule, onEdit }: {
     <td>{rule.threshold}%</td>
     <td>{formatRuleDuration(rule.forSeconds)} · no data {formatNoDataTimeout(rule.noDataSeconds)}</td>
     <td><StatusIndicator label={state.label} tone={state.tone} /></td>
-    <td><button className="text-button" type="button" onClick={() => onEdit(rule)} disabled={!editable}
+    {onEdit ? <td><button className="text-button" type="button" onClick={() => onEdit(rule)} disabled={!editable}
       title={editable ? 'Edit rule' : 'This rule type is not supported for editing yet'}>
       <Pencil aria-hidden size={14} />{editable ? 'Edit' : 'Unavailable'}
-    </button></td>
+    </button></td> : null}
   </tr>
 }

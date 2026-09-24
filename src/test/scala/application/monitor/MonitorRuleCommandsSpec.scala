@@ -24,7 +24,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
   test("creates a rule for a node") {
     val fixture = new CommandFixture()
 
-    val created = fixture.create.execute(OrganizationId, NodeResourceId, command()).unsafeRunSync()
+    val created = fixture.create.execute(support.AuthorizationFixtures.actor(OrganizationId), NodeResourceId, command()).unsafeRunSync()
 
     assertEquals(created.map(_.resourceId), Some(NodeResourceId))
     assertEquals(fixture.rules.saved.map(_.id), List(GeneratedRuleId))
@@ -34,7 +34,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
     val fixture = new CommandFixture()
 
     val failure = intercept[InvalidMonitorRule](
-      fixture.create.execute(OrganizationId, ContainerResourceId, command()).unsafeRunSync()
+      fixture.create.execute(support.AuthorizationFixtures.actor(OrganizationId), ContainerResourceId, command()).unsafeRunSync()
     )
 
     assert(failure.getMessage.contains("CONTAINER"))
@@ -44,7 +44,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
   test("reports an absent resource as not found instead of invalid") {
     val fixture = new CommandFixture()
 
-    assertEquals(fixture.create.execute(OrganizationId, UUID.randomUUID(), command()).unsafeRunSync(), None)
+    assertEquals(fixture.create.execute(support.AuthorizationFixtures.actor(OrganizationId), UUID.randomUUID(), command()).unsafeRunSync(), None)
     assertEquals(fixture.rules.saved, List.empty)
   }
 
@@ -59,7 +59,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
       initialIncidents = List(openIncident())
     )
 
-    val updated = fixture.update.execute(OrganizationId, RuleId, command(enabled = false)).unsafeRunSync()
+    val updated = fixture.update.execute(support.AuthorizationFixtures.actor(OrganizationId), RuleId, command(enabled = false)).unsafeRunSync()
 
     assertEquals(updated.map(_.enabled), Some(false))
     assertEquals(fixture.states.deleted, List(OrganizationId -> RuleId))
@@ -78,7 +78,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
       initialIncidents = List(openIncident(IncidentReason.NoData))
     )
 
-    fixture.update.execute(OrganizationId, RuleId, command(enabled = false)).unsafeRunSync()
+    fixture.update.execute(support.AuthorizationFixtures.actor(OrganizationId), RuleId, command(enabled = false)).unsafeRunSync()
 
     assertEquals(fixture.states.deleted, List(OrganizationId -> RuleId))
     assertEquals(fixture.incidents.saved.map(incident => (incident.reason, incident.status)),
@@ -91,7 +91,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
       initialStates = List(state(MonitorRuleStatus.Pending, Some(Earlier)))
     )
 
-    fixture.update.execute(OrganizationId, RuleId, command(enabled = false)).unsafeRunSync()
+    fixture.update.execute(support.AuthorizationFixtures.actor(OrganizationId), RuleId, command(enabled = false)).unsafeRunSync()
 
     assertEquals(fixture.states.deleted, List(OrganizationId -> RuleId))
     assertEquals(fixture.incidents.saved, List.empty)
@@ -114,7 +114,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
         initialIncidents = List(openIncident())
       )
 
-      fixture.update.execute(OrganizationId, RuleId, value).unsafeRunSync()
+      fixture.update.execute(support.AuthorizationFixtures.actor(OrganizationId), RuleId, value).unsafeRunSync()
 
       assertEquals(fixture.states.deleted, List(OrganizationId -> RuleId), s"state kept for $value")
       assertEquals(fixture.incidents.saved.map(_.status), List(IncidentStatus.Resolved), s"incident kept for $value")
@@ -128,7 +128,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
       initialIncidents = List(openIncident())
     )
 
-    val updated = fixture.update.execute(OrganizationId, RuleId, command(threshold = BigDecimal("90.00")))
+    val updated = fixture.update.execute(support.AuthorizationFixtures.actor(OrganizationId), RuleId, command(threshold = BigDecimal("90.00")))
       .unsafeRunSync()
 
     assertEquals(updated.map(_.updatedAt), Some(Now))
@@ -143,7 +143,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
       initialStates = List(state(MonitorRuleStatus.Pending, Some(Earlier)))
     )
 
-    val updated = fixture.update.execute(OrganizationId, RuleId, command(enabled = true)).unsafeRunSync()
+    val updated = fixture.update.execute(support.AuthorizationFixtures.actor(OrganizationId), RuleId, command(enabled = true)).unsafeRunSync()
 
     assertEquals(updated.map(_.enabled), Some(true))
     assertEquals(fixture.states.deleted, List(OrganizationId -> RuleId))
@@ -152,7 +152,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
   test("an unknown rule is reported as not found without touching anything") {
     val fixture = new CommandFixture(initialRules = List(enabledRule))
 
-    assertEquals(fixture.update.execute(OrganizationId, UUID.randomUUID(), command()).unsafeRunSync(), None)
+    assertEquals(fixture.update.execute(support.AuthorizationFixtures.actor(OrganizationId), UUID.randomUUID(), command()).unsafeRunSync(), None)
     assertEquals(fixture.rules.saved, List.empty)
     assertEquals(fixture.states.deleted, List.empty)
   }
@@ -161,7 +161,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
     val fixture = new CommandFixture(initialRules = List(enabledRule))
 
     intercept[InvalidMonitorRule](
-      fixture.update.execute(OrganizationId, RuleId, command(noDataSeconds = -1)).unsafeRunSync()
+      fixture.update.execute(support.AuthorizationFixtures.actor(OrganizationId), RuleId, command(noDataSeconds = -1)).unsafeRunSync()
     )
 
     assertEquals(fixture.rules.saved, List.empty)
@@ -199,8 +199,11 @@ final class MonitorRuleCommandsSpec extends FunSuite {
     val states = new FakeMonitorRuleStateRepository(initialStates)
     val incidents = new FakeIncidentRepository(initialIncidents)
 
+    val (auditEvents, auditRecorder) = support.TestAuditRecorder.recording
+
     val create: CreateMonitorRule[IO] =
-      CreateMonitorRule[IO](resources, rules, new FixedIdGenerator, new FixedTimeProvider)
+      CreateMonitorRule[IO](resources, rules, new FixedIdGenerator, new FixedTimeProvider,
+        auditRecorder)
 
     val notificationDeliveries = new FakeNotificationDeliveryRepository
 
@@ -210,6 +213,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
       incidents,
       new RecordNotificationDeliveries[IO](notificationDeliveries, new FixedIdGenerator,
         new FixedTimeProvider, List(NotificationChannel.Webhook)),
+      auditRecorder,
       new FixedTimeProvider
     )
   }

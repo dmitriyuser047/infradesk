@@ -5,6 +5,7 @@ import application.monitor.{CreateMonitorRule, ListMonitorRules, MonitorRuleComm
 import application.port.TransactionRunner
 import cats.effect.IO
 import cats.syntax.all._
+import domain.auth.OrganizationPermission
 import domain.metric.MetricCode
 import domain.monitor.{InvalidMonitorRule, MonitorOperator}
 import infrastructure.http.dto.{
@@ -25,7 +26,8 @@ final class MonitorRuleRoutes[Tx[_]](
   listMonitorRules: ListMonitorRules[Tx],
   createMonitorRule: CreateMonitorRule[Tx],
   updateMonitorRule: UpdateMonitorRule[Tx],
-  transactionRunner: TransactionRunner[IO, Tx]
+  transactionRunner: TransactionRunner[IO, Tx],
+  authorization: OrganizationAuthorization
 ) {
   import CirceEntityDecoder._
   import CirceEntityEncoder._
@@ -38,7 +40,8 @@ final class MonitorRuleRoutes[Tx[_]](
   private val invalidRequest = ApiErrorResponse("INVALID_REQUEST", "Invalid request")
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
-    case GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "resources" / resourceIdValue / "monitor-rules" =>
+    case request @ GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "resources" / resourceIdValue / "monitor-rules" =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       (parseUuid(organizationIdValue, "organizationId"), parseUuid(resourceIdValue, "resourceId")) match {
         case (Right(organizationId), Right(resourceId)) =>
           transactionRunner.run(listMonitorRules.execute(organizationId, resourceId)).attempt.flatMap {
@@ -49,10 +52,12 @@ final class MonitorRuleRoutes[Tx[_]](
         case (Left(error), _) => BadRequest(error)
         case (_, Left(error)) => BadRequest(error)
       }
+      }
 
     case request @ POST -> Root / "api" / "v1" / "organizations" / organizationIdValue / "resources" / resourceIdValue / "monitor-rules" =>
+      authorization.require(request, OrganizationPermission.ManageMonitoring) { context =>
       (parseUuid(organizationIdValue, "organizationId"), parseUuid(resourceIdValue, "resourceId")) match {
-        case (Right(organizationId), Right(resourceId)) =>
+        case (Right(_), Right(resourceId)) =>
           request.as[CreateMonitorRuleRequest].attempt.flatMap {
             case Left(_) => BadRequest(invalidRequest)
             case Right(body) =>
@@ -60,7 +65,7 @@ final class MonitorRuleRoutes[Tx[_]](
                 body.noDataSeconds, body.enabled).fold(
                 _ => BadRequest(invalidMonitorRule),
                 value => respond(
-                  transactionRunner.run(createMonitorRule.execute(organizationId, resourceId, value)),
+                  transactionRunner.run(createMonitorRule.execute(context.actor, resourceId, value)),
                   rule => Created(MonitorRuleHttpMapper.toResponse(rule)),
                   resourceNotFound
                 )
@@ -69,10 +74,12 @@ final class MonitorRuleRoutes[Tx[_]](
         case (Left(error), _) => BadRequest(error)
         case (_, Left(error)) => BadRequest(error)
       }
+      }
 
     case request @ PUT -> Root / "api" / "v1" / "organizations" / organizationIdValue / "monitor-rules" / monitorRuleIdValue =>
+      authorization.require(request, OrganizationPermission.ManageMonitoring) { context =>
       (parseUuid(organizationIdValue, "organizationId"), parseUuid(monitorRuleIdValue, "monitorRuleId")) match {
-        case (Right(organizationId), Right(monitorRuleId)) =>
+        case (Right(_), Right(monitorRuleId)) =>
           request.as[UpdateMonitorRuleRequest].attempt.flatMap {
             case Left(_) => BadRequest(invalidRequest)
             case Right(body) =>
@@ -80,7 +87,7 @@ final class MonitorRuleRoutes[Tx[_]](
                 body.noDataSeconds, body.enabled).fold(
                 _ => BadRequest(invalidMonitorRule),
                 value => respond(
-                  transactionRunner.run(updateMonitorRule.execute(organizationId, monitorRuleId, value)),
+                  transactionRunner.run(updateMonitorRule.execute(context.actor, monitorRuleId, value)),
                   rule => Ok(MonitorRuleHttpMapper.toResponse(rule)),
                   monitorRuleNotFound
                 )
@@ -88,6 +95,7 @@ final class MonitorRuleRoutes[Tx[_]](
           }
         case (Left(error), _) => BadRequest(error)
         case (_, Left(error)) => BadRequest(error)
+      }
       }
   }
 

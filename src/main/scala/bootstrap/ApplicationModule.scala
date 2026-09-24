@@ -1,6 +1,7 @@
 package ru.bitec.app.ops
 package bootstrap
 
+import application.audit.{AuditRecorder, ListAuditEvents}
 import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, Login, SessionTokens}
 import application.connection.{
   GetConnection,
@@ -68,6 +69,7 @@ final case class ApplicationComponents(
   login: Login[ConnectionIO],
   authentication: Authentication[ConnectionIO],
   bootstrapAdmin: BootstrapAdmin[ConnectionIO],
+  listAuditEvents: ListAuditEvents[ConnectionIO],
   scheduler: SyncScheduler[IO, ConnectionIO],
   /** Absent when no notification channel is configured, so no worker is started for it. */
   notificationDispatcher: Option[NotificationDispatcher[IO, ConnectionIO]]
@@ -92,6 +94,15 @@ object ApplicationModule {
     val timeProvider = new SystemTimeProvider
     val transactionIdGenerator = new ConnectionIOIdGenerator
     val transactionTimeProvider = new ConnectionIOTimeProvider
+
+    // Every mutation use case writes its journal entry through this recorder, inside its own
+    // business transaction.
+    val auditRecorder =
+      new AuditRecorder[ConnectionIO](
+        auditEventRepository,
+        transactionIdGenerator,
+        transactionTimeProvider
+      )
 
     val persistExternalResource =
       new PersistExternalResource[ConnectionIO](resourceRepository, externalRefRepository)
@@ -188,13 +199,15 @@ object ApplicationModule {
         resourceRepository,
         monitorRuleRepository,
         transactionIdGenerator,
-        transactionTimeProvider
+        transactionTimeProvider,
+        auditRecorder
       ),
       updateMonitorRule = UpdateMonitorRule[ConnectionIO](
         monitorRuleRepository,
         monitorRuleStateRepository,
         incidentRepository,
         recordNotificationDeliveries,
+        auditRecorder,
         transactionTimeProvider
       ),
       getConnection = GetConnection[ConnectionIO](
@@ -216,13 +229,19 @@ object ApplicationModule {
         transactionRunner,
         integrations.sshConnectionProbe,
         integrations.sshPasswordResolver,
-        integrations.secretCipher
+        integrations.secretCipher,
+        auditRecorder
       ),
       listConnectionSyncSessions =
         new ListConnectionSyncSessions[ConnectionIO](connectionRepository, syncSessionRepository),
       getConnectionSyncSession = new GetConnectionSyncSession[ConnectionIO](syncSessionRepository),
-      runManualConnectionSync =
-        new RunManualConnectionSync[ConnectionIO](runConnectionSync, syncSessionRepository, transactionRunner),
+      runManualConnectionSync = new RunManualConnectionSync[ConnectionIO](
+        runConnectionSync,
+        syncSessionRepository,
+        connectionRepository,
+        auditRecorder,
+        transactionRunner
+      ),
       getOrganization = GetOrganization[ConnectionIO](organizationRepository),
       listProjects = ListProjects[ConnectionIO](organizationRepository, projectRepository),
       listEnvironments =
@@ -232,13 +251,15 @@ object ApplicationModule {
         organizationRepository,
         projectRepository,
         transactionIdGenerator,
-        transactionTimeProvider
+        transactionTimeProvider,
+        auditRecorder
       ),
       createEnvironment = new CreateEnvironment[ConnectionIO](
         projectRepository,
         environmentRepository,
         transactionIdGenerator,
-        transactionTimeProvider
+        transactionTimeProvider,
+        auditRecorder
       ),
       login = new Login[ConnectionIO](
         userAccountRepository,
@@ -261,6 +282,7 @@ object ApplicationModule {
         transactionRunner,
         passwordHasher
       ),
+      listAuditEvents = new ListAuditEvents[ConnectionIO](auditEventRepository),
       scheduler = new SyncScheduler[IO, ConnectionIO](
         connectionScheduleRepository,
         runConnectionSync,

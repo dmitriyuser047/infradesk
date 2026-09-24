@@ -61,6 +61,10 @@ object HttpJsonCodecs {
     Encoder.forProduct3("metricCode", "value", "observedAt")(value => (value.metricCode, value.value, value.observedAt))
   implicit val incidentResponseEncoder: Encoder[IncidentResponse] = Encoder.forProduct10("id","monitorRuleId","resourceId","status","reason","startedAt","openedAt","resolvedAt","createdAt","updatedAt")(v => (v.id,v.monitorRuleId,v.resourceId,v.status,v.reason,v.startedAt,v.openedAt,v.resolvedAt,v.createdAt,v.updatedAt))
   implicit val monitorRuleResponseEncoder: Encoder[MonitorRuleResponse] = Encoder.forProduct11("id","resourceId","metricCode","operator","threshold","forSeconds","noDataSeconds","enabled","status","createdAt","updatedAt")(v=>(v.id,v.resourceId,v.metricCode,v.operator,v.threshold,v.forSeconds,v.noDataSeconds,v.enabled,v.status,v.createdAt,v.updatedAt))
+  implicit val auditEventResponseEncoder: Encoder[AuditEventResponse] =
+    Encoder.forProduct6("id", "actorUserId", "action", "targetType", "targetId", "occurredAt") { value =>
+      (value.id, value.actorUserId, value.action, value.targetType, value.targetId, value.occurredAt)
+    }
   implicit val createMonitorRuleDecoder: Decoder[CreateMonitorRuleRequest] = Decoder.forProduct6("metricCode","operator","threshold","forSeconds","noDataSeconds","enabled")(CreateMonitorRuleRequest.apply)
   implicit val updateMonitorRuleDecoder: Decoder[UpdateMonitorRuleRequest] = Decoder.forProduct6("metricCode","operator","threshold","forSeconds","noDataSeconds","enabled")(UpdateMonitorRuleRequest.apply)
 

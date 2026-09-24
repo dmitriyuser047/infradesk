@@ -9,9 +9,12 @@ import application.port.{
   ResourceRepository,
   TimeProvider
 }
+import application.audit.AuditRecorder
+import application.auth.ActorContext
 import application.notification.RecordNotificationDeliveries
 import cats.MonadThrow
 import cats.syntax.all._
+import domain.audit.{AuditAction, AuditTargetType}
 import domain.incident.IncidentStatus
 import domain.metric.MetricCode
 import domain.monitor.{InvalidMonitorRule, MonitorOperator, MonitorRule, MonitorRuleStatus, MonitorRuleValidation}
@@ -63,13 +66,15 @@ final case class CreateMonitorRule[Tx[_]: MonadThrow](
   resourceRepository: ResourceRepository[Tx],
   monitorRuleRepository: MonitorRuleRepository[Tx],
   idGenerator: IdGenerator[Tx],
-  timeProvider: TimeProvider[Tx]
+  timeProvider: TimeProvider[Tx],
+  auditRecorder: AuditRecorder[Tx]
 ) {
   def execute(
-    organizationId: UUID,
+    actor: ActorContext,
     resourceId: UUID,
     command: MonitorRuleCommand
-  ): Tx[Option[MonitorRule]] =
+  ): Tx[Option[MonitorRule]] = {
+    val organizationId = actor.organizationId
     command.validated[Tx].flatMap { valid =>
       resourceRepository.findById(organizationId, resourceId).flatMap {
         case None =>
@@ -98,9 +103,12 @@ final case class CreateMonitorRule[Tx[_]: MonadThrow](
               now
             )
             _ <- monitorRuleRepository.save(rule)
+            _ <- auditRecorder.record(actor, AuditAction.MonitorRuleCreated,
+              AuditTargetType.MonitorRule, Some(rule.id))
           } yield Some(rule)
       }
     }
+  }
 }
 
 /** Updates a rule and, in the same transaction, drops the evaluation state the change
@@ -112,13 +120,15 @@ final case class UpdateMonitorRule[Tx[_]: MonadThrow](
   monitorRuleStateRepository: MonitorRuleStateRepository[Tx],
   incidentRepository: IncidentRepository[Tx],
   notificationRecorder: RecordNotificationDeliveries[Tx],
+  auditRecorder: AuditRecorder[Tx],
   timeProvider: TimeProvider[Tx]
 ) {
   def execute(
-    organizationId: UUID,
+    actor: ActorContext,
     monitorRuleId: UUID,
     command: MonitorRuleCommand
-  ): Tx[Option[MonitorRule]] =
+  ): Tx[Option[MonitorRule]] = {
+    val organizationId = actor.organizationId
     command.validated[Tx].flatMap { valid =>
       monitorRuleRepository.findById(organizationId, monitorRuleId).flatMap {
         case None =>
@@ -136,10 +146,15 @@ final case class UpdateMonitorRule[Tx[_]: MonadThrow](
             )
 
             monitorRuleRepository.save(updated) *>
-              resetEvaluationIfInvalidated(existing, updated, now).as(Some(updated))
+              resetEvaluationIfInvalidated(existing, updated, now) *>
+              // Rule change, incident lifecycle, notification outbox and journal entry all
+              // belong to the one transaction this use case runs in.
+              auditRecorder.record(actor, AuditAction.MonitorRuleUpdated,
+                AuditTargetType.MonitorRule, Some(updated.id)).as(Some(updated))
           }
       }
     }
+  }
 
   private def resetEvaluationIfInvalidated(
     existing: MonitorRule,

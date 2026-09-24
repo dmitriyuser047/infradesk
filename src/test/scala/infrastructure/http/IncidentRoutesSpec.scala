@@ -36,8 +36,8 @@ final class IncidentRoutesSpec extends FunSuite {
     val badOrg=run(fixture(List.empty),s"/api/v1/organizations/bad/incidents"); val badId=run(fixture(List.empty),s"/api/v1/organizations/$Org/incidents/bad"); val failed=run(fixture(List.empty,Some(new IllegalStateException("sql secret"))),s"/api/v1/organizations/$Org/incidents")
     assertEquals(badOrg._1.status,Status.BadRequest);assertEquals(badId._1.status,Status.BadRequest);assertEquals(failed._1.status,Status.InternalServerError);assert(!failed._2.noSpaces.contains("sql secret"))
   }
-  private def fixture(values:List[Incident], failure:Option[Throwable]=None)={val r=new Repo(values,failure);val t=new Runner; (new IncidentRoutes[IO](GetIncident(r),ListIncidents(r),t),r,t)}
-  private def run(f:(IncidentRoutes[IO],Repo,Runner), path:String)={val r=f._1.routes.orNotFound.run(Request[IO](Method.GET,Uri.unsafeFromString(path))).unsafeRunSync();(r,r.as[Json].unsafeRunSync())}
+  private def fixture(values:List[Incident], failure:Option[Throwable]=None)={val r=new Repo(values,failure);val t=new Runner; (new IncidentRoutes[IO](GetIncident(r),ListIncidents(r),t,support.AuthorizationFixtures.authorization),r,t)}
+  private def run(f:(IncidentRoutes[IO],Repo,Runner), path:String)={val r=support.AuthorizationFixtures.authorized(f._1.routes.orNotFound).run(Request[IO](Method.GET,Uri.unsafeFromString(path))).unsafeRunSync();(r,r.as[Json].unsafeRunSync())}
   private final class Runner extends TransactionRunner[IO,IO]{var calls=0;def run[A](p:IO[A])=IO{calls+=1}*>p}
   private final class Repo(values:List[Incident], failure:Option[Throwable]) extends IncidentRepository[IO] {
     def findOpenByRule(o:UUID,r:UUID)=IO.pure(values.find(x=>x.organizationId==o&&x.monitorRuleId==r&&x.status==IncidentStatus.Open))

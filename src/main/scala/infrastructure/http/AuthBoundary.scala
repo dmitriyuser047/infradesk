@@ -11,14 +11,13 @@ import org.http4s.dsl.io._
 
 import java.util.UUID
 import scala.util.Try
-import domain.auth.OrganizationRole
 
-final case class OrganizationAccessContext(
-  user: domain.auth.AuthenticatedUser,
-  organizationId: UUID,
-  role: OrganizationRole
-)
-
+/** Authentication and organization access, and nothing else.
+  *
+  * The boundary answers "who is this and may they see this organization at all"; what each
+  * operation requires is stated by the route that implements it, through
+  * [[OrganizationAuthorization]]. There is no catalogue of privileged URLs here.
+  */
 final class AuthBoundary[Tx[_]](
   authRoutes: AuthRoutes[Tx],
   authentication: Authentication[Tx],
@@ -28,8 +27,8 @@ final class AuthBoundary[Tx[_]](
 
   private val unauthenticated = ApiErrorResponse("UNAUTHENTICATED", "Authentication required")
   private val organizationNotFound = ApiErrorResponse("ORGANIZATION_NOT_FOUND", "Organization was not found")
-  private val forbidden = ApiErrorResponse("FORBIDDEN", "Owner role required")
   private val internalError = ApiErrorResponse("INTERNAL_ERROR", "Internal server error")
+  private val invalidOrganizationId = ApiErrorResponse("INVALID_REQUEST", "Invalid organizationId")
   private val publicApp = authRoutes.public.orNotFound
 
   val app: HttpApp[IO] = Kleisli { request: Request[IO] =>
@@ -43,10 +42,15 @@ final class AuthBoundary[Tx[_]](
       case "api" :: "v1" :: "organizations" :: organizationIdValue :: _ =>
         authenticated(request) { user =>
           Try(UUID.fromString(organizationIdValue)).toOption match {
-            case None => organizationRoutes.run(request)
+            // Every organization route runs with an access context, so a path that cannot carry
+            // one is rejected here instead of reaching a handler without it.
+            case None => BadRequest(invalidOrganizationId)
             case Some(organizationId) =>
               authentication.organizationRole(user.id, organizationId).attempt.flatMap {
-                case Right(Some(role)) => runForOrganization(OrganizationAccessContext(user, organizationId, role), request)
+                case Right(Some(role)) =>
+                  val context = OrganizationAccessContext(user, organizationId, role)
+                  organizationRoutes.run(OrganizationAuthorization.withContext(request, context))
+                // A user who is not an active member learns nothing about the organization.
                 case Right(None) => NotFound(organizationNotFound)
                 case Left(_) => InternalServerError(internalError)
               }
@@ -55,24 +59,6 @@ final class AuthBoundary[Tx[_]](
       case "api" :: "v1" :: _ =>
         authenticated(request)(_ => organizationRoutes.run(request))
       case _ => organizationRoutes.run(request)
-    }
-  }
-
-  private def runForOrganization(context: OrganizationAccessContext, request: Request[IO]): IO[Response[IO]] =
-    if (isOwnerMutation(request) && context.role != OrganizationRole.Owner) Forbidden(forbidden)
-    else organizationRoutes.run(request)
-
-  private def isOwnerMutation(request: Request[IO]): Boolean = {
-    val segments = request.uri.path.renderString.split('/').filter(_.nonEmpty).toList
-    segments match {
-      case List("api", "v1", "organizations", _, "connections") => request.method == POST
-      case List("api", "v1", "organizations", _, "connections", "ssh", "test") => request.method == POST
-      case List("api", "v1", "organizations", _, "connections", _, "sync") => request.method == POST
-      case List("api", "v1", "organizations", _, "connections", _) =>
-        request.method == PUT || request.method == DELETE
-      case List("api", "v1", "organizations", _, "projects") => request.method == POST
-      case List("api", "v1", "organizations", _, "projects", _, "environments") => request.method == POST
-      case _ => false
     }
   }
 

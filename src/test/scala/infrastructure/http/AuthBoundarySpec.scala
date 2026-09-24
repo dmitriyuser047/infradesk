@@ -5,7 +5,14 @@ import application.auth.{Authentication, BCryptPasswordHasher, Login, SessionTok
 import application.port.{AuthSessionRepository, MyOrganization, OrganizationMembershipRepository, TransactionRunner, UserAccountRepository}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import domain.auth.{AuthSession, AuthenticatedUser, OrganizationMembership, OrganizationRole, UserAccount}
+import domain.auth.{
+  AuthSession,
+  AuthenticatedUser,
+  OrganizationMembership,
+  OrganizationPermission,
+  OrganizationRole,
+  UserAccount
+}
 import io.circe.Json
 import munit.FunSuite
 import org.http4s.{Method, Request, Status, Uri}
@@ -175,6 +182,70 @@ final class AuthBoundarySpec extends FunSuite {
     assertEquals(fixture.app.run(cookieRequest(Method.POST, environmentsPath, raw)).unsafeRunSync().status, Status.Ok)
   }
 
+  test("monitoring mutations require OWNER while MEMBER keeps reading rules") {
+    val fixture = new AuthFixture(secure = false)
+    val raw = tokens.generate()
+    fixture.sessions.values = List(AuthSession(UUID.randomUUID(), userId, tokens.hash(raw), now, now.plusSeconds(3600), None))
+    fixture.memberships.values = List(OrganizationMembership(userId, orgA, OrganizationRole.Member, true, now, now))
+    val resourceId = UUID.randomUUID()
+    val rulesPath = s"/api/v1/organizations/$orgA/resources/$resourceId/monitor-rules"
+    val rulePath = s"/api/v1/organizations/$orgA/monitor-rules/${UUID.randomUUID()}"
+
+    // The gap this stage closes: these routes were never listed as owner-only.
+    val deniedCreate = fixture.app.run(cookieRequest(Method.POST, rulesPath, raw)).unsafeRunSync()
+    val deniedUpdate = fixture.app.run(cookieRequest(Method.PUT, rulePath, raw)).unsafeRunSync()
+    assertEquals(deniedCreate.status, Status.Forbidden)
+    assertEquals(deniedUpdate.status, Status.Forbidden)
+    assertEquals(deniedCreate.as[Json].unsafeRunSync().hcursor.get[String]("code"), Right("FORBIDDEN"))
+    // The message stays a capability statement; it does not name the role that would be needed.
+    assertEquals(deniedCreate.as[Json].unsafeRunSync().hcursor.get[String]("message"),
+      Right("Operation is not allowed"))
+    assertEquals(fixture.app.run(cookieRequest(Method.GET, rulesPath, raw)).unsafeRunSync().status, Status.Ok)
+
+    fixture.memberships.values = fixture.memberships.values.map(_.copy(role = OrganizationRole.Owner))
+    assertEquals(fixture.app.run(cookieRequest(Method.POST, rulesPath, raw)).unsafeRunSync().status, Status.Ok)
+    assertEquals(fixture.app.run(cookieRequest(Method.PUT, rulePath, raw)).unsafeRunSync().status, Status.Ok)
+  }
+
+  test("the audit journal and connection removal are owner-only") {
+    val fixture = new AuthFixture(secure = false)
+    val raw = tokens.generate()
+    fixture.sessions.values = List(AuthSession(UUID.randomUUID(), userId, tokens.hash(raw), now, now.plusSeconds(3600), None))
+    fixture.memberships.values = List(OrganizationMembership(userId, orgA, OrganizationRole.Member, true, now, now))
+    val auditPath = s"/api/v1/organizations/$orgA/audit-events"
+    val connectionPath = s"/api/v1/organizations/$orgA/connections/${UUID.randomUUID()}"
+
+    assertEquals(fixture.app.run(cookieRequest(Method.GET, auditPath, raw)).unsafeRunSync().status, Status.Forbidden)
+    assertEquals(fixture.app.run(cookieRequest(Method.DELETE, connectionPath, raw)).unsafeRunSync().status, Status.Forbidden)
+
+    fixture.memberships.values = fixture.memberships.values.map(_.copy(role = OrganizationRole.Owner))
+    assertEquals(fixture.app.run(cookieRequest(Method.GET, auditPath, raw)).unsafeRunSync().status, Status.Ok)
+    assertEquals(fixture.app.run(cookieRequest(Method.DELETE, connectionPath, raw)).unsafeRunSync().status, Status.Ok)
+  }
+
+  test("an organization the user does not belong to is not found, whatever the operation") {
+    val fixture = new AuthFixture(secure = false)
+    val raw = tokens.generate()
+    fixture.sessions.values = List(AuthSession(UUID.randomUUID(), userId, tokens.hash(raw), now, now.plusSeconds(3600), None))
+    fixture.memberships.values = List(OrganizationMembership(userId, orgA, OrganizationRole.Owner, true, now, now))
+    val foreignRead = s"/api/v1/organizations/$orgB/projects"
+    val foreignWrite = s"/api/v1/organizations/$orgB/resources/${UUID.randomUUID()}/monitor-rules"
+
+    val read = fixture.app.run(cookieRequest(Method.GET, foreignRead, raw)).unsafeRunSync()
+    val write = fixture.app.run(cookieRequest(Method.POST, foreignWrite, raw)).unsafeRunSync()
+
+    // Existence is never disclosed through a 403 on a foreign organization.
+    assertEquals(read.status, Status.NotFound)
+    assertEquals(write.status, Status.NotFound)
+    assertEquals(write.as[Json].unsafeRunSync().hcursor.get[String]("code"), Right("ORGANIZATION_NOT_FOUND"))
+    // A malformed organization id is a bad request, not a context-less route call.
+    assertEquals(
+      fixture.app.run(cookieRequest(Method.GET, "/api/v1/organizations/not-a-uuid/projects", raw))
+        .unsafeRunSync().status,
+      Status.BadRequest
+    )
+  }
+
   private def cookieRequest(method: Method, path: String, token: String): Request[IO] =
     Request[IO](method, Uri.unsafeFromString(path))
       .putHeaders(org.http4s.Header.Raw(CIString("Cookie"), s"infradesk_session=$token"))
@@ -190,15 +261,40 @@ final class AuthBoundarySpec extends FunSuite {
     val authentication = new Authentication[IO](sessions, memberships, runner, tokens)
     val loginService = new Login[IO](users, sessions, runner, passwordHasher, tokens, 3600)
     val authRoutes = new AuthRoutes(loginService, authentication, AuthSettings(3600, secure))
+    // The routes declare what they need, exactly as the real ones do; the boundary only supplies
+    // the access context.
+    val authorization = new OrganizationAuthorization(
+      org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.authorization"))
+    private def reached(request: Request[IO], permission: OrganizationPermission) =
+      authorization.require(request, permission)(_ => Ok("reached"))
+
     val business = HttpRoutes.of[IO] {
-      case GET -> Root / "api" / "v1" / "organizations" / _ / "projects" => Ok("reached")
-      case POST -> Root / "api" / "v1" / "organizations" / _ / "projects" => Ok("reached")
-      case GET -> Root / "api" / "v1" / "organizations" / _ / "projects" / _ / "environments" => Ok("reached")
-      case POST -> Root / "api" / "v1" / "organizations" / _ / "projects" / _ / "environments" => Ok("reached")
-      case GET -> Root / "api" / "v1" / "organizations" / _ / "connections" => Ok("reached")
-      case POST -> Root / "api" / "v1" / "organizations" / _ / "connections" => Ok("reached")
-      case POST -> Root / "api" / "v1" / "organizations" / _ / "connections" / _ / "sync" => Ok("reached")
-      case GET -> Root / "api" / "v1" / "organizations" / _ / "connections" / _ / "sync-sessions" => Ok("reached")
+      case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "projects" =>
+        reached(request, OrganizationPermission.ReadOrganization)
+      case request @ POST -> Root / "api" / "v1" / "organizations" / _ / "projects" =>
+        reached(request, OrganizationPermission.ManageWorkspace)
+      case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "projects" / _ / "environments" =>
+        reached(request, OrganizationPermission.ReadOrganization)
+      case request @ POST -> Root / "api" / "v1" / "organizations" / _ / "projects" / _ / "environments" =>
+        reached(request, OrganizationPermission.ManageWorkspace)
+      case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "connections" =>
+        reached(request, OrganizationPermission.ReadOrganization)
+      case request @ POST -> Root / "api" / "v1" / "organizations" / _ / "connections" =>
+        reached(request, OrganizationPermission.ManageConnections)
+      case request @ DELETE -> Root / "api" / "v1" / "organizations" / _ / "connections" / _ =>
+        reached(request, OrganizationPermission.ManageConnections)
+      case request @ POST -> Root / "api" / "v1" / "organizations" / _ / "connections" / _ / "sync" =>
+        reached(request, OrganizationPermission.RunConnectionSync)
+      case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "connections" / _ / "sync-sessions" =>
+        reached(request, OrganizationPermission.ReadOrganization)
+      case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "resources" / _ / "monitor-rules" =>
+        reached(request, OrganizationPermission.ReadOrganization)
+      case request @ POST -> Root / "api" / "v1" / "organizations" / _ / "resources" / _ / "monitor-rules" =>
+        reached(request, OrganizationPermission.ManageMonitoring)
+      case request @ PUT -> Root / "api" / "v1" / "organizations" / _ / "monitor-rules" / _ =>
+        reached(request, OrganizationPermission.ManageMonitoring)
+      case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "audit-events" =>
+        reached(request, OrganizationPermission.ViewAudit)
     }.orNotFound
     val app = new AuthBoundary(authRoutes, authentication, business).app
 

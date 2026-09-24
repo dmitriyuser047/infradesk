@@ -5,6 +5,7 @@ import application.navigation.{GetEnvironmentContext, GetOrganization, ListEnvir
 import application.port.TransactionRunner
 import cats.effect.IO
 import cats.syntax.all._
+import domain.auth.OrganizationPermission
 import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs}
 import infrastructure.http.mapper.NavigationHttpMapper
 import org.http4s.HttpRoutes
@@ -19,7 +20,8 @@ final class NavigationRoutes[Tx[_]](
   listProjects: ListProjects[Tx],
   listEnvironments: ListEnvironments[Tx],
   getEnvironmentContext: GetEnvironmentContext[Tx],
-  transactionRunner: TransactionRunner[IO, Tx]
+  transactionRunner: TransactionRunner[IO, Tx],
+  authorization: OrganizationAuthorization
 ) {
   import HttpJsonCodecs._
 
@@ -41,7 +43,8 @@ final class NavigationRoutes[Tx[_]](
   )
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
-    case GET -> Root / "api" / "v1" / "organizations" / organizationIdValue =>
+    case request @ GET -> Root / "api" / "v1" / "organizations" / organizationIdValue =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       parseUuid(organizationIdValue, "organizationId") match {
         case Left(error) => BadRequest(error)
         case Right(organizationId) =>
@@ -51,8 +54,10 @@ final class NavigationRoutes[Tx[_]](
             case Left(_) => InternalServerError(internalError)
           }
       }
+      }
 
-    case GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "projects" =>
+    case request @ GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "projects" =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       parseUuid(organizationIdValue, "organizationId") match {
         case Left(error) => BadRequest(error)
         case Right(organizationId) =>
@@ -62,8 +67,10 @@ final class NavigationRoutes[Tx[_]](
             case Left(_) => InternalServerError(internalError)
           }
       }
+      }
 
-    case GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "projects" / projectIdValue / "environments" =>
+    case request @ GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "projects" / projectIdValue / "environments" =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       (parseUuid(organizationIdValue, "organizationId"), parseUuid(projectIdValue, "projectId")) match {
         case (Left(error), _) => BadRequest(error)
         case (_, Left(error)) => BadRequest(error)
@@ -74,8 +81,10 @@ final class NavigationRoutes[Tx[_]](
             case Left(_) => InternalServerError(internalError)
           }
       }
+      }
 
-    case GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "environments" / environmentIdValue / "context" =>
+    case request @ GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "environments" / environmentIdValue / "context" =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       (parseUuid(organizationIdValue, "organizationId"), parseUuid(environmentIdValue, "environmentId")) match {
         case (Left(error), _) => BadRequest(error)
         case (_, Left(error)) => BadRequest(error)
@@ -85,6 +94,7 @@ final class NavigationRoutes[Tx[_]](
             case Right(None) => NotFound(environmentNotFound)
             case Left(_) => InternalServerError(internalError)
           }
+      }
       }
   }
 

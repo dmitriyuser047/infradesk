@@ -7,6 +7,7 @@ import {
   useUpdateMonitorRule,
 } from '../../api/monitorRules'
 import type { MonitorRuleRequest, MonitorRuleResponse } from '../../types/monitorRule'
+import { useOrganizationPermissions } from '../auth/authorization'
 import { MonitorRuleDialog } from './MonitorRuleDialog'
 import { MonitorRuleRow } from './MonitorRuleRow'
 import { EmptyWorkspaceState, WorkspaceSection } from '../layout/WorkspacePrimitives'
@@ -17,6 +18,8 @@ interface MonitorRulesSectionProps {
 }
 
 export function MonitorRulesSection({ organizationId, resourceId }: MonitorRulesSectionProps) {
+  const permissions = useOrganizationPermissions(organizationId)
+  const canManage = permissions.can('manageMonitoring')
   const rulesQuery = useMonitorRules(organizationId, resourceId)
   const createMutation = useCreateMonitorRule(organizationId, resourceId)
   const updateMutation = useUpdateMonitorRule(organizationId, resourceId)
@@ -59,7 +62,8 @@ export function MonitorRulesSection({ organizationId, resourceId }: MonitorRules
   const mutationError = createMutation.error ?? updateMutation.error
 
   return (
-    <WorkspaceSection title="Monitor rules" actions={<button className="primary-button" type="button" onClick={openCreate}>+ Add rule</button>}>
+    <WorkspaceSection title="Monitor rules" actions={canManage ?
+      <button className="primary-button" type="button" onClick={openCreate}>+ Add rule</button> : undefined}>
       {rulesQuery.isPending ? <RulesSkeleton /> : null}
       {rulesQuery.isError ? (
         <div className="monitor-rules-error" role="alert">
@@ -73,11 +77,13 @@ export function MonitorRulesSection({ organizationId, resourceId }: MonitorRules
       ) : null}
       {!rulesQuery.isPending && !rulesQuery.isError && rulesQuery.data !== undefined && rulesQuery.data.length > 0 ? (
         <div className="table-scroll"><table className="data-grid">
-          <thead><tr><th>Metric</th><th>Condition</th><th>Threshold</th><th>Duration</th><th>State</th><th>Action</th></tr></thead>
-          <tbody>{rulesQuery.data.map(rule => <MonitorRuleRow key={rule.id} rule={rule} onEdit={openEdit} />)}</tbody>
+          <thead><tr><th>Metric</th><th>Condition</th><th>Threshold</th><th>Duration</th><th>State</th>
+            {canManage ? <th>Action</th> : null}</tr></thead>
+          <tbody>{rulesQuery.data.map(rule => <MonitorRuleRow key={rule.id} rule={rule}
+            onEdit={canManage ? openEdit : undefined} />)}</tbody>
         </table></div>
       ) : null}
-      {dialogOpen ? (
+      {canManage && dialogOpen ? (
         <MonitorRuleDialog
           rule={dialogRule}
           pending={createMutation.isPending || updateMutation.isPending}

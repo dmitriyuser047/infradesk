@@ -93,6 +93,13 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     assertEquals(saved.head.updatedAt, Now)
     assertEquals(fixture.idGenerator.calls, 1)
     assertEquals(fixture.transactionRunner.calls, 1)
+    // The creation is journalled in the same transaction, against the authenticated actor.
+    assertEquals(
+      fixture.auditEvents.recorded.map(event =>
+        (event.action.code, event.targetType.code, event.targetId, event.actorUserId)),
+      List(("MONITOR_RULE_CREATED", "MONITOR_RULE", Some(GeneratedRuleId),
+        support.AuthorizationFixtures.ActorUserId))
+    )
   }
 
   test("rejects unknown metric, unknown operator, negative duration, and malformed JSON") {
@@ -144,6 +151,8 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     assertEquals(response._1.status, Status.NotFound)
     assertEquals(response._2.hcursor.get[String]("code"), Right("RESOURCE_NOT_FOUND"))
     assertEquals(fixture.transactionRunner.calls, 1)
+    // Nothing happened, so nothing is journalled.
+    assertEquals(fixture.auditEvents.recorded, List.empty)
   }
 
   test("updates mutable fields while preserving resource id and createdAt") {
@@ -173,6 +182,8 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     assertEquals(saved.enabled, false)
     assertEquals(saved.updatedAt, Now)
     assertEquals(fixture.transactionRunner.calls, 1)
+    assertEquals(fixture.auditEvents.recorded.map(event => (event.action.code, event.targetId)),
+      List(("MONITOR_RULE_UPDATED", Some(enabledRule.id))))
   }
 
   test("returns not found for unknown or foreign monitor rule updates") {
@@ -216,17 +227,22 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     val idGenerator = new FixedIdGenerator(GeneratedRuleId)
     val timeProvider = new FixedTimeProvider(Now)
     val transactionRunner = new RecordingTransactionRunner
+    val (auditEvents, auditRecorder) = support.TestAuditRecorder.recording
     val routes = new MonitorRuleRoutes[IO](
       ListMonitorRules(resourceRepository, monitorRuleRepository, monitorRuleStateRepository),
-      CreateMonitorRule(resourceRepository, monitorRuleRepository, idGenerator, timeProvider),
+      CreateMonitorRule(resourceRepository, monitorRuleRepository, idGenerator, timeProvider,
+        auditRecorder),
       UpdateMonitorRule(monitorRuleRepository, monitorRuleStateRepository, incidentRepository,
         new application.notification.RecordNotificationDeliveries[IO](
           new NoNotificationDeliveryRepository, idGenerator, timeProvider, List.empty),
+        auditRecorder,
         timeProvider),
-      transactionRunner
+      transactionRunner,
+      support.AuthorizationFixtures.authorization
     )
 
-    RouteFixture(routes.routes.orNotFound, resourceRepository, monitorRuleRepository, idGenerator, transactionRunner)
+    RouteFixture(support.AuthorizationFixtures.authorized(routes.routes.orNotFound),
+      resourceRepository, monitorRuleRepository, idGenerator, transactionRunner, auditEvents)
   }
 
   private def run(fixture: RouteFixture, request: Request[IO]): (org.http4s.Response[IO], Json) = {
@@ -252,7 +268,8 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     resourceRepository: InMemoryResourceRepository,
     monitorRuleRepository: InMemoryMonitorRuleRepository,
     idGenerator: FixedIdGenerator,
-    transactionRunner: RecordingTransactionRunner
+    transactionRunner: RecordingTransactionRunner,
+    auditEvents: support.RecordingAuditEventRepository
   )
 
   private final class RecordingTransactionRunner extends TransactionRunner[IO, IO] {

@@ -26,11 +26,24 @@ private[postgres] object PostgresTestDatabase {
     val project = UUID.fromString("30000000-0000-0000-0000-000000000001")
     val environment = UUID.fromString("40000000-0000-0000-0000-000000000001")
     val connection = UUID.fromString("60000000-0000-0000-0000-000000000003")
+    // Audit rows point at a real actor, so the fixture owns one user and its membership.
+    val actor = UUID.fromString("10000000-0000-0000-0000-0000000000aa")
     val program: ConnectionIO[Unit] = for {
       _ <- sql"insert into organization (id, code, name) values ($org, 'integration-fixture', 'Integration fixture') on conflict do nothing".update.run
       _ <- sql"insert into project (id, organization_id, code, name) values ($project, $org, 'integration-fixture', 'Integration fixture') on conflict do nothing".update.run
       _ <- sql"insert into environment (id, organization_id, project_id, code, name, kind) values ($environment, $org, $project, 'integration-fixture', 'Integration fixture', 'TEST') on conflict do nothing".update.run
       _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($connection, $org, 'ORGANIZATION', 'SSH', 'integration-fixture', 'Integration fixture') on conflict do nothing".update.run
+      _ <- sql"""
+        insert into user_account (id, email, password_hash, display_name, created_at, updated_at)
+        values ($actor, 'integration-fixture@example.test', 'x', 'Integration fixture',
+          current_timestamp, current_timestamp)
+        on conflict do nothing
+      """.update.run
+      _ <- sql"""
+        insert into organization_membership (user_id, organization_id, role, created_at, updated_at)
+        values ($actor, $org, 'OWNER', current_timestamp, current_timestamp)
+        on conflict do nothing
+      """.update.run
     } yield ()
     new DoobieTransactionRunner(xa).run(program)
   }

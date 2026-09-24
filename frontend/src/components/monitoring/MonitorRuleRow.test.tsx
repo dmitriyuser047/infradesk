@@ -38,4 +38,13 @@ describe('monitor rule row', () => {
     expect(render(rule({ status: null }))).toContain('Enabled')
     expect(render(rule({ status: 'FIRING', enabled: false }))).toContain('Disabled')
   })
+
+  it('omits the edit action for a read-only member', () => {
+    const html = renderToStaticMarkup(<table><tbody>
+      <MonitorRuleRow rule={rule()} />
+    </tbody></table>)
+
+    expect(html).not.toContain('Edit rule')
+    expect(html).not.toContain('>Edit<')
+  })
 })

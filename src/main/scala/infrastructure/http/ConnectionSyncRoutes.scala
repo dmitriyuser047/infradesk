@@ -5,6 +5,7 @@ import application.connection.{GetConnectionSyncSession, ListConnectionSyncSessi
 import application.connector.{ConnectionSyncInactive, ConnectionSyncNotFound, SyncAlreadyRunning}
 import application.port.TransactionRunner
 import cats.effect.IO
+import domain.auth.OrganizationPermission
 import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs}
 import infrastructure.http.mapper.SyncSessionHttpMapper
 import org.http4s.{HttpRoutes, Response}
@@ -18,7 +19,8 @@ final class ConnectionSyncRoutes[Tx[_]](
   listSessions: ListConnectionSyncSessions[Tx],
   getSession: GetConnectionSyncSession[Tx],
   manualSync: RunManualConnectionSync[Tx],
-  runner: TransactionRunner[IO, Tx]
+  runner: TransactionRunner[IO, Tx],
+  authorization: OrganizationAuthorization
 ) {
   import HttpJsonCodecs._
 
@@ -27,9 +29,11 @@ final class ConnectionSyncRoutes[Tx[_]](
   private val internalError = ApiErrorResponse("INTERNAL_ERROR", "Internal server error")
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
-    case POST -> Root / "api" / "v1" / "organizations" / org / "connections" / connection / "sync" =>
-      withIds(org, connection) { (orgId, connectionId) =>
-        manualSync.execute(orgId, connectionId).attempt.flatMap {
+    // Running a synchronization is an operation on a connection, not a change to its settings.
+    case request @ POST -> Root / "api" / "v1" / "organizations" / org / "connections" / connection / "sync" =>
+      authorization.require(request, OrganizationPermission.RunConnectionSync) { context =>
+      withIds(org, connection) { (_, connectionId) =>
+        manualSync.execute(context.actor, connectionId).attempt.flatMap {
           case Right(session) => Ok(SyncSessionHttpMapper.toResponse(session))
           case Left(_: ConnectionSyncNotFound) => NotFound(connectionNotFound)
           case Left(_: ConnectionSyncInactive) => Conflict(ApiErrorResponse("CONNECTION_INACTIVE", "Connection is inactive"))
@@ -37,8 +41,10 @@ final class ConnectionSyncRoutes[Tx[_]](
           case Left(_) => InternalServerError(internalError)
         }
       }
+      }
 
-    case GET -> Root / "api" / "v1" / "organizations" / org / "connections" / connection / "sync-sessions" =>
+    case request @ GET -> Root / "api" / "v1" / "organizations" / org / "connections" / connection / "sync-sessions" =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       withIds(org, connection) { (orgId, connectionId) =>
         runner.run(listSessions.execute(orgId, connectionId)).attempt.flatMap {
           case Right(Some(sessions)) => Ok(sessions.map(SyncSessionHttpMapper.toResponse))
@@ -46,14 +52,17 @@ final class ConnectionSyncRoutes[Tx[_]](
           case Left(_) => InternalServerError(internalError)
         }
       }
+      }
 
-    case GET -> Root / "api" / "v1" / "organizations" / org / "connections" / connection / "sync-sessions" / session =>
+    case request @ GET -> Root / "api" / "v1" / "organizations" / org / "connections" / connection / "sync-sessions" / session =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       withThreeIds(org, connection, session) { (orgId, connectionId, sessionId) =>
         runner.run(getSession.execute(orgId, connectionId, sessionId)).attempt.flatMap {
           case Right(Some(found)) => Ok(SyncSessionHttpMapper.toResponse(found))
           case Right(None) => NotFound(sessionNotFound)
           case Left(_) => InternalServerError(internalError)
         }
+      }
       }
   }
 

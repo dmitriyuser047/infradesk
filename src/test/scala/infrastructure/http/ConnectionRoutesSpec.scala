@@ -182,10 +182,11 @@ final class ConnectionRoutesSpec extends FunSuite {
     val routes = new ConnectionRoutes[IO](
       GetConnection(connectionRepository, syncSessionRepository, connectionScheduleRepository),
       ListConnections(connectionRepository, syncSessionRepository, connectionScheduleRepository),
-      transactionRunner
+      transactionRunner,
+      support.AuthorizationFixtures.authorization
     )
 
-    RouteFixture(routes.routes.orNotFound, connectionRepository, transactionRunner)
+    RouteFixture(support.AuthorizationFixtures.authorized(routes.routes.orNotFound), connectionRepository, transactionRunner)
   }
 
   private def run(fixture: RouteFixture, request: Request[IO]): (org.http4s.Response[IO], Json) = {

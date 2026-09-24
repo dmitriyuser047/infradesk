@@ -34,7 +34,7 @@ final class SshConnectionManagementSpec extends FunSuite {
 
   test("create probes outside transaction and schedules first sync after the interval") {
     val f = new ManagementFixture
-    val result = f.management.create(org, request).unsafeRunSync()
+    val result = f.management.create(support.AuthorizationFixtures.actor(org), request).unsafeRunSync()
     assertEquals(f.probes, 1)
     assertEquals(f.probedInTransaction, false)
     assertEquals(result.connection.secretRef.exists(_.startsWith("db:")), true)
@@ -48,31 +48,53 @@ final class SshConnectionManagementSpec extends FunSuite {
 
   test("metadata-only update does not probe or replace secret, and deactivate retains it") {
     val f = new ManagementFixture
-    val created = f.management.create(org, request).unsafeRunSync().connection
+    val created = f.management.create(support.AuthorizationFixtures.actor(org), request).unsafeRunSync().connection
     val originalSecret = f.savedSecret.get
     val originalNextRun = f.savedSchedule.get.nextRunAt
     f.savedSchedule = f.savedSchedule.map(_.copy(consecutiveFailures = 2L))
-    val changed = f.management.update(org, created.id, updateRequest.copy(name = "Renamed")).unsafeRunSync()
+    val changed = f.management.update(support.AuthorizationFixtures.actor(org), created.id, updateRequest.copy(name = "Renamed")).unsafeRunSync()
     assertEquals(changed.connection.name, "Renamed")
     assertEquals(f.probes, 1)
     assertEquals(f.savedSecret.get.id, originalSecret.id)
     assertEquals(changed.schedule.get.nextRunAt, originalNextRun)
     assertEquals(changed.schedule.get.consecutiveFailures, 2L)
-    f.management.deactivate(org, created.id).unsafeRunSync()
-    f.management.deactivate(org, created.id).unsafeRunSync()
+    f.management.deactivate(support.AuthorizationFixtures.actor(org), created.id).unsafeRunSync()
+    f.management.deactivate(support.AuthorizationFixtures.actor(org), created.id).unsafeRunSync()
     assertEquals(f.savedConnection.get.isActive, false)
     assertEquals(f.savedSchedule.get.enabled, false)
     assertEquals(f.savedSchedule.get.consecutiveFailures, 2L)
     assertEquals(f.savedSecret.get.id, originalSecret.id)
+    // Create, update and the first deactivation are journalled; the second changes nothing but is
+    // still an action the owner performed.
+    assertEquals(f.auditEvents.recorded.map(event => (event.action.code, event.targetId)), List(
+      ("CONNECTION_CREATED", Some(created.id)),
+      ("CONNECTION_UPDATED", Some(created.id)),
+      ("CONNECTION_DELETED", Some(created.id)),
+      ("CONNECTION_DELETED", Some(created.id))
+    ))
+    assertEquals(f.auditEvents.recorded.map(_.targetType.code).distinct, List("CONNECTION"))
+    assertEquals(f.auditEvents.recorded.map(_.organizationId).distinct, List(org))
+  }
+
+  test("a failed SSH probe records neither a connection nor a journal entry") {
+    val f = new ManagementFixture
+    f.failProbe = true
+
+    val outcome = f.management.create(support.AuthorizationFixtures.actor(org), request)
+      .attempt.unsafeRunSync()
+
+    assert(outcome.isLeft)
+    assertEquals(f.savedConnection, None)
+    assertEquals(f.auditEvents.recorded, List.empty)
   }
 
   test("failed SSH probe leaves connection and secret unchanged") {
     val f = new ManagementFixture
-    val created = f.management.create(org, request).unsafeRunSync().connection
+    val created = f.management.create(support.AuthorizationFixtures.actor(org), request).unsafeRunSync().connection
     val originalSecret = f.savedSecret.get
     f.failProbe = true
     val error = intercept[ConnectionManagementError] {
-      f.management.update(org, created.id, updateRequest.copy(ssh = request.ssh.copy(host = "other.example.org"))).unsafeRunSync()
+      f.management.update(support.AuthorizationFixtures.actor(org), created.id, updateRequest.copy(ssh = request.ssh.copy(host = "other.example.org"))).unsafeRunSync()
     }
     assertEquals(error.code, "SSH_CONNECTION_FAILED")
     assertEquals(f.savedConnection.get, created)
@@ -81,11 +103,11 @@ final class SshConnectionManagementSpec extends FunSuite {
 
   test("changing an enabled interval schedules the next run after the new interval") {
     val f = new ManagementFixture
-    val created = f.management.create(org, request.copy(schedule = SshScheduleCommand(true, 3600))).unsafeRunSync().connection
+    val created = f.management.create(support.AuthorizationFixtures.actor(org), request.copy(schedule = SshScheduleCommand(true, 3600))).unsafeRunSync().connection
     val oldNextRun = Instant.now().plusSeconds(3300)
     f.savedSchedule = f.savedSchedule.map(_.copy(nextRunAt = oldNextRun))
     f.savedSchedule = f.savedSchedule.map(_.copy(consecutiveFailures = 2L))
-    val changed = f.management.update(org, created.id,
+    val changed = f.management.update(support.AuthorizationFixtures.actor(org), created.id,
       updateRequest.copy(schedule = SshScheduleCommand(true, 900))).unsafeRunSync()
     assertEquals(changed.schedule.get.intervalSeconds, 900L)
     assertEquals(changed.schedule.get.nextRunAt, changed.connection.updatedAt.plusSeconds(900))
@@ -95,11 +117,11 @@ final class SshConnectionManagementSpec extends FunSuite {
 
   test("re-enabling a schedule avoids its old overdue run and keeps failures") {
     val f = new ManagementFixture
-    val created = f.management.create(org, request).unsafeRunSync().connection
+    val created = f.management.create(support.AuthorizationFixtures.actor(org), request).unsafeRunSync().connection
     f.savedSchedule = f.savedSchedule.map(_.copy(enabled = false, nextRunAt = Instant.EPOCH,
       consecutiveFailures = 3L))
 
-    val changed = f.management.update(org, created.id, updateRequest).unsafeRunSync()
+    val changed = f.management.update(support.AuthorizationFixtures.actor(org), created.id, updateRequest).unsafeRunSync()
 
     assertEquals(changed.schedule.get.nextRunAt, changed.connection.updatedAt.plusSeconds(600))
     assertEquals(changed.schedule.get.consecutiveFailures, 3L)
@@ -109,15 +131,15 @@ final class SshConnectionManagementSpec extends FunSuite {
     val f = new ManagementFixture
     val invalid = request.copy(schedule = SshScheduleCommand(true, 299))
     val createError = intercept[ConnectionManagementError] {
-      f.management.create(org, invalid).unsafeRunSync()
+      f.management.create(support.AuthorizationFixtures.actor(org), invalid).unsafeRunSync()
     }
     assertEquals(createError.code, "INVALID_REQUEST")
     assertEquals(f.probes, 0)
 
-    val created = f.management.create(org, request.copy(schedule = SshScheduleCommand(true, 300)))
+    val created = f.management.create(support.AuthorizationFixtures.actor(org), request.copy(schedule = SshScheduleCommand(true, 300)))
       .unsafeRunSync().connection
     val updateError = intercept[ConnectionManagementError] {
-      f.management.update(org, created.id,
+      f.management.update(support.AuthorizationFixtures.actor(org), created.id,
         updateRequest.copy(schedule = SshScheduleCommand(true, 299))).unsafeRunSync()
     }
     assertEquals(updateError.code, "INVALID_REQUEST")
@@ -126,7 +148,9 @@ final class SshConnectionManagementSpec extends FunSuite {
 
   test("mutation routes return safe 201, 422 for probe failure and 404 for unknown ID") {
     val f = new ManagementFixture
-    val app = new SshConnectionMutationRoutes[IO](f.management).routes.orNotFound
+    val app = support.AuthorizationFixtures.authorized(
+      new SshConnectionMutationRoutes[IO](f.management, support.AuthorizationFixtures.authorization)
+        .routes.orNotFound)
     val body = parser.parse(s"""{
       "connectorType":"SSH","code":"prod-vps","name":"Production VPS",
       "scope":{"type":"ORGANIZATION"},
@@ -211,7 +235,8 @@ final class SshConnectionManagementSpec extends FunSuite {
     val auth = new SshPasswordResolver[IO] {
       override def resolvePassword(connection: Connection): IO[String] = IO.pure("secret")
     }
+    val (auditEvents, auditRecorder) = support.TestAuditRecorder.recording
     val management = new SshConnectionManagement[IO](connections, schedules, secrets,
-      projects, environments, runner, probe, auth, cipher)
+      projects, environments, runner, probe, auth, cipher, auditRecorder)
   }
 }

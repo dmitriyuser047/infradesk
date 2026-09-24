@@ -44,6 +44,29 @@ final class WorkspaceMutationRoutesSpec extends FunSuite {
     assertEquals(environment._2.hcursor.get[String]("kind"), Right("PROD"))
     assertEquals(environment._2.hcursor.get[String]("projectId"), Right(projectId.toString))
     assertEquals(fixture.calls, 2)
+    // Both creations are journalled, in the transaction that created them.
+    val environmentId = UUID.fromString(environment._2.hcursor.get[String]("id").toOption.get)
+    assertEquals(
+      fixture.auditEvents.recorded.map(event =>
+        (event.action.code, event.targetType.code, event.targetId, event.organizationId)),
+      List(
+        ("PROJECT_CREATED", "PROJECT", Some(projectId), orgA),
+        ("ENVIRONMENT_CREATED", "ENVIRONMENT", Some(environmentId), orgA)
+      )
+    )
+    assertEquals(fixture.auditEvents.recorded.map(_.actorUserId).distinct,
+      List(support.AuthorizationFixtures.ActorUserId))
+  }
+
+  test("a rejected mutation leaves no journal entry behind") {
+    val fixture = new WorkspaceFixture
+    fixture.post(fixture.projectPath(orgA), fixture.projectBody("alpha"))
+    val duplicate = fixture.post(fixture.projectPath(orgA), fixture.projectBody("ALPHA"))
+    val invalid = fixture.post(fixture.projectPath(orgA), Json.obj("code" -> Json.fromString("")))
+
+    assertEquals(duplicate._1, Status.Conflict)
+    assertEquals(invalid._1, Status.BadRequest)
+    assertEquals(fixture.auditEvents.recorded.map(_.action.code), List("PROJECT_CREATED"))
   }
 
   test("rejects case-insensitive duplicates within scope but allows same codes in another scope") {
@@ -131,8 +154,15 @@ final class WorkspaceMutationRoutesSpec extends FunSuite {
     private val runner = new TransactionRunner[IO, IO] {
       override def run[A](program: IO[A]): IO[A] = IO { calls += 1 } *> program
     }
-    private val routes = new WorkspaceMutationRoutes[IO](new CreateProject(organizations, projectRepository, ids, time),
-      new CreateEnvironment(projectRepository, environmentRepository, ids, time), runner).routes.orNotFound
+    val (auditEvents, auditRecorder) = support.TestAuditRecorder.recording
+    private val routes = support.AuthorizationFixtures.authorized(
+      new WorkspaceMutationRoutes[IO](
+        new CreateProject(organizations, projectRepository, ids, time, auditRecorder),
+        new CreateEnvironment(projectRepository, environmentRepository, ids, time, auditRecorder),
+        runner,
+        support.AuthorizationFixtures.authorization
+      ).routes.orNotFound
+    )
 
     def projectPath(org: UUID): String = s"/api/v1/organizations/$org/projects"
     def environmentPath(org: UUID, project: UUID): String = s"${projectPath(org)}/$project/environments"

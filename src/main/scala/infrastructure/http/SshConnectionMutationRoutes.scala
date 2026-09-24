@@ -4,6 +4,7 @@ package infrastructure.http
 import application.connection.{ConnectionManagementError, SshConnectionManagement}
 import cats.effect.IO
 import cats.syntax.all._
+import domain.auth.OrganizationPermission
 import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs, SaveSshConnectionRequest, TestSshConnectionRequest, TestSshConnectionResponse}
 import infrastructure.http.mapper.{ConnectionHttpMapper, SshConnectionCommandMapper}
 import org.http4s.{HttpRoutes, Response}
@@ -13,45 +14,57 @@ import org.http4s.dsl.io._
 import java.util.UUID
 import scala.util.Try
 
-final class SshConnectionMutationRoutes[Tx[_]](management: SshConnectionManagement[Tx]) {
+final class SshConnectionMutationRoutes[Tx[_]](
+  management: SshConnectionManagement[Tx],
+  authorization: OrganizationAuthorization
+) {
   import HttpJsonCodecs._
   import CirceEntityDecoder._
   import CirceEntityEncoder._
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
+    // Probing a host with submitted credentials is part of managing connections, not a read.
     case request @ POST -> Root / "api" / "v1" / "organizations" / org / "connections" / "ssh" / "test" =>
-      withOrganization(org) { id =>
-        request.as[TestSshConnectionRequest].attempt.flatMap {
-          case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid SSH test request"))
-          case Right(body) => respond(IO.fromEither(SshConnectionCommandMapper.test(body))
-            .flatMap(management.test).flatMap(fingerprint =>
-            Ok(TestSshConnectionResponse(true, fingerprint))))
+      authorization.require(request, OrganizationPermission.ManageConnections) { _ =>
+        withOrganization(org) { _ =>
+          request.as[TestSshConnectionRequest].attempt.flatMap {
+            case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid SSH test request"))
+            case Right(body) => respond(IO.fromEither(SshConnectionCommandMapper.test(body))
+              .flatMap(management.test).flatMap(fingerprint =>
+              Ok(TestSshConnectionResponse(true, fingerprint))))
+          }
         }
       }
 
     case request @ POST -> Root / "api" / "v1" / "organizations" / org / "connections" =>
-      withOrganization(org) { id =>
-        request.as[SaveSshConnectionRequest].attempt.flatMap {
-          case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid connection request"))
-          case Right(body) => respond(IO.fromEither(SshConnectionCommandMapper.create(body))
-            .flatMap(management.create(id, _)).flatMap(value =>
-            Created(ConnectionHttpMapper.toResponse(value))))
+      authorization.require(request, OrganizationPermission.ManageConnections) { context =>
+        withOrganization(org) { _ =>
+          request.as[SaveSshConnectionRequest].attempt.flatMap {
+            case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid connection request"))
+            case Right(body) => respond(IO.fromEither(SshConnectionCommandMapper.create(body))
+              .flatMap(management.create(context.actor, _)).flatMap(value =>
+              Created(ConnectionHttpMapper.toResponse(value))))
+          }
         }
       }
 
     case request @ PUT -> Root / "api" / "v1" / "organizations" / org / "connections" / connection =>
-      withIds(org, connection) { (orgId, connectionId) =>
-        request.as[SaveSshConnectionRequest].attempt.flatMap {
-          case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid connection request"))
-          case Right(body) => respond(IO.fromEither(SshConnectionCommandMapper.update(body))
-            .flatMap(management.update(orgId, connectionId, _)).flatMap(value =>
-            Ok(ConnectionHttpMapper.toResponse(value))))
+      authorization.require(request, OrganizationPermission.ManageConnections) { context =>
+        withIds(org, connection) { (_, connectionId) =>
+          request.as[SaveSshConnectionRequest].attempt.flatMap {
+            case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid connection request"))
+            case Right(body) => respond(IO.fromEither(SshConnectionCommandMapper.update(body))
+              .flatMap(management.update(context.actor, connectionId, _)).flatMap(value =>
+              Ok(ConnectionHttpMapper.toResponse(value))))
+          }
         }
       }
 
-    case DELETE -> Root / "api" / "v1" / "organizations" / org / "connections" / connection =>
-      withIds(org, connection) { (orgId, connectionId) =>
-        respond(management.deactivate(orgId, connectionId).flatMap(_ => NoContent()))
+    case request @ DELETE -> Root / "api" / "v1" / "organizations" / org / "connections" / connection =>
+      authorization.require(request, OrganizationPermission.ManageConnections) { context =>
+        withIds(org, connection) { (_, connectionId) =>
+          respond(management.deactivate(context.actor, connectionId).flatMap(_ => NoContent()))
+        }
       }
   }
 

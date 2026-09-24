@@ -151,10 +151,11 @@ final class NavigationRoutesSpec extends FunSuite {
       ListProjects(organizationRepository, projectRepository),
       ListEnvironments(organizationRepository, projectRepository, environmentRepository),
       GetEnvironmentContext(navigationQueries),
-      transactionRunner
+      transactionRunner,
+      support.AuthorizationFixtures.authorization
     )
 
-    RouteFixture(routes.routes.orNotFound, transactionRunner)
+    RouteFixture(support.AuthorizationFixtures.authorized(routes.routes.orNotFound), transactionRunner)
   }
 
   private def run(

@@ -5,6 +5,7 @@ import cats.data.Kleisli
 import cats.effect.IO
 import cats.syntax.semigroupk._
 import infrastructure.http.{
+  AuditRoutes,
   AuthBoundary,
   AuthRoutes,
   AuthSettings,
@@ -14,6 +15,7 @@ import infrastructure.http.{
   IncidentRoutes,
   MonitorRuleRoutes,
   NavigationRoutes,
+  OrganizationAuthorization,
   ResourceRoutes,
   SshConnectionMutationRoutes,
   WorkspaceMutationRoutes
@@ -33,41 +35,52 @@ object HttpModule {
     loggers: AppLoggers
   ): HttpApp[IO] = {
     val transactionRunner = persistence.transactionRunner
+    // Every organization-scoped handler states the permission it needs through this helper; the
+    // authentication boundary no longer knows which operations are privileged.
+    val authorization = new OrganizationAuthorization(loggers.authorization)
 
     val businessApp = (
       new ResourceRoutes(
         application.getResource,
         application.listEnvironmentResources,
         application.getResourceMetricHistory,
-        transactionRunner
+        transactionRunner,
+        authorization
       ).routes <+>
-        new IncidentRoutes(application.getIncident, application.listIncidents, transactionRunner).routes <+>
+        new IncidentRoutes(application.getIncident, application.listIncidents, transactionRunner,
+          authorization).routes <+>
         new MonitorRuleRoutes(
           application.listMonitorRules,
           application.createMonitorRule,
           application.updateMonitorRule,
-          transactionRunner
+          transactionRunner,
+          authorization
         ).routes <+>
-        new ConnectionRoutes(application.getConnection, application.listConnections, transactionRunner).routes <+>
-        new SshConnectionMutationRoutes(application.sshConnectionManagement).routes <+>
+        new ConnectionRoutes(application.getConnection, application.listConnections,
+          transactionRunner, authorization).routes <+>
+        new SshConnectionMutationRoutes(application.sshConnectionManagement, authorization).routes <+>
         new ConnectionSyncRoutes(
           application.listConnectionSyncSessions,
           application.getConnectionSyncSession,
           application.runManualConnectionSync,
-          transactionRunner
+          transactionRunner,
+          authorization
         ).routes <+>
         new NavigationRoutes(
           application.getOrganization,
           application.listProjects,
           application.listEnvironments,
           application.getEnvironmentContext,
-          transactionRunner
+          transactionRunner,
+          authorization
         ).routes <+>
         new WorkspaceMutationRoutes(
           application.createProject,
           application.createEnvironment,
-          transactionRunner
-        ).routes
+          transactionRunner,
+          authorization
+        ).routes <+>
+        new AuditRoutes(application.listAuditEvents, transactionRunner, authorization).routes
     ).orNotFound
 
     val authRoutes = new AuthRoutes(application.login, application.authentication, authSettings)

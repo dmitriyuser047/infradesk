@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMyOrganizations } from '../api/auth'
 import { ApiError } from '../api/httpClient'
 import { useCreateProject } from '../api/navigation'
+import { canOrganization } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { buildCreateProjectRequest } from '../components/navigation/buildWorkspaceRequests'
@@ -16,7 +17,7 @@ export function ProjectCreatePage() {
   if (!organizationId) return <InvalidRoutePage />
   if (membership.isPending) return <AppShell><p>Loading organization…</p></AppShell>
   if (membership.isError) return <AppShell><p role="alert">Unable to check organization access.</p></AppShell>
-  if (membership.data?.find(value => value.id === organizationId)?.role !== 'OWNER') {
+  if (!canOrganization(membership.data?.find(value => value.id === organizationId)?.role, 'manageWorkspace')) {
     return <AppShell><p>Only organization owners can create projects.</p></AppShell>
   }
   return <ProjectCreateForm organizationId={organizationId} />

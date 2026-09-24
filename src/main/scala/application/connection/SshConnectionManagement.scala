@@ -1,10 +1,13 @@
 package ru.bitec.app.ops
 package application.connection
 
+import application.audit.AuditRecorder
+import application.auth.ActorContext
 import application.port.{ConnectionRepository, ConnectionScheduleRepository, ConnectionSecretCryptography, ConnectionSecretRepository, EnvironmentRepository, ProjectRepository, SshConnectionProbe, SshPasswordResolver, SshProbeError, TransactionRunner}
 import cats.MonadThrow
 import cats.effect.IO
 import cats.syntax.all._
+import domain.audit.{AuditAction, AuditTargetType}
 import domain.connection.{Connection, ConnectionSchedule, ConnectionScope, SecretRef, SshConnectionSettings}
 
 import java.time.Instant
@@ -22,7 +25,8 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
   runner: TransactionRunner[IO, Tx],
   probe: SshConnectionProbe[IO],
   credentials: SshPasswordResolver[IO],
-  cipher: ConnectionSecretCryptography
+  cipher: ConnectionSecretCryptography,
+  audit: AuditRecorder[Tx]
 ) {
   def test(request: TestSshConnectionCommand): IO[String] =
     for {
@@ -31,7 +35,8 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
       fingerprint <- probeConnection(config, password)
     } yield fingerprint
 
-  def create(orgId: UUID, request: CreateSshConnectionCommand): IO[ConnectionOverview] =
+  def create(actor: ActorContext, request: CreateSshConnectionCommand): IO[ConnectionOverview] = {
+    val orgId = actor.organizationId
     for {
       _ <- IO.fromEither(validateRequest(request.code, request.name, request.schedule))
       ssh <- IO.fromEither(validateSsh(request.ssh))
@@ -55,10 +60,14 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
         _ <- secrets.save(secret)
         _ <- connections.save(connection)
         _ <- schedules.save(schedule)
+        _ <- audit.record(actor, AuditAction.ConnectionCreated, AuditTargetType.Connection,
+          Some(connection.id))
       } yield ())
     } yield ConnectionOverview(connection, Some(schedule), None)
+  }
 
-  def update(orgId: UUID, id: UUID, request: UpdateSshConnectionCommand): IO[ConnectionOverview] =
+  def update(actor: ActorContext, id: UUID, request: UpdateSshConnectionCommand): IO[ConnectionOverview] = {
+    val orgId = actor.organizationId
     for {
       _ <- IO.fromEither(validateRequest(request.code, request.name, request.schedule))
       submittedSsh <- IO.fromEither(validateSsh(request.ssh))
@@ -109,10 +118,13 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
           case Some(SecretRef.Database(oldSecretId)) => secrets.delete(orgId, oldSecretId)
           case _ => MonadThrow[Tx].unit
         } else MonadThrow[Tx].unit
+        _ <- audit.record(actor, AuditAction.ConnectionUpdated, AuditTargetType.Connection, Some(id))
       } yield ())
     } yield ConnectionOverview(next, Some(schedule), None)
+  }
 
-  def deactivate(orgId: UUID, id: UUID): IO[Unit] =
+  def deactivate(actor: ActorContext, id: UUID): IO[Unit] = {
+    val orgId = actor.organizationId
     runner.run(for {
       found <- connections.findById(orgId, id)
       connection <- found.liftTo[Tx](ConnectionManagementError("CONNECTION_NOT_FOUND", "Connection was not found"))
@@ -121,7 +133,10 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
         else MonadThrow[Tx].unit
       schedule <- schedules.findByConnection(orgId, id)
       _ <- schedule.fold(MonadThrow[Tx].unit)(s => schedules.save(s.copy(enabled = false)))
+      // The journal outlives the connection, which is why the target carries no foreign key.
+      _ <- audit.record(actor, AuditAction.ConnectionDeleted, AuditTargetType.Connection, Some(id))
     } yield ())
+  }
 
   private def validateScope(orgId: UUID, scope: ConnectionScope): Tx[Unit] = scope match {
     case ConnectionScope.Organization => MonadThrow[Tx].unit

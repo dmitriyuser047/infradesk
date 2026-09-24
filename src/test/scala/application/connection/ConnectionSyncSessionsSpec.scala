@@ -60,8 +60,8 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
         ConnectionSyncResult(id, Nil)
       }
     }
-    val result = new RunManualConnectionSync[IO](run, f.sessions, f.transactionRunner)
-      .execute(org, connectionId).unsafeRunSync()
+    val result = manualSync(f, run)
+      .execute(support.AuthorizationFixtures.actor(org), connectionId).unsafeRunSync()
     assertEquals(result.id, id)
     assertEquals(f.sessions.latestCalls, 0)
   }
@@ -83,8 +83,8 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
     val clock = new TimeProvider[IO] { override def now: IO[Instant] = IO.pure(at) }
     val shared = new RunConnectionSync[IO, IO](synchronizer, evaluator, f.transactionRunner, clock,
       _root_.org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.sync-sessions"))
-    val result = new RunManualConnectionSync[IO](shared, f.sessions, f.transactionRunner)
-      .execute(org, connectionId).unsafeRunSync()
+    val result = manualSync(f, shared)
+      .execute(support.AuthorizationFixtures.actor(org), connectionId).unsafeRunSync()
     assertEquals(result.id, id)
     assertEquals(evaluations, 1)
   }
@@ -241,8 +241,8 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
         throw ConnectionSyncExecutionFailed(id, new IllegalStateException("password in raw exception"))
       }
     }
-    val result = new RunManualConnectionSync[IO](run, f.sessions, f.transactionRunner)
-      .execute(org, connectionId).unsafeRunSync()
+    val result = manualSync(f, run)
+      .execute(support.AuthorizationFixtures.actor(org), connectionId).unsafeRunSync()
     assertEquals(result.id, id)
     assertEquals(result.status, SyncSessionStatus.Failed)
     assertEquals(result.errorCode, Some("SYNC_FAILED"))
@@ -258,8 +258,8 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
           IO.raiseError(error)
       }
       intercept[RuntimeException] {
-        new RunManualConnectionSync[IO](run, f.sessions, f.transactionRunner)
-          .execute(org, connectionId).unsafeRunSync()
+        manualSync(f, run)
+          .execute(support.AuthorizationFixtures.actor(org), connectionId).unsafeRunSync()
       }
       assertEquals(f.sessions.values, Nil)
     }
@@ -367,11 +367,20 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
   private def routes(f: SyncFixture, syncRunner: ConnectionSyncRunner[IO]): _root_.org.http4s.HttpApp[IO] =
     new ConnectionSyncRoutes[IO](new ListConnectionSyncSessions(f.connections, f.sessions),
       new GetConnectionSyncSession(f.sessions),
-      new RunManualConnectionSync(syncRunner, f.sessions, f.transactionRunner),
-      f.transactionRunner).routes.orNotFound
+      manualSync(f, syncRunner),
+      f.transactionRunner,
+      support.AuthorizationFixtures.authorization).routes.orNotFound
+
+  private def manualSync(
+    f: SyncFixture,
+    syncRunner: ConnectionSyncRunner[IO]
+  ): RunManualConnectionSync[IO] =
+    new RunManualConnectionSync[IO](syncRunner, f.sessions, f.connections,
+      support.TestAuditRecorder(new support.RecordingAuditEventRepository), f.transactionRunner)
 
   private def response(app: _root_.org.http4s.HttpApp[IO], method: Method, path: String): (Status, Json) = {
-    val result = app.run(Request[IO](method, Uri.unsafeFromString(path))).unsafeRunSync()
+    val result = support.AuthorizationFixtures.authorized(app)
+      .run(Request[IO](method, Uri.unsafeFromString(path))).unsafeRunSync()
     result.status -> result.as[Json].unsafeRunSync()
   }
 

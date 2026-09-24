@@ -5,6 +5,7 @@ import application.connection.{GetConnection, ListConnections}
 import application.port.TransactionRunner
 import cats.effect.IO
 import cats.syntax.all._
+import domain.auth.OrganizationPermission
 import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs}
 import infrastructure.http.mapper.ConnectionHttpMapper
 import org.http4s.HttpRoutes
@@ -17,7 +18,8 @@ import scala.util.Try
 final class ConnectionRoutes[Tx[_]](
   getConnection: GetConnection[Tx],
   listConnections: ListConnections[Tx],
-  transactionRunner: TransactionRunner[IO, Tx]
+  transactionRunner: TransactionRunner[IO, Tx],
+  authorization: OrganizationAuthorization
 ) {
   import HttpJsonCodecs._
 
@@ -31,7 +33,8 @@ final class ConnectionRoutes[Tx[_]](
   )
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
-    case GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "connections" =>
+    case request @ GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "connections" =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       parseUuid(organizationIdValue, "organizationId") match {
         case Right(organizationId) =>
           transactionRunner.run(listConnections.execute(organizationId)).attempt.flatMap {
@@ -40,8 +43,10 @@ final class ConnectionRoutes[Tx[_]](
           }
         case Left(error) => BadRequest(error)
       }
+      }
 
-    case GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "connections" / connectionIdValue =>
+    case request @ GET -> Root / "api" / "v1" / "organizations" / organizationIdValue / "connections" / connectionIdValue =>
+      authorization.require(request, OrganizationPermission.ReadOrganization) { _ =>
       (parseUuid(organizationIdValue, "organizationId"), parseUuid(connectionIdValue, "connectionId")) match {
         case (Right(organizationId), Right(connectionId)) =>
           transactionRunner.run(getConnection.execute(organizationId, connectionId)).attempt.flatMap {
@@ -51,6 +56,7 @@ final class ConnectionRoutes[Tx[_]](
           }
         case (Left(error), _) => BadRequest(error)
         case (_, Left(error)) => BadRequest(error)
+      }
       }
   }
 

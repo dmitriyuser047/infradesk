@@ -110,8 +110,9 @@ final class SyncConnectionFailureSpec extends FunSuite {
         f.sync.execute(connection)
     }
 
-    val result = new RunManualConnectionSync[IO](sharedRunner, f.repository, f.runner)
-      .execute(org, connectionId).unsafeRunSync()
+    val result = new RunManualConnectionSync[IO](sharedRunner, f.repository, new support.FixedConnectionRepository(connection),
+      support.TestAuditRecorder(new support.RecordingAuditEventRepository), f.runner)
+      .execute(support.AuthorizationFixtures.actor(org), connectionId).unsafeRunSync()
 
     assertEquals(result.id, sessionId)
     assertEquals(result.status, SyncSessionStatus.Failed)

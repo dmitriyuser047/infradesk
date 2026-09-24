@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useMyOrganizations } from '../../api/auth'
 import { useEnvironmentContext, useEnvironments, useProjects } from '../../api/navigation'
+import { canOrganization } from '../auth/authorization'
 import { getEnvironmentKindLabel } from '../navigation/navigationPresentation'
 import { useWorkspaceRouteContext } from './useWorkspaceRouteContext'
 
@@ -37,6 +38,9 @@ function OrganizationContext({ organizationId, projectId, environmentId, organiz
   const environments = useEnvironments(organizationId, resolvedProjectId ?? null)
   const base = `/organizations/${encodeURIComponent(organizationId)}`
 
+  const canManageWorkspace = canOrganization(
+    organizations.find(item => item.id === organizationId)?.role, 'manageWorkspace')
+
   return <div className="context-bar" aria-label="Workspace context">
     <label>Organization<select value={organizationId} onChange={event => navigate(`/organizations/${encodeURIComponent(event.target.value)}`)}>
       {!organizations.some(item => item.id === organizationId) ? <option value={organizationId}>Current organization</option> : null}
@@ -57,10 +61,9 @@ function OrganizationContext({ organizationId, projectId, environmentId, organiz
       {environments.data?.map(item => <option key={item.id} value={item.id}>
         {item.name} · {getEnvironmentKindLabel(item.kind)}</option>)}
     </select></label>
-    {projects.isSuccess && projects.data.length === 0 && organizations.some(item => item.id === organizationId && item.role === 'OWNER')
+    {projects.isSuccess && projects.data.length === 0 && canManageWorkspace
       ? <Link className="context-create" to={`${base}/projects/new`}>Create project</Link> : null}
-    {resolvedProjectId && environments.isSuccess && environments.data.length === 0 &&
-      organizations.some(item => item.id === organizationId && item.role === 'OWNER')
+    {resolvedProjectId && environments.isSuccess && environments.data.length === 0 && canManageWorkspace
       ? <Link className="context-create" to={`${base}/projects/${encodeURIComponent(resolvedProjectId)}/environments/new`}>Add environment</Link> : null}
   </div>
 }

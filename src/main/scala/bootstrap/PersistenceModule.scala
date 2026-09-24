@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package bootstrap
 
 import application.port.{
+  AuditEventRepository,
   AuthSessionRepository,
   ConnectionRepository,
   ConnectionScheduleRepository,
@@ -32,6 +33,7 @@ import serialization.resource.{ResourceDataCodec, ResourceDefinitionRegistry}
 import serialization.resource.container.ContainerResourceDataCodec
 import serialization.resource.node.NodeResourceDataCodec
 import persistence.postgres.{
+  PostgresAuditEventRepository,
   PostgresAuthSessionRepository,
   PostgresConnectionRepository,
   PostgresConnectionScheduleRepository,
@@ -82,7 +84,8 @@ final case class PersistenceComponents(
   navigationQueryRepository: NavigationQueryRepository[ConnectionIO],
   userAccountRepository: UserAccountRepository[ConnectionIO],
   authSessionRepository: AuthSessionRepository[ConnectionIO],
-  membershipRepository: OrganizationMembershipRepository[ConnectionIO]
+  membershipRepository: OrganizationMembershipRepository[ConnectionIO],
+  auditEventRepository: AuditEventRepository[ConnectionIO]
 )
 
 /** Builds every PostgreSQL-backed port on top of one transactor. */
@@ -124,6 +127,7 @@ object PersistenceModule {
       navigationQueryRepository = new PostgresNavigationQueryRepository,
       userAccountRepository = new PostgresUserAccountRepository,
       authSessionRepository = new PostgresAuthSessionRepository,
-      membershipRepository = new PostgresOrganizationMembershipRepository
+      membershipRepository = new PostgresOrganizationMembershipRepository,
+      auditEventRepository = new PostgresAuditEventRepository
     )
 }

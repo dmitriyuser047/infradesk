@@ -1,8 +1,8 @@
 import { useParams } from 'react-router-dom'
 
 import { ApiError } from '../api/httpClient'
-import { useMyOrganizations } from '../api/auth'
 import { useOrganization, useProjects } from '../api/navigation'
+import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { WorkspaceHeader } from '../components/layout/WorkspacePrimitives'
 import { ContextSelector } from '../components/navigation/ContextSelector'
@@ -21,8 +21,8 @@ export function OrganizationPage() {
 function OrganizationContent({ organizationId }: { organizationId: string }) {
   const organizationQuery = useOrganization(organizationId)
   const projectsQuery = useProjects(organizationId)
-  const memberships = useMyOrganizations()
-  const isOwner = memberships.data?.some(value => value.id === organizationId && value.role === 'OWNER') ?? false
+  const permissions = useOrganizationPermissions(organizationId)
+  const isOwner = permissions.can('manageWorkspace')
 
   return (
     <AppShell>

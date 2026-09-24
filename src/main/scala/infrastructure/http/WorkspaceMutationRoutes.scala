@@ -4,6 +4,7 @@ package infrastructure.http
 import application.port.TransactionRunner
 import application.workspace.{CreateEnvironment, CreateEnvironmentCommand, CreateProject, CreateProjectCommand, WorkspaceManagementError}
 import cats.effect.IO
+import domain.auth.OrganizationPermission
 import infrastructure.http.dto.{ApiErrorResponse, CreateEnvironmentRequest, CreateProjectRequest, HttpJsonCodecs}
 import infrastructure.http.mapper.NavigationHttpMapper
 import org.http4s.{HttpRoutes, Response}
@@ -16,7 +17,8 @@ import scala.util.Try
 final class WorkspaceMutationRoutes[Tx[_]](
   createProject: CreateProject[Tx],
   createEnvironment: CreateEnvironment[Tx],
-  runner: TransactionRunner[IO, Tx]
+  runner: TransactionRunner[IO, Tx],
+  authorization: OrganizationAuthorization
 ) {
   import HttpJsonCodecs._
   import CirceEntityDecoder._
@@ -24,22 +26,26 @@ final class WorkspaceMutationRoutes[Tx[_]](
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     case request @ POST -> Root / "api" / "v1" / "organizations" / org / "projects" =>
-      withOrganization(org) { organizationId =>
-        request.as[CreateProjectRequest].attempt.flatMap {
-          case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid project request"))
-          case Right(body) => respond(runner.run(createProject.execute(organizationId,
-            CreateProjectCommand(body.code, body.name, body.description)))
-            .flatMap(project => Created(NavigationHttpMapper.projectResponse(project))))
+      authorization.require(request, OrganizationPermission.ManageWorkspace) { context =>
+        withOrganization(org) { _ =>
+          request.as[CreateProjectRequest].attempt.flatMap {
+            case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid project request"))
+            case Right(body) => respond(runner.run(createProject.execute(context.actor,
+              CreateProjectCommand(body.code, body.name, body.description)))
+              .flatMap(project => Created(NavigationHttpMapper.projectResponse(project))))
+          }
         }
       }
 
     case request @ POST -> Root / "api" / "v1" / "organizations" / org / "projects" / project / "environments" =>
-      withProject(org, project) { (organizationId, projectId) =>
-        request.as[CreateEnvironmentRequest].attempt.flatMap {
-          case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid environment request"))
-          case Right(body) => respond(runner.run(createEnvironment.execute(organizationId, projectId,
-            CreateEnvironmentCommand(body.code, body.name, body.kind)))
-            .flatMap(environment => Created(NavigationHttpMapper.environmentResponse(environment))))
+      authorization.require(request, OrganizationPermission.ManageWorkspace) { context =>
+        withProject(org, project) { (_, projectId) =>
+          request.as[CreateEnvironmentRequest].attempt.flatMap {
+            case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid environment request"))
+            case Right(body) => respond(runner.run(createEnvironment.execute(context.actor, projectId,
+              CreateEnvironmentCommand(body.code, body.name, body.kind)))
+              .flatMap(environment => Created(NavigationHttpMapper.environmentResponse(environment))))
+          }
         }
       }
   }

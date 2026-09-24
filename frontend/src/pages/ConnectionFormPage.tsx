@@ -6,6 +6,7 @@ import { useConnection, useCreateConnection, useTestSshConnection, useUpdateConn
 import { ApiError } from '../api/httpClient'
 import { useEnvironments, useProjects } from '../api/navigation'
 import { buildSshConnectionRequest, MIN_SSH_SYNC_INTERVAL_SECONDS } from '../components/connections/buildSshConnectionRequest'
+import { canOrganization } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { contextSearch } from '../components/layout/workspaceNavigation'
@@ -18,7 +19,7 @@ export function ConnectionFormPage() {
   const existing = useConnection(organizationId, connectionId)
   if (!organizationId) return <InvalidRoutePage />
   if (membership.isPending || (connectionId && existing.isPending)) return <AppShell><p className="compact-state">Loading connection…</p></AppShell>
-  if (membership.data?.find(value => value.id === organizationId)?.role !== 'OWNER') {
+  if (!canOrganization(membership.data?.find(value => value.id === organizationId)?.role, 'manageConnections')) {
     return <AppShell><p className="compact-state">Only organization owners can manage connections.</p></AppShell>
   }
   if (connectionId && (existing.isError || !existing.data)) return <AppShell><p className="compact-state">Connection not found.</p></AppShell>

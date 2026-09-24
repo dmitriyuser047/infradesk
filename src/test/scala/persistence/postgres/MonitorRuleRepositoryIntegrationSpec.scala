@@ -7,6 +7,8 @@ import cats.syntax.all._
 import domain.metric.{MetricCode, MetricObservation}
 import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
+import application.audit.AuditRecorder
+import application.auth.ActorContext
 import application.monitor.{EvaluateMonitorRules, MonitorEvaluationInput, MonitorRuleCommand, UpdateMonitorRule}
 import application.notification.RecordNotificationDeliveries
 import domain.notification.NotificationChannel
@@ -361,7 +363,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     }.unsafeRunSync()
   }
 
-  test("disabling a firing rule resolves its incident and clears its state in one transaction") {
+  test("disabling a firing rule resolves, clears, notifies and journals in one transaction") {
     assume(
       sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests"
@@ -378,6 +380,8 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       val recorder = new RecordNotificationDeliveries[ConnectionIO](notifications,
         new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
       val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
+        new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
+          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),
         new ConnectionIOTimeProvider)
       val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
         ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
@@ -395,7 +399,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         _ <- runner.run(states.saveAll(List(firing)))
         _ <- runner.run(incidents.saveAll(List(incident)))
         // One transaction: the rule must never be stored as disabled while its incident stays open.
-        updated <- runner.run(update.execute(OrganizationId, ids.ruleId, disable))
+        updated <- runner.run(update.execute(ActorContext(ActorUserId, OrganizationId), ids.ruleId, disable))
         reloadedRule <- runner.run(rules.findById(OrganizationId, ids.ruleId))
         reloadedState <- runner.run(states.findByRuleId(OrganizationId, ids.ruleId))
         openIncident <- runner.run(incidents.findOpenByRule(OrganizationId, ids.ruleId))
@@ -405,10 +409,19 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
           from notification_delivery
           where organization_id = $OrganizationId and monitor_rule_id = ${ids.ruleId}
         """.query[(String, String, String)].to[List])
-      } yield (updated, reloadedRule, reloadedState, openIncident, storedIncident, outbox)
+        journal <- runner.run(sql"""
+          select action, target_type, target_id, actor_user_id
+          from audit_event
+          where organization_id = $OrganizationId and target_id = ${ids.ruleId}
+        """.query[(String, String, Option[UUID], UUID)].to[List])
+      } yield (updated, reloadedRule, reloadedState, openIncident, storedIncident, outbox, journal)
 
       program.guarantee(runner.run(cleanup(ids)).attempt.void).flatMap {
-        case (updated, reloadedRule, reloadedState, openIncident, storedIncident, outbox) => IO {
+        case (updated, reloadedRule, reloadedState, openIncident, storedIncident, outbox, journal) => IO {
+          // Rule, state, incident, outbox row and journal entry are one commit: stages 8, 9 and 10
+          // share the transaction rather than competing for it.
+          assertEquals(journal,
+            List(("MONITOR_RULE_UPDATED", "MONITOR_RULE", Some(ids.ruleId), ActorUserId)))
           // Closing an incident by hand is reported through the same outbox, in the same commit.
           assertEquals(outbox, List(("INCIDENT_RESOLVED", "THRESHOLD", "PENDING")))
           assertEquals(updated.map(_.enabled), Some(false))
@@ -418,6 +431,57 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
           assertEquals(storedIncident.map(_.status), Some(IncidentStatus.Resolved))
           assertEquals(storedIncident.flatMap(_.resolvedAt).isDefined, true)
           assertEquals(storedIncident.map(_.reason), Some(IncidentReason.ThresholdViolation))
+        }
+      }
+    }.unsafeRunSync()
+  }
+
+  test("a failing journal write rolls the rule change back with it") {
+    assume(
+      sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
+      "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests"
+    )
+
+    val ids = TestIds.random()
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+      val runner = new DoobieTransactionRunner(xa)
+      val resources = ProductionResourceCodec.resourceRepository
+      val rules = new PostgresMonitorRuleRepository
+      val states = new PostgresMonitorRuleStateRepository
+      val incidents = new PostgresIncidentRepository
+      val recorder = new RecordNotificationDeliveries[ConnectionIO](
+        new PostgresNotificationDeliveryRepository, new ConnectionIOIdGenerator,
+        new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
+      // An actor without a user_account row: the audit insert violates its foreign key.
+      val unknownActor = ActorContext(UUID.randomUUID(), OrganizationId)
+      val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
+        new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
+          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),
+        new ConnectionIOTimeProvider)
+      val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
+        ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
+      val rule = MonitorRule(ids.ruleId, OrganizationId, ids.resourceId, MetricCode.CpuUsagePercent,
+        MonitorOperator.GreaterThan, BigDecimal(90), 300, 900, enabled = true, Now, Now)
+      val disable = MonitorRuleCommand(MetricCode.CpuUsagePercent, MonitorOperator.GreaterThan,
+        BigDecimal(90), 300, 900, enabled = false)
+
+      val program = for {
+        _ <- runner.run(resources.save(resource))
+        _ <- runner.run(rules.save(rule))
+        outcome <- runner.run(update.execute(unknownActor, ids.ruleId, disable)).attempt
+        reloaded <- runner.run(rules.findById(OrganizationId, ids.ruleId))
+        journal <- runner.run(sql"""
+          select count(*) from audit_event
+          where organization_id = $OrganizationId and target_id = ${ids.ruleId}
+        """.query[Int].unique)
+      } yield (outcome, reloaded, journal)
+
+      program.guarantee(runner.run(cleanup(ids)).attempt.void).flatMap {
+        case (outcome, reloaded, journal) => IO {
+          assert(outcome.isLeft)
+          // No journal entry, and therefore no rule change either.
+          assertEquals(journal, 0)
+          assertEquals(reloaded.map(_.enabled), Some(true))
         }
       }
     }.unsafeRunSync()
@@ -441,6 +505,8 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       val recorder = new RecordNotificationDeliveries[ConnectionIO](notifications,
         new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
       val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
+        new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
+          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),
         new ConnectionIOTimeProvider)
 
       // The projection holds its row locks while this evaluation is deliberately slow, which is
@@ -476,7 +542,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         _ <- runner.run(metrics.insertAll(List(violating)))
         evaluation <- runner.run(evaluator.execute(OrganizationId, ConnectionId, Now)).start
         _ <- IO.sleep(400.milliseconds)
-        updated <- runner.run(update.execute(OrganizationId, ids.ruleId, disable))
+        updated <- runner.run(update.execute(ActorContext(ActorUserId, OrganizationId), ids.ruleId, disable))
         transitions <- evaluation.joinWithNever
         reloadedRule <- runner.run(rules.findById(OrganizationId, ids.ruleId))
         reloadedState <- runner.run(states.findByRuleId(OrganizationId, ids.ruleId))
@@ -519,6 +585,11 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         delete from notification_delivery
         where organization_id = $OrganizationId
           and monitor_rule_id = ${ids.ruleId}
+      """.update.run
+      _ <- sql"""
+        delete from audit_event
+        where organization_id = $OrganizationId
+          and target_id = ${ids.ruleId}
       """.update.run
       _ <- sql"""
         delete from metric_observation
@@ -572,6 +643,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
   }
 
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
+  private val ActorUserId = support.AuthorizationFixtures.ActorUserId
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
   private val NodeResourceTypeId = UUID.fromString("10000000-0000-0000-0000-000000000001")
   private val ConnectionId = UUID.fromString("60000000-0000-0000-0000-000000000003")

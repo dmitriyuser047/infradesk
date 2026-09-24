@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
-import { useMyOrganizations } from '../api/auth'
 import { useConnection, useConnectionSyncSessions, useDeactivateConnection, useRunConnectionSync } from '../api/connections'
 import { ApiError } from '../api/httpClient'
 import { useEnvironments, useProjects } from '../api/navigation'
+import { useOrganizationPermissions } from '../components/auth/authorization'
 import { ConnectionStatusBadge } from '../components/connections/ConnectionStatusBadge'
 import { environmentName, projectName } from '../components/connections/connectionContextPresentation'
 import { formatConnectionDateTime, formatScheduleInterval, formatSyncDuration, getConnectionScopeLabel,
@@ -33,14 +33,15 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
   const scope = connectionQuery.data?.scope
   const scopedProjectId = scope && scope.type !== ConnectionScopeType.organization ? scope.projectId : null
   const environmentsQuery = useEnvironments(organizationId, scopedProjectId)
-  const membership = useMyOrganizations()
+  const permissions = useOrganizationPermissions(organizationId)
   const deactivate = useDeactivateConnection(organizationId, connectionId)
   const sync = useRunConnectionSync(organizationId, connectionId)
   const [tab, setTab] = useState<Tab>('overview')
   const navigate = useNavigate()
   const location = useLocation()
   const context = contextSearch(new URLSearchParams(location.search))
-  const isOwner = membership.data?.some(value => value.id === organizationId && value.role === 'OWNER')
+  const canManage = permissions.can('manageConnections')
+  const canSync = permissions.can('runConnectionSync')
   const connectionBase = `/organizations/${encodeURIComponent(organizationId)}/connections`
   const back = `${connectionBase}${context}`
 
@@ -57,10 +58,10 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
       subtitle={`${getConnectorTypeLabel(connection.connectorType)} · ${getConnectionScopeLabel(connection.scope)} · ${connection.code}`}
       back={{ label: 'Connections', to: back }} status={<ConnectionStatusBadge active={connection.active} />}
       actions={<>
-        {isOwner && connection.active ? <button className="primary-button" type="button"
+        {canSync && connection.active ? <button className="primary-button" type="button"
           disabled={sync.isPending || connection.lastSync?.status === SyncStatus.running}
           onClick={() => sync.mutate()}>{sync.isPending ? 'Synchronizing…' : 'Sync now'}</button> : null}
-        {isOwner && connection.active && connection.connectorType === 'SSH' ? <>
+        {canManage && connection.active && connection.connectorType === 'SSH' ? <>
           <Link className="secondary-button" to={`${connectionBase}/${encodeURIComponent(connectionId)}/edit${context}`}>Edit</Link>
           <details className="toolbar-overflow"><summary aria-label="More connection actions" title="More actions">⋯</summary>
             <button type="button" className="danger-action" disabled={deactivate.isPending} onClick={() => {
