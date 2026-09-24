@@ -30,7 +30,10 @@ function NodeOverview({ resource }: ResourcePresentationProps) {
       { label: 'Code', value: resource.code },
       { label: 'Hostname', value: spec?.hostname ?? '—' },
       { label: 'Operating system', value: spec?.operatingSystem ?? '—' },
+      { label: 'Distribution', value: spec?.distribution ?? '—' },
+      { label: 'Kernel', value: spec?.kernelVersion ?? '—' },
       { label: 'Architecture', value: spec?.architecture ?? '—' },
+      { label: 'CPU model', value: spec?.cpuModel ?? '—' },
       { label: 'CPU cores', value: spec?.cpuCores ?? '—' },
       { label: 'Memory', value: formatMemoryMb(spec?.memoryMb ?? null) },
     ]} /></WorkspaceSection>

@@ -63,6 +63,19 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
     assertEquals(state.sessions.get(syncSessionId).map(_.status), Some(SyncSessionStatus.Completed))
   }
 
+  test("deactivates containers omitted by an authoritative empty Docker snapshot") {
+    val result = runSnapshot(
+      initialState,
+      failNewResourceSave = false,
+      completeExternalTypes = Set("NODE", "CONTAINER"),
+      discoveredResources = List.empty
+    )
+    val state = result.toOption.getOrElse(fail("Snapshot should succeed"))
+
+    assertEquals(state.resources.get(oldResourceId).map(_.isActive), Some(false))
+    assertEquals(state.sessions.get(syncSessionId).map(_.status), Some(SyncSessionStatus.Completed))
+  }
+
   private def runSnapshot(
                           initial: SnapshotState,
                           failNewResourceSave: Boolean,

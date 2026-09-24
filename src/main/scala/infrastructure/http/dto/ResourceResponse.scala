@@ -27,7 +27,10 @@ final case class NodeResourceDataResponse(spec: Option[NodeSpecResponse], status
 final case class NodeSpecResponse(
                                    hostname: String,
                                    operatingSystem: Option[String],
+                                   distribution: Option[String],
+                                   kernelVersion: Option[String],
                                    architecture: Option[String],
+                                   cpuModel: Option[String],
                                    cpuCores: Option[Int],
                                    memoryMb: Option[Long]
                                  )

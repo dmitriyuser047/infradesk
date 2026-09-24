@@ -26,12 +26,19 @@ object NodeResourceDataCodec extends ResourceDataCodec.Typed[NodeSpec, NodeStatu
 private[node] object NodeResourceJson {
 
   implicit val nodeSpecEncoder: Encoder[NodeSpec] =
-    Encoder.forProduct5("hostname", "operatingSystem", "architecture", "cpuCores", "memoryMb")(node =>
-      (node.hostname, node.operatingSystem, node.architecture, node.cpuCores, node.memoryMb)
+    Encoder.forProduct8(
+      "hostname", "operatingSystem", "distribution", "kernelVersion",
+      "architecture", "cpuModel", "cpuCores", "memoryMb"
+    )(node =>
+      (node.hostname, node.operatingSystem, node.distribution, node.kernelVersion,
+        node.architecture, node.cpuModel, node.cpuCores, node.memoryMb)
     )
 
   implicit val nodeSpecDecoder: Decoder[NodeSpec] =
-    Decoder.forProduct5("hostname", "operatingSystem", "architecture", "cpuCores", "memoryMb")(NodeSpec.apply)
+    Decoder.forProduct8(
+      "hostname", "operatingSystem", "distribution", "kernelVersion",
+      "architecture", "cpuModel", "cpuCores", "memoryMb"
+    )(NodeSpec.apply)
 
   implicit val nodeStatusEncoder: Encoder[NodeStatus] =
     Encoder.forProduct4("online", "cpuUsagePercent", "memoryUsagePercent", "uptimeSeconds")(node =>

@@ -31,7 +31,10 @@ function renderResourcePage(value: ResourceResponse): string {
 describe('resource page presentation', () => {
   const node = resource('NODE', {
     kind: 'NODE',
-    spec: { hostname: 'node-1', operatingSystem: 'Linux', architecture: 'x86_64', cpuCores: 4, memoryMb: 8192 },
+    spec: {
+      hostname: 'node-1', operatingSystem: 'Linux', distribution: 'Ubuntu 24.04 LTS',
+      kernelVersion: '6.8.0', architecture: 'x86_64', cpuModel: 'AMD EPYC', cpuCores: 4, memoryMb: 8192,
+    },
     status: { online: true, cpuUsagePercent: 12.5, memoryUsagePercent: 37.5, uptimeSeconds: 3600 },
   })
   const container = resource('CONTAINER', {
@@ -43,6 +46,9 @@ describe('resource page presentation', () => {
 
     expect(html).toContain('<dt>Hostname</dt><dd>node-1</dd>')
     expect(html).toContain('<dt>Operating system</dt><dd>Linux</dd>')
+    expect(html).toContain('<dt>Distribution</dt><dd>Ubuntu 24.04 LTS</dd>')
+    expect(html).toContain('<dt>Kernel</dt><dd>6.8.0</dd>')
+    expect(html).toContain('<dt>CPU model</dt><dd>AMD EPYC</dd>')
     expect(html).toContain('<dt>Architecture</dt><dd>x86_64</dd>')
     expect(html).toContain('<dt>CPU cores</dt><dd>4</dd>')
     expect(html).toContain('status-indicator status-success')
@@ -50,6 +56,25 @@ describe('resource page presentation', () => {
     expect(html).toContain('id="tab-metrics"')
     expect(html).toContain('id="tab-rules"')
     expect(html).toContain('Monitor rules')
+  })
+
+  it('renders an em dash for missing optional node inventory fields', () => {
+    if (node.data.kind !== 'NODE') throw new Error('Expected NODE test data')
+    const withoutOptionalFacts = resource('NODE', {
+      kind: 'NODE',
+      status: node.data.status,
+      spec: node.data.spec ? {
+        ...node.data.spec, distribution: null, kernelVersion: null, cpuModel: null,
+      } : null,
+    })
+    const html = renderResourcePage(withoutOptionalFacts)
+
+    expect(html).toContain('<dt>Distribution</dt><dd>—</dd>')
+    expect(html).toContain('<dt>Kernel</dt><dd>—</dd>')
+    expect(html).toContain('<dt>CPU model</dt><dd>—</dd>')
+    expect(html).toContain('<dt>CPU</dt><dd>12.5%</dd>')
+    expect(html).toContain('<dt>Memory</dt><dd>37.5%</dd>')
+    expect(html).toContain('<dt>Uptime</dt><dd>1h 0m</dd>')
   })
 
   it('renders container properties without the node-only tabs and header status', () => {

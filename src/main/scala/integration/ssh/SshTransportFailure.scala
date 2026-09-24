@@ -21,6 +21,8 @@ object SshTransportFailure {
     extends SshTransportFailure("SSH host key has changed", cause)
   final class CommandTimeout(cause: Throwable)
     extends SshTransportFailure("SSH command timed out", cause)
+  final class CommandOutputLimitExceeded(cause: Throwable)
+    extends SshTransportFailure("SSH command output exceeded the allowed limit", cause)
   final class ConnectionFailed(cause: Throwable)
     extends SshTransportFailure("SSH connection failed", cause)
 
@@ -42,6 +44,11 @@ object SshTransportFailure {
 
   private[ssh] def commandTimeout(): SshTransportFailure =
     new CommandTimeout(new TimeoutException("SSH command timed out"))
+
+  private[ssh] def commandOutputLimitExceeded(stream: String, limitBytes: Int): SshTransportFailure =
+    new CommandOutputLimitExceeded(
+      new IOException(s"SSH $stream exceeded its $limitBytes byte limit")
+    )
 
   private def hasNestedNetworkCause(error: Throwable): Boolean =
     Option(error.getCause).exists { cause =>

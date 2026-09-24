@@ -1,7 +1,10 @@
 export interface NodeSpecResponse {
   hostname: string
   operatingSystem: string | null
+  distribution: string | null
+  kernelVersion: string | null
   architecture: string | null
+  cpuModel: string | null
   cpuCores: number | null
   memoryMb: number | null
 }

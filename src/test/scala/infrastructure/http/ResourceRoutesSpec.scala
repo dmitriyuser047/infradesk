@@ -31,6 +31,9 @@ final class ResourceRoutesSpec extends FunSuite {
     assertEquals(body.hcursor.get[String]("resourceTypeCode"), Right("NODE"))
     assertEquals(body.hcursor.downField("data").get[String]("kind"), Right("NODE"))
     assertEquals(body.hcursor.downField("data").downField("spec").get[String]("hostname"), Right("node-1"))
+    assertEquals(body.hcursor.downField("data").downField("spec").get[String]("distribution"), Right("Ubuntu 24.04 LTS"))
+    assertEquals(body.hcursor.downField("data").downField("spec").get[String]("kernelVersion"), Right("6.8.0"))
+    assertEquals(body.hcursor.downField("data").downField("spec").get[String]("cpuModel"), Right("AMD EPYC"))
     assertEquals(body.hcursor.downField("data").downField("spec").get[Int]("cpuCores"), Right(4))
     assertEquals(body.hcursor.downField("data").downField("status").get[BigDecimal]("cpuUsagePercent"), Right(BigDecimal(42.5)))
     assertEquals(body.hcursor.downField("data").downField("status").get[BigDecimal]("memoryUsagePercent"), Right(BigDecimal(70)))
@@ -410,7 +413,11 @@ final class ResourceRoutesSpec extends FunSuite {
     Now,
     "NODE",
     ResourceData(
-      Some(NodeSpec("node-1", Some("Linux"), Some("x86_64"), Some(4), Some(8192))),
+      Some(NodeSpec(
+        hostname = "node-1", operatingSystem = Some("Linux"), distribution = Some("Ubuntu 24.04 LTS"),
+        kernelVersion = Some("6.8.0"), architecture = Some("x86_64"), cpuModel = Some("AMD EPYC"),
+        cpuCores = Some(4), memoryMb = Some(8192)
+      )),
       Some(NodeStatus(true, Some(BigDecimal(42.5)), Some(BigDecimal(70)), Some(12345)))
     )
   )

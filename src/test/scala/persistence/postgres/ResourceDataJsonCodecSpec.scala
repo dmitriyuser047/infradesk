@@ -11,7 +11,11 @@ final class ResourceDataJsonCodecSpec extends FunSuite {
   private val codec = ProductionResourceCodec.codec
 
   private val nodeData = ResourceData(
-    Some(NodeSpec("node-1", Some("Linux"), Some("x86_64"), Some(4), Some(8192))),
+    Some(NodeSpec(
+      hostname = "node-1", operatingSystem = Some("Linux"), distribution = Some("Ubuntu 24.04 LTS"),
+      kernelVersion = Some("6.8.0"), architecture = Some("x86_64"), cpuModel = Some("AMD EPYC"),
+      cpuCores = Some(4), memoryMb = Some(8192)
+    )),
     Some(NodeStatus(true, Some(BigDecimal("12.5")), Some(BigDecimal("37.5")), Some(123456)))
   )
 
@@ -31,6 +35,19 @@ final class ResourceDataJsonCodecSpec extends FunSuite {
     val decoded = codec.decode(NodeDefinition.code, stored.specJson, stored.statusJson)
 
     assertEquals(decoded, Right(nodeData))
+  }
+
+  test("decodes old NODE JSON without the new optional inventory fields") {
+    val status = encoded(NodeDefinition.code, nodeData).statusJson
+    val decoded = codec.decode(NodeDefinition.code,
+      """{"hostname":"old-node","operatingSystem":"Linux","architecture":"x86_64","cpuCores":2,"memoryMb":4096}""",
+      status).toOption.getOrElse(fail("Old NODE JSON did not decode"))
+    val spec = decoded.spec.collect { case value: NodeSpec => value }.getOrElse(fail("Missing NodeSpec"))
+
+    assertEquals(spec.hostname, "old-node")
+    assertEquals(spec.distribution, None)
+    assertEquals(spec.kernelVersion, None)
+    assertEquals(spec.cpuModel, None)
   }
 
   test("round-trips ContainerSpec and ContainerStatus") {

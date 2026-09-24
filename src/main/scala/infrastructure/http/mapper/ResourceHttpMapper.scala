@@ -33,11 +33,14 @@ object ResourceHttpMapper {
         Right(
           NodeResourceDataResponse(
             Some(NodeSpecResponse(
-              spec.hostname,
-              spec.operatingSystem,
-              spec.architecture,
-              spec.cpuCores,
-              spec.memoryMb
+              hostname = spec.hostname,
+              operatingSystem = spec.operatingSystem,
+              distribution = spec.distribution,
+              kernelVersion = spec.kernelVersion,
+              architecture = spec.architecture,
+              cpuModel = spec.cpuModel,
+              cpuCores = spec.cpuCores,
+              memoryMb = spec.memoryMb
             )),
             Some(NodeStatusResponse(
               status.online,

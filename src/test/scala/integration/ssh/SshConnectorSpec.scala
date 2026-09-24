@@ -50,7 +50,10 @@ final class SshConnectorSpec extends FunSuite {
           operatingSystem = Some("Linux"),
           architecture = Some("x86_64"),
           cpuCores = Some(4),
-          memoryMb = Some(8192)
+          memoryMb = Some(8192),
+          distribution = Some("Ubuntu 24.04 LTS"),
+          kernelVersion = Some("6.8.0"),
+          cpuModel = Some("AMD EPYC")
         )),
         Some(NodeStatus(
           online = true,
@@ -102,6 +105,35 @@ final class SshConnectorSpec extends FunSuite {
     assertEquals(calls.get.unsafeRunSync().map(_.command), List(SshConnector.NodeDiscoveryCommand, DockerContainersCommand))
   }
 
+  test("treats successful empty Docker output as a complete authoritative snapshot") {
+    val calls = Ref.of[IO, List[ExecuteCall]](Nil).unsafeRunSync()
+    val sessions = Ref.of[IO, Int](0).unsafeRunSync()
+    val connector = new SshConnector[IO](
+      new RecordingSshClient(calls, sessions,
+        dockerResult = SshCommandResult(0, "", "", HostKeyFingerprint)),
+      new FixedAuthenticationProvider
+    )
+
+    val result = connector.discover(connection).unsafeRunSync()
+    assertEquals(result.resources.map(_.externalType), List(SshConnector.NodeExternalType))
+    assertEquals(result.completeExternalTypes,
+      Set(SshConnector.NodeExternalType, SshConnector.ContainerExternalType))
+  }
+
+  test("rejects malformed successful Docker output without returning a partial snapshot") {
+    val calls = Ref.of[IO, List[ExecuteCall]](Nil).unsafeRunSync()
+    val sessions = Ref.of[IO, Int](0).unsafeRunSync()
+    val connector = new SshConnector[IO](
+      new RecordingSshClient(calls, sessions,
+        dockerResult = SshCommandResult(0, "id\tmissing-fields\n", "", HostKeyFingerprint)),
+      new FixedAuthenticationProvider
+    )
+
+    intercept[docker.DockerInventoryParseError] {
+      connector.discover(connection).unsafeRunSync()
+    }
+  }
+
   test("keeps a pinned fingerprint without reconnecting") {
     val calls = Ref.of[IO, List[ExecuteCall]](Nil).unsafeRunSync()
     val sessions = Ref.of[IO, Int](0).unsafeRunSync()
@@ -144,7 +176,7 @@ final class SshConnectorSpec extends FunSuite {
       new FixedAuthenticationProvider
     )
 
-    intercept[IllegalStateException] {
+    intercept[node.NodeInventoryParseError] {
       connector.discover(connection).unsafeRunSync()
     }
   }
@@ -311,6 +343,9 @@ final class SshConnectorSpec extends FunSuite {
         ResourceConnectorFailureCode.SshHostKeyMismatch, "SSH host key has changed"),
       (new SshTransportFailure.CommandTimeout(new RuntimeException(raw)),
         ResourceConnectorFailureCode.SshCommandTimeout, "SSH command timed out"),
+      (new SshTransportFailure.CommandOutputLimitExceeded(new RuntimeException(raw)),
+        ResourceConnectorFailureCode.SshCommandOutputLimit,
+        "SSH command output exceeded the allowed limit"),
       (new SshTransportFailure.ConnectionFailed(new RuntimeException(raw)),
         ResourceConnectorFailureCode.SshConnectionFailed, "SSH connection failed")
     )
@@ -342,7 +377,10 @@ final class SshConnectorSpec extends FunSuite {
   private val SuccessfulNodeDiscoveryResult =
     SshCommandResult(
       0,
-      "hostname\ttest-node\noperating_system\tLinux\narchitecture\tx86_64\ncpu_cores\t4\nmemory_mb\t8192\ncpu_usage_percent\t12.500000\nmemory_usage_percent\t37.500000\nuptime_seconds\t123456\n",
+      "hostname\ttest-node\noperating_system\tLinux\ndistribution\tUbuntu 24.04 LTS\n" +
+        "kernel_version\t6.8.0\narchitecture\tx86_64\ncpu_model\tAMD EPYC\ncpu_cores\t4\n" +
+        "memory_mb\t8192\ncpu_usage_percent\t12.500000\nmemory_usage_percent\t37.500000\n" +
+        "uptime_seconds\t123456\n",
       "",
       HostKeyFingerprint
     )

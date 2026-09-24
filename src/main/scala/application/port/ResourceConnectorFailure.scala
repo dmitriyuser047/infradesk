@@ -10,5 +10,6 @@ object ResourceConnectorFailureCode {
   val SshAuthenticationFailed = "SSH_AUTH_FAILED"
   val SshHostKeyMismatch = "SSH_HOST_KEY_MISMATCH"
   val SshCommandTimeout = "SSH_COMMAND_TIMEOUT"
+  val SshCommandOutputLimit = "SSH_COMMAND_OUTPUT_LIMIT"
   val SshConnectionFailed = "SSH_CONNECTION_FAILED"
 }

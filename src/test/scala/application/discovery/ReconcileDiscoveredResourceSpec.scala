@@ -9,6 +9,7 @@ import domain.externalref.ExternalRef
 import domain.resource.Resource
 import domain.resource.ResourceData
 import domain.resource.container.{ContainerSpec, ContainerStatus}
+import domain.resource.node.{NodeSpec, NodeStatus}
 import munit.FunSuite
 
 import java.time.Instant
@@ -70,6 +71,54 @@ final class ReconcileDiscoveredResourceSpec extends FunSuite {
         )
       )
     )
+  }
+
+  test("updates NODE SELF inventory fields on the existing resource identity") {
+    val existingNode = existingResource.copy(
+      code = "node-before",
+      name = "node-before",
+      resourceTypeCode = "NODE",
+      data = ResourceData(
+        Some(NodeSpec("node-before", Some("Linux"), None, Some(2), Some(4096))),
+        Some(NodeStatus(true, None, None, Some(100)))
+      )
+    )
+    val nodeRef = containerExternalRef.copy(externalType = "NODE", externalId = "SELF")
+    val resourceRepository = new RecordingResourceRepository(existingNode)
+    val externalRefRepository = new RecordingExternalRefRepository(parentExternalRef)
+    val reconcile = new ReconcileDiscoveredResource[IO](resourceRepository, externalRefRepository)
+
+    val reconciled = reconcile.execute(
+      connection,
+      DiscoveredResource(
+        externalType = "NODE",
+        externalId = "SELF",
+        resourceTypeCode = "NODE",
+        code = "node-after",
+        name = "node-after",
+        data = ResourceData(
+          Some(NodeSpec(
+            hostname = "node-after", operatingSystem = Some("Linux"),
+            distribution = Some("Ubuntu 24.04 LTS"), kernelVersion = Some("6.8.0"),
+            architecture = Some("x86_64"), cpuModel = Some("AMD EPYC"),
+            cpuCores = Some(4), memoryMb = Some(8192)
+          )),
+          Some(NodeStatus(true, Some(BigDecimal("12.5")), Some(BigDecimal("37.5")), Some(200)))
+        )
+      ),
+      nodeRef,
+      syncSessionId,
+      reconciledAt
+    ).unsafeRunSync()
+
+    assertEquals(reconciled.id, existingNode.id)
+    assertEquals(reconciled.createdAt, existingNode.createdAt)
+    assertEquals(reconciled.code, "node-after")
+    assertEquals(reconciled.name, "node-after")
+    assertEquals(reconciled.data.spec.collect { case spec: NodeSpec => spec.distribution },
+      Some(Some("Ubuntu 24.04 LTS")))
+    assertEquals(resourceRepository.saved.map(_.id), Some(existingNode.id))
+    assertEquals(externalRefRepository.saved.map(_.externalId), Some("SELF"))
   }
 
   private val organizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")

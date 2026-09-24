@@ -139,8 +139,12 @@ object HttpJsonCodecs {
     }
 
   implicit val nodeSpecResponseEncoder: Encoder[NodeSpecResponse] =
-    Encoder.forProduct5("hostname", "operatingSystem", "architecture", "cpuCores", "memoryMb") { value =>
-      (value.hostname, value.operatingSystem, value.architecture, value.cpuCores, value.memoryMb)
+    Encoder.forProduct8(
+      "hostname", "operatingSystem", "distribution", "kernelVersion",
+      "architecture", "cpuModel", "cpuCores", "memoryMb"
+    ) { value =>
+      (value.hostname, value.operatingSystem, value.distribution, value.kernelVersion,
+        value.architecture, value.cpuModel, value.cpuCores, value.memoryMb)
     }
 
   implicit val nodeStatusResponseEncoder: Encoder[NodeStatusResponse] =
