@@ -122,10 +122,12 @@ not part of the API.
 Each request is journaled and creates a durable `operation_execution`. A partial unique index allows
 only one `RUNNING` execution per resource. Target resolution, stale recovery, the RUNNING insert and
 the audit event commit together; SSH runs after that transaction, and a second short transaction
-records `SUCCEEDED` or `FAILED`. There is no automatic retry. A RUNNING row is recovered as
-`UNKNOWN` only once its own attempt can no longer be in flight — the connection's connect and
-command timeouts plus a minute of margin, never less than ten minutes — since the backend cannot
-safely infer whether the remote command took effect. Owners see controls and history; members retain read-only history access.
+records `SUCCEEDED` or `FAILED`. There is no automatic retry. Each execution stores the moment
+after which its own attempt may be declared abandoned, computed when it starts from that
+connection's connect and command timeouts plus a minute of margin, never less than ten minutes.
+Recovery compares against that stored deadline, so reconfiguring the connection afterwards cannot
+retire a command that is still in flight; the recovered execution becomes `UNKNOWN`, since the
+backend cannot safely infer whether the remote command took effect. Owners see controls and history; members retain read-only history access.
 
 Frontend: `cd frontend`, then `npm ci`, `npm test`, `npm run build`, or `npm run dev`.
 

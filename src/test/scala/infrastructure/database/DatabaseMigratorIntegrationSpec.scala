@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V18 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V19 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 18)
-        assertEquals(first.currentVersion, "18")
+        assertEquals(first.migrationsApplied, 19)
+        assertEquals(first.currentVersion, "19")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "18")
+        assertEquals(second.currentVersion, "19")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -101,7 +101,11 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
                 "(select count(*) from information_schema.table_constraints " +
                 "where table_schema = current_schema() and table_name = 'operation_execution' " +
                 "and constraint_name in ('ck_operation_execution_operation', " +
-                "'ck_operation_execution_status', 'ck_operation_execution_lifecycle')), " +
+                "'ck_operation_execution_status', 'ck_operation_execution_lifecycle', " +
+                "'ck_operation_execution_recover_after_at')), " +
+                "(select count(*) from information_schema.columns where table_schema = current_schema() " +
+                "and table_name = 'operation_execution' and column_name = 'recover_after_at' " +
+                "and is_nullable = 'NO'), " +
                 "(select indexdef like '%WHERE%''RUNNING''%' from pg_indexes " +
                 "where schemaname = current_schema() " +
                 "and indexname = 'ux_operation_execution_resource_running')"
@@ -110,9 +114,11 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               assert(operations.next())
               assert(operations.getString(1) != null)
               assertEquals(operations.getInt(2), 2)
-              assertEquals(operations.getInt(3), 3)
+              assertEquals(operations.getInt(3), 4)
+              // Every execution stores its own recovery deadline; the column cannot be absent.
+              assertEquals(operations.getInt(4), 1)
               // The uniqueness that serializes remediation is the partial one, not a global one.
-              assertEquals(operations.getBoolean(4), true)
+              assertEquals(operations.getBoolean(5), true)
             } finally operations.close()
           } finally statement.close()
         } finally connection.close()
@@ -122,7 +128,7 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         try {
           val statement = connection.createStatement()
           try assertEquals(statement.executeUpdate(
-            "update flyway_schema_history set checksum = checksum + 1 where version = '18'"
+            "update flyway_schema_history set checksum = checksum + 1 where version = '19'"
           ), 1)
           finally statement.close()
         } finally connection.close()

@@ -50,10 +50,12 @@ final class OperationExecutionRepositoryIntegrationSpec extends FunSuite {
         _ <- sql"delete from project where id = $project".update.run
         _ <- sql"delete from organization where id = $org".update.run
       } yield ()
-      def running(id: UUID, targetResource: UUID, startedAt: Instant) = OperationExecution(id, org,
+      def running(id: UUID, targetResource: UUID, startedAt: Instant,
+        recoverAfterAt: Instant = at.plusSeconds(600)) = OperationExecution(id, org,
         targetResource, actor, ResourceOperationCode.ContainerRestart, connection, "CONTAINER",
         "73ac69cf50927aadda817a4a31fdcf6b56f2d3cfe782dabeab65b961c230fc6d",
-        OperationExecutionStatus.Running, startedAt, None, None, None, startedAt, startedAt)
+        OperationExecutionStatus.Running, startedAt, recoverAfterAt, None, None, None, startedAt,
+        startedAt)
 
       runner.run(setup) *> (for {
         first <- IO(UUID.randomUUID()); second <- IO(UUID.randomUUID())
@@ -66,14 +68,18 @@ final class OperationExecutionRepositoryIntegrationSpec extends FunSuite {
         changedAgain <- runner.run(repository.markFailed(org, winner, at.plusSeconds(2), "X", "X"))
         _ <- IO { assert(changed); assert(!changedAgain) }
         staleId <- IO(UUID.randomUUID())
-        _ <- runner.run(repository.tryCreateRunning(running(staleId, resource, at.minusSeconds(601))))
-        recovered <- runner.run(repository.recoverStaleRunning(org, resource, at.minusSeconds(600), at,
+        // Its own deadline has passed; a fresh execution with a later deadline must survive.
+        _ <- runner.run(repository.tryCreateRunning(running(staleId, resource, at.minusSeconds(1801),
+          recoverAfterAt = at.minusSeconds(1))))
+        notDue <- runner.run(repository.recoverStaleRunning(org, otherResource, at.minusSeconds(60),
+          "OPERATION_RESULT_UNKNOWN", "Operation result is unknown because execution was interrupted"))
+        recovered <- runner.run(repository.recoverStaleRunning(org, resource, at,
           "OPERATION_RESULT_UNKNOWN", "Operation result is unknown because execution was interrupted"))
         stale <- runner.run(repository.findById(org, resource, staleId))
         history <- runner.run(repository.listByResource(org, resource, None, 20))
         target <- runner.run(targetQuery.find(org, resource))
         _ <- IO {
-          assertEquals(recovered, List(staleId)); assertEquals(stale.map(_.status), Some(OperationExecutionStatus.Unknown))
+          assertEquals(notDue, List.empty); assertEquals(recovered, List(staleId)); assertEquals(stale.map(_.status), Some(OperationExecutionStatus.Unknown))
           assertEquals(stale.flatMap(_.errorCode), Some("OPERATION_RESULT_UNKNOWN"))
           assertEquals(history.map(_.startedAt), history.map(_.startedAt).sortWith(_.isAfter(_)))
           assertEquals(target.map(_.targets.size), Some(1))

@@ -36,6 +36,8 @@ final case class OperationExecution(
   targetExternalId: String,
   status: OperationExecutionStatus,
   startedAt: Instant,
+  /** When this attempt may be declared abandoned, fixed from the conditions it started under. */
+  recoverAfterAt: Instant,
   finishedAt: Option[Instant],
   errorCode: Option[String],
   errorMessage: Option[String],

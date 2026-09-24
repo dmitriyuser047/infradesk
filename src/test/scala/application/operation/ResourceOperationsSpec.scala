@@ -9,7 +9,6 @@ import domain.connection.{Connection, ConnectionScope, SshConnectionSettings}
 import domain.operation._
 import munit.FunSuite
 import support.{FailingAuditEventRepository, RecordingAuditEventRepository, TestAuditRecorder}
-import integration.ssh.docker.SshContainerOperationExecutor
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import java.time.Instant
@@ -63,11 +62,25 @@ final class ResourceOperationsSpec extends FunSuite {
     assertEquals(fixture.executor.calls.unsafeRunSync(), 0)
   }
 
-  test("a running operation is never abandoned while its own command can still be in flight") {
-    // Twenty minutes of command timeout: eleven minutes in, the first SSH command may well still
-    // be waiting for the container to stop.
+  test("an execution stores the deadline of the conditions it started under") {
     val fixture = OpFixture(commandTimeoutSeconds = 1200)
-    fixture.repository.start(now.minusSeconds(11 * 60))
+
+    fixture.service.execute(actor, resource, ResourceOperationCode.ContainerStart).unsafeRunSync()
+
+    // connect 10s + command 1200s + one minute of margin.
+    assertEquals(fixture.repository.values.head.recoverAfterAt, now.plusSeconds(10 + 1200 + 60))
+
+    // A fast connection still keeps the ten-minute floor.
+    val fast = OpFixture(commandTimeoutSeconds = 30)
+    fast.service.execute(actor, resource, ResourceOperationCode.ContainerStart).unsafeRunSync()
+    assertEquals(fast.repository.values.head.recoverAfterAt, now.plusSeconds(600))
+  }
+
+  test("a running operation is never abandoned while its own command can still be in flight") {
+    // The running operation was started when the connection allowed twenty-minute commands; the
+    // connection has since been reconfigured to thirty seconds.
+    val fixture = OpFixture(commandTimeoutSeconds = 30)
+    fixture.repository.start(startedAt = now.minusSeconds(11 * 60), recoverAfterAt = now.plusSeconds(10 * 60))
 
     intercept[OperationAlreadyRunning] {
       fixture.service.execute(actor, resource, ResourceOperationCode.ContainerRestart).unsafeRunSync()
@@ -80,10 +93,9 @@ final class ResourceOperationsSpec extends FunSuite {
     assertEquals(fixture.auditRepository.toList.flatMap(_.recorded), List.empty)
   }
 
-  test("a running operation past its own budget becomes unknown and releases the resource") {
-    val fixture = OpFixture(commandTimeoutSeconds = 1200)
-    val abandoned = now.minusSeconds(10 + 1200 + 60 + 1)
-    fixture.repository.start(abandoned)
+  test("a running operation past its own deadline becomes unknown and releases the resource") {
+    val fixture = OpFixture(commandTimeoutSeconds = 30)
+    fixture.repository.start(startedAt = now.minusSeconds(22 * 60), recoverAfterAt = now.minusSeconds(60))
 
     val result = fixture.service.execute(actor, resource, ResourceOperationCode.ContainerRestart)
       .unsafeRunSync()
@@ -116,13 +128,21 @@ final class ResourceOperationsSpec extends FunSuite {
     }
     val auditRepository: Option[RecordingAuditEventRepository] = if (failingAudit) None else Some(new RecordingAuditEventRepository)
     val auditRecorder = TestAuditRecorder(auditRepository.getOrElse(new FailingAuditEventRepository))
-    val budget = new SshContainerOperationExecutor[IO](null, null)
+    val budget = new SshTimeoutBudget
     val preparation = new ResourceOperationPreparation[IO](query, repository, new FixedId,
       new FixedTime, auditRecorder, budget)
     val executor = new RecordingExecutor(failure)
     val service = new ExecuteResourceOperation[IO](preparation, repository, executor,
       new TransactionRunner[IO, IO] { def run[A](program: IO[A]): IO[A] = program }, new FixedTime,
       Slf4jLogger.getLoggerFromName[IO]("test.operations"))
+  }
+
+  /** Mirrors the SSH adapter: the budget of a target is what its own connection allows. */
+  private final class SshTimeoutBudget extends ResourceOperationBudget {
+    def maxAttemptDuration(target: ResourceOperationTarget): FiniteDuration =
+      SshConnectionSettings.from(target.connection.config)
+        .map(value => value.connectTimeoutSeconds.seconds + value.commandTimeoutSeconds.seconds)
+        .getOrElse(Duration.Zero)
   }
 
   private final class FixedId extends IdGenerator[IO] { def nextId = IO.pure(UUID.randomUUID()) }
@@ -138,21 +158,22 @@ final class ResourceOperationsSpec extends FunSuite {
     var running = false
     var recovered = List.empty[UUID]
 
-    /** Seeds a running execution started at the given moment, as a previous request would. */
-    def start(startedAt: Instant): Unit = {
+    /** Seeds a running execution with the deadline a previous request would have stored. */
+    def start(startedAt: Instant, recoverAfterAt: Instant): Unit = {
       running = true
       values ::= OperationExecution(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
         UUID.randomUUID(), ResourceOperationCode.ContainerRestart, UUID.randomUUID(), "CONTAINER",
         "73ac69cf50927aadda817a4a31fdcf6b56f2d3cfe782dabeab65b961c230fc6d",
-        OperationExecutionStatus.Running, startedAt, None, None, None, startedAt, startedAt)
+        OperationExecutionStatus.Running, startedAt, recoverAfterAt, None, None, None, startedAt,
+        startedAt)
     }
 
     def tryCreateRunning(value: OperationExecution) = IO {
       if (running) false else { running = true; values ::= value; true }
     }
-    def recoverStaleRunning(o: UUID, r: UUID, b: Instant, at: Instant, c: String, m: String) = IO {
+    def recoverStaleRunning(o: UUID, r: UUID, at: Instant, c: String, m: String) = IO {
       val stale = values.filter(value =>
-        value.status == OperationExecutionStatus.Running && value.startedAt.isBefore(b))
+        value.status == OperationExecutionStatus.Running && !value.recoverAfterAt.isAfter(at))
       values = values.map(value =>
         if (stale.exists(_.id == value.id)) value.copy(status = OperationExecutionStatus.Unknown,
           finishedAt = Some(at), errorCode = Some(c), errorMessage = Some(m))

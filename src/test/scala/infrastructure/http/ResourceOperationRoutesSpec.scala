@@ -65,7 +65,7 @@ final class ResourceOperationRoutesSpec extends FunSuite {
   private final class Repo extends OperationExecutionRepository[IO] {
     private var values = List.empty[OperationExecution]
     def tryCreateRunning(v: OperationExecution) = IO { values ::= v; true }
-    def recoverStaleRunning(o: UUID, r: UUID, b: Instant, a: Instant, c: String, m: String) = IO.pure(List.empty[UUID])
+    def recoverStaleRunning(o: UUID, r: UUID, at: Instant, c: String, m: String) = IO.pure(List.empty[UUID])
     def markSucceeded(o: UUID, id: UUID, at: Instant) = IO { values = values.map(v => if(v.id == id) v.copy(status = OperationExecutionStatus.Succeeded, finishedAt = Some(at)) else v); true }
     def markFailed(o: UUID, id: UUID, at: Instant, c: String, m: String) = IO.pure(true)
     def findById(o: UUID, r: UUID, id: UUID) = IO.pure(values.find(_.id == id))

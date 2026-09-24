@@ -77,15 +77,14 @@ final class ResourceOperationPreparation[Tx[_]: MonadThrow](
       }
       id <- ids.nextId
       now <- time.now
-      // The horizon comes from the target the resource actually has, since a resource with more
-      // than one actionable target is rejected above and never reaches this point.
-      staleAfter = ResourceOperationPolicy.staleAfter(budget.maxAttemptDuration(target))
-      recovered <- executions.recoverStaleRunning(actor.organizationId, resourceId,
-        now.minusMillis(staleAfter.toMillis), now,
+      // Each running execution carries its own deadline, so recovery never reads settings that
+      // may have changed since that execution sent its command.
+      recovered <- executions.recoverStaleRunning(actor.organizationId, resourceId, now,
         ResourceOperationPolicy.UnknownCode, ResourceOperationPolicy.UnknownMessage)
+      staleAfter = ResourceOperationPolicy.staleAfter(budget.maxAttemptDuration(target))
       execution = OperationExecution(id, actor.organizationId, resourceId, actor.userId, operation,
         target.connection.id, target.externalType, target.externalId, OperationExecutionStatus.Running,
-        now, None, None, None, now, now)
+        now, now.plusMillis(staleAfter.toMillis), None, None, None, now, now)
       created <- executions.tryCreateRunning(execution)
       _ <- MonadThrow[Tx].raiseUnless(created)(OperationAlreadyRunning())
       _ <- audit.record(actor, auditAction(operation), AuditTargetType.Resource, Some(resourceId))

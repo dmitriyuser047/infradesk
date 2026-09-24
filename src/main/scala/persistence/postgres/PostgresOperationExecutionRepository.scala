@@ -14,26 +14,27 @@ import java.util.UUID
 final class PostgresOperationExecutionRepository extends OperationExecutionRepository[ConnectionIO] {
   private val columns = fr"id, organization_id, resource_id, actor_user_id, operation," ++
     fr"target_connection_id, target_external_type, target_external_id, status, started_at," ++
-    fr"finished_at, error_code, error_message, created_at, updated_at"
+    fr"recover_after_at, finished_at, error_code, error_message, created_at, updated_at"
 
   override def tryCreateRunning(value: OperationExecution): ConnectionIO[Boolean] =
     sql"""insert into operation_execution
       (id, organization_id, resource_id, actor_user_id, operation, target_connection_id,
-       target_external_type, target_external_id, status, started_at, finished_at, error_code,
-       error_message, created_at, updated_at)
+       target_external_type, target_external_id, status, started_at, recover_after_at, finished_at,
+       error_code, error_message, created_at, updated_at)
       values (${value.id}, ${value.organizationId}, ${value.resourceId}, ${value.actorUserId},
        ${value.operation.code}, ${value.targetConnectionId}, ${value.targetExternalType},
-       ${value.targetExternalId}, ${value.status.code}, ${value.startedAt}, ${value.finishedAt},
-       ${value.errorCode}, ${value.errorMessage}, ${value.createdAt}, ${value.updatedAt})
+       ${value.targetExternalId}, ${value.status.code}, ${value.startedAt}, ${value.recoverAfterAt},
+       ${value.finishedAt}, ${value.errorCode}, ${value.errorMessage}, ${value.createdAt},
+       ${value.updatedAt})
       on conflict (organization_id, resource_id) where status = 'RUNNING' do nothing"""
       .update.run.map(_ == 1)
 
-  override def recoverStaleRunning(organizationId: UUID, resourceId: UUID, staleBefore: Instant,
-    recoveredAt: Instant, errorCode: String, errorMessage: String): ConnectionIO[List[UUID]] =
-    sql"""update operation_execution set status = 'UNKNOWN', finished_at = $recoveredAt,
-      error_code = $errorCode, error_message = $errorMessage, updated_at = $recoveredAt
+  override def recoverStaleRunning(organizationId: UUID, resourceId: UUID, at: Instant,
+    errorCode: String, errorMessage: String): ConnectionIO[List[UUID]] =
+    sql"""update operation_execution set status = 'UNKNOWN', finished_at = $at,
+      error_code = $errorCode, error_message = $errorMessage, updated_at = $at
       where organization_id = $organizationId and resource_id = $resourceId
-        and status = 'RUNNING' and started_at <= $staleBefore returning id""".query[UUID].to[List]
+        and status = 'RUNNING' and recover_after_at <= $at returning id""".query[UUID].to[List]
 
   override def markSucceeded(organizationId: UUID, id: UUID, finishedAt: Instant): ConnectionIO[Boolean] =
     sql"""update operation_execution set status = 'SUCCEEDED', finished_at = $finishedAt,
@@ -61,12 +62,13 @@ final class PostgresOperationExecutionRepository extends OperationExecutionRepos
 
   private final case class Row(id: UUID, organizationId: UUID, resourceId: UUID, actorUserId: UUID,
     operation: String, targetConnectionId: UUID, targetExternalType: String, targetExternalId: String,
-    status: String, startedAt: Instant, finishedAt: Option[Instant], errorCode: Option[String],
-    errorMessage: Option[String], createdAt: Instant, updatedAt: Instant) {
+    status: String, startedAt: Instant, recoverAfterAt: Instant, finishedAt: Option[Instant],
+    errorCode: Option[String], errorMessage: Option[String], createdAt: Instant, updatedAt: Instant) {
     def domain: Either[IllegalArgumentException, OperationExecution] = for {
       op <- ResourceOperationCode.fromCode(operation)
       state <- OperationExecutionStatus.fromCode(status)
     } yield OperationExecution(id, organizationId, resourceId, actorUserId, op, targetConnectionId,
-      targetExternalType, targetExternalId, state, startedAt, finishedAt, errorCode, errorMessage, createdAt, updatedAt)
+      targetExternalType, targetExternalId, state, startedAt, recoverAfterAt, finishedAt, errorCode,
+      errorMessage, createdAt, updatedAt)
   }
 }
