@@ -21,6 +21,21 @@ final class SshNodeInventoryCollector[F[_]: MonadThrow] {
 final case class CollectedNodeInventory(inventory: NodeInventory, hostKeyFingerprint: String)
 
 object SshNodeInventoryCollector {
+
+  /** Reads the human-readable processor name out of `/proc/cpuinfo`.
+    *
+    * `model` and `model name` are different fields, and `model` — a numeric identifier — comes
+    * first, so a pattern that accepts either reports the number. Each key is therefore matched
+    * on its own, and the name wins over the ARM `Hardware` fallback regardless of file order.
+    * Only POSIX awk features are used, because the default awk of a Debian host is mawk.
+    */
+  private[node] val CpuModelProgram: String =
+    "/^model name[[:space:]]*:/ { if (name == \"\") name = substr($0, index($0, \":\") + 1) } " +
+      "/^[Hh]ardware[[:space:]]*:/ { if (hardware == \"\") hardware = substr($0, index($0, \":\") + 1) } " +
+      "END { value = (name != \"\" ? name : hardware); " +
+      "sub(/^[[:space:]]+/, \"\", value); sub(/[[:space:]]+$/, \"\", value); " +
+      "if (value != \"\") print value }"
+
   val Command: String =
     "LC_ALL=C; export LC_ALL; " +
       "printf 'hostname\\t%s\\n' \"$(hostname 2>/dev/null || true)\"; " +
@@ -28,7 +43,7 @@ object SshNodeInventoryCollector {
       "printf 'distribution\\t%s\\n' \"$(awk -F= '$1 == \"PRETTY_NAME\" { value=substr($0, index($0, \"=\") + 1); gsub(/^\"|\"$/, \"\", value); print value; exit }' /etc/os-release 2>/dev/null || true)\"; " +
       "printf 'kernel_version\\t%s\\n' \"$(uname -r 2>/dev/null || true)\"; " +
       "printf 'architecture\\t%s\\n' \"$(uname -m 2>/dev/null || true)\"; " +
-      "printf 'cpu_model\\t%s\\n' \"$(awk -F: 'BEGIN { IGNORECASE=1 } /^(model name|hardware|model)[[:space:]]*:/ { value=$2; sub(/^[[:space:]]+/, \"\", value); print value; exit }' /proc/cpuinfo 2>/dev/null || true)\"; " +
+      "printf 'cpu_model\\t%s\\n' \"$(awk '" + CpuModelProgram + "' /proc/cpuinfo 2>/dev/null || true)\"; " +
       "printf 'cpu_cores\\t%s\\n' \"$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)\"; " +
       "printf 'memory_mb\\t%s\\n' \"$(awk '/^MemTotal:/ { printf \"%d\", $2 / 1024; exit }' /proc/meminfo 2>/dev/null || true)\"; " +
       "cpu_first=\"$(awk '/^cpu / { total=0; for (i=2; i<=9 && i<=NF; i++) total += $i; print total, $5 + $6; exit }' /proc/stat 2>/dev/null || true)\"; " +
