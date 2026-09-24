@@ -258,7 +258,7 @@ object ApplicationModule {
         environmentRepository,
         transactionRunner,
         integrations.sshConnectionProbe,
-        integrations.sshPasswordResolver,
+        integrations.sshCredentialResolver,
         integrations.secretCipher,
         auditRecorder
       ),

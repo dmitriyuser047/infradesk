@@ -135,14 +135,15 @@ jobs:
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
-          # Build a representative V20 dump. Restoring it proves that a clean restored database
-          # is migrated forward to V21 before the backend becomes ready.
+          # Build a representative production V21 dump. Restoring it proves that the existing
+          # password-only secret schema is migrated forward to V22 before the backend is ready.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
-          alter table sync_session drop constraint ck_sync_session_recover_after_at;
-          alter table sync_session drop column recover_after_at;
-          delete from flyway_schema_history where version = '21';
+          alter table connection_secret drop constraint ck_connection_secret_kind;
+          alter table connection_secret add constraint connection_secret_kind_check
+            check (kind = 'SSH_PASSWORD');
+          delete from flyway_schema_history where version = '22';
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
@@ -170,11 +171,11 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "21"
-          deadline_column="$(docker compose -f compose.prod.yml exec -T postgres \
+          test "${migrated}" = "22"
+          credential_kind="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
-            --command "select count(*) from information_schema.columns where table_name = 'sync_session' and column_name = 'recover_after_at'")"
-          test "${deadline_column}" = "1"
+            --command "select count(*) from pg_constraint where conname = 'ck_connection_secret_kind' and pg_get_constraintdef(oid) like '%SSH_CREDENTIAL%'")"
+          test "${credential_kind}" = "1"
           ./scripts/check-production.sh http://127.0.0.1:8081
       - name: Separate liveness from readiness while the database is down
         run: |

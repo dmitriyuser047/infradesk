@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package integration.ssh
 
-import domain.connection.{ConnectionConfig, SshConnectionSettings}
+import domain.connection.{ConnectionConfig, SshAuthenticationType, SshConnectionSettings}
 
 final case class SshConnectionConfig(
   host: String,
@@ -9,7 +9,8 @@ final case class SshConnectionConfig(
   username: String,
   hostKeyFingerprint: Option[String],
   connectTimeoutSeconds: Int,
-  commandTimeoutSeconds: Int
+  commandTimeoutSeconds: Int,
+  authenticationType: SshAuthenticationType = SshAuthenticationType.Password
 )
 
 object SshConnectionConfig {
@@ -20,10 +21,10 @@ object SshConnectionConfig {
 
   def fromSettings(value: SshConnectionSettings): SshConnectionConfig =
     SshConnectionConfig(value.host, value.port, value.username, value.hostKeyFingerprint,
-      value.connectTimeoutSeconds, value.commandTimeoutSeconds)
+      value.connectTimeoutSeconds, value.commandTimeoutSeconds, value.authenticationType)
 
   def toConnectionConfig(value: SshConnectionConfig): ConnectionConfig =
     SshConnectionSettings.toConnectionConfig(SshConnectionSettings(
       value.host, value.port, value.username, value.hostKeyFingerprint,
-      value.connectTimeoutSeconds, value.commandTimeoutSeconds))
+      value.connectTimeoutSeconds, value.commandTimeoutSeconds, value.authenticationType))
 }

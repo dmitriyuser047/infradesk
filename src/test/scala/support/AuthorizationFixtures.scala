@@ -137,6 +137,8 @@ final class FixedConnectionRepository(connection: domain.connection.Connection)
   override def findByOrganization(organizationId: UUID): IO[List[domain.connection.Connection]] =
     IO.pure(List(connection))
   override def save(value: domain.connection.Connection): IO[Unit] = IO.unit
+  override def saveIfUnmodified(value: domain.connection.Connection,
+                                expectedUpdatedAt: Instant): IO[Boolean] = IO.pure(true)
 }
 
 /** An in-memory timeline that keeps what was recorded, in order. */

@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package application.connection
 
-import domain.connection.{ConnectionScope, SshConnectionSettings}
+import domain.connection.{ConnectionScope, SshCredential, SshConnectionSettings}
 
 final case class SshScheduleCommand(enabled: Boolean, intervalSeconds: Long)
 
@@ -10,7 +10,7 @@ final case class CreateSshConnectionCommand(
   name: String,
   scope: ConnectionScope,
   ssh: SshConnectionSettings,
-  password: String,
+  credential: SshCredential,
   schedule: SshScheduleCommand
 )
 
@@ -19,8 +19,13 @@ final case class UpdateSshConnectionCommand(
   name: String,
   scope: ConnectionScope,
   ssh: SshConnectionSettings,
-  password: Option[String],
+  /** Absent means "keep what is stored"; a change of authentication type requires a new one. */
+  credential: Option[SshCredential],
   schedule: SshScheduleCommand
 )
 
-final case class TestSshConnectionCommand(ssh: SshConnectionSettings, password: String)
+/** Asking a host who it is. Deliberately carries no credential. */
+final case class ProbeSshHostCommand(ssh: SshConnectionSettings)
+
+/** Authenticating against a host whose identity is already pinned in the settings. */
+final case class TestSshConnectionCommand(ssh: SshConnectionSettings, credential: SshCredential)

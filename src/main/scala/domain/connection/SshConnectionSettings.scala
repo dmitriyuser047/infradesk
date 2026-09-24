@@ -8,10 +8,16 @@ final case class SshConnectionSettings(
   host: String,
   port: Int,
   username: String,
+  /** The host identity this connection trusts. Empty means the host has not been confirmed yet,
+    * and no credential may be sent to it.
+    */
   hostKeyFingerprint: Option[String],
   connectTimeoutSeconds: Int,
-  commandTimeoutSeconds: Int
+  commandTimeoutSeconds: Int,
+  authenticationType: SshAuthenticationType = SshAuthenticationType.Password
 ) {
+  def hostTrusted: Boolean = hostKeyFingerprint.isDefined
+
   require(connectTimeoutSeconds > 0 &&
     connectTimeoutSeconds <= SshConnectionSettings.MaxConnectTimeoutSeconds,
     s"connectTimeoutSeconds must be between 1 and ${SshConnectionSettings.MaxConnectTimeoutSeconds}")
@@ -37,8 +43,13 @@ object SshConnectionSettings {
         DefaultConnectTimeoutSeconds, MaxConnectTimeoutSeconds)
       commandTimeout <- boundedPositiveInt(config, "commandTimeoutSeconds",
         DefaultCommandTimeoutSeconds, MaxCommandTimeoutSeconds)
+      // Connections stored before authentication became configurable are password connections.
+      authenticationType <- config.get("authenticationType").map(_.trim).filter(_.nonEmpty)
+        .fold[Either[IllegalArgumentException, SshAuthenticationType]](
+          Right(SshAuthenticationType.Password))(SshAuthenticationType.fromCode)
     } yield SshConnectionSettings(host, port, username,
-      config.get("hostKeyFingerprint").map(_.trim).filter(_.nonEmpty), connectTimeout, commandTimeout)
+      config.get("hostKeyFingerprint").map(_.trim).filter(_.nonEmpty), connectTimeout, commandTimeout,
+      authenticationType)
 
   def toConnectionConfig(value: SshConnectionSettings): ConnectionConfig =
     ConnectionConfig(Map(
@@ -46,7 +57,8 @@ object SshConnectionSettings {
       "port" -> value.port.toString,
       "username" -> value.username,
       "connectTimeoutSeconds" -> value.connectTimeoutSeconds.toString,
-      "commandTimeoutSeconds" -> value.commandTimeoutSeconds.toString
+      "commandTimeoutSeconds" -> value.commandTimeoutSeconds.toString,
+      "authenticationType" -> value.authenticationType.code
     ) ++ value.hostKeyFingerprint.map("hostKeyFingerprint" -> _))
 
   private def required(config: ConnectionConfig, key: String): Either[IllegalArgumentException, String] =

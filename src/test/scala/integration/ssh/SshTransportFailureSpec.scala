@@ -4,10 +4,18 @@ package integration.ssh
 import munit.FunSuite
 import net.schmizz.sshj.transport.TransportException
 import net.schmizz.sshj.userauth.UserAuthException
+import com.hierynomus.sshj.common.KeyDecryptionFailedException
 
 import java.net.{ConnectException, SocketTimeoutException}
 
 final class SshTransportFailureSpec extends FunSuite {
+  test("private-key authentication recognizes lazy passphrase decryption failures") {
+    val decryption = new KeyDecryptionFailedException("PEM Key decryption failed")
+    val wrapped = new UserAuthException("Exhausted available authentication methods", decryption)
+
+    assert(SshTransportFailure.fromPrivateKeyAuthentication(wrapped)
+      .isInstanceOf[SshTransportFailure.PrivateKeyPassphraseInvalid])
+  }
   private val raw = "password=super-secret host=10.0.0.1"
 
   test("connect timeout and refused are classified by typed causes, not messages") {

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef } from 'react'
 
 import { ApiError, requestJson } from './httpClient'
-import type { ConnectionResponse, SaveSshConnectionRequest, SyncSessionResponse } from '../types/connection'
+import type { ConnectionResponse, SaveSshConnectionRequest, SshCredentialsRequest, SyncSessionResponse } from '../types/connection'
 import { requestVoid } from './httpClient'
 
 export function getConnections(organizationId: string): Promise<ConnectionResponse[]> {
@@ -144,8 +144,39 @@ export function useDeactivateConnection(organizationId: string, connectionId: st
   })
 }
 
+/** Step one of trusting a host: read its identity. No credential is sent or accepted here. */
+export function useProbeSshHostKey(organizationId: string) {
+  type ProbeBody = { host: string; port: number; username: string }
+  const pending = useRef<ProbeBody | null>(null)
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const body = pending.current
+      if (!body) throw new Error('Missing SSH host probe request')
+      try {
+        return await requestJson<{ hostKeyFingerprint: string }>(
+          `${path(organizationId)}/ssh/host-key`,
+          { method: 'POST', body: JSON.stringify(body) },
+        )
+      } finally { pending.current = null }
+    },
+  })
+  return {
+    ...mutation,
+    submit: (body: ProbeBody, onSuccess: (value: { hostKeyFingerprint: string }) => void) => {
+      pending.current = body
+      mutation.mutate(undefined, { onSuccess })
+    },
+  }
+}
+
 export function useTestSshConnection(organizationId: string) {
-  type TestBody = { host: string; port: number; username: string; credentials: { type: 'PASSWORD'; password: string } }
+  type TestBody = {
+    host: string
+    port: number
+    username: string
+    hostKeyFingerprint: string
+    credentials: SshCredentialsRequest
+  }
   const pending = useRef<TestBody | null>(null)
   const mutation = useMutation({
     mutationFn: async () => {

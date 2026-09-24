@@ -36,12 +36,17 @@ final case class ConnectionScheduleResponse(
   nextRunAt: Instant
 )
 
+/** Safe metadata only: how the connection authenticates, whether a credential exists, and which
+  * host identity it trusts. The credential itself is never part of a response.
+  */
 final case class SshConnectionResponse(
   host: String,
   port: Int,
   username: String,
   hostKeyFingerprint: Option[String],
-  credentialConfigured: Boolean
+  credentialConfigured: Boolean,
+  authenticationType: String,
+  hostTrusted: Boolean
 )
 
 final case class ConnectionResponse(

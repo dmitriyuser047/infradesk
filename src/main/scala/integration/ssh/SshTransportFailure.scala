@@ -4,6 +4,7 @@ package integration.ssh
 import java.io.IOException
 import java.net.{ConnectException, SocketTimeoutException}
 import java.util.concurrent.TimeoutException
+import com.hierynomus.sshj.common.KeyDecryptionFailedException
 import net.schmizz.sshj.transport.TransportException
 import net.schmizz.sshj.userauth.UserAuthException
 
@@ -19,6 +20,13 @@ object SshTransportFailure {
     extends SshTransportFailure("SSH authentication failed", cause)
   final class HostKeyMismatch(cause: Throwable)
     extends SshTransportFailure("SSH host key has changed", cause)
+  /** The host has never been confirmed, so it may not be given a credential. */
+  final class HostKeyNotTrusted(cause: Throwable)
+    extends SshTransportFailure("SSH host identity is not trusted", cause)
+  final class PrivateKeyInvalid(cause: Throwable)
+    extends SshTransportFailure("SSH private key could not be read", cause)
+  final class PrivateKeyPassphraseInvalid(cause: Throwable)
+    extends SshTransportFailure("SSH private key passphrase is invalid", cause)
   final class CommandTimeout(cause: Throwable)
     extends SshTransportFailure("SSH command timed out", cause)
   final class CommandOutputLimitExceeded(cause: Throwable)
@@ -36,11 +44,35 @@ object SshTransportFailure {
     if (hasNestedNetworkCause(error)) new ConnectionFailed(error)
     else new AuthenticationFailed(error)
 
+  private[ssh] def fromPrivateKeyAuthentication(error: UserAuthException): SshTransportFailure =
+    if (hasCause(error)(_.isInstanceOf[KeyDecryptionFailedException]))
+      new PrivateKeyPassphraseInvalid(error)
+    else fromAuthentication(error)
+
   private[ssh] def fromAuthenticationTransport(error: TransportException): SshTransportFailure =
     new ConnectionFailed(error)
 
   private[ssh] def fromCommandTransport(error: IOException): SshTransportFailure =
     new ConnectionFailed(error)
+
+  private[ssh] def hostKeyNotTrusted(host: String, port: Int): SshTransportFailure =
+    new HostKeyNotTrusted(
+      new SshHostKeyNotTrusted(s"SSH host identity of $host:$port has not been confirmed")
+    )
+
+  /** A key that cannot be read and a key whose passphrase is wrong are different operator
+    * problems, and sshj reports both as the same exception type.
+    */
+  private[ssh] def fromPrivateKey(error: Throwable): SshTransportFailure = {
+    val message = Option(error.getMessage).map(_.toLowerCase).getOrElse("")
+    if (message.contains("passphrase") || message.contains("decrypt") ||
+      hasCause(error)(cause => Option(cause.getMessage).exists { nested =>
+        val normalized = nested.toLowerCase
+        normalized.contains("passphrase") || normalized.contains("decrypt")
+      }))
+      new PrivateKeyPassphraseInvalid(error)
+    else new PrivateKeyInvalid(error)
+  }
 
   private[ssh] def commandTimeout(): SshTransportFailure =
     new CommandTimeout(new TimeoutException("SSH command timed out"))

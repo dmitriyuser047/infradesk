@@ -5,7 +5,7 @@ import application.connection.{ConnectionManagementError, SshConnectionManagemen
 import cats.effect.IO
 import cats.syntax.all._
 import domain.auth.OrganizationPermission
-import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs, SaveSshConnectionRequest, TestSshConnectionRequest, TestSshConnectionResponse}
+import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs, ProbeSshHostRequest, ProbeSshHostResponse, SaveSshConnectionRequest, TestSshConnectionRequest, TestSshConnectionResponse}
 import infrastructure.http.mapper.{ConnectionHttpMapper, SshConnectionCommandMapper}
 import org.http4s.{HttpRoutes, Response}
 import org.http4s.circe.{CirceEntityDecoder, CirceEntityEncoder}
@@ -23,6 +23,20 @@ final class SshConnectionMutationRoutes[Tx[_]](
   import CirceEntityEncoder._
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
+    // Asking a host for its identity changes nothing, but it is an outbound connection made on
+    // behalf of the organization, so it needs the same capability as managing connections.
+    case request @ POST -> Root / "api" / "v1" / "organizations" / org / "connections" / "ssh" / "host-key" =>
+      authorization.require(request, OrganizationPermission.ManageConnections) { _ =>
+        withOrganization(org) { _ =>
+          request.as[ProbeSshHostRequest].attempt.flatMap {
+            case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid SSH host request"))
+            case Right(body) => respond(IO.fromEither(SshConnectionCommandMapper.probe(body))
+              .flatMap(management.probeHost).flatMap(fingerprint =>
+              Ok(ProbeSshHostResponse(fingerprint))))
+          }
+        }
+      }
+
     // Probing a host with submitted credentials is part of managing connections, not a read.
     case request @ POST -> Root / "api" / "v1" / "organizations" / org / "connections" / "ssh" / "test" =>
       authorization.require(request, OrganizationPermission.ManageConnections) { _ =>
@@ -86,8 +100,13 @@ final class SshConnectionMutationRoutes[Tx[_]](
         val body = ApiErrorResponse(error.code, error.getMessage)
         error.code match {
           case "CONNECTION_NOT_FOUND" | "PROJECT_NOT_FOUND" | "ENVIRONMENT_NOT_FOUND" => NotFound(body)
-          case "CONNECTION_CODE_ALREADY_EXISTS" | "SSH_HOST_KEY_MISMATCH" => Conflict(body)
-          case "SSH_CONNECTION_FAILED" => UnprocessableEntity(body)
+          case "CONNECTION_CODE_ALREADY_EXISTS" | "CONNECTION_MODIFIED" |
+               "SSH_HOST_KEY_MISMATCH" => Conflict(body)
+          // Reaching the host failed for a reason the operator can act on; the request itself
+          // was well formed.
+          case "SSH_CONNECTION_FAILED" | "SSH_AUTHENTICATION_FAILED" | "SSH_PRIVATE_KEY_INVALID" |
+               "SSH_PRIVATE_KEY_PASSPHRASE_INVALID" | "SSH_HOST_KEY_NOT_TRUSTED" =>
+            UnprocessableEntity(body)
           case _ => BadRequest(body)
         }
       case error: _root_.org.postgresql.util.PSQLException if error.getSQLState == "23505" &&

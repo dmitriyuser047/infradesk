@@ -177,6 +177,51 @@ starts the topology again. It deliberately refuses to replace `postgres`, `templ
    `application.started` reports the expected image SHA, and check that organizations, resources and connections are
    present, and that a synchronization still authenticates.
 
+## SSH connections
+
+A connection authenticates with a password or with a private key, and it only ever talks to a
+host whose identity it already trusts.
+
+Recommended setup for a managed node:
+
+1. Create a dedicated user rather than using `root`:
+   ```bash
+   sudo adduser --disabled-password --gecos "InfraDesk" infradesk
+   ```
+2. Generate a key pair for InfraDesk alone, on your workstation, and install the public half:
+   ```bash
+   ssh-keygen -t ed25519 -C "infradesk" -f ~/.ssh/infradesk
+   ssh-copy-id -i ~/.ssh/infradesk.pub infradesk@node.example.com
+   ```
+3. Container operations and Docker inventory talk to the local Docker daemon, so the user needs
+   access to its socket: `sudo usermod -aG docker infradesk`. That group grants root-equivalent
+   power on the host — give it to this user on nodes you intend InfraDesk to operate, and nowhere
+   else.
+4. In InfraDesk, open the connection form, press **Read host key**, compare the fingerprint with
+   what the node itself reports, and confirm it:
+   ```bash
+   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+   ```
+5. Choose **Private key** as the authentication method and paste the private half (plus its
+   passphrase, if it has one). The key is encrypted with the deployment's encryption key and is
+   never returned by the API, written to a log, or stored in the audit journal.
+
+### Host identity
+
+The confirmed fingerprint is a pinned value. Every synchronization, every manual sync and every
+controlled operation verifies it during the SSH handshake, before authenticating — a host that
+presents a different key is refused with `SSH_HOST_KEY_MISMATCH` and never receives the
+credential. A host that was never confirmed is refused with `SSH_HOST_KEY_NOT_TRUSTED`.
+
+Nothing accepts a new host key on its own. If you rebuild a node or rotate its host key, the
+connection stops working until someone with `ManageConnections` reads the new key, compares it,
+confirms the replacement and saves — which is recorded as a connection update in the audit
+journal.
+
+Changing other settings, or the schedule, never touches the stored credential: leave the
+credential field blank and it is kept. Switching between password and private key does require a
+new credential, so a connection can never carry one method with the other method's secret.
+
 ## Health, logs and limits
 
 * `GET /health` — liveness. No SQL, answers as long as the process is alive.

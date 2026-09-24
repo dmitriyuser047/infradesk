@@ -37,7 +37,8 @@ object ConnectionHttpMapper {
       connection.createdAt,
       connection.updatedAt,
       if (connection.connectorType == "SSH") SshConnectionConfig.from(connection.config).toOption.map { ssh =>
-        SshConnectionResponse(ssh.host, ssh.port, ssh.username, ssh.hostKeyFingerprint, connection.secretRef.nonEmpty)
+        SshConnectionResponse(ssh.host, ssh.port, ssh.username, ssh.hostKeyFingerprint,
+          connection.secretRef.nonEmpty, ssh.authenticationType.code, ssh.hostKeyFingerprint.isDefined)
       } else None
     )
   }

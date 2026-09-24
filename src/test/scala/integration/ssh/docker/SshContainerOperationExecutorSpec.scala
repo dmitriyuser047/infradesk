@@ -60,6 +60,8 @@ final class SshContainerOperationExecutorSpec extends FunSuite {
     def resolve(connection: Connection): IO[SshAuthentication] = IO.pure(SshAuthentication.Password("secret"))
   }
   private final class Client(calls: Ref[IO, List[String]], sessions: Ref[IO, Int], exit: Int = 0) extends SshClient[IO] {
+    def probeHostKey(config: SshConnectionConfig): IO[String] =
+      IO.raiseError(new IllegalStateException("host probing is not part of this test"))
     def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)(use: SshSession[IO] => IO[A]): IO[A] =
       sessions.update(_ + 1) *> use(new SshSession[IO] {
         def execute(command: String): IO[SshCommandResult] =

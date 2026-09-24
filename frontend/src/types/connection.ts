@@ -56,15 +56,42 @@ export interface ConnectionResponse {
   lastSync: SyncSessionResponse | null
   createdAt: string
   updatedAt: string
-  ssh: { host: string; port: number; username: string; hostKeyFingerprint: string | null; credentialConfigured: boolean } | null
+  ssh: {
+    host: string
+    port: number
+    username: string
+    hostKeyFingerprint: string | null
+    credentialConfigured: boolean
+    authenticationType: SshAuthenticationType
+    hostTrusted: boolean
+  } | null
 }
+
+export const SshAuthenticationType = {
+  password: 'PASSWORD',
+  privateKey: 'PRIVATE_KEY',
+} as const
+
+export type SshAuthenticationType =
+  (typeof SshAuthenticationType)[keyof typeof SshAuthenticationType]
+
+/** What the browser submits. The server never sends any of this back. */
+export type SshCredentialsRequest =
+  | { type: 'PASSWORD'; password: string }
+  | { type: 'PRIVATE_KEY'; privateKey: string; passphrase?: string }
 
 export interface SaveSshConnectionRequest {
   connectorType: 'SSH'
   code: string
   name: string
   scope: ConnectionScopeResponse
-  ssh: { host: string; port: number; username: string }
-  credentials?: { type: 'PASSWORD'; password: string }
+  ssh: {
+    host: string
+    port: number
+    username: string
+    authenticationType: SshAuthenticationType
+    hostKeyFingerprint?: string
+  }
+  credentials?: SshCredentialsRequest
   schedule: { enabled: boolean; intervalSeconds: number }
 }

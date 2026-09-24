@@ -398,6 +398,12 @@ final class ConnectionSyncSessionsSpec extends FunSuite {
       override def findByOrganization(organizationId: UUID): IO[List[Connection]] =
         IO.pure(current.filter(_.organizationId == organizationId).toList)
       override def save(value: Connection): IO[Unit] = IO { current = Some(value) }
+      override def saveIfUnmodified(value: Connection, expectedUpdatedAt: Instant): IO[Boolean] = IO {
+        if (current.exists(_.updatedAt == expectedUpdatedAt)) {
+          current = Some(value)
+          true
+        } else false
+      }
     }
     val sessions = new Sessions
     val transactionRunner = new TransactionRunner[IO, IO] {

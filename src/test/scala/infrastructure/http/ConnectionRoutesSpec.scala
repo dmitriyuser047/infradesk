@@ -231,6 +231,8 @@ final class ConnectionRoutesSpec extends FunSuite {
         )
 
     override def save(connection: Connection): IO[Unit] = IO.unit
+    override def saveIfUnmodified(connection: Connection, expectedUpdatedAt: Instant): IO[Boolean] =
+      IO.pure(true)
 
     private def operation[A](value: => A): IO[A] =
       failure.fold(IO(value))(IO.raiseError)

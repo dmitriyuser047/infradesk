@@ -216,4 +216,38 @@ final class PostgresConnectionRepository extends ConnectionRepository[Connection
           ).raiseError[ConnectionIO, Unit]
       }
   }
+
+  override def saveIfUnmodified(
+    connection: Connection,
+    expectedUpdatedAt: Instant
+  ): ConnectionIO[Boolean] = {
+    val (projectId, environmentId) = scopeIds(connection.scope)
+    val configJson = connection.config.values.asJson.noSpaces
+
+    sql"""
+      update connection
+      set scope_type = ${connection.scope.code},
+          project_id = $projectId,
+          environment_id = $environmentId,
+          connector_type = ${connection.connectorType},
+          code = ${connection.code},
+          name = ${connection.name},
+          config = cast($configJson as jsonb),
+          secret_ref = ${connection.secretRef},
+          is_active = ${connection.isActive},
+          updated_at = ${connection.updatedAt}
+      where organization_id = ${connection.organizationId}
+        and id = ${connection.id}
+        and updated_at = $expectedUpdatedAt
+    """.update.run.map(_ == 1)
+  }
+
+  private def scopeIds(scope: ConnectionScope): (Option[UUID], Option[UUID]) = scope match {
+    case ConnectionScope.Organization =>
+      (Option.empty[UUID], Option.empty[UUID])
+    case ConnectionScope.Project(projectId) =>
+      (Some(projectId), Option.empty[UUID])
+    case ConnectionScope.Environment(projectId, environmentId) =>
+      (Some(projectId), Some(environmentId))
+  }
 }

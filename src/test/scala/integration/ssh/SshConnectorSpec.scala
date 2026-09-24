@@ -33,8 +33,9 @@ final class SshConnectorSpec extends FunSuite {
 
     assertEquals(recordedCalls.map(_.command), List(SshConnector.NodeDiscoveryCommand, DockerContainersCommand))
     assertEquals(sessions.get.unsafeRunSync(), 1)
-    assertEquals(recordedCalls.map(_.config.hostKeyFingerprint), List(None, None))
-    assertEquals(result.connectionConfig.values.get(SshConnectionConfig.HostKeyFingerprintKey), Some(HostKeyFingerprint))
+    assertEquals(recordedCalls.map(_.config.hostKeyFingerprint),
+      List(Some(HostKeyFingerprint), Some(HostKeyFingerprint)))
+    assertEquals(result.connectionConfig, connection.config)
 
     assertEquals(result.resources.size, 2)
     assertEquals(
@@ -147,6 +148,27 @@ final class SshConnectorSpec extends FunSuite {
     assertEquals(calls.get.unsafeRunSync().map(_.config.hostKeyFingerprint),
       List(Some(HostKeyFingerprint), Some(HostKeyFingerprint)))
     assertEquals(result.connectionConfig, pinned.config)
+  }
+
+  test("refuses an untrusted connection before resolving credentials or opening SSH") {
+    val calls = Ref.of[IO, List[ExecuteCall]](Nil).unsafeRunSync()
+    val sessions = Ref.of[IO, Int](0).unsafeRunSync()
+    val resolutions = Ref.of[IO, Int](0).unsafeRunSync()
+    val untrusted = connection.copy(config = ConnectionConfig(
+      connection.config.values - SshConnectionConfig.HostKeyFingerprintKey))
+    val authentication = new SshAuthenticationProvider[IO] {
+      override def resolve(connection: Connection): IO[SshAuthentication] =
+        resolutions.update(_ + 1).as(SshAuthentication.Password("must-not-be-read"))
+    }
+
+    val error = intercept[ResourceConnectorFailure] {
+      new SshConnector[IO](new RecordingSshClient(calls, sessions), authentication)
+        .discover(untrusted).unsafeRunSync()
+    }
+
+    assertEquals(error.code, ResourceConnectorFailureCode.SshHostKeyNotTrusted)
+    assertEquals(resolutions.get.unsafeRunSync(), 0)
+    assertEquals(sessions.get.unsafeRunSync(), 0)
   }
 
   test("node command failure skips Docker and releases the SSH session") {
@@ -263,7 +285,8 @@ final class SshConnectorSpec extends FunSuite {
     config = ConnectionConfig(
       Map(
         "host" -> "test.example",
-        "username" -> "root"
+        "username" -> "root",
+        SshConnectionConfig.HostKeyFingerprintKey -> HostKeyFingerprint
       )
     ),
     secretRef = Some("env:TEST_SSH_PASSWORD"),
@@ -285,6 +308,9 @@ final class SshConnectorSpec extends FunSuite {
                                            dockerResult: SshCommandResult = SuccessfulDockerResult
                                          )
     extends SshClient[IO] {
+
+    override def probeHostKey(config: SshConnectionConfig): IO[String] =
+      IO.raiseError(new IllegalStateException("host probing is not part of this test"))
 
     override def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
                                (use: SshSession[IO] => IO[A]): IO[A] =
@@ -315,6 +341,9 @@ final class SshConnectorSpec extends FunSuite {
   }
 
   private final class FailingDockerSshClient(releases: Ref[IO, Int]) extends SshClient[IO] {
+
+    override def probeHostKey(config: SshConnectionConfig): IO[String] =
+      IO.raiseError(new IllegalStateException("host probing is not part of this test"))
 
     override def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
                                (use: SshSession[IO] => IO[A]): IO[A] =
@@ -352,6 +381,9 @@ final class SshConnectorSpec extends FunSuite {
 
     cases.foreach { case (transport, code, message) =>
       val client = new SshClient[IO] {
+        override def probeHostKey(config: SshConnectionConfig): IO[String] =
+          IO.raiseError(new IllegalStateException("host probing is not part of this test"))
+
         override def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
                                    (use: SshSession[IO] => IO[A]): IO[A] = IO.raiseError(transport)
       }
@@ -366,6 +398,9 @@ final class SshConnectorSpec extends FunSuite {
 
     val unknown = new IllegalStateException(raw)
     val client = new SshClient[IO] {
+      override def probeHostKey(config: SshConnectionConfig): IO[String] =
+        IO.raiseError(new IllegalStateException("host probing is not part of this test"))
+
       override def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
                                  (use: SshSession[IO] => IO[A]): IO[A] = IO.raiseError(unknown)
     }

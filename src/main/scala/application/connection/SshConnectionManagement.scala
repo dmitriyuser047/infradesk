@@ -3,12 +3,12 @@ package application.connection
 
 import application.audit.AuditRecorder
 import application.auth.ActorContext
-import application.port.{ConnectionRepository, ConnectionScheduleRepository, ConnectionSecretCryptography, ConnectionSecretRepository, EnvironmentRepository, ProjectRepository, SshConnectionProbe, SshPasswordResolver, SshProbeError, TransactionRunner}
+import application.port.{ConnectionRepository, ConnectionScheduleRepository, ConnectionSecretCryptography, ConnectionSecretRepository, EnvironmentRepository, ProjectRepository, SshConnectionProbe, SshCredentialResolver, SshProbeError, TransactionRunner}
 import cats.MonadThrow
 import cats.effect.IO
 import cats.syntax.all._
 import domain.audit.{AuditAction, AuditTargetType}
-import domain.connection.{Connection, ConnectionSchedule, ConnectionScope, SecretRef, SshConnectionSettings}
+import domain.connection.{Connection, ConnectionSchedule, ConnectionScope, SecretRef, SshAuthenticationType, SshConnectionSettings, SshCredential}
 
 import java.time.Instant
 import java.util.UUID
@@ -24,15 +24,25 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
   environments: EnvironmentRepository[Tx],
   runner: TransactionRunner[IO, Tx],
   probe: SshConnectionProbe[IO],
-  credentials: SshPasswordResolver[IO],
+  credentials: SshCredentialResolver[IO],
   cipher: ConnectionSecretCryptography,
   audit: AuditRecorder[Tx]
 ) {
+  /** Step one of onboarding: learn who the host is, without offering it anything. */
+  def probeHost(request: ProbeSshHostCommand): IO[String] =
+    IO.fromEither(validateSsh(request.ssh)).flatMap(settings =>
+      probe.probeHostKey(settings.copy(hostKeyFingerprint = None)).adaptError {
+        case error: SshProbeError => managementError(error)
+      }
+    )
+
+  /** Step two: authenticate, but only against the identity the caller has confirmed. */
   def test(request: TestSshConnectionCommand): IO[String] =
     for {
-      config <- IO.fromEither(validateSsh(request.ssh))
-      password <- IO.fromEither(validatePassword(request.password))
-      fingerprint <- probeConnection(config, password)
+      settings <- IO.fromEither(validateSsh(request.ssh))
+      _ <- IO.fromEither(validateCredential(request.credential))
+      _ <- IO.fromEither(requireTrustedHost(settings))
+      fingerprint <- probeConnection(settings, request.credential)
     } yield fingerprint
 
   def create(actor: ActorContext, request: CreateSshConnectionCommand): IO[ConnectionOverview] = {
@@ -40,13 +50,17 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
     for {
       _ <- IO.fromEither(validateRequest(request.code, request.name, request.schedule))
       ssh <- IO.fromEither(validateSsh(request.ssh))
-      password <- IO.fromEither(validatePassword(request.password))
+      _ <- IO.fromEither(validateCredential(request.credential))
+      _ <- IO.fromEither(requireMatchingCredentialType(ssh, request.credential))
+      // A connection is created against a confirmed identity: the caller has probed the host and
+      // is telling us which fingerprint it accepts.
+      _ <- IO.fromEither(requireTrustedHost(ssh))
       _ <- runner.run(validateScope(orgId, request.scope))
-      fingerprint <- probeConnection(ssh, password)
+      fingerprint <- probeConnection(ssh, request.credential)
       now <- IO(Instant.now())
       id <- IO(UUID.randomUUID())
       secretId <- IO(UUID.randomUUID())
-      secret <- IO(cipher.encrypt(secretId, orgId, password))
+      secret <- IO(cipher.encrypt(secretId, orgId, request.credential))
       connection = Connection(id, orgId, request.scope, "SSH", request.code.trim, request.name.trim,
         SshConnectionSettings.toConnectionConfig(ssh.copy(hostKeyFingerprint = Some(fingerprint))),
         Some(s"db:$secretId"), true, now, now)
@@ -71,7 +85,9 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
     for {
       _ <- IO.fromEither(validateRequest(request.code, request.name, request.schedule))
       submittedSsh <- IO.fromEither(validateSsh(request.ssh))
-      newPassword <- request.password.traverse(value => IO.fromEither(validatePassword(value)))
+      _ <- request.credential.traverse_(value => IO.fromEither(validateCredential(value)))
+      _ <- request.credential.traverse_(value =>
+        IO.fromEither(requireMatchingCredentialType(submittedSsh, value)))
       old <- runner.run(for {
         found <- connections.findById(orgId, id)
         _ <- validateScope(orgId, request.scope)
@@ -81,18 +97,33 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
       _ <- if (connection.connectorType != "SSH" || !connection.isActive)
         IO.raiseError[Unit](ConnectionManagementError("INVALID_REQUEST", "Connection is not editable")) else IO.unit
       oldSsh <- IO.fromEither(SshConnectionSettings.from(connection.config))
+      // Switching authentication method cannot reuse the credential of the previous one.
+      authenticationType = submittedSsh.authenticationType
+      _ <- IO.fromEither(requireCredentialForTypeChange(oldSsh, authenticationType, request.credential))
       endpointChanged = oldSsh.host != submittedSsh.host || oldSsh.port != submittedSsh.port
-      requiresProbe = endpointChanged || oldSsh.username != submittedSsh.username || newPassword.nonEmpty
-      effectiveSsh = submittedSsh.copy(hostKeyFingerprint = if (endpointChanged) None else oldSsh.hostKeyFingerprint)
+      // A trusted fingerprint the caller supplies replaces the stored one: that is how a rotated
+      // host key is accepted, and only ever by an explicit decision.
+      trusted = submittedSsh.hostKeyFingerprint
+        .orElse(if (endpointChanged) None else oldSsh.hostKeyFingerprint)
+      effectiveSsh = submittedSsh.copy(hostKeyFingerprint = trusted,
+        authenticationType = authenticationType)
+      _ <- IO.fromEither(requireTrustedHost(effectiveSsh))
+      requiresProbe = endpointChanged || oldSsh.username != submittedSsh.username ||
+        request.credential.nonEmpty || trusted != oldSsh.hostKeyFingerprint
+      credential <- request.credential match {
+        case Some(value) => IO.pure(Some(value))
+        case None if requiresProbe => credentials.resolveCredential(connection).map(Some(_))
+        case None => IO.pure(None)
+      }
       fingerprint <- if (requiresProbe)
-        (newPassword match {
-          case Some(password) => IO.pure(password)
-          case None => credentials.resolvePassword(connection)
-        }).flatMap(password => probeConnection(effectiveSsh, password))
-      else IO.pure(oldSsh.hostKeyFingerprint.getOrElse(""))
+        credential.fold[IO[String]](
+          IO.raiseError(ConnectionManagementError("INVALID_REQUEST", "SSH credential is required"))
+        )(probeConnection(effectiveSsh, _))
+      else IO.pure(trusted.getOrElse(""))
       now <- IO(Instant.now())
-      newSecretId <- if (newPassword.nonEmpty) IO(Some(UUID.randomUUID())) else IO.pure(None)
-      newSecret <- IO(newSecretId.map(secretId => cipher.encrypt(secretId, orgId, newPassword.get)))
+      newSecretId <- if (request.credential.nonEmpty) IO(Some(UUID.randomUUID())) else IO.pure(None)
+      newSecret <- IO((newSecretId, request.credential).mapN((secretId, value) =>
+        cipher.encrypt(secretId, orgId, value)))
       next = connection.copy(scope = request.scope, code = request.code.trim, name = request.name.trim,
         config = SshConnectionSettings.toConnectionConfig(effectiveSsh.copy(
           hostKeyFingerprint = if (fingerprint.nonEmpty) Some(fingerprint) else None)),
@@ -104,15 +135,15 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
         else old._2.map(_.nextRunAt).getOrElse(now.plusSeconds(request.schedule.intervalSeconds)),
         old._2.map(_.consecutiveFailures).getOrElse(0L))
       _ <- runner.run(for {
-        current <- connections.findById(orgId, id)
-        _ <- if (current.isEmpty) MonadThrow[Tx].raiseError[Unit](ConnectionManagementError("CONNECTION_NOT_FOUND", "Connection was not found"))
-          else MonadThrow[Tx].unit
         existing <- connections.findByOrganization(orgId)
         _ <- if (existing.exists(c => c.id != id && c.code.equalsIgnoreCase(next.code)))
           MonadThrow[Tx].raiseError[Unit](ConnectionManagementError("CONNECTION_CODE_ALREADY_EXISTS", "Connection code already exists"))
         else MonadThrow[Tx].unit
         _ <- newSecret.fold(MonadThrow[Tx].unit)(secrets.save)
-        _ <- connections.save(next)
+        saved <- connections.saveIfUnmodified(next, connection.updatedAt)
+        _ <- if (saved) MonadThrow[Tx].unit else MonadThrow[Tx].raiseError[Unit](
+          ConnectionManagementError("CONNECTION_MODIFIED",
+            "Connection changed while SSH settings were being verified; retry the update"))
         _ <- if (scheduleChanged) schedules.save(schedule) else MonadThrow[Tx].unit
         _ <- if (newSecret.nonEmpty) connection.secretRef.flatMap(raw => SecretRef.parse(raw).toOption) match {
           case Some(SecretRef.Database(oldSecretId)) => secrets.delete(orgId, oldSecretId)
@@ -169,16 +200,59 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
       _ <- check(value.port > 0 && value.port <= 65535, "INVALID_REQUEST", "Invalid SSH port")
     } yield value.copy(host = value.host.trim, username = value.username.trim)
 
-  private def validatePassword(password: String): Either[ConnectionManagementError, String] =
-    check(password.nonEmpty, "INVALID_REQUEST", "SSH password is required").map(_ => password)
+  private def validateCredential(credential: SshCredential): Either[ConnectionManagementError, Unit] =
+    credential match {
+      case SshCredential.Password(value) =>
+        check(value.nonEmpty, "INVALID_REQUEST", "SSH password is required")
+      case SshCredential.PrivateKey(pem, passphrase) =>
+        for {
+          _ <- check(pem.trim.nonEmpty, "INVALID_REQUEST", "SSH private key is required")
+          _ <- check(passphrase.forall(_.nonEmpty), "INVALID_REQUEST", "SSH passphrase must not be empty")
+        } yield ()
+    }
+
+  private def requireMatchingCredentialType(
+    settings: SshConnectionSettings,
+    credential: SshCredential
+  ): Either[ConnectionManagementError, Unit] =
+    check(settings.authenticationType == credential.authenticationType, "INVALID_REQUEST",
+      "SSH credential does not match the requested authentication type")
+
+  /** No credential is sent to a host whose identity has not been confirmed. */
+  private def requireTrustedHost(settings: SshConnectionSettings): Either[ConnectionManagementError, Unit] =
+    check(settings.hostTrusted, "SSH_HOST_KEY_NOT_TRUSTED",
+      "Confirm the host key fingerprint before connecting")
+
+  private def requireCredentialForTypeChange(
+    stored: SshConnectionSettings,
+    requested: SshAuthenticationType,
+    credential: Option[SshCredential]
+  ): Either[ConnectionManagementError, Unit] =
+    check(requested == stored.authenticationType || credential.nonEmpty, "INVALID_REQUEST",
+      "A new credential is required when the authentication method changes")
+
+  private def managementError(error: SshProbeError): ConnectionManagementError = error match {
+    case SshProbeError.HostKeyMismatch =>
+      ConnectionManagementError("SSH_HOST_KEY_MISMATCH", "SSH host identity has changed")
+    case SshProbeError.HostKeyNotTrusted =>
+      ConnectionManagementError("SSH_HOST_KEY_NOT_TRUSTED", "SSH host identity is not trusted")
+    case SshProbeError.AuthenticationFailed =>
+      ConnectionManagementError("SSH_AUTHENTICATION_FAILED", "SSH authentication failed")
+    case SshProbeError.PrivateKeyInvalid =>
+      ConnectionManagementError("SSH_PRIVATE_KEY_INVALID", "SSH private key could not be read")
+    case SshProbeError.PrivateKeyPassphraseInvalid =>
+      ConnectionManagementError("SSH_PRIVATE_KEY_PASSPHRASE_INVALID", "SSH private key passphrase is invalid")
+    case SshProbeError.ConnectionFailed =>
+      ConnectionManagementError("SSH_CONNECTION_FAILED", "SSH connection failed")
+  }
 
   private def check(valid: Boolean, code: String, message: String): Either[ConnectionManagementError, Unit] =
     if (valid) Right(()) else Left(ConnectionManagementError(code, message))
 
-  private def probeConnection(config: SshConnectionSettings, password: String): IO[String] =
-    probe.probe(config, password).handleErrorWith {
-      case SshProbeError.HostKeyMismatch =>
-        IO.raiseError(ConnectionManagementError("SSH_HOST_KEY_MISMATCH", "SSH host key has changed"))
-      case _ => IO.raiseError(ConnectionManagementError("SSH_CONNECTION_FAILED", "Unable to connect using these SSH settings"))
+  private def probeConnection(config: SshConnectionSettings, credential: SshCredential): IO[String] =
+    probe.verify(config, credential).handleErrorWith {
+      case error: SshProbeError => IO.raiseError(managementError(error))
+      case _ => IO.raiseError(
+        ConnectionManagementError("SSH_CONNECTION_FAILED", "Unable to connect using these SSH settings"))
     }
 }

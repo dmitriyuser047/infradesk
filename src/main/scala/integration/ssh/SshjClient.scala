@@ -21,11 +21,54 @@ import java.util.{Collections, List => JList}
 final class SshHostKeyMismatch(cause: Throwable = null)
   extends RuntimeException("SSH host key mismatch", cause)
 
+final class SshHostKeyNotTrusted(message: String)
+  extends RuntimeException(message)
+
+/** Stops the handshake once the host key has been read, so a probe learns the identity of a host
+  * without ever offering it a credential.
+  */
+private[ssh] final class SshHostKeyProbed(val fingerprint: String)
+  extends RuntimeException("SSH host key probed")
+
 final class SshjClient[F[_]: Async](
   commandPolicy: SshCommandExecutionPolicy = SshCommandExecutionPolicy.Default
 ) extends SshClient[F] {
 
   private val commandExecutor = new SshCommandExecutor[F](commandPolicy)
+
+  /** Reads the host key and disconnects. The verifier refuses every key, so sshj aborts the
+    * transport before user authentication can start: nothing secret leaves this process.
+    */
+  override def probeHostKey(config: SshConnectionConfig): F[String] =
+    Async[F].blocking {
+      val ssh = new SSHClient()
+      val observed = new AtomicReference[Option[String]](None)
+      try {
+        ssh.setConnectTimeout(config.connectTimeoutSeconds * 1000)
+        ssh.addHostKeyVerifier(new HostKeyVerifier {
+          override def verify(hostname: String, port: Int, key: PublicKey): Boolean = {
+            observed.set(Some(SecurityUtils.getFingerprint(key)))
+            false
+          }
+
+          override def findExistingAlgorithms(hostname: String, port: Int): JList[String] =
+            Collections.emptyList[String]()
+        })
+        try ssh.connect(config.host, config.port)
+        catch {
+          case error: IOException => observed.get() match {
+            case Some(fingerprint) => throw new SshHostKeyProbed(fingerprint)
+            case None => throw SshTransportFailure.fromConnect(error, hostKeyMismatch = false)
+          }
+        }
+        observed.get().getOrElse(
+          throw new IllegalStateException(s"SSH host key was not received from ${config.host}:${config.port}")
+        )
+      } finally {
+        try ssh.close()
+        catch { case _: Throwable => () }
+      }
+    }.recover { case probed: SshHostKeyProbed => probed.fingerprint }
 
   override def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
                              (use: SshSession[F] => F[A]): F[A] =
@@ -115,11 +158,17 @@ final class SshjClient[F[_]: Async](
       ssh.setConnectTimeout(config.connectTimeoutSeconds * 1000)
       val observedFingerprint = new AtomicReference[Option[String]](None)
 
+      // An unconfirmed host is refused here, before authentication: a credential is never the
+      // way InfraDesk finds out who it is talking to.
+      val trusted = config.hostKeyFingerprint.getOrElse(
+        throw SshTransportFailure.hostKeyNotTrusted(config.host, config.port)
+      )
+
       ssh.addHostKeyVerifier(new HostKeyVerifier {
         override def verify(hostname: String, port: Int, key: PublicKey): Boolean = {
           val fingerprint = SecurityUtils.getFingerprint(key)
           observedFingerprint.set(Some(fingerprint))
-          config.hostKeyFingerprint.forall(_ == fingerprint)
+          fingerprint == trusted
         }
 
         override def findExistingAlgorithms(hostname: String, port: Int): JList[String] =
@@ -137,7 +186,14 @@ final class SshjClient[F[_]: Async](
 
       try authenticate(ssh, config.username, authentication)
       catch {
-        case error: UserAuthException => throw SshTransportFailure.fromAuthentication(error)
+        case error: SshTransportFailure => throw error
+        case error: UserAuthException =>
+          val failure = authentication match {
+            case SshAuthentication.PrivateKey(_, _) =>
+              SshTransportFailure.fromPrivateKeyAuthentication(error)
+            case SshAuthentication.Password(_) => SshTransportFailure.fromAuthentication(error)
+          }
+          throw failure
         case error: TransportException => throw SshTransportFailure.fromAuthenticationTransport(error)
       }
 
@@ -158,7 +214,10 @@ final class SshjClient[F[_]: Async](
       case SshAuthentication.PrivateKey(pem, passphrase) =>
         val passwordFinder: PasswordFinder = passphrase
           .map(value => PasswordUtils.createOneOff(value.toCharArray)).orNull
-        val keyProvider = ssh.loadKeys(pem, null, passwordFinder)
+        // The key is parsed once per attempt, from memory: it is never written to disk.
+        val keyProvider =
+          try ssh.loadKeys(pem, null, passwordFinder)
+          catch { case error: IOException => throw SshTransportFailure.fromPrivateKey(error) }
         ssh.authPublickey(username, keyProvider)
     }
 }

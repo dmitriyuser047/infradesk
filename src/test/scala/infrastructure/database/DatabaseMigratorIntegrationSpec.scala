@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V21 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V22 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 21)
-        assertEquals(first.currentVersion, "21")
+        assertEquals(first.migrationsApplied, 22)
+        assertEquals(first.currentVersion, "22")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "21")
+        assertEquals(second.currentVersion, "22")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -160,6 +160,17 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               assertEquals(syncDeadline.getInt(2), 1)
               assertEquals(syncDeadline.getInt(3), 1)
             } finally syncDeadline.close()
+            val secretKinds = statement.executeQuery(
+              "select pg_get_constraintdef(oid) from pg_constraint " +
+                "where conname = 'ck_connection_secret_kind'"
+            )
+            try {
+              assert(secretKinds.next())
+              val definition = secretKinds.getString(1)
+              // A credential is a password or a private key; both encrypt into the same table.
+              assert(definition.contains("SSH_PASSWORD"), definition)
+              assert(definition.contains("SSH_CREDENTIAL"), definition)
+            } finally secretKinds.close()
           } finally statement.close()
         } finally connection.close()
       }
@@ -168,7 +179,7 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         try {
           val statement = connection.createStatement()
           try assertEquals(statement.executeUpdate(
-            "update flyway_schema_history set checksum = checksum + 1 where version = '21'"
+            "update flyway_schema_history set checksum = checksum + 1 where version = '22'"
           ), 1)
           finally statement.close()
         } finally connection.close()

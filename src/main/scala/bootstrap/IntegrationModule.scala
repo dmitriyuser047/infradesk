@@ -8,7 +8,7 @@ import application.port.{
   ResourceOperationBudget,
   ResourceOperationExecutor,
   SshConnectionProbe,
-  SshPasswordResolver
+  SshCredentialResolver
 }
 import domain.operation.ResourceOperationCode
 import cats.effect.{IO, Resource}
@@ -36,7 +36,7 @@ import org.typelevel.doobie.ConnectionIO
 final case class IntegrationComponents(
   secretCipher: ConnectionSecretCipher,
   sshConnectionProbe: SshConnectionProbe[IO],
-  sshPasswordResolver: SshPasswordResolver[IO],
+  sshCredentialResolver: SshCredentialResolver[IO],
   resourceOperationExecutor: ResourceOperationExecutor[IO],
   resourceOperationBudget: ResourceOperationBudget,
   connectionSyncBudget: ConnectionSyncBudget,
@@ -73,7 +73,7 @@ object IntegrationModule {
     IntegrationComponents(
       secretCipher = secretCipher,
       sshConnectionProbe = new SshConnectionProbeAdapter(sshClient),
-      sshPasswordResolver = sshAuthenticationProvider,
+      sshCredentialResolver = sshAuthenticationProvider,
       resourceOperationExecutor = sshContainerOperations,
       resourceOperationBudget = sshContainerOperations,
       connectionSyncBudget = new SshConnectionSyncBudget,

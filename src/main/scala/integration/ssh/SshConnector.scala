@@ -21,6 +21,9 @@ final class SshConnector[F[_]: MonadThrow](
   override def discover(connection: Connection): F[ResourceConnectorResult] =
     for {
       config <- SshConnectionConfig.from(connection.config).liftTo[F]
+      _ <- config.hostKeyFingerprint.toRight(
+        SshConnector.toConnectorFailure(
+          SshTransportFailure.hostKeyNotTrusted(config.host, config.port))).liftTo[F]
       authentication <- authenticationProvider.resolve(connection)
       result <- sshClient.withSession(config, authentication) { session =>
         for {
@@ -34,17 +37,10 @@ final class SshConnector[F[_]: MonadThrow](
             case DockerInventoryResult.Unavailable(_) =>
               List.empty -> Set(SshConnector.NodeExternalType)
           }
-          updatedConfig = config.hostKeyFingerprint match {
-            case Some(_) => connection.config
-            case None => connection.config.updated(
-              SshConnectionConfig.HostKeyFingerprintKey,
-              collectedNode.hostKeyFingerprint
-            )
-          }
         } yield ResourceConnectorResult(
           resources = node.toDiscoveredResource(connection) :: containers,
           completeExternalTypes = completeExternalTypes,
-          connectionConfig = updatedConfig
+          connectionConfig = connection.config
         )
       }.adaptError { case failure: SshTransportFailure => SshConnector.toConnectorFailure(failure) }
     } yield result
@@ -61,6 +57,14 @@ object SshConnector {
         ResourceConnectorFailureCode.SshAuthenticationFailed -> "SSH authentication failed"
       case _: SshTransportFailure.HostKeyMismatch =>
         ResourceConnectorFailureCode.SshHostKeyMismatch -> "SSH host key has changed"
+      // A host nobody confirmed is refused before authentication, and a sync says so plainly.
+      case _: SshTransportFailure.HostKeyNotTrusted =>
+        ResourceConnectorFailureCode.SshHostKeyNotTrusted -> "SSH host identity is not trusted"
+      case _: SshTransportFailure.PrivateKeyInvalid =>
+        ResourceConnectorFailureCode.SshPrivateKeyInvalid -> "SSH private key could not be read"
+      case _: SshTransportFailure.PrivateKeyPassphraseInvalid =>
+        ResourceConnectorFailureCode.SshPrivateKeyPassphraseInvalid ->
+          "SSH private key passphrase is invalid"
       case _: SshTransportFailure.CommandTimeout =>
         ResourceConnectorFailureCode.SshCommandTimeout -> "SSH command timed out"
       case _: SshTransportFailure.CommandOutputLimitExceeded =>

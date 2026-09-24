@@ -18,15 +18,20 @@ object HttpJsonCodecs {
   implicit val connectionScopeRequestDecoder: Decoder[ConnectionScopeRequest] =
     Decoder.forProduct3("type", "projectId", "environmentId")(ConnectionScopeRequest.apply)
   implicit val sshSettingsRequestDecoder: Decoder[SshSettingsRequest] =
-    Decoder.forProduct3("host", "port", "username")(SshSettingsRequest.apply)
-  implicit val passwordCredentialsRequestDecoder: Decoder[PasswordCredentialsRequest] =
-    Decoder.forProduct2("type", "password")(PasswordCredentialsRequest.apply)
+    Decoder.forProduct5("host", "port", "username", "authenticationType", "hostKeyFingerprint")(SshSettingsRequest.apply)
+  implicit val sshCredentialsRequestDecoder: Decoder[SshCredentialsRequest] =
+    Decoder.forProduct4("type", "password", "privateKey", "passphrase")(SshCredentialsRequest.apply)
   implicit val connectionScheduleRequestDecoder: Decoder[ConnectionScheduleRequest] =
     Decoder.forProduct2("enabled", "intervalSeconds")(ConnectionScheduleRequest.apply)
   implicit val saveSshConnectionRequestDecoder: Decoder[SaveSshConnectionRequest] =
     Decoder.forProduct7("connectorType", "code", "name", "scope", "ssh", "credentials", "schedule")(SaveSshConnectionRequest.apply)
   implicit val testSshConnectionRequestDecoder: Decoder[TestSshConnectionRequest] =
-    Decoder.forProduct4("host", "port", "username", "credentials")(TestSshConnectionRequest.apply)
+    Decoder.forProduct5("host", "port", "username", "hostKeyFingerprint", "credentials")(
+      TestSshConnectionRequest.apply)
+  implicit val probeSshHostRequestDecoder: Decoder[ProbeSshHostRequest] =
+    Decoder.forProduct3("host", "port", "username")(ProbeSshHostRequest.apply)
+  implicit val probeSshHostResponseEncoder: Encoder[ProbeSshHostResponse] =
+    Encoder.forProduct1("hostKeyFingerprint")(_.hostKeyFingerprint)
   implicit val testSshConnectionResponseEncoder: Encoder[TestSshConnectionResponse] =
     Encoder.forProduct2("success", "hostKeyFingerprint")(v => (v.success, v.hostKeyFingerprint))
 
@@ -125,8 +130,10 @@ object HttpJsonCodecs {
     }
 
   implicit val sshConnectionResponseEncoder: Encoder[SshConnectionResponse] =
-    Encoder.forProduct5("host", "port", "username", "hostKeyFingerprint", "credentialConfigured") { value =>
-      (value.host, value.port, value.username, value.hostKeyFingerprint, value.credentialConfigured)
+    Encoder.forProduct7("host", "port", "username", "hostKeyFingerprint", "credentialConfigured",
+      "authenticationType", "hostTrusted") { value =>
+      (value.host, value.port, value.username, value.hostKeyFingerprint, value.credentialConfigured,
+        value.authenticationType, value.hostTrusted)
     }
 
   implicit val connectionResponseEncoder: Encoder[ConnectionResponse] =

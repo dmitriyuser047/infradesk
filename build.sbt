@@ -61,6 +61,7 @@ lazy val root = rootProject
       "org.http4s" %% "http4s-ember-client" % http4sVersion,
       "org.http4s" %% "http4s-dsl" % http4sVersion,
       "org.http4s" %% "http4s-circe" % http4sVersion,
+      "org.apache.sshd" % "sshd-core" % "2.19.0" % Test,
       "com.github.docker-java" % "docker-java-core" % dockerVersion,
       "com.github.docker-java" % "docker-java-transport-httpclient5" % dockerVersion,
       "com.hierynomus" % "sshj" % sshjVersion

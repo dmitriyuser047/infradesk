@@ -14,4 +14,9 @@ trait ConnectionRepository[F[_]] {
   def findByOrganization(organizationId: UUID): F[List[Connection]]
 
   def save(connection: Connection): F[Unit]
+
+  /** Updates an existing connection only while it is still the snapshot the caller prepared
+    * external work against. False means another writer won the race.
+    */
+  def saveIfUnmodified(connection: Connection, expectedUpdatedAt: java.time.Instant): F[Boolean]
 }
