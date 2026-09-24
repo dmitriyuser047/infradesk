@@ -219,7 +219,10 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     val routes = new MonitorRuleRoutes[IO](
       ListMonitorRules(resourceRepository, monitorRuleRepository, monitorRuleStateRepository),
       CreateMonitorRule(resourceRepository, monitorRuleRepository, idGenerator, timeProvider),
-      UpdateMonitorRule(monitorRuleRepository, monitorRuleStateRepository, incidentRepository, timeProvider),
+      UpdateMonitorRule(monitorRuleRepository, monitorRuleStateRepository, incidentRepository,
+        new application.notification.RecordNotificationDeliveries[IO](
+          new NoNotificationDeliveryRepository, idGenerator, timeProvider, List.empty),
+        timeProvider),
       transactionRunner
     )
 
@@ -306,6 +309,22 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     override def save(state: MonitorRuleState): IO[Unit] = IO.unit
 
     override def saveAll(states: List[MonitorRuleState]): IO[Unit] = IO.unit
+  }
+
+  /** Notifications are off in these route tests: the outbox has its own coverage. */
+  private final class NoNotificationDeliveryRepository
+    extends application.port.NotificationDeliveryRepository[IO] {
+    override def saveAll(deliveries: List[domain.notification.NotificationDelivery]): IO[Unit] = IO.unit
+    override def findById(organizationId: UUID, id: UUID): IO[Option[domain.notification.NotificationDelivery]] =
+      IO.pure(None)
+    override def claimPending(claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[domain.notification.NotificationDelivery]] =
+      IO.pure(List.empty)
+    override def markSent(organizationId: UUID, id: UUID, claimedBy: UUID, sentAt: Instant): IO[Boolean] =
+      IO.pure(true)
+    override def reschedule(organizationId: UUID, id: UUID, claimedBy: UUID, attemptCount: Long,
+      nextAttemptAt: Instant, errorCode: String, updatedAt: Instant): IO[Boolean] = IO.pure(true)
+    override def markDead(organizationId: UUID, id: UUID, claimedBy: UUID, attemptCount: Long,
+      errorCode: String, updatedAt: Instant): IO[Boolean] = IO.pure(true)
   }
 
   private final class InMemoryIncidentRepository extends IncidentRepository[IO] {

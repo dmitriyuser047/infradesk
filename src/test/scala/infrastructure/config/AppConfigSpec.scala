@@ -31,6 +31,54 @@ final class AppConfigSpec extends FunSuite {
     assert(!config.toString.contains("test-password")) // DatabaseConfig must not be rendered in logs.
   }
 
+  test("notifications are disabled without a webhook URL and configured with one") {
+    val disabled = AppConfig.fromEnvironment(minimal).toOption.get.notification
+    val enabled = AppConfig.fromEnvironment(
+      minimal + ("INFRADESK_NOTIFICATION_WEBHOOK_URL" -> "https://hooks.example.test/infradesk?token=secret")
+    ).toOption.get.notification
+
+    assertEquals(disabled.enabled, false)
+    assertEquals(disabled.webhookUrl, None)
+    assertEquals(disabled.pollInterval, 5.seconds)
+    assertEquals(disabled.batchSize, 50)
+    assertEquals(disabled.maxConcurrency, 5)
+    assertEquals(disabled.claimLease, 60.seconds)
+    assertEquals(disabled.requestTimeout, 10.seconds)
+    assertEquals(disabled.maxAttempts, 10L)
+
+    assertEquals(enabled.enabled, true)
+    assertEquals(enabled.webhookUrl.map(_.host.map(_.value)), Some(Some("hooks.example.test")))
+    // The URL can carry a token, so it must not be rendered anywhere.
+    assert(!enabled.toString.contains("secret"))
+    assert(!enabled.toString.contains("hooks.example.test"))
+  }
+
+  test("a webhook URL that is not an absolute http or https endpoint fails startup") {
+    List(
+      "ftp://hooks.example.test/infradesk",
+      "hooks.example.test/infradesk",
+      "/infradesk",
+      "https://",
+      "not a url"
+    ).foreach { value =>
+      val result = AppConfig.fromEnvironment(minimal + ("INFRADESK_NOTIFICATION_WEBHOOK_URL" -> value))
+      assertEquals(
+        result.swap.toOption.map(_.getMessage),
+        Some("Invalid INFRADESK_NOTIFICATION_WEBHOOK_URL: expected an absolute http or https URL"),
+        s"accepted $value"
+      )
+    }
+  }
+
+  test("a claim lease shorter than the request timeout fails startup") {
+    val result = AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_NOTIFICATION_CLAIM_LEASE_SECONDS" -> "10",
+      "INFRADESK_NOTIFICATION_REQUEST_TIMEOUT_SECONDS" -> "10"
+    ))
+
+    assert(result.swap.toOption.exists(_.getMessage.contains("CLAIM_LEASE_SECONDS")))
+  }
+
   test("missing database URL, user and password fail with their keys") {
     List("INFRADESK_DB_URL", "INFRADESK_DB_USER", "INFRADESK_DB_PASSWORD").foreach { key =>
       assertEquals(AppConfig.fromEnvironment(minimal - key).swap.toOption.get.getMessage, s"$key is required")

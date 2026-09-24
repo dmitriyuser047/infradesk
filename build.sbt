@@ -27,6 +27,7 @@ lazy val root = rootProject
       "io.circe" %% "circe-core"   % "0.14.10",
       "io.circe" %% "circe-parser" % "0.14.10",
       "org.http4s" %% "http4s-ember-server" % http4sVersion,
+      "org.http4s" %% "http4s-ember-client" % http4sVersion,
       "org.http4s" %% "http4s-dsl" % http4sVersion,
       "org.http4s" %% "http4s-circe" % http4sVersion,
       "com.github.docker-java" % "docker-java-core" % dockerVersion,

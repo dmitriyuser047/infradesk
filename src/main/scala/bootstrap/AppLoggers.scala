@@ -16,7 +16,8 @@ final case class AppLoggers(
   health: Logger[IO],
   sync: Logger[IO],
   scheduler: Logger[IO],
-  monitor: Logger[IO]
+  monitor: Logger[IO],
+  notification: Logger[IO]
 )
 
 object AppLoggers {
@@ -27,7 +28,8 @@ object AppLoggers {
     health = named("infrastructure.http.health"),
     sync = named("application.connector.SyncConnection"),
     scheduler = named("application.scheduler.SyncScheduler"),
-    monitor = named("application.monitor.EvaluateMonitorRules")
+    monitor = named("application.monitor.EvaluateMonitorRules"),
+    notification = named("application.notification.NotificationDispatcher")
   )
 
   private def named(name: String): Logger[IO] = Slf4jLogger.getLoggerFromName[IO](name)

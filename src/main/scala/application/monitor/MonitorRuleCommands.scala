@@ -9,6 +9,7 @@ import application.port.{
   ResourceRepository,
   TimeProvider
 }
+import application.notification.RecordNotificationDeliveries
 import cats.MonadThrow
 import cats.syntax.all._
 import domain.incident.IncidentStatus
@@ -110,6 +111,7 @@ final case class UpdateMonitorRule[Tx[_]: MonadThrow](
   monitorRuleRepository: MonitorRuleRepository[Tx],
   monitorRuleStateRepository: MonitorRuleStateRepository[Tx],
   incidentRepository: IncidentRepository[Tx],
+  notificationRecorder: RecordNotificationDeliveries[Tx],
   timeProvider: TimeProvider[Tx]
 ) {
   def execute(
@@ -156,5 +158,11 @@ final case class UpdateMonitorRule[Tx[_]: MonadThrow](
           ))
         )
         _ <- monitorRuleStateRepository.deleteByRuleId(updated.organizationId, updated.id)
+        // Closing an incident here is the same business fact as closing one during an
+        // evaluation, so it is reported through the same outbox, in this transaction.
+        _ <- notificationRecorder.record(openIncident.toList.map(incident =>
+          MonitorTransition.Resolved(updated.organizationId, updated.resourceId, updated.id,
+            incident.id, incident.reason, now)
+        ))
       } yield ()
 }

@@ -1,12 +1,14 @@
 package ru.bitec.app.ops
 package application.monitor
 
-import application.port.{IdGenerator, IncidentRepository, MonitorRuleRepository, MonitorRuleStateRepository, ResourceRepository, TimeProvider}
+import application.notification.RecordNotificationDeliveries
+import application.port.{IdGenerator, IncidentRepository, MonitorRuleRepository, MonitorRuleStateRepository, NotificationDeliveryRepository, ResourceRepository, TimeProvider}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.metric.MetricCode
 import domain.monitor.{InvalidMonitorRule, MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
+import domain.notification.{NotificationChannel, NotificationDelivery}
 import domain.resource.{Resource, ResourceData}
 import munit.FunSuite
 
@@ -63,6 +65,10 @@ final class MonitorRuleCommandsSpec extends FunSuite {
     assertEquals(fixture.states.deleted, List(OrganizationId -> RuleId))
     assertEquals(fixture.incidents.saved.map(incident => (incident.status, incident.resolvedAt)),
       List((IncidentStatus.Resolved, Some(Now))))
+    // Closing an incident by hand is reported through the same outbox as an evaluation would use.
+    assertEquals(fixture.notificationDeliveries.saved.map(delivery =>
+      (delivery.eventType.code, delivery.reason.code, delivery.incidentId, delivery.status.code)),
+      List(("INCIDENT_RESOLVED", "THRESHOLD", IncidentId, "PENDING")))
   }
 
   test("disabling a rule in NO_DATA resolves its no-data incident and clears its state") {
@@ -196,8 +202,16 @@ final class MonitorRuleCommandsSpec extends FunSuite {
     val create: CreateMonitorRule[IO] =
       CreateMonitorRule[IO](resources, rules, new FixedIdGenerator, new FixedTimeProvider)
 
-    val update: UpdateMonitorRule[IO] =
-      UpdateMonitorRule[IO](rules, states, incidents, new FixedTimeProvider)
+    val notificationDeliveries = new FakeNotificationDeliveryRepository
+
+    val update: UpdateMonitorRule[IO] = UpdateMonitorRule[IO](
+      rules,
+      states,
+      incidents,
+      new RecordNotificationDeliveries[IO](notificationDeliveries, new FixedIdGenerator,
+        new FixedTimeProvider, List(NotificationChannel.Webhook)),
+      new FixedTimeProvider
+    )
   }
 
   private final class FakeResourceRepository extends ResourceRepository[IO] {
@@ -250,6 +264,21 @@ final class MonitorRuleCommandsSpec extends FunSuite {
       IO.pure(List.empty)
     override def save(incident: Incident): IO[Unit] = saveAll(List(incident))
     override def saveAll(incidents: List[Incident]): IO[Unit] = IO { saved = saved ++ incidents }
+  }
+
+  private final class FakeNotificationDeliveryRepository extends NotificationDeliveryRepository[IO] {
+    var saved: List[NotificationDelivery] = List.empty
+    override def saveAll(deliveries: List[NotificationDelivery]): IO[Unit] =
+      IO { saved = saved ++ deliveries }
+    override def findById(organizationId: UUID, id: UUID): IO[Option[NotificationDelivery]] = IO.pure(None)
+    override def claimPending(claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[NotificationDelivery]] =
+      IO.pure(List.empty)
+    override def markSent(organizationId: UUID, id: UUID, claimedBy: UUID, sentAt: Instant): IO[Boolean] =
+      IO.pure(true)
+    override def reschedule(organizationId: UUID, id: UUID, claimedBy: UUID, attemptCount: Long,
+      nextAttemptAt: Instant, errorCode: String, updatedAt: Instant): IO[Boolean] = IO.pure(true)
+    override def markDead(organizationId: UUID, id: UUID, claimedBy: UUID, attemptCount: Long,
+      errorCode: String, updatedAt: Instant): IO[Boolean] = IO.pure(true)
   }
 
   private final class FixedIdGenerator extends IdGenerator[IO] {

@@ -14,6 +14,12 @@ import application.connector.{RunConnectionSync, SyncConnection, SyncConnectionB
 import application.discovery.{CreateDiscoveredResource, ReconcileDiscoveredResource, SyncDiscoveredSnapshot}
 import application.incident.{GetIncident, ListIncidents}
 import application.monitor.{CreateMonitorRule, EvaluateMonitorRules, ListMonitorRules, UpdateMonitorRule}
+import application.notification.{
+  NotificationDispatcher,
+  NotificationRecordingMonitorRuleEvaluator,
+  RecordNotificationDeliveries
+}
+import application.port.NotificationSender
 import application.navigation.{GetEnvironmentContext, GetOrganization, ListEnvironments, ListProjects}
 import application.resource.{
   GetResource,
@@ -23,6 +29,7 @@ import application.resource.{
   RecordResourceObservations
 }
 import application.scheduler.SyncScheduler
+import domain.notification.NotificationChannel
 import application.workspace.{CreateEnvironment, CreateProject}
 import cats.effect.IO
 import infrastructure.config.AppConfig
@@ -61,7 +68,9 @@ final case class ApplicationComponents(
   login: Login[ConnectionIO],
   authentication: Authentication[ConnectionIO],
   bootstrapAdmin: BootstrapAdmin[ConnectionIO],
-  scheduler: SyncScheduler[IO, ConnectionIO]
+  scheduler: SyncScheduler[IO, ConnectionIO],
+  /** Absent when no notification channel is configured, so no worker is started for it. */
+  notificationDispatcher: Option[NotificationDispatcher[IO, ConnectionIO]]
 )
 
 object ApplicationModule {
@@ -71,7 +80,9 @@ object ApplicationModule {
     persistence: PersistenceComponents,
     integrations: IntegrationComponents,
     loggers: AppLoggers,
-    schedulerInstanceId: UUID
+    schedulerInstanceId: UUID,
+    notificationSender: Option[NotificationSender[IO]] = None,
+    notificationDispatcherInstanceId: UUID = UUID.randomUUID()
   ): ApplicationComponents = {
     import persistence._
 
@@ -108,12 +119,29 @@ object ApplicationModule {
         recordResourceObservations
       )
 
+    // Only channels the deployment can actually deliver to are recorded.
+    val notificationChannels: List[NotificationChannel] =
+      if (notificationSender.isDefined) List(NotificationChannel.Webhook) else Nil
+
+    val recordNotificationDeliveries =
+      new RecordNotificationDeliveries[ConnectionIO](
+        notificationDeliveryRepository,
+        transactionIdGenerator,
+        transactionTimeProvider,
+        notificationChannels
+      )
+
+    // The outbox rows are written inside the evaluation transaction, so an incident change and
+    // the intent to report it commit together.
     val evaluateMonitorRules =
-      new EvaluateMonitorRules[ConnectionIO](
-        monitorEvaluationQuery,
-        monitorRuleStateRepository,
-        incidentRepository,
-        transactionIdGenerator
+      new NotificationRecordingMonitorRuleEvaluator[ConnectionIO](
+        new EvaluateMonitorRules[ConnectionIO](
+          monitorEvaluationQuery,
+          monitorRuleStateRepository,
+          incidentRepository,
+          transactionIdGenerator
+        ),
+        recordNotificationDeliveries
       )
 
     val syncConnection =
@@ -166,6 +194,7 @@ object ApplicationModule {
         monitorRuleRepository,
         monitorRuleStateRepository,
         incidentRepository,
+        recordNotificationDeliveries,
         transactionTimeProvider
       ),
       getConnection = GetConnection[ConnectionIO](
@@ -241,6 +270,19 @@ object ApplicationModule {
         config.scheduler.maxConcurrency,
         schedulerInstanceId,
         config.scheduler.claimLease
+      ),
+      notificationDispatcher = notificationSender.map(sender =>
+        new NotificationDispatcher[IO, ConnectionIO](
+          notificationDeliveryRepository,
+          sender,
+          transactionRunner,
+          timeProvider,
+          loggers.notification,
+          config.notification.maxConcurrency,
+          notificationDispatcherInstanceId,
+          config.notification.claimLease,
+          config.notification.maxAttempts
+        )
       )
     )
   }

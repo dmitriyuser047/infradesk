@@ -8,6 +8,8 @@ import domain.metric.{MetricCode, MetricObservation}
 import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
 import application.monitor.{EvaluateMonitorRules, MonitorEvaluationInput, MonitorRuleCommand, UpdateMonitorRule}
+import application.notification.RecordNotificationDeliveries
+import domain.notification.NotificationChannel
 import application.port.MonitorEvaluationQuery
 import domain.resource.{Resource, ResourceData}
 import domain.resource.node.{NodeSpec, NodeStatus}
@@ -260,9 +262,11 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
 
       program.guarantee(runner.run(cleanup(ids)).attempt.void).flatMap {
         case (loaded, foreign, otherConnection, otherType, persistedMetrics, indexNames) => IO {
-        assertEquals(loaded.map(_.rule.id).toSet, Set(rule.id, memoryRule.id))
-        val cpu = loaded.find(_.rule.id == rule.id).get
-        val memory = loaded.find(_.rule.id == memoryRule.id).get
+        // Other suites may own rules on the same fixture connection while this one runs.
+        val own = loaded.filter(input => Set(rule.id, memoryRule.id, disabledRule.id).contains(input.rule.id))
+        assertEquals(own.map(_.rule.id).toSet, Set(rule.id, memoryRule.id))
+        val cpu = own.find(_.rule.id == rule.id).get
+        val memory = own.find(_.rule.id == memoryRule.id).get
         assertEquals(cpu.rule.noDataSeconds, 900L)
         assertEquals(cpu.observation.map(_.value), Some(BigDecimal(99)))
         assertEquals(cpu.state, Some(state))
@@ -275,8 +279,8 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         assertEquals(memory.state, None)
         assertEquals(memory.openIncident, None)
         assertEquals(foreign, List.empty)
-        assertEquals(otherConnection, List.empty)
-        assertEquals(otherType, List.empty)
+        assertEquals(otherConnection.map(_.rule.id).toSet.intersect(Set(rule.id, memoryRule.id)), Set.empty[UUID])
+        assertEquals(otherType.map(_.rule.id).toSet.intersect(Set(rule.id, memoryRule.id)), Set.empty[UUID])
         assertEquals(persistedMetrics.map(_.id).toSet, observations.map(_.id).toSet)
         assertEquals(indexNames.toSet, Set(
           "ix_metric_observation_resource_metric_observed_at",
@@ -370,7 +374,11 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       val rules = new PostgresMonitorRuleRepository
       val states = new PostgresMonitorRuleStateRepository
       val incidents = new PostgresIncidentRepository
-      val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, new ConnectionIOTimeProvider)
+      val notifications = new PostgresNotificationDeliveryRepository
+      val recorder = new RecordNotificationDeliveries[ConnectionIO](notifications,
+        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
+      val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
+        new ConnectionIOTimeProvider)
       val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
         ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
       val rule = MonitorRule(ids.ruleId, OrganizationId, ids.resourceId, MetricCode.CpuUsagePercent,
@@ -392,10 +400,17 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         reloadedState <- runner.run(states.findByRuleId(OrganizationId, ids.ruleId))
         openIncident <- runner.run(incidents.findOpenByRule(OrganizationId, ids.ruleId))
         storedIncident <- runner.run(incidents.findById(OrganizationId, ids.incidentId))
-      } yield (updated, reloadedRule, reloadedState, openIncident, storedIncident)
+        outbox <- runner.run(sql"""
+          select event_type, reason, status
+          from notification_delivery
+          where organization_id = $OrganizationId and monitor_rule_id = ${ids.ruleId}
+        """.query[(String, String, String)].to[List])
+      } yield (updated, reloadedRule, reloadedState, openIncident, storedIncident, outbox)
 
       program.guarantee(runner.run(cleanup(ids)).attempt.void).flatMap {
-        case (updated, reloadedRule, reloadedState, openIncident, storedIncident) => IO {
+        case (updated, reloadedRule, reloadedState, openIncident, storedIncident, outbox) => IO {
+          // Closing an incident by hand is reported through the same outbox, in the same commit.
+          assertEquals(outbox, List(("INCIDENT_RESOLVED", "THRESHOLD", "PENDING")))
           assertEquals(updated.map(_.enabled), Some(false))
           assertEquals(reloadedRule.map(_.enabled), Some(false))
           assertEquals(reloadedState, None)
@@ -422,7 +437,11 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       val states = new PostgresMonitorRuleStateRepository
       val incidents = new PostgresIncidentRepository
       val metrics = new PostgresMetricObservationRepository
-      val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, new ConnectionIOTimeProvider)
+      val notifications = new PostgresNotificationDeliveryRepository
+      val recorder = new RecordNotificationDeliveries[ConnectionIO](notifications,
+        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
+      val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
+        new ConnectionIOTimeProvider)
 
       // The projection holds its row locks while this evaluation is deliberately slow, which is
       // the window the concurrent update used to slip through.
@@ -495,6 +514,11 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         delete from external_ref
         where organization_id = $OrganizationId
           and resource_id = ${ids.resourceId}
+      """.update.run
+      _ <- sql"""
+        delete from notification_delivery
+        where organization_id = $OrganizationId
+          and monitor_rule_id = ${ids.ruleId}
       """.update.run
       _ <- sql"""
         delete from metric_observation

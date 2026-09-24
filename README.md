@@ -22,6 +22,13 @@ Backend startup:
 | `INFRADESK_SCHEDULER_BATCH_SIZE` | `100` | Schedules per poll |
 | `INFRADESK_SCHEDULER_MAX_CONCURRENCY` | `5` | Maximum concurrently executing scheduled syncs |
 | `INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS` | `900` | Distributed scheduler lease; matches the 15-minute stale sync horizon |
+| `INFRADESK_NOTIFICATION_WEBHOOK_URL` | Optional | Webhook endpoint for incident events; absent disables notifications |
+| `INFRADESK_NOTIFICATION_POLL_INTERVAL_SECONDS` | `5` | Delivery dispatcher poll interval |
+| `INFRADESK_NOTIFICATION_BATCH_SIZE` | `50` | Deliveries claimed per poll |
+| `INFRADESK_NOTIFICATION_MAX_CONCURRENCY` | `5` | Concurrent webhook requests |
+| `INFRADESK_NOTIFICATION_CLAIM_LEASE_SECONDS` | `60` | Delivery lease; must exceed the request timeout |
+| `INFRADESK_NOTIFICATION_REQUEST_TIMEOUT_SECONDS` | `10` | Webhook request timeout |
+| `INFRADESK_NOTIFICATION_MAX_ATTEMPTS` | `10` | Attempts before a delivery is abandoned |
 | `INFRADESK_BOOTSTRAP_EMAIL`, `INFRADESK_BOOTSTRAP_PASSWORD`, `INFRADESK_BOOTSTRAP_ORGANIZATION_ID`, `INFRADESK_BOOTSTRAP_DISPLAY_NAME` | Optional, all-or-none | Initial admin for an existing organization |
 
 Legacy `env:` SSH secret references use environment variables snapshotted at startup. Do not commit real credentials or encryption keys.
@@ -77,6 +84,27 @@ Rules are evaluated after every synchronization of the connection that discovere
 including a failed one, so a connection that stopped answering turns its rules into `NO_DATA`
 instead of leaving them on stale data. The evaluation is a secondary step: it never changes the
 outcome the synchronization itself reports.
+
+## Notifications
+
+Incident events can be delivered to one deployment-level webhook; there is no per-user channel
+configuration. Without `INFRADESK_NOTIFICATION_WEBHOOK_URL` the subsystem is off: nothing is
+recorded and no dispatcher runs. A configured URL must be an absolute `http` or `https` endpoint,
+is validated at startup and is never logged, because it may carry a token.
+
+Delivery uses a transactional outbox. Opening or resolving an incident writes a
+`notification_delivery` row in the same transaction as the incident change, so the two cannot
+diverge; if the outbox write fails, the incident change rolls back with it. The dispatcher then
+claims due rows with a lease (`for update skip locked`, like the sync scheduler), performs the HTTP
+request outside any transaction, and finishes each delivery in its own short transaction fenced by
+the claim. No database row is locked while a request is in flight.
+
+The guarantee is at-least-once: a process that dies between a delivered request and its completion
+retries after the lease expires. The delivery id is the event id, sent both as `eventId` in the
+body and as the `X-InfraDesk-Event-Id` header, so receivers can deduplicate. `2xx` accepts an
+event; `408`, `429`, `5xx`, timeouts and connection failures are retried with exponential backoff
+(30s doubling to at most one hour) until `INFRADESK_NOTIFICATION_MAX_ATTEMPTS`; other `4xx`
+responses end the delivery immediately.
 
 Frontend: `cd frontend`, then `npm ci`, `npm test`, `npm run build`, or `npm run dev`.
 

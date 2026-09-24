@@ -2,9 +2,12 @@ package ru.bitec.app.ops
 package bootstrap
 
 import application.connector.ResourceConnectorRegistry
-import application.port.{SshConnectionProbe, SshPasswordResolver}
-import cats.effect.IO
-import infrastructure.config.AppConfig
+import application.port.{NotificationSender, SshConnectionProbe, SshPasswordResolver}
+import cats.effect.{IO, Resource}
+import infrastructure.config.{AppConfig, NotificationConfig}
+import integration.notification.WebhookNotificationSender
+import org.http4s.client.Client
+import org.http4s.ember.client.EmberClientBuilder
 import integration.docker.{DockerConnector, DockerJavaEngineClient}
 import integration.ssh.{
   CompositeSshAuthenticationProvider,
@@ -57,4 +60,20 @@ object IntegrationModule {
       connectorRegistry = connectorRegistry
     )
   }
+
+  /** One HTTP client for the lifetime of the application, or none at all when no webhook is
+    * configured: a deployment without notifications opens no client and starts no dispatcher.
+    */
+  def notificationSender(config: NotificationConfig): Resource[IO, Option[NotificationSender[IO]]] =
+    config.webhookUrl match {
+      case None => Resource.pure[IO, Option[NotificationSender[IO]]](None)
+      case Some(url) =>
+        EmberClientBuilder
+          .default[IO]
+          .withTimeout(config.requestTimeout)
+          .build
+          .map { client: Client[IO] =>
+            Some(new WebhookNotificationSender(client, url, config.requestTimeout))
+          }
+    }
 }
