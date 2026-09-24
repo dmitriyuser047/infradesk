@@ -223,6 +223,12 @@ final class HistoryEventIntegrationSpec extends FunSuite {
         values ($ForeignOrganizationId, 'history-foreign-fixture', 'History foreign fixture')
         on conflict do nothing
       """.update.run.void) *>
+        run(sql"""
+          insert into connection (id, organization_id, scope_type, connector_type, code, name)
+          values ($ConnectionId, $OrganizationId, 'ORGANIZATION', 'SSH', ${ConnectionId.toString},
+            'Integration fixture')
+          on conflict do nothing
+        """.update.run.void) *>
         run(resources.save(resource)) *>
         run(resources.save(second)) *>
         run(rules.save(rule)) *>
@@ -242,6 +248,7 @@ final class HistoryEventIntegrationSpec extends FunSuite {
       _ <- sql"delete from monitor_rule_state where organization_id = $OrganizationId and monitor_rule_id = $ruleId".update.run
       _ <- sql"delete from monitor_rule where organization_id = $OrganizationId and resource_id = $resourceId".update.run
       _ <- sql"delete from external_ref where organization_id = $OrganizationId and resource_id = $resourceId".update.run
+      _ <- sql"delete from connection where organization_id = $OrganizationId and id = $ConnectionId".update.run
       _ <- sql"delete from resource where organization_id = $OrganizationId and id in ($resourceId, $secondResourceId)".update.run
     } yield ()).attempt.void
   }
@@ -257,7 +264,10 @@ final class HistoryEventIntegrationSpec extends FunSuite {
   private val ForeignOrganizationId = UUID.fromString("20000000-0000-0000-0000-0000000000fd")
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
   private val NodeResourceTypeId = UUID.fromString("10000000-0000-0000-0000-000000000001")
-  private val ConnectionId = UUID.fromString("60000000-0000-0000-0000-000000000003")
+  // Each PostgreSQL suite evaluates every rule reachable through the connection it names, so a
+  // shared fixture connection would let suites running in parallel evaluate each other's rules.
+  // This one belongs to this run alone.
+  private val ConnectionId: UUID = UUID.randomUUID()
   // Ordering compares stored timestamps, so the fixture works in real time.
   private val At = Instant.now().truncatedTo(ChronoUnit.MILLIS).minusSeconds(900)
 

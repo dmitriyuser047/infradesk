@@ -295,7 +295,13 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
       val rule = MonitorRule(ruleId, OrganizationId, resourceId, MetricCode.CpuUsagePercent,
         MonitorOperator.GreaterThan, BigDecimal(90), 0, 900, enabled = true, Now, Now)
 
-      run(resources.save(resource)) *>
+      run(sql"""
+          insert into connection (id, organization_id, scope_type, connector_type, code, name)
+          values ($ConnectionId, $OrganizationId, 'ORGANIZATION', 'SSH', ${ConnectionId.toString},
+            'Integration fixture')
+          on conflict do nothing
+      """.update.run.void) *>
+        run(resources.save(resource)) *>
         run(rules.save(rule)) *>
         run(sql"""
           insert into external_ref (id, organization_id, connection_id, external_type, external_id, resource_id)
@@ -343,6 +349,7 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
       _ <- sql"delete from monitor_rule_state where organization_id = $OrganizationId and monitor_rule_id = $ruleId".update.run
       _ <- sql"delete from monitor_rule where organization_id = $OrganizationId and resource_id = $resourceId".update.run
       _ <- sql"delete from external_ref where organization_id = $OrganizationId and resource_id = $resourceId".update.run
+      _ <- sql"delete from connection where organization_id = $OrganizationId and id = $ConnectionId".update.run
       _ <- sql"delete from resource where organization_id = $OrganizationId and id = $resourceId".update.run
     } yield ()).attempt.void
   }
@@ -382,7 +389,10 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
   private val NodeResourceTypeId = UUID.fromString("10000000-0000-0000-0000-000000000001")
-  private val ConnectionId = UUID.fromString("60000000-0000-0000-0000-000000000003")
+  // Each PostgreSQL suite evaluates every rule reachable through the connection it names, so a
+  // shared fixture connection would let suites running in parallel evaluate each other's rules.
+  // This one belongs to this run alone.
+  private val ConnectionId: UUID = UUID.randomUUID()
   private val IncidentId = UUID.fromString("a0000000-0000-0000-0000-0000000000ff")
   private val DeliveryId = UUID.fromString("c0000000-0000-0000-0000-000000000001")
   private val SecondDeliveryId = UUID.fromString("c0000000-0000-0000-0000-000000000002")

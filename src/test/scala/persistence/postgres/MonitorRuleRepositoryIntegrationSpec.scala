@@ -580,6 +580,12 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
 
   private def linkResourceToConnection(ids: TestIds): ConnectionIO[Unit] =
     sql"""
+      insert into connection (id, organization_id, scope_type, connector_type, code, name)
+      values ($ConnectionId, $OrganizationId, 'ORGANIZATION', 'SSH', ${ConnectionId.toString},
+        'Monitoring fixture')
+      on conflict do nothing
+    """.update.run *>
+    sql"""
       insert into external_ref (id, organization_id, connection_id, external_type, external_id, resource_id)
       values (${ids.externalRefId}, $OrganizationId, $ConnectionId, 'NODE', ${ids.resourceCode}, ${ids.resourceId})
       on conflict do nothing
@@ -591,6 +597,10 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         delete from external_ref
         where organization_id = $OrganizationId
           and resource_id = ${ids.resourceId}
+      """.update.run
+      _ <- sql"""
+        delete from connection
+        where organization_id = $OrganizationId and id = $ConnectionId
       """.update.run
       _ <- sql"""
         delete from notification_delivery
@@ -657,6 +667,9 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
   private val ActorUserId = support.AuthorizationFixtures.ActorUserId
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
   private val NodeResourceTypeId = UUID.fromString("10000000-0000-0000-0000-000000000001")
-  private val ConnectionId = UUID.fromString("60000000-0000-0000-0000-000000000003")
+  // Each PostgreSQL suite evaluates every rule reachable through the connection it names, so a
+  // shared fixture connection would let suites running in parallel evaluate each other's rules.
+  // This one belongs to this run alone.
+  private val ConnectionId: UUID = UUID.randomUUID()
   private val Now = Instant.parse("2026-09-22T10:00:00Z")
 }

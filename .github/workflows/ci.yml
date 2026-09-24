@@ -176,6 +176,54 @@ jobs:
             --command "select count(*) from information_schema.columns where table_name = 'sync_session' and column_name = 'recover_after_at'")"
           test "${deadline_column}" = "1"
           ./scripts/check-production.sh http://127.0.0.1:8081
+      - name: Separate liveness from readiness while the database is down
+        run: |
+          docker compose -f compose.prod.yml stop postgres
+          live=""
+          ready=""
+          for _ in $(seq 1 12); do
+            live="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 \
+              http://127.0.0.1:8081/health)"
+            ready="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 \
+              http://127.0.0.1:8081/ready)"
+            if [ "${live}" = "200" ] && [ "${ready}" != "200" ]; then break; fi
+            sleep 5
+          done
+          # The process is alive, so liveness answers; it cannot serve data, so readiness does not.
+          test "${live}" = "200"
+          test "${ready}" != "200"
+          body="$(curl --silent --max-time 10 http://127.0.0.1:8081/ready)"
+          # A failing dependency must not describe itself to the internet.
+          for leak in password postgresql jdbc exception ru.bitec; do
+            if printf '%s' "${body}" | grep -qi -- "${leak}"; then
+              echo "readiness body leaked '${leak}'" >&2
+              exit 1
+            fi
+          done
+          docker compose -f compose.prod.yml start postgres
+          for _ in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then break; fi
+            sleep 5
+          done
+          curl --silent --fail http://127.0.0.1:8081/ready > /dev/null
+      - name: Shut the backend down on SIGTERM
+        run: |
+          container="$(docker compose -f compose.prod.yml ps -q backend)"
+          started="$(date +%s)"
+          # `compose stop` sends SIGTERM and only escalates after stop_grace_period; a runtime that
+          # needed the escalation would take the whole grace period and report 137.
+          docker compose -f compose.prod.yml stop backend
+          elapsed=$(( $(date +%s) - started ))
+          code="$(docker inspect --format '{{.State.ExitCode}}' "${container}")"
+          echo "backend exited with ${code} after ${elapsed}s"
+          test "${code}" = "0" -o "${code}" = "143"
+          test "${elapsed}" -lt 30
+          docker compose -f compose.prod.yml start backend
+          for _ in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then break; fi
+            sleep 5
+          done
+          curl --silent --fail http://127.0.0.1:8081/ready > /dev/null
       - name: Assert the database and the backend are not published
         run: |
           # The proxy is the only service with a host port in the production topology.
