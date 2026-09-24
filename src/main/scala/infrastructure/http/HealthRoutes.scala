@@ -29,16 +29,25 @@ final class HealthRoutes(
       Ok(Json.obj("status" -> Json.fromString("UP")))
 
     case GET -> Root / "ready" =>
-      readiness.check.timeout(readinessTimeout).attempt.flatMap {
-        case Right(_) => Ok(Json.obj("status" -> Json.fromString("READY")))
-        case Left(error) =>
-          // JDBC exception messages can contain connection URLs. Readiness exposes and logs only
-          // the failure class; operators can inspect PostgreSQL separately without leaking it.
-          logger.error(s"readiness.failed errorType=${error.getClass.getSimpleName}")
-            .handleErrorWith(_ => IO.unit) *>
-            ServiceUnavailable(Json.obj("status" -> Json.fromString("NOT_READY")))
+      // The probe runs on its own fiber and the deadline applies to waiting for it, not to
+      // unwinding it: a JDBC call already blocked on a dead host cannot be interrupted, and
+      // waiting for it would hand the answer back to the proxy's timeout instead of ours.
+      readiness.check.attempt.start.flatMap { probe =>
+        probe.joinWithNever.timeout(readinessTimeout).attempt.flatMap {
+          case Right(Right(_)) => Ok(Json.obj("status" -> Json.fromString("READY")))
+          case Right(Left(error)) => notReady(error)
+          case Left(error) => probe.cancel.start *> notReady(error)
+        }
       }
   }
+
+  /** JDBC exception messages can carry connection URLs. Readiness exposes and logs the failure
+    * class only; operators inspect PostgreSQL itself without that reaching a client.
+    */
+  private def notReady(error: Throwable): IO[org.http4s.Response[IO]] =
+    logger.error(s"readiness.failed errorType=${error.getClass.getSimpleName}")
+      .handleErrorWith(_ => IO.unit) *>
+      ServiceUnavailable(Json.obj("status" -> Json.fromString("NOT_READY")))
 }
 
 object HealthRoutes {

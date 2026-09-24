@@ -37,8 +37,12 @@ final class HealthRoutesSpec extends FunSuite {
   }
 
   test("a database that never answers still gives readiness a controlled 503") {
-    // The pool may be configured to wait minutes for ordinary work; readiness may not.
-    val check = new ReadinessCheck[IO] { def check: IO[Unit] = IO.never }
+    // A JDBC call blocked on a dead host cannot be interrupted, so the deadline has to apply to
+    // waiting for the probe rather than to unwinding it. The pool may be configured to wait
+    // minutes for ordinary work; readiness may not.
+    val check = new ReadinessCheck[IO] {
+      def check: IO[Unit] = IO.blocking(Thread.sleep(30000))
+    }
     val routes = new HealthRoutes(check, logger, readinessTimeout = 100.milliseconds)
       .routes.orNotFound
 
