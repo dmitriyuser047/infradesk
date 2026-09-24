@@ -8,7 +8,10 @@ import io.circe.Json
 import munit.FunSuite
 import org.http4s.{Method, Request, Status, Uri}
 import org.http4s.circe.CirceEntityDecoder._
+import infrastructure.database.DatabaseConfig
 import org.typelevel.log4cats.slf4j.Slf4jLogger
+
+import scala.concurrent.duration._
 
 final class HealthRoutesSpec extends FunSuite {
   private val logger = Slf4jLogger.getLoggerFromName[IO]("test.health")
@@ -31,6 +34,33 @@ final class HealthRoutesSpec extends FunSuite {
     assertEquals(response.status, Status.Ok)
     assertEquals(response.as[Json].unsafeRunSync().hcursor.get[String]("status"), Right("READY"))
     assertEquals(calls, 1)
+  }
+
+  test("a database that never answers still gives readiness a controlled 503") {
+    // The pool may be configured to wait minutes for ordinary work; readiness may not.
+    val check = new ReadinessCheck[IO] { def check: IO[Unit] = IO.never }
+    val routes = new HealthRoutes(check, logger, readinessTimeout = 100.milliseconds)
+      .routes.orNotFound
+
+    val started = System.nanoTime()
+    val response = routes.run(Request[IO](Method.GET, Uri.unsafeFromString("/ready")))
+      .unsafeRunSync()
+    val elapsed = (System.nanoTime() - started).nanos
+
+    // The application answers, so the proxy never has to invent a gateway timeout.
+    assertEquals(response.status, Status.ServiceUnavailable)
+    assertEquals(response.as[Json].unsafeRunSync().hcursor.get[String]("status"), Right("NOT_READY"))
+    assert(elapsed < 3.seconds, s"readiness took $elapsed")
+    // Liveness is unaffected by a database that is not answering.
+    assertEquals(
+      routes.run(Request[IO](Method.GET, Uri.unsafeFromString("/health"))).unsafeRunSync().status,
+      Status.Ok
+    )
+  }
+
+  test("the readiness budget is shorter than the pool it protects") {
+    assert(HealthRoutes.DefaultReadinessTimeout < DatabaseConfig.DefaultConnectionTimeout)
+    assertEquals(HealthRoutes.DefaultReadinessTimeout, 3.seconds)
   }
 
   test("ready hides database exception details") {

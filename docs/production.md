@@ -180,8 +180,11 @@ starts the topology again. It deliberately refuses to replace `postgres`, `templ
 ## Health, logs and limits
 
 * `GET /health` — liveness. No SQL, answers as long as the process is alive.
-* `GET /ready` — readiness. One lightweight database query; non-200 while PostgreSQL is
-  unavailable, which is exactly what makes a rolling restart wait.
+* `GET /ready` — readiness. One lightweight database query with a three-second budget of its
+  own, so a pool configured to wait minutes for ordinary work does not make readiness wait too.
+  While PostgreSQL is unavailable it answers `503 NOT_READY` — the application reporting itself
+  unavailable, never a `504` from the proxy, which is what makes a rolling restart wait. The
+  budgets are layered deliberately: readiness 3s < proxy 7s < client.
 * Logs go to stdout and are collected by Docker; the compose file caps them at 5 × 10 MB per
   service. Nothing writes application log files inside a container.
 * Memory limits are set per service in the compose file and can be tuned per host.

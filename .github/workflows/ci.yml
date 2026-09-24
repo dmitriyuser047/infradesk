@@ -181,23 +181,30 @@ jobs:
           docker compose -f compose.prod.yml stop postgres
           live=""
           ready=""
+          curl_status=1
           for _ in $(seq 1 12); do
-            # A readiness probe against a stopped database waits for the pool timeout and then
-            # for the proxy's; a curl failure is itself "not ready", never a reason to abort.
             live="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 \
               http://127.0.0.1:8081/health || echo 000)"
-            ready="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 30 \
-              http://127.0.0.1:8081/ready || echo 000)"
-            if [ "${live}" = "200" ] && [ "${ready}" != "200" ]; then break; fi
+            # Readiness has a three-second budget of its own, the proxy waits seven, and this
+            # waits twelve: the client must see the application's answer, not a gateway timeout.
+            set +e
+            ready="$(curl --silent --output "${RUNNER_TEMP}/ready-body" \
+              --write-out '%{http_code}' --max-time 12 http://127.0.0.1:8081/ready)"
+            curl_status=$?
+            set -e
+            if [ "${live}" = "200" ] && [ "${ready}" = "503" ]; then break; fi
             sleep 5
           done
-          # The process is alive, so liveness answers; it cannot serve data, so readiness does not.
+          echo "health=${live} ready=${ready} curl=${curl_status}"
+          # The process is alive, so liveness answers.
           test "${live}" = "200"
-          test "${ready}" != "200"
-          body="$(curl --silent --max-time 30 http://127.0.0.1:8081/ready || true)"
+          # The transport completed: this is InfraDesk reporting itself unavailable, not nginx
+          # giving up on it, and not a connection that never produced a response.
+          test "${curl_status}" = "0"
+          test "${ready}" = "503"
           # A failing dependency must not describe itself to the internet.
           for leak in password postgresql jdbc exception ru.bitec; do
-            if printf '%s' "${body}" | grep -qi -- "${leak}"; then
+            if grep -qi -- "${leak}" "${RUNNER_TEMP}/ready-body"; then
               echo "readiness body leaked '${leak}'" >&2
               exit 1
             fi
