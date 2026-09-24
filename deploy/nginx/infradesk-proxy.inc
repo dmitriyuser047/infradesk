@@ -8,7 +8,6 @@ proxy_set_header X-Forwarded-For $remote_addr;
 proxy_set_header X-Real-IP $remote_addr;
 proxy_set_header X-Request-ID $infradesk_request_id;
 
-# A controlled SSH operation may legitimately take minutes; an unbounded wait may not.
+# Establishing the backend connection should always be fast. Response budgets are assigned by
+# route in infradesk.conf so ordinary API traffic cannot occupy a proxy worker for 45 minutes.
 proxy_connect_timeout 5s;
-proxy_send_timeout 300s;
-proxy_read_timeout 300s;

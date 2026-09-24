@@ -74,6 +74,27 @@ jobs:
             --build-arg INFRADESK_BUILD_VERSION="0.1.0-${GITHUB_SHA::7}" \
             --tag "infradesk-backend:${GITHUB_SHA::7}" \
             .
+      - name: Verify backend artifact and immutable build identity
+        run: |
+          image="infradesk-backend:${GITHUB_SHA::7}"
+          docker run --rm --entrypoint test "${image}" -x /opt/infradesk/bin/infradesk
+          set +e
+          identity_logs="$(docker run --rm --network none \
+            -e INFRADESK_GIT_SHA=WRONG_SHA \
+            -e INFRADESK_BUILD_VERSION=WRONG_VERSION \
+            -e INFRADESK_DB_URL=jdbc:postgresql://127.0.0.1:1/infradesk \
+            -e INFRADESK_DB_USER=infradesk \
+            -e INFRADESK_DB_PASSWORD=not-a-real-password \
+            -e INFRADESK_SECRET_MASTER_KEY_BASE64=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+            "${image}" 2>&1)"
+          status=$?
+          set -e
+          test "${status}" -ne 0
+          grep "application.starting" <<< "${identity_logs}" | grep "gitSha=${GITHUB_SHA}"
+          if grep -q "gitSha=WRONG_SHA\|version=WRONG_VERSION" <<< "${identity_logs}"; then
+            echo "runtime environment replaced baked build identity" >&2
+            exit 1
+          fi
       - name: Build frontend production image
         run: |
           docker build \
@@ -97,10 +118,15 @@ jobs:
       - name: Start the production topology
         run: |
           docker compose -f compose.prod.yml up -d
+          ready=false
           for _ in $(seq 1 60); do
-            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then break; fi
+            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then
+              ready=true
+              break
+            fi
             sleep 5
           done
+          test "${ready}" = "true"
       - name: Smoke-test the deployment
         run: ./scripts/check-production.sh http://127.0.0.1:8081
       - name: Exercise production backup and restore
@@ -109,34 +135,61 @@ jobs:
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
+          # Build a representative V20 dump. Restoring it proves that a clean restored database
+          # is migrated forward to V21 before the backend becomes ready.
+          docker compose -f compose.prod.yml stop backend proxy
+          docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          alter table sync_session drop constraint ck_sync_session_recover_after_at;
+          alter table sync_session drop column recover_after_at;
+          delete from flyway_schema_history where version = '21';
+          SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
+          # Mutate the source database after the backup. The restore must replace the database,
+          # recover the marker and let Flyway reapply the missing migration.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
           ./scripts/restore-database.sh "${dump}"
+          ready=false
           for _ in $(seq 1 60); do
-            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then break; fi
+            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then
+              ready=true
+              break
+            fi
             sleep 5
           done
+          test "${ready}" = "true"
           restored="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from organization where id = '${marker_id}'")"
           test "${restored}" = "1"
+          migrated="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
+          test "${migrated}" = "21"
+          deadline_column="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from information_schema.columns where table_name = 'sync_session' and column_name = 'recover_after_at'")"
+          test "${deadline_column}" = "1"
           ./scripts/check-production.sh http://127.0.0.1:8081
       - name: Assert the database and the backend are not published
         run: |
           # The proxy is the only service with a host port in the production topology.
-          if docker compose -f compose.prod.yml port postgres 5432 2>/dev/null; then
-            echo "postgres must not publish a host port" >&2
-            exit 1
-          fi
-          if docker compose -f compose.prod.yml port backend 8080 2>/dev/null; then
-            echo "backend must not publish a host port" >&2
-            exit 1
-          fi
+          for service in postgres backend; do
+            container="$(docker compose -f compose.prod.yml ps -q "${service}")"
+            published="$(docker inspect --format \
+              '{{range .NetworkSettings.Ports}}{{if .}}{{.}}{{end}}{{end}}' \
+              "${container}")"
+            if [ -n "${published}" ]; then
+              echo "${service} must not publish a host port" >&2
+              exit 1
+            fi
+          done
+          test "$(docker compose -f compose.prod.yml port proxy 80)" = "127.0.0.1:8081"
       - name: Assert the deployment reports the build it runs
         run: docker compose -f compose.prod.yml logs backend | grep "application.started" | grep "gitSha=${GITHUB_SHA}"
       - name: Collect logs on failure

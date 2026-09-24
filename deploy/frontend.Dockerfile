@@ -12,10 +12,13 @@ RUN npm run build
 FROM nginx:1.29-alpine
 
 ARG INFRADESK_GIT_SHA=unknown
-ENV INFRADESK_GIT_SHA=${INFRADESK_GIT_SHA} \
+LABEL org.opencontainers.image.revision=${INFRADESK_GIT_SHA}
+ENV INFRADESK_TRUSTED_PROXY_CIDR=172.28.0.1/32 \
     TZ=UTC
 
-COPY deploy/nginx/infradesk.conf /etc/nginx/conf.d/default.conf
+# The official nginx entrypoint renders this template from the small, explicit environment
+# contract above. Nginx's own variables remain untouched by its allow-list based envsubst step.
+COPY deploy/nginx/infradesk.conf /etc/nginx/templates/default.conf.template
 COPY deploy/nginx/infradesk-proxy.inc /etc/nginx/conf.d/infradesk-proxy.inc
 COPY --from=build /workspace/frontend/dist /usr/share/nginx/html
 

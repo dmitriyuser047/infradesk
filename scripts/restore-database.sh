@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restores one dump into the database of a stopped deployment.
+# DESTRUCTIVE: replaces the application database with one cleanly restored from a dump.
 #
 # Usage: scripts/restore-database.sh /var/backups/infradesk/infradesk-...dump
 #
@@ -21,12 +21,26 @@ if [ -n "${ENV_FILE}" ]; then
 fi
 compose+=(-f "${COMPOSE_FILE}")
 
-"${compose[@]}" up -d postgres
 "${compose[@]}" stop backend proxy || true
+"${compose[@]}" up -d postgres
 
-# A restore replaces the schema it finds; Flyway then brings it to the version the image needs.
+database="$("${compose[@]}" exec -T postgres sh -c 'printf "%s" "$POSTGRES_DB"')"
+case "${database}" in
+  ""|postgres|template0|template1|-*)
+    echo "refusing to replace unsafe application database name: ${database:-<empty>}" >&2
+    exit 1
+    ;;
+esac
+
+# Recreate the database instead of layering an old dump over a newer schema. The persistent
+# PostgreSQL volume remains intact; only the named application database is replaced.
 "${compose[@]}" exec -T postgres \
-  sh -c 'exec pg_restore --clean --if-exists --no-owner --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"' \
+  sh -c 'set -eu
+    dropdb --force --if-exists --maintenance-db=postgres --username "$POSTGRES_USER" "$POSTGRES_DB"
+    createdb --maintenance-db=postgres --username "$POSTGRES_USER" --owner "$POSTGRES_USER" "$POSTGRES_DB"'
+
+"${compose[@]}" exec -T postgres \
+  sh -c 'exec pg_restore --exit-on-error --no-owner --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"' \
   < "${dump}"
 
 "${compose[@]}" up -d

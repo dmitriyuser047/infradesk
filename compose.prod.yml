@@ -77,8 +77,6 @@ services:
       INFRADESK_SCHEDULER_BATCH_SIZE: ${INFRADESK_SCHEDULER_BATCH_SIZE:-100}
       INFRADESK_SCHEDULER_MAX_CONCURRENCY: ${INFRADESK_SCHEDULER_MAX_CONCURRENCY:-5}
       INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS: ${INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS:-900}
-      INFRADESK_GIT_SHA: ${INFRADESK_GIT_SHA:-unknown}
-      INFRADESK_BUILD_VERSION: ${INFRADESK_BUILD_VERSION:-0.1.0-SNAPSHOT}
     # No published port either: nginx is the only way in.
     expose:
       - "8080"
@@ -99,6 +97,10 @@ services:
       args:
         INFRADESK_GIT_SHA: ${INFRADESK_GIT_SHA:-unknown}
     restart: unless-stopped
+    environment:
+      # Only this host-side bridge address may assert X-Forwarded-For. It is the TLS proxy
+      # boundary documented in docs/production.md, never a trust-all CIDR.
+      INFRADESK_TRUSTED_PROXY_CIDR: ${INFRADESK_TRUSTED_PROXY_CIDR:-172.28.0.1/32}
     depends_on:
       backend:
         condition: service_healthy
@@ -114,3 +116,6 @@ volumes:
 networks:
   internal:
     driver: bridge
+    ipam:
+      config:
+        - subnet: ${INFRADESK_INTERNAL_SUBNET:-172.28.0.0/24}

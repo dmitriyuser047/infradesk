@@ -5,6 +5,7 @@
     </encoder>
   </appender>
   <logger name="application" level="INFO" />
+  <logger name="bootstrap" level="INFO" />
   <logger name="infrastructure" level="INFO" />
   <root level="WARN">
     <appender-ref ref="STDOUT" />

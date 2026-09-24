@@ -532,13 +532,17 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         slowProjection, states, incidents, new ConnectionIOIdGenerator
       )
 
+      // Keep every timestamp in this real-clock concurrency test on the same timeline. A fixed
+      // calendar date eventually falls behind ConnectionIOTimeProvider and violates incident
+      // lifecycle constraints for reasons unrelated to the locking behavior under test.
+      val testNow = Instant.now()
       val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
-        ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
+        ids.resourceCode, ids.resourceCode, isActive = true, testNow, testNow, "NODE", ResourceData.empty)
       // Zero duration: the evaluation opens a threshold incident on its first violating sample.
       val rule = MonitorRule(ids.ruleId, OrganizationId, ids.resourceId, MetricCode.CpuUsagePercent,
-        MonitorOperator.GreaterThan, BigDecimal(90), 0, 900, enabled = true, Now, Now)
+        MonitorOperator.GreaterThan, BigDecimal(90), 0, 900, enabled = true, testNow, testNow)
       val violating = MetricObservation(UUID.randomUUID(), OrganizationId, ids.resourceId,
-        MetricCode.CpuUsagePercent, BigDecimal(95), Now)
+        MetricCode.CpuUsagePercent, BigDecimal(95), testNow)
       val disable = MonitorRuleCommand(MetricCode.CpuUsagePercent, MonitorOperator.GreaterThan,
         BigDecimal(90), 0, 900, enabled = false)
 
@@ -547,7 +551,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         _ <- runner.run(rules.save(rule))
         _ <- runner.run(linkResourceToConnection(ids))
         _ <- runner.run(metrics.insertAll(List(violating)))
-        evaluation <- runner.run(evaluator.execute(OrganizationId, ConnectionId, Now)).start
+        evaluation <- runner.run(evaluator.execute(OrganizationId, ConnectionId, testNow)).start
         _ <- IO.sleep(400.milliseconds)
         updated <- runner.run(update.execute(ActorContext(ActorUserId, OrganizationId), ids.ruleId, disable))
         transitions <- evaluation.joinWithNever

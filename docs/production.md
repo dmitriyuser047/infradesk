@@ -26,7 +26,16 @@ internal Compose network and nowhere else — PostgreSQL has no published port a
   viewer's local time by the browser.
 * A TLS terminator (nginx, Caddy, Traefik or a cloud load balancer). InfraDesk sets an
   authentication cookie and must not be reachable over plain HTTP: redirect port 80 to 443 and
-  forward `X-Forwarded-Proto: https`.
+  forward `X-Forwarded-Proto: https` and the client address in `X-Forwarded-For`.
+
+### Trusted proxy boundary
+
+The proxy container trusts `X-Forwarded-For` only from `INFRADESK_TRUSTED_PROXY_CIDR`. The default
+is the gateway of the dedicated Compose subnet (`172.28.0.1/32`), which is where a TLS terminator
+running on the same host reaches the published loopback port. Direct clients and other containers
+cannot choose the login rate-limit key by sending their own forwarding header. If the Compose
+subnet conflicts with another Docker network, change `INFRADESK_INTERNAL_SUBNET` and set
+`INFRADESK_TRUSTED_PROXY_CIDR` to that subnet's host gateway `/32`; never use `0.0.0.0/0`.
 
 ## Configuration
 
@@ -34,6 +43,11 @@ Everything is read from the environment at startup, and anything invalid stops t
 it serves a request: a missing database URL, user or password, a malformed port, a pool size
 outside 1–100, an unusable encryption key, a webhook URL that is not absolute `http`/`https`, or a
 notification lease shorter than its request timeout.
+
+SSH settings are also bounded: connect timeout is at most 60 seconds and command timeout at most
+1200 seconds. Manual sync and controlled-operation routes receive a 45-minute nginx budget, which
+is longer than the maximum backend transport budget plus its recovery margin. Ordinary API
+routes retain a 60-second proxy timeout.
 
 Copy [`.env.production.example`](../.env.production.example) to a host path outside the
 repository — `/etc/infradesk/infradesk.env`, mode `600`, owned by root — and fill it in. The
@@ -89,7 +103,7 @@ never log or echo it.
    `INFRADESK_BOOTSTRAP_ORGANIZATION_ID` (the UUID above), and
    `INFRADESK_BOOTSTRAP_DISPLAY_NAME` in the environment file, then recreate the backend:
    `docker compose --env-file /etc/infradesk/infradesk.env -f compose.prod.yml up -d --force-recreate backend`.
-10. Wait for `/ready`, sign in as the bootstrap administrator, and change the password.
+10. Wait for `/ready` and sign in as the bootstrap administrator to verify the account.
 11. Empty all four `INFRADESK_BOOTSTRAP_*` values and recreate the backend again. Bootstrap is
     idempotent: it creates a missing account and membership, but never rewrites an existing
     password.
@@ -104,8 +118,9 @@ never log or echo it.
 5. `docker compose --env-file … -f compose.prod.yml up -d`. The backend runs Flyway itself, and
    HTTP, the scheduler and the notification dispatcher start only after the migration succeeded.
 6. `scripts/check-production.sh https://infradesk.example.com`
-7. `docker compose -f compose.prod.yml logs backend | head -50` — the first line reports the
-   version and commit that are actually running.
+7. `docker compose -f compose.prod.yml logs backend | grep application.started` reports the
+   version and commit baked into the artifact. Runtime environment variables cannot replace this
+   identity; compare the SHA with the immutable image tag you selected.
 
 ### Migration policy
 
@@ -146,13 +161,20 @@ dumps to object storage or another machine, and keep the encryption key somewher
 
 ## Restore
 
-1. Stop the application: `docker compose -f compose.prod.yml stop backend proxy`.
-2. `INFRADESK_ENV_FILE=/etc/infradesk/infradesk.env scripts/restore-database.sh /var/backups/infradesk/infradesk-2026-09-24T020000Z.dump`
-3. Make sure the environment file carries the **same** `INFRADESK_SECRET_MASTER_KEY_BASE64` the
+Restore is destructive. The script stops the backend and proxy, drops and recreates the named
+application database inside the existing PostgreSQL volume, restores the custom-format dump, and
+starts the topology again. It deliberately refuses to replace `postgres`, `template0`, or
+`template1`.
+
+1. Preserve current logs and verify the dump path and target environment file.
+2. Make sure the environment file carries the **same** `INFRADESK_SECRET_MASTER_KEY_BASE64` the
    dump was taken under.
-4. `docker compose --env-file … -f compose.prod.yml up -d` — Flyway brings the restored schema to
-   the version this image needs.
-5. `scripts/check-production.sh` and then check that organizations, resources and connections are
+3. Run:
+   `INFRADESK_ENV_FILE=/etc/infradesk/infradesk.env scripts/restore-database.sh /var/backups/infradesk/infradesk-2026-09-24T020000Z.dump`.
+4. The restarted backend runs Flyway before HTTP, bringing an older restored schema to the version
+   required by the current image.
+5. Run `scripts/check-production.sh https://infradesk.example.com`, verify
+   `application.started` reports the expected image SHA, and check that organizations, resources and connections are
    present, and that a synchronization still authenticates.
 
 ## Health, logs and limits
