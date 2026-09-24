@@ -7,16 +7,20 @@ import cats.syntax.all._
 import domain.metric.{MetricCode, MetricObservation}
 import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
-import application.monitor.{EvaluateMonitorRules, MonitorRuleCommand, UpdateMonitorRule}
+import application.monitor.{EvaluateMonitorRules, MonitorEvaluationInput, MonitorRuleCommand, UpdateMonitorRule}
+import application.port.MonitorEvaluationQuery
 import domain.resource.{Resource, ResourceData}
 import domain.resource.node.{NodeSpec, NodeStatus}
 import infrastructure.database.{ConnectionIOIdGenerator, ConnectionIOTimeProvider, Database, DatabaseConfig, DoobieTransactionRunner}
 import munit.FunSuite
 import org.typelevel.doobie.ConnectionIO
+import org.typelevel.doobie.free.{connection => FC}
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 
 import java.time.Instant
+
+import scala.concurrent.duration._
 import java.util.UUID
 
 final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
@@ -399,6 +403,80 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
           assertEquals(storedIncident.map(_.status), Some(IncidentStatus.Resolved))
           assertEquals(storedIncident.flatMap(_.resolvedAt).isDefined, true)
           assertEquals(storedIncident.map(_.reason), Some(IncidentReason.ThresholdViolation))
+        }
+      }
+    }.unsafeRunSync()
+  }
+
+  test("an evaluation running next to a rule update cannot leave state behind a disabled rule") {
+    assume(
+      sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
+      "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests"
+    )
+
+    val ids = TestIds.random()
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+      val runner = new DoobieTransactionRunner(xa)
+      val resources = ProductionResourceCodec.resourceRepository
+      val rules = new PostgresMonitorRuleRepository
+      val states = new PostgresMonitorRuleStateRepository
+      val incidents = new PostgresIncidentRepository
+      val metrics = new PostgresMetricObservationRepository
+      val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, new ConnectionIOTimeProvider)
+
+      // The projection holds its row locks while this evaluation is deliberately slow, which is
+      // the window the concurrent update used to slip through.
+      val slowProjection = new MonitorEvaluationQuery[ConnectionIO] {
+        private val delegate = new PostgresMonitorEvaluationQuery
+        override def findEnabledForConnection(
+          organizationId: UUID,
+          connectionId: UUID,
+          resourceTypeCodes: List[String]
+        ): ConnectionIO[List[MonitorEvaluationInput]] =
+          delegate.findEnabledForConnection(organizationId, connectionId, resourceTypeCodes)
+            .flatTap(_ => FC.delay(Thread.sleep(1500)))
+      }
+      val evaluator = new EvaluateMonitorRules[ConnectionIO](
+        slowProjection, states, incidents, new ConnectionIOIdGenerator
+      )
+
+      val resource = Resource(ids.resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
+        ids.resourceCode, ids.resourceCode, isActive = true, Now, Now, "NODE", ResourceData.empty)
+      // Zero duration: the evaluation opens a threshold incident on its first violating sample.
+      val rule = MonitorRule(ids.ruleId, OrganizationId, ids.resourceId, MetricCode.CpuUsagePercent,
+        MonitorOperator.GreaterThan, BigDecimal(90), 0, 900, enabled = true, Now, Now)
+      val violating = MetricObservation(UUID.randomUUID(), OrganizationId, ids.resourceId,
+        MetricCode.CpuUsagePercent, BigDecimal(95), Now)
+      val disable = MonitorRuleCommand(MetricCode.CpuUsagePercent, MonitorOperator.GreaterThan,
+        BigDecimal(90), 0, 900, enabled = false)
+
+      val program = for {
+        _ <- runner.run(resources.save(resource))
+        _ <- runner.run(rules.save(rule))
+        _ <- runner.run(linkResourceToConnection(ids))
+        _ <- runner.run(metrics.insertAll(List(violating)))
+        evaluation <- runner.run(evaluator.execute(OrganizationId, ConnectionId, Now)).start
+        _ <- IO.sleep(400.milliseconds)
+        updated <- runner.run(update.execute(OrganizationId, ids.ruleId, disable))
+        transitions <- evaluation.joinWithNever
+        reloadedRule <- runner.run(rules.findById(OrganizationId, ids.ruleId))
+        reloadedState <- runner.run(states.findByRuleId(OrganizationId, ids.ruleId))
+        openIncident <- runner.run(incidents.findOpenByRule(OrganizationId, ids.ruleId))
+        ruleIncidents <- runner.run(incidents.findByOrganization(OrganizationId, None))
+      } yield (transitions, updated, reloadedRule, reloadedState, openIncident,
+        ruleIncidents.filter(_.monitorRuleId == ids.ruleId))
+
+      program.guarantee(runner.run(cleanup(ids)).attempt.void).flatMap {
+        case (transitions, updated, reloadedRule, reloadedState, openIncident, ruleIncidents) => IO {
+          // The evaluation really did open an incident before the update committed.
+          assertEquals(transitions.map(transition => (transition.eventName, transition.reason)),
+            List(("incident.opened", IncidentReason.ThresholdViolation)))
+          assertEquals(updated.map(_.enabled), Some(false))
+          assertEquals(reloadedRule.map(_.enabled), Some(false))
+          // The update waited for the row lock, so it cleaned up what the evaluation wrote.
+          assertEquals(reloadedState, None)
+          assertEquals(openIncident, None)
+          assertEquals(ruleIncidents.map(_.status), List(IncidentStatus.Resolved))
         }
       }
     }.unsafeRunSync()

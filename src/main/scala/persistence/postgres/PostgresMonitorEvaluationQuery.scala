@@ -164,7 +164,12 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
                   and er.connection_id = $connectionId
               )
               and
-          """ ++ Fragments.in(fr"rt.code", codes) ++ fr"order by mr.id"
+          """ ++ Fragments.in(fr"rt.code", codes) ++
+            // Locking the selected monitor_rule rows serializes an evaluation against a
+            // concurrent rule change: either this evaluation finishes and the update cleans up
+            // after it, or the update commits first and its rule is no longer selected here.
+            // Only the driving table is locked; the outer joins and the lateral stay unlocked.
+            fr"order by mr.id for update of mr"
 
         query.query[EvaluationRow].to[List]
           .flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
