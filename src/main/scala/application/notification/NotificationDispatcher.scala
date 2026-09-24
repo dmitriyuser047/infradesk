@@ -11,7 +11,6 @@ import application.port.{
 import cats.{MonadThrow, Parallel}
 import cats.effect.{Async, Temporal}
 import cats.effect.implicits._
-import cats.effect.std.Queue
 import cats.syntax.all._
 import domain.notification.NotificationDelivery
 import org.typelevel.log4cats.Logger
@@ -21,10 +20,15 @@ import scala.concurrent.duration.FiniteDuration
 
 /** Delivers the notification outbox.
   *
-  * One tick claims a batch in a short transaction, performs the network calls outside any
-  * transaction, and finishes each delivery in its own short transaction. No database row is
-  * locked while an HTTP request is in flight, and every completion is fenced by the claim, so an
-  * instance whose lease expired can no longer change the delivery someone else took over.
+  * One tick works in waves of at most `maxConcurrency` deliveries: it claims a wave in a short
+  * transaction, performs its network calls outside any transaction, finishes each delivery in its
+  * own short transaction, and only then claims the next wave, up to the tick budget. A claimed
+  * delivery therefore never waits its turn while the lease is already running, so the lease has to
+  * cover one request rather than a whole batch, and a crash freezes only one wave.
+  *
+  * No database row is locked while an HTTP request is in flight, and every completion is fenced by
+  * the claim, so an instance whose lease expired can no longer change the delivery someone else
+  * took over.
   *
   * The guarantee is at-least-once: a process that dies between a successful request and its
   * completion transaction leaves the delivery claimed until the lease expires, and it is then
@@ -45,15 +49,25 @@ final class NotificationDispatcher[F[_]: Async, Tx[_]: MonadThrow](
   require(maxConcurrency > 0, "maxConcurrency must be positive")
   require(maxAttempts > 0, "maxAttempts must be positive")
 
-  def tick(limit: Int): F[Unit] =
-    for {
-      claimed <- transactionRunner.run(
-        deliveries.claimPending(dispatcherInstanceId, limit, claimLease.toSeconds)
-      )
-      _ <- if (claimed.isEmpty) ().pure[F]
-      else logInfo(s"notification.dispatch.started dispatcherInstanceId=$dispatcherInstanceId claimed=${claimed.size}") *>
-        dispatch(claimed)
-    } yield ()
+  def tick(limit: Int): F[Unit] = dispatchWaves(limit)
+
+  /** Claims and delivers one wave at a time until the tick budget is spent or nothing is due. */
+  private def dispatchWaves(remaining: Int): F[Unit] = {
+    val waveSize = math.min(maxConcurrency, remaining)
+    if (waveSize <= 0) ().pure[F]
+    else
+      transactionRunner.run(
+        deliveries.claimPending(dispatcherInstanceId, waveSize, claimLease.toSeconds)
+      ).flatMap { claimed =>
+        if (claimed.isEmpty) ().pure[F]
+        else
+          logInfo(
+            s"notification.dispatch.started dispatcherInstanceId=$dispatcherInstanceId claimed=${claimed.size}"
+          ) *> dispatch(claimed) *>
+            // A partial wave means the queue is drained; a full one may have left work behind.
+            (if (claimed.size < waveSize) ().pure[F] else dispatchWaves(remaining - claimed.size))
+      }
+  }
 
   def run(pollInterval: FiniteDuration, limit: Int): F[Nothing] =
     (tick(limit).handleErrorWith(error =>
@@ -63,25 +77,13 @@ final class NotificationDispatcher[F[_]: Async, Tx[_]: MonadThrow](
       )
     ) *> Temporal[F].sleep(pollInterval)).foreverM
 
-  private def dispatch(claimed: List[NotificationDelivery]): F[Unit] = {
-    val workerCount = math.min(maxConcurrency, claimed.size)
-
-    Queue.unbounded[F, Option[NotificationDelivery]].flatMap { queue =>
-      claimed.traverse_(delivery => queue.offer(Some(delivery))) *>
-        List.fill(workerCount)(()).traverse_(_ => queue.offer(None)) *>
-        Parallel.parTraverse_(List.fill(workerCount)(()))(_ => worker(queue))
-    }
-  }
-
-  private def worker(queue: Queue[F, Option[NotificationDelivery]]): F[Unit] =
-    queue.take.flatMap {
-      case Some(delivery) =>
-        deliver(delivery)
-          .handleErrorWith(error => logError(
-            s"notification.dispatch.failed ${context(delivery)} errorType=${error.getClass.getSimpleName}",
-            error
-          )) *> worker(queue)
-      case None => ().pure[F]
+  /** A wave is never larger than `maxConcurrency`, so every claimed delivery starts at once. */
+  private def dispatch(claimed: List[NotificationDelivery]): F[Unit] =
+    Parallel.parTraverse_(claimed) { delivery =>
+      deliver(delivery).handleErrorWith(error => logError(
+        s"notification.dispatch.failed ${context(delivery)} errorType=${error.getClass.getSimpleName}",
+        error
+      ))
     }
 
   private def deliver(delivery: NotificationDelivery): F[Unit] =

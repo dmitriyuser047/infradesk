@@ -98,7 +98,9 @@ object AppConfig {
       requestTimeoutSeconds <- positiveInt(values, "INFRADESK_NOTIFICATION_REQUEST_TIMEOUT_SECONDS", 10)
       maxAttempts <- positiveInt(values, "INFRADESK_NOTIFICATION_MAX_ATTEMPTS", 10)
       // A lease shorter than a request would let a second dispatcher start the same delivery
-      // while the first one is still waiting for the receiver.
+      // while the first one is still waiting for the receiver. The dispatcher claims in waves of
+      // at most maxConcurrency, so the lease only has to cover one request plus database overhead,
+      // not the whole batch.
       _ <- Either.cond(
         claimLeaseSeconds > requestTimeoutSeconds,
         (),

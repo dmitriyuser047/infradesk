@@ -2,8 +2,13 @@ package ru.bitec.app.ops
 package persistence.postgres
 
 import application.monitor.{EvaluateMonitorRules, MonitorTransition}
-import application.notification.{NotificationRecordingMonitorRuleEvaluator, RecordNotificationDeliveries}
-import application.port.NotificationDeliveryRepository
+import application.notification.{
+  NotificationDispatcher,
+  NotificationEvent,
+  NotificationRecordingMonitorRuleEvaluator,
+  RecordNotificationDeliveries
+}
+import application.port.{NotificationDeliveryRepository, NotificationSendResult, NotificationSender}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -18,7 +23,9 @@ import domain.notification.{
 }
 import domain.resource.{Resource, ResourceData}
 import infrastructure.database.{ConnectionIOIdGenerator, ConnectionIOTimeProvider, DoobieTransactionRunner}
+import infrastructure.runtime.SystemTimeProvider
 import munit.FunSuite
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 import org.typelevel.doobie.ConnectionIO
 import org.typelevel.doobie.free.{connection => FC}
 import org.typelevel.doobie.implicits._
@@ -147,6 +154,42 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
     }
   }
 
+  test("a dispatcher leases only the deliveries it is about to send") {
+    withFixture { fixture =>
+      val secondIncident = fixture.seedIncident.copy(id = SecondIncidentId)
+      val deliveries = List(
+        pending(fixture, deliveryId(1), NotificationEventType.IncidentOpened),
+        pending(fixture, deliveryId(2), NotificationEventType.IncidentResolved),
+        pending(fixture, deliveryId(3), NotificationEventType.IncidentOpened).copy(incidentId = SecondIncidentId),
+        pending(fixture, deliveryId(4), NotificationEventType.IncidentResolved).copy(incidentId = SecondIncidentId)
+      )
+      // Slower than one poll of the observer, so an over-eager lease would be visible in the table.
+      val sender = new SlowSender(150.milliseconds)
+      val dispatcher = new NotificationDispatcher[IO, ConnectionIO](
+        fixture.deliveries, sender, fixture.transactionRunner, new SystemTimeProvider,
+        Slf4jLogger.getLoggerFromName[IO]("test.notification.dispatcher"),
+        maxConcurrency = 1, DispatcherA, 30.seconds, maxAttempts = 3
+      )
+
+      for {
+        _ <- fixture.run(fixture.incidents.saveAll(List(secondIncident)))
+        _ <- fixture.run(fixture.deliveries.saveAll(deliveries))
+        dispatching <- dispatcher.tick(deliveries.size).start
+        // Sample the lease held by this dispatcher while the wave-by-wave tick is running.
+        samples <- (IO.sleep(40.milliseconds) *> fixture.run(fixture.countLeased(DispatcherA)))
+          .replicateA(12).timeoutTo(10.seconds, IO.pure(List.empty))
+        _ <- dispatching.joinWithNever
+        stored <- fixture.run(fixture.listDeliveries)
+      } yield IO {
+        // A batch claim would have leased all four rows at once while three of them waited.
+        assertEquals(samples.maxOption.getOrElse(0), 1, samples.toString)
+        assert(samples.exists(_ == 1), s"the dispatcher was never observed working: $samples")
+        assertEquals(sender.count, 4)
+        assertEquals(stored.map(_.status.code).toSet, Set("SENT"))
+      }
+    }
+  }
+
   test("an evaluation commits the incident and its notification together") {
     withFixture { fixture =>
       val observation = MetricObservation(UUID.randomUUID(), OrganizationId, fixture.resourceId,
@@ -241,6 +284,8 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
 
     def run[A](program: ConnectionIO[A]): IO[A] = runner.run(program)
 
+    val transactionRunner: DoobieTransactionRunner = runner
+
     def setUp: IO[Unit] = {
       val resource = Resource(resourceId, OrganizationId, EnvironmentId, NodeResourceTypeId, None,
         code, code, isActive = true, Now, Now, "NODE", ResourceData.empty)
@@ -272,6 +317,15 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
         .flatMap(_.traverse(id => deliveries.findById(OrganizationId, id)))
         .map(_.flatten)
 
+    /** How many deliveries this dispatcher currently holds under a live lease. */
+    def countLeased(claimedBy: UUID): ConnectionIO[Int] =
+      sql"""
+        select count(*) from notification_delivery
+        where organization_id = $OrganizationId and monitor_rule_id = $ruleId
+          and status = 'PENDING' and claimed_by = $claimedBy
+          and claimed_until > current_timestamp
+      """.query[Int].unique
+
     def expireLease(deliveryId: UUID): ConnectionIO[Unit] =
       sql"""
         update notification_delivery
@@ -288,6 +342,14 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
       _ <- sql"delete from external_ref where organization_id = $OrganizationId and resource_id = $resourceId".update.run
       _ <- sql"delete from resource where organization_id = $OrganizationId and id = $resourceId".update.run
     } yield ()).attempt.void
+  }
+
+  /** A sender that takes long enough for the observer to see how many rows are leased. */
+  private final class SlowSender(delay: FiniteDuration) extends NotificationSender[IO] {
+    private val sent = new java.util.concurrent.atomic.AtomicInteger(0)
+    def count: Int = sent.get()
+    override def send(event: NotificationEvent): IO[NotificationSendResult] =
+      IO.sleep(delay) *> IO(sent.incrementAndGet()) *> IO.pure(NotificationSendResult.Sent)
   }
 
   private final class FailingDeliveryRepository extends NotificationDeliveryRepository[ConnectionIO] {
@@ -321,6 +383,9 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
   private val IncidentId = UUID.fromString("a0000000-0000-0000-0000-0000000000ff")
   private val DeliveryId = UUID.fromString("c0000000-0000-0000-0000-000000000001")
   private val SecondDeliveryId = UUID.fromString("c0000000-0000-0000-0000-000000000002")
+  private val SecondIncidentId = UUID.fromString("a0000000-0000-0000-0000-0000000000fe")
+
+  private def deliveryId(index: Int): UUID = UUID.fromString(f"c0000000-0000-0000-0000-$index%012d")
   private val DispatcherA = UUID.fromString("d0000000-0000-0000-0000-00000000000a")
   private val DispatcherB = UUID.fromString("d0000000-0000-0000-0000-00000000000b")
   // Claims compare against the database clock, so the fixture has to be due in real time.

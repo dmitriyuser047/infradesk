@@ -88,7 +88,8 @@ final class NotificationOutboxSpec extends FunSuite {
     val repository = new DispatchRepository(List(pending()))
     dispatcher(repository, new FixedSender(NotificationSendResult.Sent)).tick(10).unsafeRunSync()
 
-    assertEquals(repository.claims, List((DispatcherId, 10, 60L)))
+    // A wave is never larger than maxConcurrency; the second claim finds the queue drained.
+    assertEquals(repository.claims, List((DispatcherId, 1, 60L), (DispatcherId, 1, 60L)))
     assertEquals(repository.sent, List((DeliveryId, DispatcherId, Now)))
     assertEquals(repository.rescheduled, List.empty)
     assertEquals(repository.dead, List.empty)
@@ -147,6 +148,29 @@ final class NotificationOutboxSpec extends FunSuite {
     assertEquals(repository.claims.size, 1)
   }
 
+  test("a batch larger than the concurrency limit is claimed wave by wave") {
+    val deliveries = (1 to 5).toList.map(index => pending(id = deliveryId(index)))
+    val repository = new DispatchRepository(deliveries)
+    val sender = new FixedSender(NotificationSendResult.Sent)
+
+    dispatcher(repository, sender, maxConcurrency = 2).tick(10).unsafeRunSync()
+
+    // Two at a time, so at most two deliveries hold a lease while their requests are in flight.
+    assertEquals(repository.claims.map(_._2), List(2, 2, 2))
+    assertEquals(repository.sent.map(_._1).toSet, deliveries.map(_.id).toSet)
+    assert(repository.waveSizes.forall(_ <= 2), repository.waveSizes.toString)
+  }
+
+  test("a tick never leases more than its budget") {
+    val repository = new DispatchRepository((1 to 6).toList.map(index => pending(id = deliveryId(index))))
+
+    dispatcher(repository, new FixedSender(NotificationSendResult.Sent), maxConcurrency = 2).tick(3)
+      .unsafeRunSync()
+
+    assertEquals(repository.claims.map(_._2), List(2, 1))
+    assertEquals(repository.sent.size, 3)
+  }
+
   test("every claimed delivery is sent once with its stable event id") {
     val second = pending(id = SecondDeliveryId)
     val repository = new DispatchRepository(List(pending(), second))
@@ -177,6 +201,8 @@ final class NotificationOutboxSpec extends FunSuite {
       Slf4jLogger.getLoggerFromName[IO]("test.notification"), maxConcurrency, DispatcherId,
       60.seconds, maxAttempts)
 
+  private def deliveryId(index: Int): UUID = UUID.fromString(f"c0000000-0000-0000-0000-$index%012d")
+
   private def pending(id: UUID = DeliveryId, attemptCount: Long = 0): NotificationDelivery =
     NotificationDelivery(id, OrganizationId, IncidentId, ResourceId, RuleId,
       NotificationEventType.IncidentOpened, IncidentReason.ThresholdViolation,
@@ -188,11 +214,13 @@ final class NotificationOutboxSpec extends FunSuite {
       IO.pure(transitions)
   }
 
+  /** A wave is delivered in parallel, so the recording fakes synchronize their bookkeeping. */
   private final class FixedSender(result: NotificationSendResult) extends NotificationSender[IO] {
-    var calls: Int = 0
-    var events: List[NotificationEvent] = List.empty
+    private var recorded: List[NotificationEvent] = List.empty
+    def events: List[NotificationEvent] = synchronized(recorded)
+    def calls: Int = events.size
     override def send(event: NotificationEvent): IO[NotificationSendResult] =
-      IO { calls += 1; events = events :+ event } *> IO.pure(result)
+      IO(synchronized { recorded = recorded :+ event }) *> IO.pure(result)
   }
 
   private class RecordingRepository extends NotificationDeliveryRepository[IO] {
@@ -216,25 +244,33 @@ final class NotificationOutboxSpec extends FunSuite {
     fenced: Boolean = true
   ) extends RecordingRepository {
     var claims: List[(UUID, Int, Long)] = List.empty
+    var waveSizes: List[Int] = List.empty
+    private var queued: List[NotificationDelivery] = claimable
     var sent: List[(UUID, UUID, Instant)] = List.empty
     var rescheduled: List[(UUID, UUID, Long, Instant, String)] = List.empty
     var dead: List[(UUID, UUID, Long, String)] = List.empty
 
     override def claimPending(claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[NotificationDelivery]] =
-      IO { claims = claims :+ ((claimedBy, limit, leaseSeconds)) } *>
-        IO.pure(claimable.map(_.copy(claimedBy = Some(claimedBy))))
+      IO(synchronized {
+        claims = claims :+ ((claimedBy, limit, leaseSeconds))
+        val (wave, rest) = queued.splitAt(limit)
+        queued = rest
+        waveSizes = waveSizes :+ wave.size
+        wave.map(_.copy(claimedBy = Some(claimedBy)))
+      })
 
     override def markSent(organizationId: UUID, id: UUID, claimedBy: UUID, sentAt: Instant): IO[Boolean] =
-      IO { sent = sent :+ ((id, claimedBy, sentAt)) } *> IO.pure(fenced)
+      IO(synchronized { sent = sent :+ ((id, claimedBy, sentAt)) }) *> IO.pure(fenced)
 
     override def reschedule(organizationId: UUID, id: UUID, claimedBy: UUID, attemptCount: Long,
       nextAttemptAt: Instant, errorCode: String, updatedAt: Instant): IO[Boolean] =
-      IO { rescheduled = rescheduled :+ ((id, claimedBy, attemptCount, nextAttemptAt, errorCode)) } *>
-        IO.pure(fenced)
+      IO(synchronized {
+        rescheduled = rescheduled :+ ((id, claimedBy, attemptCount, nextAttemptAt, errorCode))
+      }) *> IO.pure(fenced)
 
     override def markDead(organizationId: UUID, id: UUID, claimedBy: UUID, attemptCount: Long,
       errorCode: String, updatedAt: Instant): IO[Boolean] =
-      IO { dead = dead :+ ((id, claimedBy, attemptCount, errorCode)) } *> IO.pure(fenced)
+      IO(synchronized { dead = dead :+ ((id, claimedBy, attemptCount, errorCode)) }) *> IO.pure(fenced)
   }
 
   private final class DirectRunner extends TransactionRunner[IO, IO] {

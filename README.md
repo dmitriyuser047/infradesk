@@ -24,8 +24,8 @@ Backend startup:
 | `INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS` | `900` | Distributed scheduler lease; matches the 15-minute stale sync horizon |
 | `INFRADESK_NOTIFICATION_WEBHOOK_URL` | Optional | Webhook endpoint for incident events; absent disables notifications |
 | `INFRADESK_NOTIFICATION_POLL_INTERVAL_SECONDS` | `5` | Delivery dispatcher poll interval |
-| `INFRADESK_NOTIFICATION_BATCH_SIZE` | `50` | Deliveries claimed per poll |
-| `INFRADESK_NOTIFICATION_MAX_CONCURRENCY` | `5` | Concurrent webhook requests |
+| `INFRADESK_NOTIFICATION_BATCH_SIZE` | `50` | Deliveries a poll may handle, claimed in waves |
+| `INFRADESK_NOTIFICATION_MAX_CONCURRENCY` | `5` | Concurrent webhook requests, and the size of one claim wave |
 | `INFRADESK_NOTIFICATION_CLAIM_LEASE_SECONDS` | `60` | Delivery lease; must exceed the request timeout |
 | `INFRADESK_NOTIFICATION_REQUEST_TIMEOUT_SECONDS` | `10` | Webhook request timeout |
 | `INFRADESK_NOTIFICATION_MAX_ATTEMPTS` | `10` | Attempts before a delivery is abandoned |
@@ -98,6 +98,11 @@ diverge; if the outbox write fails, the incident change rolls back with it. The 
 claims due rows with a lease (`for update skip locked`, like the sync scheduler), performs the HTTP
 request outside any transaction, and finishes each delivery in its own short transaction fenced by
 the claim. No database row is locked while a request is in flight.
+
+A poll claims in waves of at most `INFRADESK_NOTIFICATION_MAX_CONCURRENCY` rows and takes the next
+wave only after the current one is finished, up to `INFRADESK_NOTIFICATION_BATCH_SIZE`. A claimed
+delivery is therefore always in flight rather than queued behind others, so the lease only has to
+cover one request, and a crashed dispatcher freezes one wave instead of a whole batch.
 
 The guarantee is at-least-once: a process that dies between a delivered request and its completion
 retries after the lease expires. The delivery id is the event id, sent both as `eventId` in the
