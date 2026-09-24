@@ -6,6 +6,7 @@ import domain.operation.{OperationExecution, OperationExecutionCursor, ResourceO
 
 import java.time.Instant
 import java.util.UUID
+import scala.concurrent.duration.FiniteDuration
 
 trait OperationExecutionRepository[F[_]] {
   def tryCreateRunning(execution: OperationExecution): F[Boolean]
@@ -34,4 +35,14 @@ trait ResourceOperationTargetQuery[F[_]] {
 
 trait ResourceOperationExecutor[F[_]] {
   def execute(target: ResourceOperationTarget, operation: ResourceOperationCode): F[Unit]
+}
+
+/** How long one attempt against a target can still legitimately be in flight.
+  *
+  * The transport decides it, not the application: a connection configured with a long command
+  * timeout must not have its running operation declared abandoned while the command is still
+  * being waited for.
+  */
+trait ResourceOperationBudget {
+  def maxAttemptDuration(target: ResourceOperationTarget): FiniteDuration
 }

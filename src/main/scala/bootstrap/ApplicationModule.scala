@@ -188,7 +188,7 @@ object ApplicationModule {
     val sessionTokens = new SessionTokens
     val resourceOperationPreparation = new ResourceOperationPreparation[ConnectionIO](
       resourceOperationTargetQuery, operationExecutionRepository, transactionIdGenerator,
-      transactionTimeProvider, auditRecorder)
+      transactionTimeProvider, auditRecorder, integrations.resourceOperationBudget)
 
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),

@@ -5,14 +5,16 @@ import application.auth.ActorContext
 import application.port._
 import cats.effect.{IO, Ref}
 import cats.effect.unsafe.implicits.global
-import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
+import domain.connection.{Connection, ConnectionScope, SshConnectionSettings}
 import domain.operation._
 import munit.FunSuite
 import support.{FailingAuditEventRepository, RecordingAuditEventRepository, TestAuditRecorder}
+import integration.ssh.docker.SshContainerOperationExecutor
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import java.time.Instant
 import java.util.UUID
+import scala.concurrent.duration._
 
 final class ResourceOperationsSpec extends FunSuite {
   private val org = UUID.randomUUID()
@@ -61,11 +63,51 @@ final class ResourceOperationsSpec extends FunSuite {
     assertEquals(fixture.executor.calls.unsafeRunSync(), 0)
   }
 
+  test("a running operation is never abandoned while its own command can still be in flight") {
+    // Twenty minutes of command timeout: eleven minutes in, the first SSH command may well still
+    // be waiting for the container to stop.
+    val fixture = OpFixture(commandTimeoutSeconds = 1200)
+    fixture.repository.start(now.minusSeconds(11 * 60))
+
+    intercept[OperationAlreadyRunning] {
+      fixture.service.execute(actor, resource, ResourceOperationCode.ContainerRestart).unsafeRunSync()
+    }
+
+    assertEquals(fixture.repository.recovered, List.empty)
+    assertEquals(fixture.repository.values.map(_.status), List(OperationExecutionStatus.Running))
+    // The decisive part: no second remote command next to the first one.
+    assertEquals(fixture.executor.calls.unsafeRunSync(), 0)
+    assertEquals(fixture.auditRepository.toList.flatMap(_.recorded), List.empty)
+  }
+
+  test("a running operation past its own budget becomes unknown and releases the resource") {
+    val fixture = OpFixture(commandTimeoutSeconds = 1200)
+    val abandoned = now.minusSeconds(10 + 1200 + 60 + 1)
+    fixture.repository.start(abandoned)
+
+    val result = fixture.service.execute(actor, resource, ResourceOperationCode.ContainerRestart)
+      .unsafeRunSync()
+
+    assertEquals(fixture.repository.recovered.size, 1)
+    assertEquals(result.status, OperationExecutionStatus.Succeeded)
+    assertEquals(fixture.executor.calls.unsafeRunSync(), 1)
+  }
+
+  test("the stale horizon never drops below its floor and always covers the transport budget") {
+    assertEquals(ResourceOperationPolicy.staleAfter(30.seconds), 10.minutes)
+    assertEquals(ResourceOperationPolicy.staleAfter(Duration.Zero), 10.minutes)
+    assertEquals(ResourceOperationPolicy.staleAfter(20.minutes), 21.minutes)
+    assert(ResourceOperationPolicy.staleAfter(9.minutes + 30.seconds) >= 10.minutes)
+  }
+
   private final case class OpFixture(failure: Option[ResourceOperationFailure] = None,
-    targetCount: Int = 1, resourceType: String = "CONTAINER", failingAudit: Boolean = false) {
+    targetCount: Int = 1, resourceType: String = "CONTAINER", failingAudit: Boolean = false,
+    commandTimeoutSeconds: Int = 30) {
     val repository = new MemoryExecutions
+    private val sshConfig = SshConnectionSettings.toConnectionConfig(
+      SshConnectionSettings("node.example.test", 22, "root", None, 10, commandTimeoutSeconds))
     val target = ResourceOperationTarget(Connection(UUID.randomUUID(), org, ConnectionScope.Organization,
-      "SSH", "ssh", "SSH", ConnectionConfig(Map.empty), None, isActive = true, now, now),
+      "SSH", "ssh", "SSH", sshConfig, None, isActive = true, now, now),
       "CONTAINER", "73ac69cf50927aadda817a4a31fdcf6b56f2d3cfe782dabeab65b961c230fc6d")
     val query = new ResourceOperationTargetQuery[IO] {
       def find(organizationId: UUID, resourceId: UUID): IO[Option[ResourceOperationTargetProjection]] =
@@ -74,7 +116,9 @@ final class ResourceOperationsSpec extends FunSuite {
     }
     val auditRepository: Option[RecordingAuditEventRepository] = if (failingAudit) None else Some(new RecordingAuditEventRepository)
     val auditRecorder = TestAuditRecorder(auditRepository.getOrElse(new FailingAuditEventRepository))
-    val preparation = new ResourceOperationPreparation[IO](query, repository, new FixedId, new FixedTime, auditRecorder)
+    val budget = new SshContainerOperationExecutor[IO](null, null)
+    val preparation = new ResourceOperationPreparation[IO](query, repository, new FixedId,
+      new FixedTime, auditRecorder, budget)
     val executor = new RecordingExecutor(failure)
     val service = new ExecuteResourceOperation[IO](preparation, repository, executor,
       new TransactionRunner[IO, IO] { def run[A](program: IO[A]): IO[A] = program }, new FixedTime,
@@ -92,10 +136,31 @@ final class ResourceOperationsSpec extends FunSuite {
   private final class MemoryExecutions extends OperationExecutionRepository[IO] {
     var values = List.empty[OperationExecution]
     var running = false
+    var recovered = List.empty[UUID]
+
+    /** Seeds a running execution started at the given moment, as a previous request would. */
+    def start(startedAt: Instant): Unit = {
+      running = true
+      values ::= OperationExecution(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+        UUID.randomUUID(), ResourceOperationCode.ContainerRestart, UUID.randomUUID(), "CONTAINER",
+        "73ac69cf50927aadda817a4a31fdcf6b56f2d3cfe782dabeab65b961c230fc6d",
+        OperationExecutionStatus.Running, startedAt, None, None, None, startedAt, startedAt)
+    }
+
     def tryCreateRunning(value: OperationExecution) = IO {
       if (running) false else { running = true; values ::= value; true }
     }
-    def recoverStaleRunning(o: UUID, r: UUID, b: Instant, at: Instant, c: String, m: String) = IO.pure(List.empty[UUID])
+    def recoverStaleRunning(o: UUID, r: UUID, b: Instant, at: Instant, c: String, m: String) = IO {
+      val stale = values.filter(value =>
+        value.status == OperationExecutionStatus.Running && value.startedAt.isBefore(b))
+      values = values.map(value =>
+        if (stale.exists(_.id == value.id)) value.copy(status = OperationExecutionStatus.Unknown,
+          finishedAt = Some(at), errorCode = Some(c), errorMessage = Some(m))
+        else value)
+      if (stale.nonEmpty) running = false
+      recovered = recovered ++ stale.map(_.id)
+      stale.map(_.id)
+    }
     def markSucceeded(o: UUID, id: UUID, at: Instant) = finish(id, OperationExecutionStatus.Succeeded, at, None, None)
     def markFailed(o: UUID, id: UUID, at: Instant, c: String, m: String) = finish(id, OperationExecutionStatus.Failed, at, Some(c), Some(m))
     private def finish(id: UUID, state: OperationExecutionStatus, at: Instant, c: Option[String], m: Option[String]) = IO {

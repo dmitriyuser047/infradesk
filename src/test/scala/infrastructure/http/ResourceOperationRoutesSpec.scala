@@ -23,7 +23,7 @@ final class ResourceOperationRoutesSpec extends FunSuite {
     val repo = new Repo
     val query = new Query
     val preparation = new ResourceOperationPreparation[IO](query, repo, new Ids, new Clock,
-      TestAuditRecorder.recording._2)
+      TestAuditRecorder.recording._2, FixedBudget)
     val execute = new ExecuteResourceOperation[IO](preparation, repo,
       new ResourceOperationExecutor[IO] { def execute(t: ResourceOperationTarget, o: ResourceOperationCode) = IO.unit },
       Runner, new Clock, Slf4jLogger.getLoggerFromName[IO]("test.operations"))
@@ -51,6 +51,9 @@ final class ResourceOperationRoutesSpec extends FunSuite {
   }
 
   private object Runner extends TransactionRunner[IO, IO] { def run[A](program: IO[A]) = program }
+  private object FixedBudget extends ResourceOperationBudget {
+    def maxAttemptDuration(target: ResourceOperationTarget) = scala.concurrent.duration.Duration.Zero
+  }
   private final class Ids extends IdGenerator[IO] { def nextId = IO.pure(UUID.randomUUID()) }
   private final class Clock extends TimeProvider[IO] { def now = IO.pure(ResourceOperationRoutesSpec.this.now) }
   private final class Query extends ResourceOperationTargetQuery[IO] {

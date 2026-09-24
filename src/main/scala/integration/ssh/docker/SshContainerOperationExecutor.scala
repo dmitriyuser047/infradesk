@@ -2,11 +2,13 @@ package ru.bitec.app.ops
 package integration.ssh.docker
 
 import application.operation.ResourceOperationFailure
-import application.port.{ResourceOperationExecutor, ResourceOperationTarget}
+import application.port.{ResourceOperationBudget, ResourceOperationExecutor, ResourceOperationTarget}
 import cats.MonadThrow
 import cats.syntax.all._
 import domain.operation.ResourceOperationCode
 import integration.ssh.{SshAuthenticationProvider, SshClient, SshConnectionConfig, SshTransportFailure}
+
+import scala.concurrent.duration._
 
 final case class DockerContainerId private (value: String) extends AnyVal
 object DockerContainerId {
@@ -19,7 +21,16 @@ object DockerContainerId {
 
 final class SshContainerOperationExecutor[F[_]: MonadThrow](
   client: SshClient[F], authentication: SshAuthenticationProvider[F]
-) extends ResourceOperationExecutor[F] {
+) extends ResourceOperationExecutor[F] with ResourceOperationBudget {
+
+  /** Connecting plus waiting for the command, as this connection is configured. A target whose
+    * configuration cannot be read runs no command at all, so it contributes nothing.
+    */
+  override def maxAttemptDuration(target: ResourceOperationTarget): FiniteDuration =
+    SshConnectionConfig.from(target.connection.config)
+      .map(config => config.connectTimeoutSeconds.seconds + config.commandTimeoutSeconds.seconds)
+      .getOrElse(Duration.Zero)
+
   override def execute(target: ResourceOperationTarget, operation: ResourceOperationCode): F[Unit] =
     (for {
       id <- DockerContainerId.parse(target.externalId).liftTo[F]

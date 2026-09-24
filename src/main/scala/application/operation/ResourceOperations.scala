@@ -30,14 +30,29 @@ final case class PreparedResourceOperation(execution: OperationExecution, target
   recoveredExecutionIds: List[UUID])
 
 object ResourceOperationPolicy {
-  val StaleAfter: FiniteDuration = 10.minutes
+  /** The floor: even a fast transport keeps its running operation for this long. */
+  val MinimumStaleAfter: FiniteDuration = 10.minutes
+
+  /** Room for connection setup, the completion transaction and clock skew between instances. */
+  val SafetyMargin: FiniteDuration = 1.minute
+
+  /** A running execution is abandoned only once its own attempt can no longer be in flight.
+    *
+    * Recovering earlier would let a second SSH command start next to a first one that is still
+    * running, which is exactly the duplicate remediation the design rules out.
+    */
+  def staleAfter(attemptBudget: FiniteDuration): FiniteDuration =
+    if (attemptBudget + SafetyMargin > MinimumStaleAfter) attemptBudget + SafetyMargin
+    else MinimumStaleAfter
+
   val UnknownCode = "OPERATION_RESULT_UNKNOWN"
   val UnknownMessage = "Operation result is unknown because execution was interrupted"
 }
 
 final class ResourceOperationPreparation[Tx[_]: MonadThrow](
   targets: ResourceOperationTargetQuery[Tx], executions: OperationExecutionRepository[Tx],
-  ids: IdGenerator[Tx], time: TimeProvider[Tx], audit: AuditRecorder[Tx]
+  ids: IdGenerator[Tx], time: TimeProvider[Tx], audit: AuditRecorder[Tx],
+  budget: ResourceOperationBudget
 ) {
   def availability(organizationId: UUID, resourceId: UUID): Tx[AvailableResourceOperations] =
     targets.find(organizationId, resourceId).flatMap {
@@ -62,8 +77,11 @@ final class ResourceOperationPreparation[Tx[_]: MonadThrow](
       }
       id <- ids.nextId
       now <- time.now
+      // The horizon comes from the target the resource actually has, since a resource with more
+      // than one actionable target is rejected above and never reaches this point.
+      staleAfter = ResourceOperationPolicy.staleAfter(budget.maxAttemptDuration(target))
       recovered <- executions.recoverStaleRunning(actor.organizationId, resourceId,
-        now.minusMillis(ResourceOperationPolicy.StaleAfter.toMillis), now,
+        now.minusMillis(staleAfter.toMillis), now,
         ResourceOperationPolicy.UnknownCode, ResourceOperationPolicy.UnknownMessage)
       execution = OperationExecution(id, actor.organizationId, resourceId, actor.userId, operation,
         target.connection.id, target.externalType, target.externalId, OperationExecutionStatus.Running,

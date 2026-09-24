@@ -2,7 +2,13 @@ package ru.bitec.app.ops
 package bootstrap
 
 import application.connector.ResourceConnectorRegistry
-import application.port.{NotificationSender, ResourceOperationExecutor, SshConnectionProbe, SshPasswordResolver}
+import application.port.{
+  NotificationSender,
+  ResourceOperationBudget,
+  ResourceOperationExecutor,
+  SshConnectionProbe,
+  SshPasswordResolver
+}
 import domain.operation.ResourceOperationCode
 import cats.effect.{IO, Resource}
 import infrastructure.config.{AppConfig, NotificationConfig}
@@ -30,6 +36,7 @@ final case class IntegrationComponents(
   sshConnectionProbe: SshConnectionProbe[IO],
   sshPasswordResolver: SshPasswordResolver[IO],
   resourceOperationExecutor: ResourceOperationExecutor[IO],
+  resourceOperationBudget: ResourceOperationBudget,
   connectorRegistry: ResourceConnectorRegistry[IO]
 )
 
@@ -48,6 +55,10 @@ object IntegrationModule {
         config.sshEnvironmentSecrets
       )
 
+    // One adapter serves both roles: it runs the command and states how long an attempt can take.
+    val sshContainerOperations =
+      new SshContainerOperationExecutor[IO](sshClient, sshAuthenticationProvider)
+
     val connectorRegistry =
       new ResourceConnectorRegistry[IO](
         List(
@@ -60,7 +71,8 @@ object IntegrationModule {
       secretCipher = secretCipher,
       sshConnectionProbe = new SshConnectionProbeAdapter(sshClient),
       sshPasswordResolver = sshAuthenticationProvider,
-      resourceOperationExecutor = new SshContainerOperationExecutor[IO](sshClient, sshAuthenticationProvider),
+      resourceOperationExecutor = sshContainerOperations,
+      resourceOperationBudget = sshContainerOperations,
       connectorRegistry = connectorRegistry
     )
   }
