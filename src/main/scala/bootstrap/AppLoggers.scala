@@ -18,6 +18,7 @@ final case class AppLoggers(
   scheduler: Logger[IO],
   monitor: Logger[IO],
   notification: Logger[IO],
+  operation: Logger[IO],
   authorization: Logger[IO]
 )
 
@@ -31,6 +32,7 @@ object AppLoggers {
     scheduler = named("application.scheduler.SyncScheduler"),
     monitor = named("application.monitor.EvaluateMonitorRules"),
     notification = named("application.notification.NotificationDispatcher"),
+    operation = named("application.operation.ExecuteResourceOperation"),
     authorization = named("infrastructure.http.OrganizationAuthorization")
   )
 

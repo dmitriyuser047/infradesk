@@ -43,13 +43,18 @@ object OrganizationPermission {
     override val code: String = "VIEW_AUDIT"
   }
 
+  case object ExecuteOperations extends OrganizationPermission {
+    override val code: String = "EXECUTE_OPERATIONS"
+  }
+
   val All: List[OrganizationPermission] = List(
     ReadOrganization,
     ManageWorkspace,
     ManageConnections,
     RunConnectionSync,
     ManageMonitoring,
-    ViewAudit
+    ViewAudit,
+    ExecuteOperations
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, OrganizationPermission] =

@@ -111,6 +111,21 @@ event; `408`, `429`, `5xx`, timeouts and connection failures are retried with ex
 (30s doubling to at most one hour) until `INFRADESK_NOTIFICATION_MAX_ATTEMPTS`; other `4xx`
 responses end the delivery immediately.
 
+## Controlled resource operations
+
+An organization owner can start, stop or restart an active `CONTAINER` resource discovered through
+one active SSH connection. The browser sends only a typed operation code; the backend resolves the
+stored full Docker id and emits one fixed command (`docker start`, `docker stop --time 10`, or
+`docker restart --time 10`). Arbitrary commands, arguments, connection selection and timeouts are
+not part of the API.
+
+Each request is journaled and creates a durable `operation_execution`. A partial unique index allows
+only one `RUNNING` execution per resource. Target resolution, stale recovery, the RUNNING insert and
+the audit event commit together; SSH runs after that transaction, and a second short transaction
+records `SUCCEEDED` or `FAILED`. There is no automatic retry. A RUNNING row abandoned for ten minutes
+is recovered as `UNKNOWN`, since the backend cannot safely infer whether the remote command took
+effect. Owners see controls and history; members retain read-only history access.
+
 Frontend: `cd frontend`, then `npm ci`, `npm test`, `npm run build`, or `npm run dev`.
 
 Applied Flyway migrations are immutable. Add a new versioned migration instead of modifying an applied one. An existing non-empty database without Flyway history is not auto-baselined; assess it before switching startup to Flyway.

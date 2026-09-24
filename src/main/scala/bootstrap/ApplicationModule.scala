@@ -29,6 +29,7 @@ import application.resource.{
   PersistExternalResource,
   RecordResourceObservations
 }
+import application.operation.{ExecuteResourceOperation, ListResourceOperationExecutions, ResourceOperationPreparation}
 import application.scheduler.SyncScheduler
 import domain.notification.NotificationChannel
 import application.workspace.{CreateEnvironment, CreateProject}
@@ -70,6 +71,9 @@ final case class ApplicationComponents(
   authentication: Authentication[ConnectionIO],
   bootstrapAdmin: BootstrapAdmin[ConnectionIO],
   listAuditEvents: ListAuditEvents[ConnectionIO],
+  resourceOperationPreparation: ResourceOperationPreparation[ConnectionIO],
+  executeResourceOperation: ExecuteResourceOperation[ConnectionIO],
+  listResourceOperationExecutions: ListResourceOperationExecutions[ConnectionIO],
   scheduler: SyncScheduler[IO, ConnectionIO],
   /** Absent when no notification channel is configured, so no worker is started for it. */
   notificationDispatcher: Option[NotificationDispatcher[IO, ConnectionIO]]
@@ -182,6 +186,9 @@ object ApplicationModule {
 
     val passwordHasher = new BCryptPasswordHasher
     val sessionTokens = new SessionTokens
+    val resourceOperationPreparation = new ResourceOperationPreparation[ConnectionIO](
+      resourceOperationTargetQuery, operationExecutionRepository, transactionIdGenerator,
+      transactionTimeProvider, auditRecorder)
 
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
@@ -283,6 +290,12 @@ object ApplicationModule {
         passwordHasher
       ),
       listAuditEvents = new ListAuditEvents[ConnectionIO](auditEventRepository),
+      resourceOperationPreparation = resourceOperationPreparation,
+      executeResourceOperation = new ExecuteResourceOperation[ConnectionIO](
+        resourceOperationPreparation, operationExecutionRepository,
+        integrations.resourceOperationExecutor, transactionRunner, timeProvider, loggers.operation),
+      listResourceOperationExecutions = new ListResourceOperationExecutions[ConnectionIO](
+        resourceOperationTargetQuery, operationExecutionRepository),
       scheduler = new SyncScheduler[IO, ConnectionIO](
         connectionScheduleRepository,
         runConnectionSync,

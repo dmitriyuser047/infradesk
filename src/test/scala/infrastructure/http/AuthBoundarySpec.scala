@@ -207,6 +207,32 @@ final class AuthBoundarySpec extends FunSuite {
     assertEquals(fixture.app.run(cookieRequest(Method.PUT, rulePath, raw)).unsafeRunSync().status, Status.Ok)
   }
 
+  test("running a controlled operation is owner-only while its history stays readable") {
+    val fixture = new AuthFixture(secure = false)
+    val raw = tokens.generate()
+    fixture.sessions.values = List(AuthSession(UUID.randomUUID(), userId, tokens.hash(raw), now, now.plusSeconds(3600), None))
+    fixture.memberships.values = List(OrganizationMembership(userId, orgA, OrganizationRole.Member, true, now, now))
+    val resourceId = UUID.randomUUID()
+    val executePath =
+      s"/api/v1/organizations/$orgA/resources/$resourceId/operations/CONTAINER_RESTART/executions"
+    val historyPath = s"/api/v1/organizations/$orgA/resources/$resourceId/operation-executions"
+
+    assertEquals(fixture.app.run(cookieRequest(Method.POST, executePath, raw)).unsafeRunSync().status,
+      Status.Forbidden)
+    assertEquals(fixture.app.run(cookieRequest(Method.GET, historyPath, raw)).unsafeRunSync().status,
+      Status.Ok)
+
+    fixture.memberships.values = fixture.memberships.values.map(_.copy(role = OrganizationRole.Owner))
+    assertEquals(fixture.app.run(cookieRequest(Method.POST, executePath, raw)).unsafeRunSync().status,
+      Status.Ok)
+
+    // A foreign organization stays a 404, whatever the operation.
+    val foreignExecute =
+      s"/api/v1/organizations/$orgB/resources/$resourceId/operations/CONTAINER_RESTART/executions"
+    assertEquals(fixture.app.run(cookieRequest(Method.POST, foreignExecute, raw)).unsafeRunSync().status,
+      Status.NotFound)
+  }
+
   test("the audit journal and connection removal are owner-only") {
     val fixture = new AuthFixture(secure = false)
     val raw = tokens.generate()
@@ -295,6 +321,10 @@ final class AuthBoundarySpec extends FunSuite {
         reached(request, OrganizationPermission.ManageMonitoring)
       case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "audit-events" =>
         reached(request, OrganizationPermission.ViewAudit)
+      case request @ POST -> Root / "api" / "v1" / "organizations" / _ / "resources" / _ / "operations" / _ / "executions" =>
+        reached(request, OrganizationPermission.ExecuteOperations)
+      case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "resources" / _ / "operation-executions" =>
+        reached(request, OrganizationPermission.ReadOrganization)
     }.orNotFound
     val app = new AuthBoundary(authRoutes, authentication, business).app
 

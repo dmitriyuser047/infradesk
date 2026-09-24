@@ -254,6 +254,14 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .monitor-rules-error p { margin: 0; }
 .dialog-backdrop { position: fixed; z-index: 10; inset: 0; display: grid; place-items: center; padding: 16px; background: #13243866; }
 .monitor-rule-dialog { width: min(100%, 460px); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-medium); background: var(--surface-primary); box-shadow: 0 8px 24px #2c343b24; }
+.operation-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.section-subtitle { margin: 18px 0 10px; font-size: 13px; color: var(--text-secondary); }
+.operation-history-row { grid-template-columns: minmax(80px, .8fr) minmax(90px, .8fr) minmax(145px, 1.2fr) minmax(145px, 1.2fr) minmax(160px, 1.5fr); }
+.operation-status { width: fit-content; font-size: 11px; font-weight: 700; letter-spacing: .03em; }
+.operation-status-succeeded { color: var(--success-text, #237a45); }
+.operation-status-failed { color: var(--danger-text, #b42318); }
+.operation-status-running { color: var(--accent, #2563eb); }
+.operation-status-unknown { color: #7a5c00; }
 .dialog-heading { display: flex; justify-content: space-between; align-items: center; min-height: 40px; padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-secondary); }
 .dialog-close { width: 26px; height: 26px; border: 0; color: var(--text-secondary); background: transparent; font-size: 22px; line-height: 1; }
 .monitor-rule-form { display: grid; gap: 10px; padding: 13px; }

@@ -17,6 +17,7 @@ import infrastructure.http.{
   NavigationRoutes,
   OrganizationAuthorization,
   ResourceRoutes,
+  ResourceOperationRoutes,
   SshConnectionMutationRoutes,
   WorkspaceMutationRoutes
 }
@@ -47,6 +48,13 @@ object HttpModule {
         transactionRunner,
         authorization
       ).routes <+>
+        new ResourceOperationRoutes(
+          application.resourceOperationPreparation,
+          application.executeResourceOperation,
+          application.listResourceOperationExecutions,
+          transactionRunner,
+          authorization
+        ).routes <+>
         new IncidentRoutes(application.getIncident, application.listIncidents, transactionRunner,
           authorization).routes <+>
         new MonitorRuleRoutes(

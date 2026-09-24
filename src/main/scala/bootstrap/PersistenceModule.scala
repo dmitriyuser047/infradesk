@@ -18,9 +18,11 @@ import application.port.{
   NavigationQueryRepository,
   OrganizationMembershipRepository,
   OrganizationRepository,
+  OperationExecutionRepository,
   ProjectRepository,
   ReadinessCheck,
   ResourceRepository,
+  ResourceOperationTargetQuery,
   ResourceTypeRepository,
   SyncSessionRepository,
   TransactionRunner,
@@ -49,8 +51,10 @@ import persistence.postgres.{
   PostgresNotificationDeliveryRepository,
   PostgresOrganizationMembershipRepository,
   PostgresOrganizationRepository,
+  PostgresOperationExecutionRepository,
   PostgresProjectRepository,
   PostgresResourceRepository,
+  PostgresResourceOperationTargetQuery,
   PostgresResourceTypeRepository,
   PostgresSyncSessionRepository,
   PostgresUserAccountRepository,
@@ -86,6 +90,8 @@ final case class PersistenceComponents(
   authSessionRepository: AuthSessionRepository[ConnectionIO],
   membershipRepository: OrganizationMembershipRepository[ConnectionIO],
   auditEventRepository: AuditEventRepository[ConnectionIO]
+  ,operationExecutionRepository: OperationExecutionRepository[ConnectionIO]
+  ,resourceOperationTargetQuery: ResourceOperationTargetQuery[ConnectionIO]
 )
 
 /** Builds every PostgreSQL-backed port on top of one transactor. */
@@ -128,6 +134,8 @@ object PersistenceModule {
       userAccountRepository = new PostgresUserAccountRepository,
       authSessionRepository = new PostgresAuthSessionRepository,
       membershipRepository = new PostgresOrganizationMembershipRepository,
-      auditEventRepository = new PostgresAuditEventRepository
+      auditEventRepository = new PostgresAuditEventRepository,
+      operationExecutionRepository = new PostgresOperationExecutionRepository,
+      resourceOperationTargetQuery = new PostgresResourceOperationTargetQuery
     )
 }

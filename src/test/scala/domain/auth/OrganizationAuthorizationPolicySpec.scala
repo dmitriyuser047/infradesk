@@ -30,7 +30,8 @@ final class OrganizationAuthorizationPolicySpec extends FunSuite {
       OrganizationPermission.ManageConnections,
       OrganizationPermission.RunConnectionSync,
       OrganizationPermission.ManageMonitoring,
-      OrganizationPermission.ViewAudit
+      OrganizationPermission.ViewAudit,
+      OrganizationPermission.ExecuteOperations
     ).foreach(permission =>
       assertEquals(
         OrganizationAuthorizationPolicy.allows(OrganizationRole.Member, permission),

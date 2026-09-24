@@ -23,10 +23,11 @@ final class AuditUnitSpec extends FunSuite {
     assertEquals(AuditAction.All.map(_.code), List(
       "PROJECT_CREATED", "ENVIRONMENT_CREATED",
       "CONNECTION_CREATED", "CONNECTION_UPDATED", "CONNECTION_DELETED",
-      "MONITOR_RULE_CREATED", "MONITOR_RULE_UPDATED", "MANUAL_SYNC_REQUESTED"
+      "MONITOR_RULE_CREATED", "MONITOR_RULE_UPDATED", "MANUAL_SYNC_REQUESTED",
+      "CONTAINER_START_REQUESTED", "CONTAINER_STOP_REQUESTED", "CONTAINER_RESTART_REQUESTED"
     ))
     assertEquals(AuditTargetType.All.map(_.code),
-      List("PROJECT", "ENVIRONMENT", "CONNECTION", "MONITOR_RULE"))
+      List("PROJECT", "ENVIRONMENT", "CONNECTION", "MONITOR_RULE", "RESOURCE"))
 
     assert(AuditAction.fromCode("PROJECT_DELETED").isLeft)
     assert(AuditTargetType.fromCode("SECRET").isLeft)

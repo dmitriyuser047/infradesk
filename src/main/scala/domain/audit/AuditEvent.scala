@@ -21,6 +21,9 @@ object AuditAction {
 
   /** The user asked for a synchronization; whether it succeeded is sync session history. */
   case object ManualSyncRequested extends AuditAction { override val code: String = "MANUAL_SYNC_REQUESTED" }
+  case object ContainerStartRequested extends AuditAction { override val code: String = "CONTAINER_START_REQUESTED" }
+  case object ContainerStopRequested extends AuditAction { override val code: String = "CONTAINER_STOP_REQUESTED" }
+  case object ContainerRestartRequested extends AuditAction { override val code: String = "CONTAINER_RESTART_REQUESTED" }
 
   val All: List[AuditAction] = List(
     ProjectCreated,
@@ -30,7 +33,10 @@ object AuditAction {
     ConnectionDeleted,
     MonitorRuleCreated,
     MonitorRuleUpdated,
-    ManualSyncRequested
+    ManualSyncRequested,
+    ContainerStartRequested,
+    ContainerStopRequested,
+    ContainerRestartRequested
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =
@@ -49,8 +55,9 @@ object AuditTargetType {
   case object Environment extends AuditTargetType { override val code: String = "ENVIRONMENT" }
   case object Connection extends AuditTargetType { override val code: String = "CONNECTION" }
   case object MonitorRule extends AuditTargetType { override val code: String = "MONITOR_RULE" }
+  case object Resource extends AuditTargetType { override val code: String = "RESOURCE" }
 
-  val All: List[AuditTargetType] = List(Project, Environment, Connection, MonitorRule)
+  val All: List[AuditTargetType] = List(Project, Environment, Connection, MonitorRule, Resource)
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditTargetType] =
     All.find(_.code == code)

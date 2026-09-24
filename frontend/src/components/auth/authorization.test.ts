@@ -9,6 +9,7 @@ const permissions: readonly OrganizationPermission[] = [
   'runConnectionSync',
   'manageMonitoring',
   'viewAudit',
+  'executeOperations',
 ]
 
 describe('organization authorization policy', () => {

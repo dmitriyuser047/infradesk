@@ -2,7 +2,8 @@ package ru.bitec.app.ops
 package bootstrap
 
 import application.connector.ResourceConnectorRegistry
-import application.port.{NotificationSender, SshConnectionProbe, SshPasswordResolver}
+import application.port.{NotificationSender, ResourceOperationExecutor, SshConnectionProbe, SshPasswordResolver}
+import domain.operation.ResourceOperationCode
 import cats.effect.{IO, Resource}
 import infrastructure.config.{AppConfig, NotificationConfig}
 import integration.notification.WebhookNotificationSender
@@ -16,6 +17,7 @@ import integration.ssh.{
   SshConnector,
   SshjClient
 }
+import integration.ssh.docker.SshContainerOperationExecutor
 import org.typelevel.doobie.ConnectionIO
 
 /** External-system clients and the connector registry built on top of them.
@@ -27,6 +29,7 @@ final case class IntegrationComponents(
   secretCipher: ConnectionSecretCipher,
   sshConnectionProbe: SshConnectionProbe[IO],
   sshPasswordResolver: SshPasswordResolver[IO],
+  resourceOperationExecutor: ResourceOperationExecutor[IO],
   connectorRegistry: ResourceConnectorRegistry[IO]
 )
 
@@ -57,6 +60,7 @@ object IntegrationModule {
       secretCipher = secretCipher,
       sshConnectionProbe = new SshConnectionProbeAdapter(sshClient),
       sshPasswordResolver = sshAuthenticationProvider,
+      resourceOperationExecutor = new SshContainerOperationExecutor[IO](sshClient, sshAuthenticationProvider),
       connectorRegistry = connectorRegistry
     )
   }

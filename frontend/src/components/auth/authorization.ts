@@ -9,6 +9,7 @@ export type OrganizationPermission =
   | 'runConnectionSync'
   | 'manageMonitoring'
   | 'viewAudit'
+  | 'executeOperations'
 
 const memberPermissions: readonly OrganizationPermission[] = ['readOrganization']
 

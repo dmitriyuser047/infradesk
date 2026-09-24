@@ -146,6 +146,12 @@ object HttpJsonCodecs {
       (value.hostname, value.operatingSystem, value.distribution, value.kernelVersion,
         value.architecture, value.cpuModel, value.cpuCores, value.memoryMb)
     }
+  implicit val availableResourceOperationsResponseEncoder: Encoder[AvailableResourceOperationsResponse] =
+    Encoder.forProduct2("operations", "unavailableReason")(v => (v.operations, v.unavailableReason))
+  implicit val operationExecutionResponseEncoder: Encoder[OperationExecutionResponse] =
+    Encoder.forProduct9("id", "resourceId", "operationCode", "status", "actorUserId", "startedAt",
+      "finishedAt", "errorCode", "errorMessage")(v => (v.id, v.resourceId, v.operationCode, v.status,
+      v.actorUserId, v.startedAt, v.finishedAt, v.errorCode, v.errorMessage))
 
   implicit val nodeStatusResponseEncoder: Encoder[NodeStatusResponse] =
     Encoder.forProduct4("online", "cpuUsagePercent", "memoryUsagePercent", "uptimeSeconds") { value =>

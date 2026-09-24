@@ -16,6 +16,7 @@ import { resourcePresentationRegistry } from '../components/resources/presentati
 import type { ResourcePresentationProps } from '../components/resources/presentation/ResourcePresentation'
 import { MetricCode, type MetricObservationResponse } from '../types/metric'
 import type { ResourceResponse } from '../types/resource'
+import { ResourceOperationsPanel } from '../components/resources/ResourceOperationsPanel'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
 type Tab = 'overview' | 'metrics' | 'rules'
@@ -58,7 +59,8 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
       status={status ? <StatusIndicator label={status.label} tone={status.tone} /> : undefined} />
     <WorkspaceTabs tabs={tabs} active={tab} onChange={setTab} />
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-      {tab === 'overview' ? <Overview resource={resource} /> : null}
+      {tab === 'overview' ? <><Overview resource={resource} />
+        <ResourceOperationsPanel organizationId={organizationId} resourceId={resourceId} resourceName={resource.name} /></> : null}
       {tab === 'metrics' && monitored ? <MetricsSection resource={resource} Summary={presentation.MetricSummary}
         isPending={metricsQuery.isPending} isError={metricsQuery.isError} error={metricsQuery.error}
         observations={metricsQuery.data} refresh={() => setMetricWindow(createLastHourWindow())}
