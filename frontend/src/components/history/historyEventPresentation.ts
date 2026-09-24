@@ -68,8 +68,16 @@ function title(event: HistoryEventResponse): string {
   return operation === null || operation === undefined ? base : `${operation}: ${base.toLowerCase()}`
 }
 
+/**
+ * Only the events that report an outcome may show one.
+ *
+ * The execution an entry points at keeps changing after the entry was written, so a request
+ * recorded at 15:40 must not display the failure its execution reached at 15:41.
+ */
+const outcomeEvents: ReadonlySet<HistoryEventType> = new Set(['OPERATION_FAILED', 'OPERATION_UNKNOWN'])
+
 function detail(event: HistoryEventResponse): string | null {
-  if (event.operation?.errorMessage != null) {
+  if (outcomeEvents.has(event.eventType) && event.operation?.errorMessage != null) {
     return event.operation.errorMessage
   }
 

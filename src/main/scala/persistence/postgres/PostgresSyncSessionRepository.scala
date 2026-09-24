@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package persistence.postgres
 
-import application.port.SyncSessionRepository
+import application.port.{SyncSessionClaim, SyncSessionRepository}
 import domain.sync.{SyncSession, SyncSessionStatus}
 
 import cats.syntax.all._
@@ -105,15 +105,22 @@ final class PostgresSyncSessionRepository extends SyncSessionRepository[Connecti
     recoveredAt: Instant,
     errorCode: String,
     errorMessage: String
-  ): ConnectionIO[Boolean] =
+  ): ConnectionIO[SyncSessionClaim] =
+    // One statement retires the abandoned sessions and hands them back; the slot is only claimed
+    // afterwards, in the same transaction.
     sql"""update sync_session
            set finished_at = $recoveredAt, status = ${SyncSessionStatus.Failed.code},
                error_code = $errorCode, error_message = $errorMessage
            where organization_id = ${session.organizationId}
              and connection_id = ${session.connectionId}
              and status = ${SyncSessionStatus.Running.code}
-             and started_at < $staleBefore"""
-      .update.run.flatMap(_ => tryCreate(session))
+             and started_at < $staleBefore
+           returning id, organization_id, connection_id, started_at, finished_at, status,
+             error_code, error_message"""
+      .query[SyncSessionRow]
+      .to[List]
+      .flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
+      .flatMap(recovered => tryCreate(session).map(SyncSessionClaim(_, recovered)))
 
   override def complete(
                         organizationId: UUID,

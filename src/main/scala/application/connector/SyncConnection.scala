@@ -60,14 +60,27 @@ final class SyncConnection[F[_]: MonadThrow, Tx[_]: MonadThrow](
         status = SyncSessionStatus.Running
       )
 
-      created <- transactionRunner.run(syncSessionRepository.recoverStaleAndTryCreate(
-        syncSession,
-        startedAt.minusSeconds(SyncSessionPolicy.StaleAfterSeconds),
-        startedAt,
-        SyncFailure.Stale.code,
-        SyncFailure.Stale.message
-      ))
-      _ <- if (created) ().pure[F] else SyncAlreadyRunning().raiseError[F, Unit]
+      // Retiring an abandoned session is a fact of its own, and it is journalled in the same
+      // transaction that retires it: no discovery starts until both are committed.
+      claim <- transactionRunner.run(
+        syncSessionRepository.recoverStaleAndTryCreate(
+          syncSession,
+          startedAt.minusSeconds(SyncSessionPolicy.StaleAfterSeconds),
+          startedAt,
+          SyncFailure.Stale.code,
+          SyncFailure.Stale.message
+        ).flatTap(claim => historyRecorder.recordAll(claim.recovered.map(recovered =>
+          HistoryEntry
+            .system(connection.organizationId, HistoryEventType.SyncFailed,
+              recovered.finishedAt.getOrElse(startedAt))
+            .copy(connectionId = Some(connection.id), syncSessionId = Some(recovered.id))
+        )))
+      )
+      _ <- claim.recovered.traverse_(recovered =>
+        logInfo(s"sync.stale.recovered organizationId=${connection.organizationId} " +
+          s"connectionId=${connection.id} syncSessionId=${recovered.id} errorCode=${SyncFailure.Stale.code}")
+      )
+      _ <- if (claim.created) ().pure[F] else SyncAlreadyRunning().raiseError[F, Unit]
       _ <- logInfo(s"sync.started organizationId=${connection.organizationId} connectionId=${connection.id} syncSessionId=$syncSessionId connectorType=${connection.connectorType}")
 
       result <- syncDiscoveredResources(

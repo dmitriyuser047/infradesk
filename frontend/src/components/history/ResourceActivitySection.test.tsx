@@ -33,9 +33,11 @@ const timeline: HistoryEventResponse[] = [
   event({
     eventType: 'OPERATION_REQUESTED', source: 'USER', occurredAt: '2026-09-24T15:40:00Z',
     actor: { id: 'actor', displayName: 'Dmitriy' },
+    // The projection joins the execution as it is now, so the request carries the outcome the
+    // execution reached a minute later.
     operation: {
       id: 'execution', operationCode: 'CONTAINER_RESTART', status: 'FAILED',
-      errorCode: null, errorMessage: null,
+      errorCode: 'DOCKER_OPERATION_FAILED', errorMessage: 'Docker container restart failed',
     },
   }),
   event({
@@ -66,7 +68,8 @@ describe('resource activity', () => {
     expect(html.indexOf('Restart: operation failed')).toBeLessThan(html.indexOf('Restart: operation requested'))
     expect(html.indexOf('Restart: operation requested')).toBeLessThan(html.indexOf('Incident resolved'))
     expect(html.indexOf('Incident opened')).toBeLessThan(html.indexOf('Resource discovered'))
-    expect(html).toContain('Docker container restart failed')
+    // The failure is shown once, on the entry that reports the outcome.
+    expect(html.match(/Docker container restart failed/g)?.length).toBe(1)
     expect(html).toContain('Metric threshold exceeded')
     expect(html).toContain('No metrics received')
     expect(html).toContain('Dmitriy')
@@ -88,6 +91,21 @@ describe('resource activity', () => {
 
     expect(html).toContain('Nothing has happened yet')
     expect(html).not.toContain('Load more')
+  })
+
+  it('never shows a later outcome on the entry that only requested it', () => {
+    const requested = timeline[1]
+
+    expect(getHistoryEventPresentation(requested)).toEqual({
+      title: 'Restart: operation requested',
+      detail: null,
+      tone: 'neutral',
+    })
+    // The failure belongs to the entry that reports it.
+    expect(getHistoryEventPresentation(timeline[0]).detail).toBe('Docker container restart failed')
+    expect(getHistoryEventPresentation({
+      ...requested, eventType: 'OPERATION_SUCCEEDED', source: 'SYSTEM', actor: null,
+    }).detail).toBe(null)
   })
 
   it('maps every event type to a title and a tone', () => {

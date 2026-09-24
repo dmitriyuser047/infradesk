@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package application.discovery
 
-import application.port.{ExternalRefRepository, MetricObservationRepository, ResourceRepository, ResourceTypeRepository, SyncSessionRepository}
+import application.port.{SyncSessionClaim, ExternalRefRepository, MetricObservationRepository, ResourceRepository, ResourceTypeRepository, SyncSessionRepository}
 import application.resource.{PersistExternalResource, RecordResourceObservations}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -372,8 +372,8 @@ final class SyncDiscoveredSnapshotSpec extends FunSuite {
       create(session).map(_ => true)
 
     override def recoverStaleAndTryCreate(session: SyncSession, staleBefore: Instant,
-                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[Boolean] =
-      tryCreate(session)
+                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[SyncSessionClaim] =
+      tryCreate(session).map(SyncSessionClaim(_, List.empty))
 
     override def findRecentByConnection(organizationId: UUID, connectionId: UUID, limit: Int): IO[List[SyncSession]] =
       IO.pure(state().sessions.values.filter(s => s.organizationId == organizationId && s.connectionId == connectionId)

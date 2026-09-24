@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package infrastructure.http
 
 import application.connection.{GetConnection, ListConnections}
-import application.port.{ConnectionRepository, ConnectionScheduleRepository, SyncSessionRepository, TransactionRunner}
+import application.port.{SyncSessionClaim, ConnectionRepository, ConnectionScheduleRepository, SyncSessionRepository, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -253,8 +253,8 @@ final class ConnectionRoutesSpec extends FunSuite {
     override def tryCreate(session: SyncSession): IO[Boolean] = IO.pure(true)
 
     override def recoverStaleAndTryCreate(session: SyncSession, staleBefore: Instant,
-                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[Boolean] =
-      IO.pure(true)
+                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[SyncSessionClaim] =
+      IO.pure(SyncSessionClaim(created = true, List.empty))
 
     override def findRecentByConnection(organizationId: UUID, connectionId: UUID, limit: Int): IO[List[SyncSession]] =
       IO.pure(sessions.filter(s => s.organizationId == organizationId && s.connectionId == connectionId)

@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package persistence.postgres
 
 import application.connector.{SyncFailure, SyncSessionPolicy}
+import application.port.SyncSessionClaim
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -9,6 +10,7 @@ import domain.sync.{SyncSession, SyncSessionStatus}
 import infrastructure.database.{Database, DatabaseConfig, DoobieTransactionRunner}
 import munit.FunSuite
 import org.typelevel.doobie.ConnectionIO
+import org.typelevel.doobie.free.{connection => FC}
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 
@@ -91,6 +93,7 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
     val oldBoundaryId = UUID.randomUUID()
     val completedId = UUID.randomUUID()
     val failedId = UUID.randomUUID()
+    val journalConnection = UUID.randomUUID()
     val firstNewId = UUID.randomUUID()
     val secondNewId = UUID.randomUUID()
     val now = Instant.parse("2026-09-23T10:00:00Z")
@@ -104,6 +107,7 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
         _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($staleConnection, $org, 'ORGANIZATION', 'SSH', 'stale', 'Stale')".update.run
         _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($boundaryConnection, $org, 'ORGANIZATION', 'SSH', 'boundary', 'Boundary')".update.run
         _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($terminalConnection, $org, 'ORGANIZATION', 'SSH', 'terminal', 'Terminal')".update.run
+        _ <- sql"insert into connection (id, organization_id, scope_type, connector_type, code, name) values ($journalConnection, $org, 'ORGANIZATION', 'SSH', 'journal', 'Journal')".update.run
       } yield ()
       val cleanup: ConnectionIO[Unit] = for {
         _ <- sql"delete from sync_session where organization_id = $org".update.run
@@ -112,9 +116,10 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
       } yield ()
       def running(id: UUID, connectionId: UUID, startedAt: Instant): SyncSession =
         SyncSession(id, org, connectionId, startedAt, None, SyncSessionStatus.Running)
-      def recover(session: SyncSession): IO[Boolean] =
+      def claim(session: SyncSession): IO[SyncSessionClaim] =
         runner.run(sessions.recoverStaleAndTryCreate(session, staleBefore, now,
           SyncFailure.Stale.code, SyncFailure.Stale.message))
+      def recover(session: SyncSession): IO[Boolean] = claim(session).map(_.created)
 
       runner.run(setup) *> (for {
         _ <- runner.run(sessions.tryCreate(running(oldStaleId, staleConnection, staleBefore.minusSeconds(1))))
@@ -125,8 +130,9 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
         _ <- runner.run(sessions.fail(org, failedId, now.minusSeconds(1899),
           SyncFailure.Generic.code, SyncFailure.Generic.message))
 
-        results <- (recover(running(firstNewId, staleConnection, now)),
-          recover(running(secondNewId, staleConnection, now))).parTupled
+        claims <- (claim(running(firstNewId, staleConnection, now)),
+          claim(running(secondNewId, staleConnection, now))).parTupled
+        results = (claims._1.created, claims._2.created)
         staleHistory <- runner.run(sessions.findRecentByConnection(org, staleConnection, 10))
         activeCount <- runner.run(sql"select count(*) from sync_session where organization_id = $org and connection_id = $staleConnection and status = 'RUNNING'".query[Long].unique)
         freshCreated <- recover(running(UUID.randomUUID(), boundaryConnection, now))
@@ -134,8 +140,27 @@ final class SyncSessionRepositoryIntegrationSpec extends FunSuite {
         terminalCreated <- recover(running(UUID.randomUUID(), terminalConnection, now))
         completed <- runner.run(sessions.findById(org, terminalConnection, completedId))
         failed <- runner.run(sessions.findById(org, terminalConnection, failedId))
+        // The retirement and the fact that reports it are one transaction: a failing journal
+        // leaves the abandoned session running and creates no replacement.
+        journalFailureId <- IO(UUID.randomUUID())
+        _ <- runner.run(sessions.tryCreate(running(journalFailureId, journalConnection,
+          staleBefore.minusSeconds(60))))
+        rolledBack <- runner.run(
+          sessions.recoverStaleAndTryCreate(running(UUID.randomUUID(), journalConnection, now),
+            staleBefore, now, SyncFailure.Stale.code, SyncFailure.Stale.message) *>
+            FC.raiseError[Unit](new IllegalStateException("history unavailable"))
+        ).attempt
+        afterRollback <- runner.run(sessions.findById(org, journalConnection, journalFailureId))
+        _ <- runner.run(sql"delete from sync_session where organization_id = $org and id = $journalFailureId".update.run)
         _ <- IO {
+          assert(rolledBack.isLeft)
+          assertEquals(afterRollback.map(_.status), Some(SyncSessionStatus.Running))
           assertEquals(List(results._1, results._2).sorted, List(false, true))
+          // The claim hands the retired session back, so its fact can be journalled without
+          // reading it again.
+          assertEquals(List(claims._1, claims._2).flatMap(_.recovered).map(_.id), List(oldStaleId))
+          assertEquals(List(claims._1, claims._2).flatMap(_.recovered).map(_.status),
+            List(SyncSessionStatus.Failed))
           assertEquals(activeCount, 1L)
           assertEquals(staleHistory.length, 2)
           assert(staleHistory.exists(_.id == oldStaleId))

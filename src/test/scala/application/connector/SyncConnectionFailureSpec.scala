@@ -3,7 +3,7 @@ package application.connector
 
 import application.discovery.SyncDiscoveredSnapshot
 import application.connection.RunManualConnectionSync
-import application.port.{ConnectionSyncResult, ConnectionSyncRunner, IdGenerator, ResourceConnector, ResourceConnectorFailure, ResourceConnectorFailureCode, ResourceConnectorResult, SyncSessionRepository, TimeProvider, TransactionRunner}
+import application.port.{SyncSessionClaim, ConnectionSyncResult, ConnectionSyncRunner, IdGenerator, ResourceConnector, ResourceConnectorFailure, ResourceConnectorFailureCode, ResourceConnectorResult, SyncSessionRepository, TimeProvider, TransactionRunner}
 import application.resource.RecordResourceObservations
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -64,6 +64,7 @@ final class SyncConnectionFailureSpec extends FunSuite {
     intercept[SyncAlreadyRunning] { f.sync.execute(connection).unsafeRunSync() }
     assertEquals(f.discoverCalls, 0)
     assertEquals(f.repository.current, Some(fresh))
+    assertEquals(f.historyEvents.recorded, List.empty[domain.history.HistoryEvent])
   }
 
   test("RUNNING session exactly at the TTL boundary is not stale") {
@@ -76,6 +77,8 @@ final class SyncConnectionFailureSpec extends FunSuite {
 
     assertEquals(f.repository.values, List(boundary))
     assertEquals(f.discoverCalls, 0)
+    // Nothing was retired, so the timeline stays silent about a session that is still running.
+    assertEquals(f.historyEvents.recorded, List.empty[domain.history.HistoryEvent])
   }
 
   test("stale RUNNING becomes FAILED before a new exact session starts outside transaction") {
@@ -98,6 +101,15 @@ final class SyncConnectionFailureSpec extends FunSuite {
     assertEquals(old.errorCode, Some(SyncFailure.Stale.code))
     assertEquals(old.errorMessage, Some(SyncFailure.Stale.message))
     assertEquals(f.repository.values.head.status, SyncSessionStatus.Failed)
+    // Retiring the abandoned session is a fact of its own, recorded in the transaction that
+    // retired it and pointing at that session rather than the new one.
+    val recovered = f.historyEvents.recorded.filter(_.syncSessionId.contains(stale.id))
+    assertEquals(recovered.map(_.eventType.code), List("SYNC_FAILED"))
+    assertEquals(recovered.map(_.source.code), List("SYSTEM"))
+    assertEquals(recovered.map(_.connectionId), List(Some(connectionId)))
+    assertEquals(recovered.map(_.occurredAt), List(at))
+    // The run of this test then failed on its own, which is a second, separate fact.
+    assertEquals(f.historyEvents.recorded.map(_.syncSessionId).distinct.size, 2)
   }
 
   test("manual sync after stale recovery returns the new session, not the recovered one") {
@@ -189,17 +201,19 @@ final class SyncConnectionFailureSpec extends FunSuite {
       else { values = value :: values; true }
     }
     override def recoverStaleAndTryCreate(value: SyncSession, staleBefore: Instant,
-                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[Boolean] = IO {
-      values = values.map { existing =>
-        if (existing.organizationId == value.organizationId && existing.connectionId == value.connectionId &&
+                                          recoveredAt: Instant, errorCode: String, errorMessage: String): IO[SyncSessionClaim] = IO {
+      val stale = values.filter(existing =>
+        existing.organizationId == value.organizationId && existing.connectionId == value.connectionId &&
           existing.status == SyncSessionStatus.Running && existing.startedAt.isBefore(staleBefore))
-          existing.copy(status = SyncSessionStatus.Failed, finishedAt = Some(recoveredAt),
-            errorCode = Some(errorCode), errorMessage = Some(errorMessage))
-        else existing
-      }
-      if (values.exists(s => s.organizationId == value.organizationId && s.connectionId == value.connectionId &&
-        s.status == SyncSessionStatus.Running)) false
-      else { values = value :: values; true }
+      val recovered = stale.map(_.copy(status = SyncSessionStatus.Failed,
+        finishedAt = Some(recoveredAt), errorCode = Some(errorCode), errorMessage = Some(errorMessage)))
+      values = values.map(existing =>
+        recovered.find(_.id == existing.id).getOrElse(existing))
+      val created =
+        if (values.exists(s => s.organizationId == value.organizationId &&
+          s.connectionId == value.connectionId && s.status == SyncSessionStatus.Running)) false
+        else { values = value :: values; true }
+      SyncSessionClaim(created, recovered)
     }
     override def complete(organizationId: UUID, id: UUID, finishedAt: Instant): IO[Unit] = IO.unit
     override def fail(organizationId: UUID, id: UUID, finishedAt: Instant, code: String, message: String): IO[Unit] = IO {
