@@ -253,6 +253,9 @@ describe('operations overview page', () => {
       expect(entry).toMatch(/class="activity-secondary"><a class="activity-subject" title="finland_node" href="\/organizations\/org\/connections\/connection"[^>]*>finland_node<\/a><span class="activity-detail">[^<]+<\/span><span class="activity-actor">System<\/span>/)
       // The scrolling list stays reachable from the keyboard.
       expect(html).toContain('class="activity-scroll" tabindex="0" role="region" aria-label="Recent activity"')
+      // Beside fewer than three attention items it does not scroll, so it is no tab stop.
+      const few = body({ data: { ...loaded, attention: { items: loaded.attention.items.slice(0, 2), total: 2 } } })
+      expect(few).toContain('class="activity-scroll" role="region" aria-label="Recent activity"')
     })
 
     it('explains an empty history in one compact line, in English and Russian', () => {

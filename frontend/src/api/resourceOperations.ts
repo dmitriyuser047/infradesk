@@ -6,15 +6,17 @@ import type { AvailableResourceOperationsResponse, OperationExecutionResponse, R
 const root = (organizationId: string, resourceId: string) =>
   `/api/v1/organizations/${encodeURIComponent(organizationId)}/resources/${encodeURIComponent(resourceId)}`
 
-export function useAvailableResourceOperations(organizationId: string, resourceId: string) {
+export function useAvailableResourceOperations(organizationId: string, resourceId: string, enabled = true) {
   return useQuery({
+    enabled,
     queryKey: ['resource-operations', organizationId, resourceId],
     queryFn: () => requestJson<AvailableResourceOperationsResponse>(`${root(organizationId, resourceId)}/operations`),
   })
 }
 
-export function useResourceOperationExecutions(organizationId: string, resourceId: string) {
+export function useResourceOperationExecutions(organizationId: string, resourceId: string, enabled = true) {
   return useQuery({
+    enabled,
     queryKey: ['resource-operation-executions', organizationId, resourceId],
     queryFn: () => requestJson<OperationExecutionResponse[]>(`${root(organizationId, resourceId)}/operation-executions?limit=20`),
   })

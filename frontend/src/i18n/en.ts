@@ -218,6 +218,7 @@ export const en = {
     accessCheckFailed: 'Unable to check organization access.',
     ownersOnly: 'Only organization owners can create environments.',
     loadProjectFailed: 'Unable to load project.',
+    loadingProject: 'Loading project…',
     projectNotFound: 'Project not found.',
     createFailed: 'Unable to create environment. Please try again.',
     target: 'The environment is created in project',
@@ -402,6 +403,7 @@ export const en = {
     refreshError: 'Unable to refresh incidents',
     staleSince: (time: string) => `Showing the list as of ${time}.`,
     listLabel: 'Incident list',
+    linkLabel: (resource: string, reason: string, time: string) => `${resource} — ${reason}, ${time}`,
     empty: {
       OPEN: { title: 'No open incidents', detail: 'Infrastructure needs no attention' },
       RESOLVED: { title: 'No resolved incidents yet', detail: 'Incidents appear here once they are resolved.' },
@@ -492,7 +494,6 @@ export const en = {
       hostKey: 'Host fingerprint',
       notPinned: 'Not confirmed',
       credentials: 'Credentials',
-      credentialsStored: 'Credentials are stored',
       credentialsMissing: 'Missing',
       history: 'Synchronization history',
       runs: (n: number) => n === 1 ? '1 run' : `${n} runs`,
@@ -514,6 +515,7 @@ export const en = {
     form: {
       loading: 'Loading connection…',
       ownersOnly: 'Only organization owners can manage connections.',
+      accessCheckFailed: 'Unable to check organization access.',
       notFound: 'Connection not found.',
       titleNew: 'Connect a server',
       titleEdit: 'Edit connection',

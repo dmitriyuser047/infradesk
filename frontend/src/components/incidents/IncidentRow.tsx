@@ -28,7 +28,9 @@ export function IncidentRow({ organizationId, incident, now }: {
     <span className="incident-status"><IncidentStatusBadge status={incident.status} /></span>
     <div className="incident-main">
       <div className="incident-subject">
-        <Link className="incident-link" to={destination} title={resource.name}>{resource.name}</Link>
+        {/* Several incidents of one resource must still be told apart by their link alone. */}
+        <Link className="incident-link" to={destination} title={resource.name}
+          aria-label={i18n.t.incidents.linkLabel(resource.name, reason.label, time.label)}>{resource.name}</Link>
         <span className="incident-type">{i18n.t.resources.types[resource.resourceTypeCode] ?? resource.resourceTypeCode}</span>
       </div>
       <span className={`incident-reason ${open ? `tone-${reason.tone}` : ''}`}>

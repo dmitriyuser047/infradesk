@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeft, Check, CheckCircle2, CircleAlert, Copy, Info, type LucideIcon } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Check, CheckCircle2, CircleAlert, Copy, Info, SearchX, type LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { useI18n } from '../../i18n'
+import { describeError } from '../../i18n/errors'
 
 /**
  * The few building blocks every screen shares: page header, section card, tabs, status badge,
@@ -24,6 +25,37 @@ export function WorkspaceHeader({ title, subtitle, back, actions, status }: {
     </div>
     {actions ? <div className="workspace-toolbar">{actions}</div> : null}
   </header>
+}
+
+/** A detail page while its object loads: the page's own header and way back, then a skeleton. */
+export function PageLoading({ title, back, label }: { title: string; back: { label: string; to: string }; label: string }) {
+  return <div className="workspace-page" aria-busy="true">
+    <WorkspaceHeader title={title} back={back} />
+    <div className="row-skeleton" aria-label={label}><span /><span /><span /></div>
+  </div>
+}
+
+/**
+ * A detail page whose object is not there: gone (explained, nothing to retry) or failed to load
+ * (a safe message and a retry). The way back stays in both.
+ */
+export function PageUnavailable({ back, notFound, notFoundTitle, notFoundDetail, errorTitle, error, onRetry }: {
+  back: { label: string; to: string }
+  notFound: boolean
+  notFoundTitle: string
+  notFoundDetail?: string
+  errorTitle: string
+  error: unknown
+  onRetry: () => void
+}) {
+  const i18n = useI18n()
+  return <div className="workspace-page">
+    <WorkspaceHeader title={notFound ? notFoundTitle : errorTitle} back={back} />
+    {notFound ? <EmptyWorkspaceState icon={SearchX} title={notFoundTitle} detail={notFoundDetail} />
+      : <InlineAlert tone="danger" title={errorTitle}
+        action={<button className="secondary-button" type="button" onClick={onRetry}>{i18n.t.common.retry}</button>}>
+        {describeError(error, i18n)}</InlineAlert>}
+  </div>
 }
 
 export function WorkspaceSection({ title, description, actions, children, className = '' }: {
@@ -159,6 +191,8 @@ export function SegmentedControl<T extends string>({ name, label, options, value
 export function CopyButton({ value, label }: { value: string; label?: string }) {
   const { t } = useI18n()
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  // "Copied" is about the value that was copied; a new value starts over.
+  useEffect(() => { setState('idle') }, [value])
   useEffect(() => {
     if (state === 'idle') return undefined
     const timer = window.setTimeout(() => setState('idle'), 2_000)

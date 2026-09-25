@@ -6,7 +6,7 @@ import { useResource } from '../api/resources'
 import { IncidentStatusBadge } from '../components/incidents/IncidentStatusBadge'
 import { formatIncidentDuration, getIncidentReasonPresentation, shortIdentifier } from '../components/incidents/incidentPresentation'
 import { AppShell } from '../components/layout/AppShell'
-import { PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
@@ -23,11 +23,11 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
   const location = useLocation()
   const resourceQuery = useResource(organizationId, incidentQuery.data?.resourceId)
   const back = `/organizations/${encodeURIComponent(organizationId)}/incidents${location.search}`
-  if (incidentQuery.isPending) return <AppShell><div className="row-skeleton" aria-label={t.loading}><span /><span /></div></AppShell>
+  if (incidentQuery.isPending) return <AppShell><PageLoading title={t.loading} back={{ label: t.back, to: back }} label={t.loading} /></AppShell>
   if (incidentQuery.isError || !incidentQuery.data) {
-    const notFound = incidentQuery.error instanceof ApiError && incidentQuery.error.code === 'INCIDENT_NOT_FOUND'
-    return <AppShell><div className="inline-error" role="alert">{notFound ? t.notFound : t.loadError}
-      {!notFound ? <button className="text-button" type="button" onClick={() => incidentQuery.refetch()}>{i18n.t.common.retry}</button> : null}</div></AppShell>
+    return <AppShell><PageUnavailable back={{ label: t.back, to: back }} onRetry={() => incidentQuery.refetch()} error={incidentQuery.error}
+      notFound={incidentQuery.error instanceof ApiError && incidentQuery.error.code === 'INCIDENT_NOT_FOUND'}
+      notFoundTitle={t.notFound} errorTitle={t.loadError} /></AppShell>
   }
   const incident = incidentQuery.data
   const reason = getIncidentReasonPresentation(incident.reason, i18n)
@@ -47,7 +47,7 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
           : `${formatIncidentDuration(incident.openedAt, null, i18n)} · ${i18n.t.incidents.ongoing}` },
       ]} /></WorkspaceSection>
       <WorkspaceSection title={t.related}><PropertyGrid items={[
-        { label: t.resource, value: resource ? <Link to={`/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(resource.environmentId)}/resources/${encodeURIComponent(resource.id)}${location.search}`}>
+        { label: t.resource, value: resource ? <Link className="property-link" to={`/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(resource.environmentId)}/resources/${encodeURIComponent(resource.id)}${location.search}`}>
           {resource.name}</Link> : resourceQuery.isPending ? i18n.t.common.loading : shortIdentifier(incident.resourceId) },
         { label: t.resourceType, value: resource ? i18n.t.resources.types[resource.resourceTypeCode] ?? resource.resourceTypeCode : '—' },
         { label: t.monitorRule, value: shortIdentifier(incident.monitorRuleId) },

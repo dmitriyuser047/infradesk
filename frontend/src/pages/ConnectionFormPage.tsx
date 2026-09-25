@@ -2,15 +2,17 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { KeyRound, LockKeyhole, ScanSearch, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
-import { useMyOrganizations } from '../api/auth'
+import { ApiError } from '../api/httpClient'
 import { useConnection, useCreateConnection, useProbeSshHostKey, useTestSshConnection, useUpdateConnection } from '../api/connections'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import { useEnvironments, useProjects } from '../api/navigation'
 import { buildSshConnectionRequest, MIN_SSH_SYNC_INTERVAL_SECONDS, SyncIntervalError } from '../components/connections/buildSshConnectionRequest'
-import { canOrganization } from '../components/auth/authorization'
+import { PermissionGate } from '../components/layout/WorkspaceGate'
 import { AppShell } from '../components/layout/AppShell'
-import { CopyButton, InlineAlert, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import {
+  CopyButton, InlineAlert, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection,
+} from '../components/layout/WorkspacePrimitives'
 import { checkKey, currentResult, type BoundResult } from '../components/connections/connectionCheck'
 import { getLastSyncSummary } from '../components/connections/connectionPresentation'
 import { contextSearch } from '../components/layout/workspaceNavigation'
@@ -21,14 +23,31 @@ import { InvalidRoutePage } from './InvalidRoutePage'
 export function ConnectionFormPage() {
   const { t } = useI18n()
   const { organizationId, connectionId } = useParams()
-  const membership = useMyOrganizations()
-  const existing = useConnection(organizationId, connectionId)
+  const location = useLocation()
   if (!organizationId) return <InvalidRoutePage />
-  if (membership.isPending || (connectionId && existing.isPending)) return <AppShell><p className="compact-state">{t.connections.form.loading}</p></AppShell>
-  if (!canOrganization(membership.data?.find(value => value.id === organizationId)?.role, 'manageConnections')) {
-    return <AppShell><p className="compact-state">{t.connections.form.ownersOnly}</p></AppShell>
+  const context = contextSearch(new URLSearchParams(location.search))
+  const list = `/organizations/${encodeURIComponent(organizationId)}/connections`
+  const back = { label: t.connections.form.back, to: connectionId ? `${list}/${encodeURIComponent(connectionId)}${context}` : `${list}${context}` }
+  return <PermissionGate organizationId={organizationId} permission="manageConnections"
+    title={connectionId ? t.connections.form.titleEdit : t.connections.form.titleNew} back={back} texts={t.connections.form}>
+    <ConnectionFormLoader organizationId={organizationId} connectionId={connectionId} back={back} />
+  </PermissionGate>
+}
+
+/** An edit starts from the saved connection; a new one starts empty. */
+function ConnectionFormLoader({ organizationId, connectionId, back }: {
+  organizationId: string
+  connectionId: string | undefined
+  back: { label: string; to: string }
+}) {
+  const { t } = useI18n()
+  const existing = useConnection(organizationId, connectionId)
+  if (connectionId && existing.isPending) return <AppShell><PageLoading title={t.connections.form.titleEdit} back={back} label={t.connections.form.loading} /></AppShell>
+  if (connectionId && (existing.isError || !existing.data)) {
+    return <AppShell><PageUnavailable back={back} onRetry={() => existing.refetch()} error={existing.error}
+      notFound={existing.error instanceof ApiError && existing.error.code === 'CONNECTION_NOT_FOUND'}
+      notFoundTitle={t.connections.form.notFound} errorTitle={t.connections.page.loadError} /></AppShell>
   }
-  if (connectionId && (existing.isError || !existing.data)) return <AppShell><p className="compact-state">{t.connections.form.notFound}</p></AppShell>
   if (existing.data && (existing.data.connectorType !== 'SSH' || !existing.data.active)) {
     return <Navigate to={`/organizations/${organizationId}/connections/${connectionId}`} replace />
   }

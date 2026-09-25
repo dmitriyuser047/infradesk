@@ -5,7 +5,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { getEnvironments, useProjects } from '../api/navigation'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
-import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { contextQuery } from '../components/layout/workspaceNavigation'
 import { getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
 import { useI18n } from '../i18n'
@@ -40,8 +40,9 @@ function ResourcesIndexContent({ organizationId }: { organizationId: string }) {
   return <div className="workspace-page">
     <WorkspaceHeader title={t.resources.title} subtitle={t.resources.chooseEnvironmentDetail} />
     {projects.isPending ? <div className="row-skeleton" aria-label={t.workspace.loadingProjects}><span /><span /><span /></div> : null}
-    {projects.isError ? <div className="inline-error" role="alert">{describeError(projects.error, i18n)}
-      <button type="button" className="text-button" onClick={() => projects.refetch()}>{t.common.retry}</button></div> : null}
+    {projects.isError ? <InlineAlert tone="danger" title={t.workspace.unableToLoadProjects}
+      action={<button type="button" className="secondary-button" onClick={() => projects.refetch()}>{t.common.retry}</button>}>
+      {describeError(projects.error, i18n)}</InlineAlert> : null}
     {projects.isSuccess && visible.length === 0 ? <EmptyWorkspaceState title={t.workspace.noProjects}
       detail={canManage ? t.workspace.noProjectsDetail : t.workspace.noProjectsMember}
       action={canManage ? <Link className="primary-button" to={`${base}/projects/new`}>{t.workspace.newProject}</Link> : undefined} /> : null}
@@ -49,6 +50,8 @@ function ResourcesIndexContent({ organizationId }: { organizationId: string }) {
       const query = environments[index]
       return <WorkspaceSection key={project.id} title={project.name}>
         {query?.isPending ? <div className="row-skeleton" aria-label={t.workspace.loadingEnvironments}><span /><span /></div> : null}
+        {query?.isError ? <InlineAlert tone="danger" title={t.workspace.unableToLoadEnvironments}
+          action={<button type="button" className="secondary-button" onClick={() => query.refetch()}>{t.common.retry}</button>} /> : null}
         {query?.isSuccess && query.data.length === 0 ? <EmptyWorkspaceState title={t.workspace.noEnvironments} /> : null}
         {query?.data && query.data.length > 0 ? <ul className="link-list">
           {query.data.map(environment => <li key={environment.id}>

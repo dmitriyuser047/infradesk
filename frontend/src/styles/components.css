@@ -83,7 +83,6 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 .workspace-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5); align-items: start; }
 .detail-split { align-items: stretch; }
 .resource-count, .section-meta { color: var(--text-tertiary); font-size: var(--font-size-small); white-space: nowrap; }
-.section-subtitle { color: var(--text-secondary); font-size: var(--font-size-small); font-weight: 600; }
 
 /* Tabs */
 .workspace-tabs { display: flex; gap: var(--space-1); overflow-x: auto; border-bottom: 1px solid var(--border); }
@@ -188,7 +187,7 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 .empty-compact .empty-workspace-icon { flex: 0 0 auto; }
 .empty-compact-text { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--space-2); min-width: 0; }
 .empty-compact-text > span { color: var(--text-secondary); font-size: var(--font-size-small); }
-.inline-alert, .inline-error, .inline-feedback {
+.inline-alert {
   display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) var(--space-4);
   border: 1px solid; border-radius: var(--radius-md); overflow-wrap: anywhere;
 }
@@ -197,18 +196,17 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 .inline-alert-body strong { color: inherit; }
 .inline-alert-body p { color: var(--text-secondary); }
 .inline-alert-action { margin-left: auto; }
-.inline-error, .alert-danger { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger); }
-.inline-error { align-items: center; flex-wrap: wrap; }
-.inline-feedback, .alert-success { border-color: var(--success-border); background: var(--success-soft); color: var(--success); }
+.alert-danger { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger); }
+.alert-success { border-color: var(--success-border); background: var(--success-soft); color: var(--success); }
 .alert-warning { border-color: var(--warning-border); background: var(--warning-soft); color: var(--warning); }
 .alert-info { border-color: var(--info-border); background: var(--info-soft); color: var(--info); }
 .form-error { color: var(--danger); }
-.compact-state, .auth-loading { padding: var(--space-6); color: var(--text-secondary); }
+.auth-loading { padding: var(--space-6); color: var(--text-secondary); }
 
-.row-skeleton, .connection-skeleton, .incident-skeleton, .context-skeleton, .organization-skeleton,
+.row-skeleton, .connection-skeleton, .incident-skeleton, .context-skeleton,
 .tree-skeleton, .rules-skeleton { display: grid; gap: 10px; }
 .row-skeleton span, .connection-skeleton span, .incident-skeleton span, .context-skeleton span,
-.organization-skeleton span, .tree-skeleton span, .rules-skeleton span {
+.tree-skeleton span, .rules-skeleton span {
   display: block; height: 18px; border-radius: var(--radius-sm);
   background: linear-gradient(90deg, var(--surface-sunken) 0%, var(--surface-muted) 50%, var(--surface-sunken) 100%);
   background-size: 200% 100%; animation: skeleton 1.4s ease-in-out infinite;

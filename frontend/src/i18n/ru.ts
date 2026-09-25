@@ -222,6 +222,7 @@ export const ru: Messages = {
     accessCheckFailed: 'Не удалось проверить доступ к организации.',
     ownersOnly: 'Создавать окружения может только владелец организации.',
     loadProjectFailed: 'Не удалось загрузить проект.',
+    loadingProject: 'Загрузка проекта…',
     projectNotFound: 'Проект не найден.',
     createFailed: 'Не удалось создать окружение. Попробуйте ещё раз.',
     target: 'Окружение будет создано в проекте',
@@ -406,6 +407,7 @@ export const ru: Messages = {
     refreshError: 'Не удалось обновить список инцидентов',
     staleSince: (time: string) => `Показан список на ${time}.`,
     listLabel: 'Список инцидентов',
+    linkLabel: (resource: string, reason: string, time: string) => `${resource} — ${reason}, ${time}`,
     empty: {
       OPEN: { title: 'Открытых инцидентов нет', detail: 'Инфраструктура не требует внимания' },
       RESOLVED: { title: 'Закрытых инцидентов пока нет', detail: 'Здесь появятся инциденты после их закрытия.' },
@@ -496,7 +498,6 @@ export const ru: Messages = {
       hostKey: 'Отпечаток сервера',
       notPinned: 'Не подтверждён',
       credentials: 'Учётные данные',
-      credentialsStored: 'Учётные данные сохранены',
       credentialsMissing: 'Отсутствуют',
       history: 'История синхронизаций',
       runs: (n: number) => plural(n, 'запуск', 'запуска', 'запусков'),
@@ -518,6 +519,7 @@ export const ru: Messages = {
     form: {
       loading: 'Загрузка подключения…',
       ownersOnly: 'Управлять подключениями может только владелец организации.',
+      accessCheckFailed: 'Не удалось проверить доступ к организации.',
       notFound: 'Подключение не найдено.',
       titleNew: 'Подключение к серверу',
       titleEdit: 'Изменение подключения',

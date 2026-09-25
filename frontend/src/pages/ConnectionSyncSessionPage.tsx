@@ -5,7 +5,7 @@ import { ApiError } from '../api/httpClient'
 import { formatSyncDuration, getSyncFailureMessage } from '../components/connections/connectionPresentation'
 import { SyncStatusBadge } from '../components/connections/SyncStatusBadge'
 import { AppShell } from '../components/layout/AppShell'
-import { PropertyGrid, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { PageLoading, PageUnavailable, PropertyGrid, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { SyncStatus } from '../types/connection'
 import { InvalidRoutePage } from './InvalidRoutePage'
@@ -27,13 +27,10 @@ function SessionContent({ organizationId, connectionId, sessionId }: {
   const connection = useConnection(organizationId, connectionId)
   const back = `/organizations/${encodeURIComponent(organizationId)}/connections/${encodeURIComponent(connectionId)}${location.search}`
   const notFound = session.error instanceof ApiError && session.error.code === 'SYNC_SESSION_NOT_FOUND'
+  if (session.isPending) return <AppShell><PageLoading title={t.loading} back={{ label: t.back, to: back }} label={t.loading} /></AppShell>
+  if (session.isError || !session.data) return <AppShell><PageUnavailable back={{ label: t.back, to: back }} onRetry={() => session.refetch()}
+    error={session.error} notFound={notFound} notFoundTitle={t.notFound} errorTitle={t.loadError} /></AppShell>
   return <AppShell><div className="workspace-page">
-    {session.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
-    {session.isError ? <div className="inline-error" role="alert">
-      {notFound ? t.notFound : t.loadError}
-      {!notFound ? <button type="button" className="text-button" onClick={() => session.refetch()}>{i18n.t.common.retry}</button> : null}
-    </div> : null}
-    {session.data ? <>
       <WorkspaceHeader title={t.title} subtitle={t.subtitle(connection.data?.name ?? '…')}
         back={{ label: t.back, to: back }} status={<SyncStatusBadge status={session.data.status} />} />
       <WorkspaceSection title={t.execution}><PropertyGrid items={[
@@ -46,6 +43,5 @@ function SessionContent({ organizationId, connectionId, sessionId }: {
           ...(session.data.errorCode ? [{ label: t.errorCode, value: <code>{session.data.errorCode}</code> }] : []),
         ] : []),
       ]} /></WorkspaceSection>
-    </> : null}
   </div></AppShell>
 }

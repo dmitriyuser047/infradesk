@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import type { ComponentType } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
-import { RefreshCw, SearchX } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 
 import { ApiError } from '../api/httpClient'
 import { createLastHourWindow, useResourceMetrics } from '../api/metrics'
 import { useResource } from '../api/resources'
 import { AppShell } from '../components/layout/AppShell'
 import {
-  EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
+  InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
 } from '../components/layout/WorkspacePrimitives'
 import { useAvailableResourceOperations, useResourceOperationExecutions } from '../api/resourceOperations'
 import { operationsApplicability } from '../components/resources/operationPresentation'
@@ -50,28 +50,21 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
   const resourceQuery = useResource(organizationId, resourceId)
   const presentation = resourcePresentationRegistry.resolve(resourceQuery.data?.resourceTypeCode ?? '')
   const monitored = supportsResourceMonitoring(resourceQuery.data?.resourceTypeCode)
-  // The same two reads the operations tab shows; asking them here only decides whether it exists.
+  // The same two reads the operations tab shows; asking them here only decides whether it exists,
+  // and only once the resource itself is known to exist.
   const operations = operationsApplicability(
-    useAvailableResourceOperations(organizationId, resourceId),
-    useResourceOperationExecutions(organizationId, resourceId))
+    useAvailableResourceOperations(organizationId, resourceId, resourceQuery.isSuccess),
+    useResourceOperationExecutions(organizationId, resourceId, resourceQuery.isSuccess))
   const metricsQuery = useResourceMetrics(organizationId, resourceId, metricWindow,
     monitored && tab === 'monitoring')
   const back = { label: t.back,
     to: `/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(environmentId)}${location.search}` }
 
-  if (resourceQuery.isPending) return <AppShell><div className="workspace-page" aria-busy="true">
-    <WorkspaceHeader title={t.loading} back={back} />
-    <div className="row-skeleton" aria-label={t.loading}><span /><span /><span /></div>
-  </div></AppShell>
+  if (resourceQuery.isPending) return <AppShell><PageLoading title={t.loading} back={back} label={t.loading} /></AppShell>
   if (resourceQuery.isError || !resourceQuery.data) {
-    const notFound = resourceQuery.error instanceof ApiError && resourceQuery.error.code === 'RESOURCE_NOT_FOUND'
-    return <AppShell><div className="workspace-page">
-      <WorkspaceHeader title={notFound ? t.notFound : t.loadError} back={back} />
-      {notFound ? <EmptyWorkspaceState icon={SearchX} title={t.notFound} detail={t.notFoundDetail} />
-        : <InlineAlert tone="danger" title={t.loadError}
-          action={<button className="secondary-button" type="button" onClick={() => resourceQuery.refetch()}>{i18n.t.common.retry}</button>}>
-          {describeError(resourceQuery.error, i18n)}</InlineAlert>}
-    </div></AppShell>
+    return <AppShell><PageUnavailable back={back} onRetry={() => resourceQuery.refetch()} error={resourceQuery.error}
+      notFound={resourceQuery.error instanceof ApiError && resourceQuery.error.code === 'RESOURCE_NOT_FOUND'}
+      notFoundTitle={t.notFound} notFoundDetail={t.notFoundDetail} errorTitle={t.loadError} /></AppShell>
   }
   const resource = resourceQuery.data
   const tabs: { id: Tab; label: string }[] = [

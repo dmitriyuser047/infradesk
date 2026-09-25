@@ -156,8 +156,8 @@ export function OverviewBody({ organizationId, projectId, environmentId, state }
       <WorkspaceSection title={t.activity} className="activity-section">
         {overview.recentActivity.length === 0
           ? <EmptyWorkspaceState compact icon={History} title={t.noActivity} detail={t.noActivityDetail} />
-          // Beside a long attention list this area scrolls, so it must be reachable from the keyboard.
-          : <div className="activity-scroll" tabIndex={0} role="region" aria-label={t.activity}>
+          // It scrolls only beside three or more attention items (see overview.css), and only then needs a focus stop.
+          : <div className="activity-scroll" tabIndex={overview.attention.items.length >= 3 ? 0 : undefined} role="region" aria-label={t.activity}>
             <ActivityTimeline events={overview.recentActivity} organizationId={organizationId} />
           </div>}
       </WorkspaceSection>

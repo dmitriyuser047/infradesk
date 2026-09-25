@@ -13,7 +13,9 @@ import { formatScheduleInterval, formatSyncDuration, getConnectionScopeLabel,
   getConnectorTypeLabel, getSyncFailureMessage } from '../components/connections/connectionPresentation'
 import { SyncStatusBadge } from '../components/connections/SyncStatusBadge'
 import { AppShell } from '../components/layout/AppShell'
-import { EmptyWorkspaceState, InlineAlert, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs } from '../components/layout/WorkspacePrimitives'
+import {
+  CopyButton, EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
+} from '../components/layout/WorkspacePrimitives'
 import { contextSearch } from '../components/layout/workspaceNavigation'
 import { ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { ConnectionScopeType, SyncStatus, type ConnectionResponse } from '../types/connection'
@@ -50,11 +52,11 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
   const connectionBase = `/organizations/${encodeURIComponent(organizationId)}/connections`
   const back = `${connectionBase}${context}`
 
-  if (connectionQuery.isPending) return <AppShell><div className="row-skeleton" aria-label={t.loading}><span /><span /><span /></div></AppShell>
+  if (connectionQuery.isPending) return <AppShell><PageLoading title={t.loading} back={{ label: t.back, to: back }} label={t.loading} /></AppShell>
   if (connectionQuery.isError || !connectionQuery.data) {
-    const notFound = connectionQuery.error instanceof ApiError && connectionQuery.error.code === 'CONNECTION_NOT_FOUND'
-    return <AppShell><div className="inline-error" role="alert">{notFound ? t.notFound : t.loadError}
-      {!notFound ? <button className="text-button" type="button" onClick={() => connectionQuery.refetch()}>{i18n.t.common.retry}</button> : null}</div></AppShell>
+    return <AppShell><PageUnavailable back={{ label: t.back, to: back }} onRetry={() => connectionQuery.refetch()} error={connectionQuery.error}
+      notFound={connectionQuery.error instanceof ApiError && connectionQuery.error.code === 'CONNECTION_NOT_FOUND'}
+      notFoundTitle={t.notFound} errorTitle={t.loadError} /></AppShell>
   }
   const connection = connectionQuery.data
 
@@ -109,7 +111,7 @@ function ConnectionOverview({ connection, projects, environments }: {
   return <>
     <div className="workspace-split detail-split">
       <WorkspaceSection title={t.connection}><PropertyGrid items={[
-        { label: i18n.t.common.code, value: connection.code },
+        { label: i18n.t.common.code, value: connection.code, technical: true },
         { label: i18n.t.common.type, value: getConnectorTypeLabel(connection.connectorType, i18n) },
         { label: t.scope, value: getConnectionScopeLabel(connection.scope, i18n) },
         ...scopeItems,
@@ -125,17 +127,20 @@ function ConnectionOverview({ connection, projects, environments }: {
       ]} /> : <EmptyWorkspaceState title={t.neverSynced} />}</WorkspaceSection>
     </div>
     {ssh ? <WorkspaceSection title={t.ssh}><PropertyGrid items={[
-      { label: t.host, value: ssh.host }, { label: t.port, value: ssh.port },
-      { label: t.username, value: ssh.username },
+      { label: t.host, value: ssh.host, technical: true }, { label: t.port, value: ssh.port, technical: true },
+      { label: t.username, value: ssh.username, technical: true },
       { label: t.authentication, value: i18n.t.connections.authTypes[ssh.authenticationType] ?? ssh.authenticationType },
       { label: i18n.t.connections.columns.trust, value: latest?.errorCode === 'SSH_HOST_KEY_MISMATCH'
         ? <StatusIndicator label={i18n.t.connections.form.statusMismatch} tone="danger" icon={ShieldAlert} />
         : ssh.hostTrusted ? <StatusIndicator label={i18n.t.connections.trust.trusted} tone="success" icon={ShieldCheck} />
           : <StatusIndicator label={i18n.t.connections.trust.untrusted} tone="warning" icon={ShieldQuestion} /> },
       { label: t.hostKey, value: ssh.hostKeyFingerprint
-        ? <code className="technical-value">{ssh.hostKeyFingerprint}</code> : t.notPinned },
+        ? <span className="fingerprint-value"><code className="fingerprint">{ssh.hostKeyFingerprint}</code><CopyButton value={ssh.hostKeyFingerprint} /></span>
+        : t.notPinned },
       { label: t.credentials, value: ssh.credentialConfigured
-        ? <StatusIndicator label={t.credentialsStored} tone="success" /> : t.credentialsMissing },
+        // Named the way the SSH form names it: which credential is stored, never the credential.
+        ? <StatusIndicator label={ssh.authenticationType === 'PASSWORD' ? i18n.t.connections.form.passwordConfigured
+          : i18n.t.connections.form.privateKeyConfigured} tone="success" /> : t.credentialsMissing },
     ]} /></WorkspaceSection> : null}
   </>
 }
@@ -146,8 +151,8 @@ function ConnectionSyncHistory({ organizationId, connectionId, context }: { orga
   const history = useConnectionSyncSessions(organizationId, connectionId)
   return <WorkspaceSection title={t.history} actions={history.data ? <span className="resource-count">{t.runs(history.data.length)}</span> : null}>
     {history.isPending ? <div className="row-skeleton" aria-label={t.loadingHistory}><span /><span /></div> : null}
-    {history.isError ? <div className="inline-error" role="alert">{t.historyError}
-      <button type="button" className="text-button" onClick={() => history.refetch()}>{i18n.t.common.retry}</button></div> : null}
+    {history.isError ? <InlineAlert tone="danger" title={t.historyError}
+      action={<button type="button" className="secondary-button" onClick={() => history.refetch()}>{i18n.t.common.retry}</button>} /> : null}
     {history.data?.length === 0 ? <EmptyWorkspaceState title={t.noRuns} /> : null}
     {history.data && history.data.length > 0 ? <div className="table-scroll"><table className="data-grid">
       <thead><tr><th>{i18n.t.common.status}</th><th>{t.started}</th><th>{t.finished}</th><th>{t.duration}</th><th>{t.error}</th></tr></thead>

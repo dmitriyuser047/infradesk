@@ -137,6 +137,9 @@ describe('resource detail page', () => {
     </QueryClientProvider></I18nProvider>)
 
     expect(await screen.findByText('Возможно, ресурс больше не существует или находится в другом окружении.')).toBeTruthy()
+    // The operations reads wait for the resource, so a missing one costs a single request.
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([url]) => String(url)))
+      .toEqual(['/api/v1/organizations/org/resources/missing'])
     expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/environments/env?project=project')
   })
 })

@@ -167,6 +167,17 @@ describe('application shell', () => {
     expect(document.activeElement).toBe(toggle)
   })
 
+  it('closes the drawer from its backdrop and gives focus back to the menu button', () => {
+    setup('/organizations/org/overview')
+    const toggle = screen.getByRole('button', { name: 'Открыть меню' })
+    fireEvent.click(toggle)
+
+    fireEvent.click(document.querySelector('.drawer-backdrop') as HTMLElement)
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(toggle)
+  })
+
   it('closes the drawer after navigating from it', () => {
     setup('/organizations/org/overview')
     fireEvent.click(screen.getByRole('button', { name: 'Открыть меню' }))

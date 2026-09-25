@@ -67,4 +67,19 @@ describe('incident list', () => {
     expect(html).toContain('href="/organizations/org/incidents/open"')
     expect(html).toContain('<ol class="incident-list" aria-label="Список инцидентов">')
   })
+
+  it('names each link by resource, reason and time, so incidents of one resource stay apart', () => {
+    const sameResource = [
+      incident({ id: 'a', reason: 'NO_DATA', openedAt: '2026-09-25T14:32:00Z' }),
+      incident({ id: 'b', reason: 'THRESHOLD', openedAt: '2026-09-25T12:00:00Z' }),
+      incident({ id: 'c', reason: 'NO_DATA', status: 'RESOLVED', openedAt: '2026-09-24T08:00:00Z', resolvedAt: '2026-09-24T09:00:00Z' }),
+    ]
+    const names = [...render(sameResource).matchAll(/<a class="incident-link"[^>]*aria-label="([^"]+)"/g)].map(match => match[1])
+
+    expect(new Set(names).size).toBe(3)
+    expect(names[0]).toMatch(/^finland-node-01 — Данные не поступают, Открыт /)
+    expect(names[2]).toMatch(/^finland-node-01 — Данные не поступают, Закрыт /)
+    expect([...render(sameResource, 'en').matchAll(/aria-label="(finland-node-01 — [^"]+)"/g)][1][1])
+      .toMatch(/^finland-node-01 — Threshold exceeded, Opened /)
+  })
 })

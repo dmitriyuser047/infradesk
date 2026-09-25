@@ -10,7 +10,8 @@ import { ProjectCreatePage } from './ProjectCreatePage'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 
-function renderForm(path: string, options: { role?: 'OWNER' | 'MEMBER'; locale?: Locale; answer?: (method: string, path: string) => Response | Promise<Response> } = {}) {
+function renderForm(path: string, options: { role?: 'OWNER' | 'MEMBER'; locale?: Locale; seedProjects?: boolean
+  answer?: (method: string, path: string) => Response | Promise<Response> } = {}) {
   const sent: string[] = []
   vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     const request = `${init?.method ?? 'GET'} ${String(url).replace('/api/v1/organizations/org', '')}`
@@ -20,7 +21,9 @@ function renderForm(path: string, options: { role?: 'OWNER' | 'MEMBER'; locale?:
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(['me'], { id: 'user', email: 'a@example.com', displayName: 'Dmitriy' })
   client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Northwind', role: options.role ?? 'OWNER' }])
-  client.setQueryData(['projects', 'org'], [{ id: 'billing', organizationId: 'org', code: 'billing', name: 'Billing', description: null }])
+  if (options.seedProjects !== false) {
+    client.setQueryData(['projects', 'org'], [{ id: 'billing', organizationId: 'org', code: 'billing', name: 'Billing', description: null }])
+  }
   render(<I18nProvider initialLocale={options.locale ?? 'ru'}><QueryClientProvider client={client}>
     <MemoryRouter initialEntries={[path]}><Routes>
       <Route path="/organizations/:organizationId/projects/new" element={<ProjectCreatePage />} />
@@ -116,5 +119,15 @@ describe('project and environment forms', () => {
 
     renderForm('/organizations/org/projects/new', { locale: 'en', role: 'MEMBER' })
     expect(screen.getByText('Only organization owners can create projects.')).toBeTruthy()
+  })
+
+  it('waits for the target project before showing the environment form, with no extra request', () => {
+    const sent = renderForm('/organizations/org/projects/billing/environments/new', { seedProjects: false,
+      answer: () => new Promise<Response>(() => undefined) })
+
+    expect(screen.getByRole('heading', { name: 'Новое окружение' })).toBeTruthy()
+    expect(screen.getByLabelText('Загрузка проекта…')).toBeTruthy()
+    expect(document.querySelector('form')).toBeNull()
+    expect(sent.filter(request => request === 'GET /projects')).toHaveLength(1)
   })
 })

@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useCreateEnvironment, useProjects } from '../api/navigation'
 import { AppShell } from '../components/layout/AppShell'
 import { PermissionGate } from '../components/layout/WorkspaceGate'
-import { InlineAlert, PropertyGrid, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { InlineAlert, PageLoading, PropertyGrid, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { buildCreateEnvironmentRequest } from '../components/navigation/buildWorkspaceRequests'
 import { getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
 import { useI18n } from '../i18n'
@@ -36,6 +36,9 @@ function EnvironmentCreateForm({ organizationId, projectId }: { organizationId: 
   const organizationPath = `/organizations/${encodeURIComponent(organizationId)}`
   const backPath = `${organizationPath}?project=${encodeURIComponent(projectId)}`
   const project = projects.data?.find(value => value.id === projectId)
+
+  // Until the target project is known there is no form to show: it would not say where the environment goes.
+  if (projects.isPending) return <AppShell><PageLoading title={t.title} back={{ label: t.back, to: backPath }} label={t.loadingProject} /></AppShell>
 
   function submit(event: FormEvent) {
     event.preventDefault()

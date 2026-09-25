@@ -116,7 +116,8 @@ function ShellFrame({ children }: { children: ReactNode }) {
         <Link className="nav-link" to="/organizations">{t.shell.organizations}</Link>
       </div>
     </aside>
-    {drawerOpen ? <div className="drawer-backdrop" aria-hidden onClick={() => setDrawerOpen(false)} /> : null}
+    {/* Closing by the backdrop returns focus to the menu button, as Escape and the close button do. */}
+    {drawerOpen ? <div className="drawer-backdrop" aria-hidden onClick={() => { setDrawerOpen(false); toggleRef.current?.focus() }} /> : null}
     <div className="app-main">
       <header className="topbar">
         <button ref={toggleRef} type="button" className="icon-button menu-toggle" aria-label={t.shell.openNavigation}
