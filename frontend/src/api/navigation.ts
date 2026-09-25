@@ -73,6 +73,8 @@ export function useProjects(organizationId: string) {
   return useQuery({
     queryKey: ['projects', organizationId],
     queryFn: () => getProjects(organizationId),
+    // The shell renders outside any organization too (the organization list); nothing to load there.
+    enabled: organizationId !== '',
   })
 }
 

@@ -1,6 +1,7 @@
 import { createBrowserRouter } from 'react-router-dom'
 
 import { RequireAuth } from '../components/auth/RequireAuth'
+import { ShellLayout } from '../components/layout/AppShell'
 
 import { EnvironmentPage } from '../pages/EnvironmentPage'
 import { InvalidRoutePage } from '../pages/InvalidRoutePage'
@@ -15,6 +16,7 @@ import { ProjectCreatePage } from '../pages/ProjectCreatePage'
 import { EnvironmentCreatePage } from '../pages/EnvironmentCreatePage'
 import { OrganizationsPage } from '../pages/OrganizationsPage'
 import { OverviewPage } from '../pages/OverviewPage'
+import { ResourcesIndexPage } from '../pages/ResourcesIndexPage'
 import { LoginPage } from '../pages/LoginPage'
 
 export const router = createBrowserRouter([
@@ -24,7 +26,7 @@ export const router = createBrowserRouter([
   },
   {
     element: <RequireAuth />,
-    children: [
+    children: [{ element: <ShellLayout />, children: [
       { path: '/organizations', element: <OrganizationsPage /> },
       { path: '/organizations/:organizationId', element: <OrganizationPage /> },
       { path: '/organizations/:organizationId/overview', element: <OverviewPage /> },
@@ -45,7 +47,8 @@ export const router = createBrowserRouter([
         },
       },
       { path: '/organizations/:organizationId/environments/:environmentId', element: <EnvironmentPage /> },
+      { path: '/organizations/:organizationId/resources', element: <ResourcesIndexPage /> },
       { path: '*', element: <InvalidRoutePage /> },
-    ],
+    ] }],
   },
 ])

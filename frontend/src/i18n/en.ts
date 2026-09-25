@@ -106,6 +106,10 @@ export const en = {
     languages: { ru: 'Русский', en: 'English' },
     openNavigation: 'Open navigation',
     closeNavigation: 'Close navigation',
+    skipToContent: 'Skip to content',
+    organizations: 'All organizations',
+    accountMenu: (name: string) => `Account menu for ${name}`,
+    chooseOrganization: 'Choose an organization to see its sections.',
     groups: { infrastructure: 'Infrastructure', monitoring: 'Monitoring', management: 'Management' },
     nav: {
       overview: 'Overview',
@@ -119,6 +123,8 @@ export const en = {
   context: {
     label: 'Workspace context',
     change: 'Change context',
+    current: (context: string) => `Current context: ${context}. Change`,
+    apply: 'Done',
     selectOrganizationHint: 'Select an organization to begin.',
     organization: 'Organization',
     project: 'Project',

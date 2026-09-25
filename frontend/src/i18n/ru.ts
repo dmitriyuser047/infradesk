@@ -110,6 +110,10 @@ export const ru: Messages = {
     languages: { ru: 'Русский', en: 'English' },
     openNavigation: 'Открыть меню',
     closeNavigation: 'Закрыть меню',
+    skipToContent: 'Перейти к содержимому',
+    organizations: 'Все организации',
+    accountMenu: (name: string) => `Меню учётной записи ${name}`,
+    chooseOrganization: 'Выберите организацию, чтобы увидеть её разделы.',
     groups: { infrastructure: 'Инфраструктура', monitoring: 'Мониторинг', management: 'Управление' },
     nav: {
       overview: 'Обзор',
@@ -123,6 +127,8 @@ export const ru: Messages = {
   context: {
     label: 'Рабочий контекст',
     change: 'Сменить контекст',
+    current: (context: string) => `Текущий контекст: ${context}. Изменить`,
+    apply: 'Готово',
     selectOrganizationHint: 'Выберите организацию, чтобы начать.',
     organization: 'Организация',
     project: 'Проект',
