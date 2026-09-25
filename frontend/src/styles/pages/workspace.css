@@ -10,12 +10,38 @@
 .hierarchy li svg { flex: 0 0 auto; margin-top: 2px; color: var(--primary); }
 .hierarchy li div { display: grid; gap: 2px; }
 .hierarchy li span { color: var(--text-secondary); font-size: var(--font-size-small); }
+.hierarchy-compact { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.hierarchy-compact li { align-items: center; padding: 6px var(--space-3); background: transparent; }
+.hierarchy-compact li + li::before { content: "→"; position: absolute; left: calc(-1 * var(--space-2) - 3px); color: var(--text-disabled); }
+.hierarchy-compact li div { display: block; }
+.hierarchy-compact li strong { font-size: var(--font-size-small); font-weight: 500; }
+.hierarchy-compact li span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Projects: a card each, the current one marked by border, text and aria-current, not by color alone. */
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: var(--space-4); align-items: start; }
 .project-card { overflow: hidden; }
-.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: var(--space-4); align-items: start; }
+.project-card-selected { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.project-card-heading {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-2) var(--space-3);
+  padding: var(--space-5) var(--space-5) 0;
+}
+.project-card-title { display: grid; gap: 2px; min-width: 0; }
+.project-card-title h2 { font-size: var(--font-size-section); overflow-wrap: anywhere; }
+.project-link { color: var(--text-primary); text-decoration: none; }
+.project-link:hover { color: var(--primary); text-decoration: underline; }
+.project-code { color: var(--text-tertiary); font-family: var(--font-mono); font-size: var(--font-size-caption); overflow-wrap: anywhere; }
+.project-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .environment-row { display: flex; align-items: center; gap: var(--space-2); }
 .environment-row .link-row { flex: 1 1 auto; min-width: 0; }
+.environment-row .link-row-text strong { overflow-wrap: break-word; }
+.environment-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--space-2); min-width: 0; }
+.environment-meta small { overflow-wrap: anywhere; }
+.environment-row-selected .link-row { background: var(--primary-soft); }
 .environment-overview { flex: 0 0 auto; padding: 0 var(--space-2); font-size: var(--font-size-small); }
-.project-card-footer { margin: 0 calc(-1 * var(--space-5)) calc(-1 * var(--space-5)); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--border); }
+.project-card-footer {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3); border-top: 1px solid var(--border);
+}
 
 .login-page { display: grid; min-height: 100vh; place-items: center; padding: var(--space-5); background: var(--bg-app); }
 .login-panel {
@@ -28,5 +54,7 @@
 
 @media (max-width: 860px) {
   .hierarchy { grid-template-columns: 1fr; }
-  .project-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .project-card-heading { padding: var(--space-4) var(--space-4) 0; }
 }
