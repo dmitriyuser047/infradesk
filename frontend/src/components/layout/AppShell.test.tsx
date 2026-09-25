@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { createMemoryRouter, RouterProvider, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFunction } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { I18nProvider, LocaleStorageKey, type Locale } from '../../i18n'
@@ -31,19 +31,31 @@ function setup(path: string, role: 'OWNER' | 'MEMBER' = 'OWNER', locale: Locale 
     { id: 'env-prod', organizationId: 'org', projectId: 'org-p1', code: 'prod', name: 'Production', kind: 'PROD' },
   ])
   queries.setQueryData(['environments', 'org', 'org-p2'], [])
-  const router = createMemoryRouter([{ element: <ShellLayout />, children: [
-    { path: '/organizations', element: <Page title="organizations" /> },
-    { path: '/organizations/:organizationId', element: <Page title="workspace" /> },
-    { path: '/organizations/:organizationId/overview', element: <Page title="overview" /> },
-    { path: '/organizations/:organizationId/resources', element: <Page title="resources" /> },
-    { path: '/organizations/:organizationId/environments/:environmentId', element: <Page title="environment" /> },
-    { path: '/organizations/:organizationId/connections', element: <Page title="connections" /> },
-    { path: '/organizations/:organizationId/connections/:connectionId', element: <Page title="connection" /> },
-    { path: '/organizations/:organizationId/incidents', element: <Page title="incidents" /> },
-  ] }], { initialEntries: [path] })
+  // A declarative router: the data router builds fetch Requests with jsdom's AbortSignal, which
+  // newer Node versions reject, and the shell needs no loaders.
+  const history: { navigate?: NavigateFunction } = {}
   render(<I18nProvider initialLocale={locale}><QueryClientProvider client={queries}>
-    <RouterProvider router={router} /></QueryClientProvider></I18nProvider>)
-  return router
+    <MemoryRouter initialEntries={[path]}>
+      <CaptureNavigate target={history} />
+      <Routes>
+        <Route element={<ShellLayout />}>
+          <Route path="/organizations" element={<Page title="organizations" />} />
+          <Route path="/organizations/:organizationId" element={<Page title="workspace" />} />
+          <Route path="/organizations/:organizationId/overview" element={<Page title="overview" />} />
+          <Route path="/organizations/:organizationId/resources" element={<Page title="resources" />} />
+          <Route path="/organizations/:organizationId/environments/:environmentId" element={<Page title="environment" />} />
+          <Route path="/organizations/:organizationId/connections" element={<Page title="connections" />} />
+          <Route path="/organizations/:organizationId/connections/:connectionId" element={<Page title="connection" />} />
+          <Route path="/organizations/:organizationId/incidents" element={<Page title="incidents" />} />
+        </Route>
+      </Routes>
+    </MemoryRouter></QueryClientProvider></I18nProvider>)
+  return { navigate: (delta: number) => { void history.navigate?.(delta) } }
+}
+
+function CaptureNavigate({ target }: { target: { navigate?: NavigateFunction } }) {
+  target.navigate = useNavigate()
+  return null
 }
 
 const location = () => screen.getByTestId('location').textContent
@@ -99,7 +111,7 @@ describe('application shell', () => {
     expect(location()).toBe('/organizations/org/overview?project=org-p2')
 
     // Back returns to the previous context: the URL is the only state.
-    act(() => { void router.navigate(-1) })
+    act(() => router.navigate(-1))
     expect(location()).toBe('/organizations/org/overview?project=org-p1&environment=env-test')
   })
 
