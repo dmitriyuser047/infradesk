@@ -3,6 +3,7 @@ package application.notification
 
 import application.port.{
   NotificationDeliveryRepository,
+  NotificationDeliveryScope,
   NotificationSendResult,
   NotificationSender,
   TimeProvider,
@@ -40,6 +41,11 @@ final class NotificationDispatcher[F[_]: Async, Tx[_]: MonadThrow](
   transactionRunner: TransactionRunner[F, Tx],
   timeProvider: TimeProvider[F],
   logger: Logger[F],
+  /** Which targets this instance serves. A dispatcher only ever claims what its sender can
+    * deliver, so a delivery addressed to a configured channel is invisible to the worker that
+    * speaks the deployment's own webhook, and stays pending until its own worker exists.
+    */
+  scope: NotificationDeliveryScope,
   maxConcurrency: Int,
   dispatcherInstanceId: UUID,
   claimLease: FiniteDuration,
@@ -57,7 +63,7 @@ final class NotificationDispatcher[F[_]: Async, Tx[_]: MonadThrow](
     if (waveSize <= 0) ().pure[F]
     else
       transactionRunner.run(
-        deliveries.claimPending(dispatcherInstanceId, waveSize, claimLease.toSeconds)
+        deliveries.claimPending(scope, dispatcherInstanceId, waveSize, claimLease.toSeconds)
       ).flatMap { claimed =>
         if (claimed.isEmpty) ().pure[F]
         else
@@ -129,7 +135,9 @@ final class NotificationDispatcher[F[_]: Async, Tx[_]: MonadThrow](
 
   private def context(delivery: NotificationDelivery): String =
     s"deliveryId=${delivery.id} organizationId=${delivery.organizationId} " +
-      s"incidentId=${delivery.incidentId} eventType=${delivery.eventType.code} channelType=${delivery.channelType.code}"
+      s"incidentId=${delivery.incidentId} eventType=${delivery.eventType.code} " +
+      s"channelType=${delivery.channelType.code}" +
+      delivery.target.channelId.fold("")(id => s" notificationChannelId=$id")
 
   private def logInfo(message: String): F[Unit] =
     logger.info(message).handleErrorWith(_ => ().pure[F])

@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V24 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V25 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 24)
-        assertEquals(first.currentVersion, "24")
+        assertEquals(first.migrationsApplied, 25)
+        assertEquals(first.currentVersion, "25")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "24")
+        assertEquals(second.currentVersion, "25")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -67,12 +67,14 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
             val outbox = statement.executeQuery(
               "select to_regclass('public.notification_delivery'), " +
                 "(select count(*) from pg_indexes where schemaname = current_schema() " +
-                "and indexname in ('ux_notification_delivery_event', 'ix_notification_delivery_claimable'))"
+                // One idempotency index per kind of target, plus the claim path.
+                "and indexname in ('ux_notification_delivery_legacy_event', " +
+                "'ux_notification_delivery_managed_event', 'ix_notification_delivery_claimable'))"
             )
             try {
               assert(outbox.next())
               assert(outbox.getString(1) != null)
-              assertEquals(outbox.getInt(2), 2)
+              assertEquals(outbox.getInt(2), 3)
             } finally outbox.close()
             val audit = statement.executeQuery(
               "select to_regclass('public.audit_event'), " +

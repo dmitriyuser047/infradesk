@@ -28,6 +28,44 @@ object NotificationEventType {
       .toRight(new IllegalArgumentException(s"Unsupported notification event type '$code'"))
 }
 
+/** Where one delivery is addressed.
+  *
+  * A managed delivery names the channel row it belongs to, so two Telegram channels of the same
+  * organization are two destinations rather than one. The legacy target is the webhook the
+  * deployment configures through its environment: it has no channel row, and never will.
+  *
+  * The identity is the channel, not its configuration. What the channel held when the delivery
+  * was recorded is not copied here: a sender resolves the channel as it stands at the moment it
+  * sends, which is why a credential rotated after an incident still works.
+  */
+sealed trait NotificationDeliveryTarget {
+  def channelType: NotificationChannelType
+
+  /** The channel row this delivery is addressed to, absent for the legacy webhook. */
+  def channelId: Option[UUID]
+}
+
+object NotificationDeliveryTarget {
+
+  /** The webhook of INFRADESK_NOTIFICATION_WEBHOOK_URL, which predates configured channels. */
+  case object LegacyWebhook extends NotificationDeliveryTarget {
+    override val channelType: NotificationChannelType = NotificationChannelType.Webhook
+    override val channelId: Option[UUID] = None
+  }
+
+  /** One configured channel of an organization.
+    *
+    * `channelType` is what the channel was when the delivery was recorded. It says how the event
+    * was routed; the sender still reads the channel itself.
+    */
+  final case class Managed(
+    id: UUID,
+    channelType: NotificationChannelType
+  ) extends NotificationDeliveryTarget {
+    override val channelId: Option[UUID] = Some(id)
+  }
+}
+
 sealed trait NotificationDeliveryStatus {
   def code: String
 }
@@ -69,7 +107,7 @@ final case class NotificationDelivery(
   monitorRuleId: UUID,
   eventType: NotificationEventType,
   reason: IncidentReason,
-  channelType: NotificationChannelType,
+  target: NotificationDeliveryTarget,
   occurredAt: Instant,
   status: NotificationDeliveryStatus,
   attemptCount: Long,
@@ -80,4 +118,7 @@ final case class NotificationDelivery(
   lastErrorCode: Option[String],
   createdAt: Instant,
   updatedAt: Instant
-)
+) {
+  /** Which transport this delivery needs, whoever it is addressed to. */
+  def channelType: NotificationChannelType = target.channelType
+}

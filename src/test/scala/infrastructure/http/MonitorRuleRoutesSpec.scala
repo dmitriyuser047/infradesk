@@ -234,7 +234,8 @@ final class MonitorRuleRoutesSpec extends FunSuite {
         auditRecorder),
       UpdateMonitorRule(monitorRuleRepository, monitorRuleStateRepository, incidentRepository,
         new application.notification.RecordNotificationDeliveries[IO](
-          new NoNotificationDeliveryRepository, idGenerator, timeProvider, List.empty),
+          new NoNotificationDeliveryRepository, new support.NoNotificationRouting[IO],
+          idGenerator, timeProvider, List.empty),
         auditRecorder,
         support.TestHistoryRecorder.recording._2,
         timeProvider),
@@ -335,7 +336,7 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     override def saveAll(deliveries: List[domain.notification.NotificationDelivery]): IO[Unit] = IO.unit
     override def findById(organizationId: UUID, id: UUID): IO[Option[domain.notification.NotificationDelivery]] =
       IO.pure(None)
-    override def claimPending(claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[domain.notification.NotificationDelivery]] =
+    override def claimPending(scope: application.port.NotificationDeliveryScope, claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[domain.notification.NotificationDelivery]] =
       IO.pure(List.empty)
     override def markSent(organizationId: UUID, id: UUID, claimedBy: UUID, sentAt: Instant): IO[Boolean] =
       IO.pure(true)

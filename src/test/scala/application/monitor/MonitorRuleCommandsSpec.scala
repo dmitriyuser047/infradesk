@@ -8,7 +8,7 @@ import cats.effect.unsafe.implicits.global
 import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.metric.MetricCode
 import domain.monitor.{InvalidMonitorRule, MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
-import domain.notification.{NotificationChannelType, NotificationDelivery}
+import domain.notification.{NotificationDelivery, NotificationDeliveryTarget}
 import domain.resource.{Resource, ResourceData}
 import munit.FunSuite
 
@@ -212,8 +212,9 @@ final class MonitorRuleCommandsSpec extends FunSuite {
       rules,
       states,
       incidents,
-      new RecordNotificationDeliveries[IO](notificationDeliveries, new FixedIdGenerator,
-        new FixedTimeProvider, List(NotificationChannelType.Webhook)),
+      new RecordNotificationDeliveries[IO](notificationDeliveries,
+        new support.NoNotificationRouting[IO], new FixedIdGenerator,
+        new FixedTimeProvider, List(NotificationDeliveryTarget.LegacyWebhook)),
       auditRecorder,
       historyRecorder,
       new FixedTimeProvider
@@ -277,7 +278,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
     override def saveAll(deliveries: List[NotificationDelivery]): IO[Unit] =
       IO { saved = saved ++ deliveries }
     override def findById(organizationId: UUID, id: UUID): IO[Option[NotificationDelivery]] = IO.pure(None)
-    override def claimPending(claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[NotificationDelivery]] =
+    override def claimPending(scope: application.port.NotificationDeliveryScope, claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[NotificationDelivery]] =
       IO.pure(List.empty)
     override def markSent(organizationId: UUID, id: UUID, claimedBy: UUID, sentAt: Instant): IO[Boolean] =
       IO.pure(true)

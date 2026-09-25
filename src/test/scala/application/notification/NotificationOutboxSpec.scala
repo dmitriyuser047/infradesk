@@ -6,7 +6,14 @@ import application.port.{IdGenerator, NotificationDeliveryRepository, Notificati
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.incident.IncidentReason
-import domain.notification.{NotificationChannelType, NotificationDelivery, NotificationDeliveryStatus, NotificationEventType}
+import application.port.NotificationDeliveryScope
+import domain.notification.{
+  NotificationChannelType,
+  NotificationDelivery,
+  NotificationDeliveryStatus,
+  NotificationDeliveryTarget,
+  NotificationEventType
+}
 import munit.FunSuite
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
@@ -62,7 +69,8 @@ final class NotificationOutboxSpec extends FunSuite {
 
   test("without a configured channel nothing is recorded at all") {
     val repository = new RecordingRepository
-    new RecordNotificationDeliveries[IO](repository, new SequenceIdGenerator, new FixedTimeProvider, Nil)
+    new RecordNotificationDeliveries[IO](repository, new support.NoNotificationRouting[IO],
+      new SequenceIdGenerator, new FixedTimeProvider, Nil)
       .record(List(opened, resolved)).unsafeRunSync()
 
     assertEquals(repository.batches, List.empty)
@@ -188,8 +196,8 @@ final class NotificationOutboxSpec extends FunSuite {
   // -------------------------------------------------------------------------------------------
 
   private def recorder(repository: NotificationDeliveryRepository[IO]): RecordNotificationDeliveries[IO] =
-    new RecordNotificationDeliveries[IO](repository, new SequenceIdGenerator, new FixedTimeProvider,
-      List(NotificationChannelType.Webhook))
+    new RecordNotificationDeliveries[IO](repository, new support.NoNotificationRouting[IO],
+      new SequenceIdGenerator, new FixedTimeProvider, List(NotificationDeliveryTarget.LegacyWebhook))
 
   private def dispatcher(
     repository: NotificationDeliveryRepository[IO],
@@ -198,15 +206,15 @@ final class NotificationOutboxSpec extends FunSuite {
     maxConcurrency: Int = 1
   ): NotificationDispatcher[IO, IO] =
     new NotificationDispatcher[IO, IO](repository, sender, new DirectRunner, new FixedTimeProvider,
-      Slf4jLogger.getLoggerFromName[IO]("test.notification"), maxConcurrency, DispatcherId,
-      60.seconds, maxAttempts)
+      Slf4jLogger.getLoggerFromName[IO]("test.notification"), NotificationDeliveryScope.Legacy,
+      maxConcurrency, DispatcherId, 60.seconds, maxAttempts)
 
   private def deliveryId(index: Int): UUID = UUID.fromString(f"c0000000-0000-0000-0000-$index%012d")
 
   private def pending(id: UUID = DeliveryId, attemptCount: Long = 0): NotificationDelivery =
     NotificationDelivery(id, OrganizationId, IncidentId, ResourceId, RuleId,
       NotificationEventType.IncidentOpened, IncidentReason.ThresholdViolation,
-      NotificationChannelType.Webhook, EvaluatedAt, NotificationDeliveryStatus.Pending, attemptCount,
+      NotificationDeliveryTarget.LegacyWebhook, EvaluatedAt, NotificationDeliveryStatus.Pending, attemptCount,
       EvaluatedAt, Some(DispatcherId), Some(Now.plusSeconds(60)), None, None, EvaluatedAt, EvaluatedAt)
 
   private final class FixedEvaluator(transitions: List[MonitorTransition]) extends MonitorRuleEvaluator[IO] {
@@ -229,7 +237,7 @@ final class NotificationOutboxSpec extends FunSuite {
     override def saveAll(deliveries: List[NotificationDelivery]): IO[Unit] =
       IO { batches = batches :+ deliveries }
     override def findById(organizationId: UUID, id: UUID): IO[Option[NotificationDelivery]] = IO.pure(None)
-    override def claimPending(claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[NotificationDelivery]] =
+    override def claimPending(scope: NotificationDeliveryScope, claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[NotificationDelivery]] =
       IO.pure(List.empty)
     override def markSent(organizationId: UUID, id: UUID, claimedBy: UUID, sentAt: Instant): IO[Boolean] =
       IO.pure(true)
@@ -250,7 +258,7 @@ final class NotificationOutboxSpec extends FunSuite {
     var rescheduled: List[(UUID, UUID, Long, Instant, String)] = List.empty
     var dead: List[(UUID, UUID, Long, String)] = List.empty
 
-    override def claimPending(claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[NotificationDelivery]] =
+    override def claimPending(scope: NotificationDeliveryScope, claimedBy: UUID, limit: Int, leaseSeconds: Long): IO[List[NotificationDelivery]] =
       IO(synchronized {
         claims = claims :+ ((claimedBy, limit, leaseSeconds))
         val (wave, rest) = queued.splitAt(limit)

@@ -13,7 +13,7 @@ import domain.history.{HistoryEvent, HistoryEventCursor, HistoryEventSource, His
 import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.metric.{MetricCode, MetricObservation}
 import domain.monitor.{MonitorOperator, MonitorRule}
-import domain.notification.NotificationChannelType
+import domain.notification.NotificationDeliveryTarget
 import domain.resource.{Resource, ResourceData}
 import infrastructure.database.{ConnectionIOIdGenerator, ConnectionIOTimeProvider, DoobieTransactionRunner}
 import munit.FunSuite
@@ -186,7 +186,8 @@ final class HistoryEventIntegrationSpec extends FunSuite {
     private def notifying = new NotificationRecordingMonitorRuleEvaluator[ConnectionIO](
       plainEvaluator,
       new RecordNotificationDeliveries[ConnectionIO](new PostgresNotificationDeliveryRepository,
-        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannelType.Webhook))
+        new support.NoNotificationRouting[ConnectionIO],
+        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationDeliveryTarget.LegacyWebhook))
     )
 
     val evaluator = new HistoryRecordingMonitorRuleEvaluator[ConnectionIO](

@@ -40,7 +40,8 @@ import application.resource.{
 }
 import application.operation.{ExecuteResourceOperation, ListResourceOperationExecutions, ResourceOperationPreparation}
 import application.scheduler.SyncScheduler
-import domain.notification.NotificationChannelType
+import application.port.NotificationDeliveryScope
+import domain.notification.NotificationDeliveryTarget
 import application.workspace.{CreateEnvironment, CreateProject}
 import cats.effect.IO
 import infrastructure.config.AppConfig
@@ -158,16 +159,19 @@ object ApplicationModule {
         historyRecorder
       )
 
-    // Only channels the deployment can actually deliver to are recorded.
-    val notificationChannelTypes: List[NotificationChannelType] =
-      if (notificationSender.isDefined) List(NotificationChannelType.Webhook) else Nil
+    // The webhook a deployment configures through its environment, which predates configured
+    // channels and is recorded for every transition regardless of subscriptions. Channels of the
+    // organization are found by routing; this is the one target that is not one of them.
+    val legacyNotificationTargets: List[NotificationDeliveryTarget] =
+      if (notificationSender.isDefined) List(NotificationDeliveryTarget.LegacyWebhook) else Nil
 
     val recordNotificationDeliveries =
       new RecordNotificationDeliveries[ConnectionIO](
         notificationDeliveryRepository,
+        notificationChannelRoutingQuery,
         transactionIdGenerator,
         transactionTimeProvider,
-        notificationChannelTypes
+        legacyNotificationTargets
       )
 
     // The outbox rows are written inside the evaluation transaction, so an incident change and
@@ -365,6 +369,9 @@ object ApplicationModule {
           transactionRunner,
           timeProvider,
           loggers.notification,
+          // This worker speaks the deployment's own webhook and nothing else. Deliveries
+          // addressed to configured channels wait for the worker that can send them.
+          NotificationDeliveryScope.Legacy,
           config.notification.maxConcurrency,
           notificationDispatcherInstanceId,
           config.notification.claimLease,

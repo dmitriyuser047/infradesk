@@ -8,7 +8,7 @@ import application.notification.{
   NotificationRecordingMonitorRuleEvaluator,
   RecordNotificationDeliveries
 }
-import application.port.{NotificationDeliveryRepository, NotificationSendResult, NotificationSender}
+import application.port.{NotificationDeliveryRepository, NotificationDeliveryScope, NotificationSendResult, NotificationSender}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -16,7 +16,7 @@ import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.metric.{MetricCode, MetricObservation}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleStatus}
 import domain.notification.{
-  NotificationChannelType,
+  NotificationDeliveryTarget,
   NotificationDelivery,
   NotificationDeliveryStatus,
   NotificationEventType
@@ -68,10 +68,10 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
       for {
         _ <- fixture.run(fixture.deliveries.saveAll(List(first, second)))
         slowClaim <- fixture.run(
-          fixture.deliveries.claimPending(DispatcherA, 1, 60).flatTap(_ => FC.delay(Thread.sleep(1000)))
+          fixture.deliveries.claimPending(NotificationDeliveryScope.Legacy, DispatcherA, 1, 60).flatTap(_ => FC.delay(Thread.sleep(1000)))
         ).start
         _ <- IO.sleep(300.milliseconds)
-        otherClaim <- fixture.run(fixture.deliveries.claimPending(DispatcherB, 1, 60))
+        otherClaim <- fixture.run(fixture.deliveries.claimPending(NotificationDeliveryScope.Legacy, DispatcherB, 1, 60))
         firstClaim <- slowClaim.joinWithNever
       } yield IO {
         assertEquals(firstClaim.size, 1)
@@ -87,10 +87,10 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
     withFixture { fixture =>
       for {
         _ <- fixture.run(fixture.deliveries.saveAll(List(pending(fixture, DeliveryId))))
-        claimed <- fixture.run(fixture.deliveries.claimPending(DispatcherA, 10, 60))
-        whileLeased <- fixture.run(fixture.deliveries.claimPending(DispatcherB, 10, 60))
+        claimed <- fixture.run(fixture.deliveries.claimPending(NotificationDeliveryScope.Legacy, DispatcherA, 10, 60))
+        whileLeased <- fixture.run(fixture.deliveries.claimPending(NotificationDeliveryScope.Legacy, DispatcherB, 10, 60))
         _ <- fixture.run(fixture.expireLease(DeliveryId))
-        afterExpiry <- fixture.run(fixture.deliveries.claimPending(DispatcherB, 10, 60))
+        afterExpiry <- fixture.run(fixture.deliveries.claimPending(NotificationDeliveryScope.Legacy, DispatcherB, 10, 60))
       } yield IO {
         // The claim query is deliberately tenant-wide, so a parallel suite may own rows of its
         // own; only this fixture's delivery is assertable here.
@@ -107,9 +107,9 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
     withFixture { fixture =>
       for {
         _ <- fixture.run(fixture.deliveries.saveAll(List(pending(fixture, DeliveryId))))
-        _ <- fixture.run(fixture.deliveries.claimPending(DispatcherA, 10, 60))
+        _ <- fixture.run(fixture.deliveries.claimPending(NotificationDeliveryScope.Legacy, DispatcherA, 10, 60))
         _ <- fixture.run(fixture.expireLease(DeliveryId))
-        _ <- fixture.run(fixture.deliveries.claimPending(DispatcherB, 10, 60))
+        _ <- fixture.run(fixture.deliveries.claimPending(NotificationDeliveryScope.Legacy, DispatcherB, 10, 60))
         staleOwner <- fixture.run(fixture.deliveries.markSent(OrganizationId, DeliveryId, DispatcherA, SentAt))
         afterStale <- fixture.run(fixture.deliveries.findById(OrganizationId, DeliveryId))
         currentOwner <- fixture.run(fixture.deliveries.markSent(OrganizationId, DeliveryId, DispatcherB, SentAt))
@@ -135,7 +135,7 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
 
       for {
         _ <- fixture.run(fixture.deliveries.saveAll(List(retried, abandoned)))
-        _ <- fixture.run(fixture.deliveries.claimPending(DispatcherA, 10, 60))
+        _ <- fixture.run(fixture.deliveries.claimPending(NotificationDeliveryScope.Legacy, DispatcherA, 10, 60))
         rescheduled <- fixture.run(fixture.deliveries.reschedule(OrganizationId, DeliveryId,
           DispatcherA, 1, SentAt.plusSeconds(30), "HTTP_500", SentAt))
         died <- fixture.run(fixture.deliveries.markDead(OrganizationId, SecondDeliveryId,
@@ -171,7 +171,8 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
       val dispatcher = new NotificationDispatcher[IO, ConnectionIO](
         fixture.deliveries, sender, fixture.transactionRunner, new SystemTimeProvider,
         Slf4jLogger.getLoggerFromName[IO]("test.notification.dispatcher"),
-        maxConcurrency = 1, DispatcherA, 30.seconds, maxAttempts = 3
+        NotificationDeliveryScope.Legacy, maxConcurrency = 1, DispatcherA, 30.seconds,
+        maxAttempts = 3
       )
 
       for {
@@ -226,7 +227,8 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
       val failing = new NotificationRecordingMonitorRuleEvaluator[ConnectionIO](
         fixture.evaluator,
         new RecordNotificationDeliveries[ConnectionIO](new FailingDeliveryRepository,
-          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannelType.Webhook))
+          new support.NoNotificationRouting[ConnectionIO],
+          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationDeliveryTarget.LegacyWebhook))
       )
 
       for {
@@ -281,8 +283,9 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
 
     val recordingEvaluator = new NotificationRecordingMonitorRuleEvaluator[ConnectionIO](
       evaluator,
-      new RecordNotificationDeliveries[ConnectionIO](deliveries, new ConnectionIOIdGenerator,
-        new ConnectionIOTimeProvider, List(NotificationChannelType.Webhook))
+      new RecordNotificationDeliveries[ConnectionIO](deliveries,
+        new support.NoNotificationRouting[ConnectionIO], new ConnectionIOIdGenerator,
+        new ConnectionIOTimeProvider, List(NotificationDeliveryTarget.LegacyWebhook))
     )
 
     def run[A](program: ConnectionIO[A]): IO[A] = runner.run(program)
@@ -367,7 +370,7 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
       FC.raiseError(new IllegalStateException("outbox unavailable"))
     override def findById(organizationId: UUID, id: UUID): ConnectionIO[Option[NotificationDelivery]] =
       FC.pure(None)
-    override def claimPending(claimedBy: UUID, limit: Int, leaseSeconds: Long): ConnectionIO[List[NotificationDelivery]] =
+    override def claimPending(scope: NotificationDeliveryScope, claimedBy: UUID, limit: Int, leaseSeconds: Long): ConnectionIO[List[NotificationDelivery]] =
       FC.pure(List.empty)
     override def markSent(organizationId: UUID, id: UUID, claimedBy: UUID, sentAt: Instant): ConnectionIO[Boolean] =
       FC.pure(false)
@@ -383,7 +386,7 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
     eventType: NotificationEventType = NotificationEventType.IncidentOpened
   ): NotificationDelivery =
     NotificationDelivery(id, OrganizationId, IncidentId, fixture.resourceId, fixture.ruleId,
-      eventType, IncidentReason.ThresholdViolation, NotificationChannelType.Webhook, Now,
+      eventType, IncidentReason.ThresholdViolation, NotificationDeliveryTarget.LegacyWebhook, Now,
       NotificationDeliveryStatus.Pending, 0, Now, None, None, None, None, Now, Now)
 
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
