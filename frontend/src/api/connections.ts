@@ -164,9 +164,9 @@ export function useProbeSshHostKey(organizationId: string) {
   })
   return {
     ...mutation,
-    submit: (body: ProbeBody, onSuccess: (value: { hostKeyFingerprint: string }) => void) => {
+    submit: (body: ProbeBody, onSuccess: (value: { hostKeyFingerprint: string }) => void, onError?: (error: Error) => void) => {
       pending.current = body
-      mutation.mutate(undefined, { onSuccess })
+      mutation.mutate(undefined, { onSuccess, onError })
     },
   }
 }
@@ -189,9 +189,10 @@ export function useTestSshConnection(organizationId: string) {
       }) } finally { pending.current = null }
     },
   })
-  return { ...mutation, submit: (body: TestBody, onSuccess: (value: { success: boolean; hostKeyFingerprint: string }) => void) => {
+  return { ...mutation, submit: (body: TestBody, onSuccess: (value: { success: boolean; hostKeyFingerprint: string }) => void,
+    onError?: (error: Error) => void) => {
     pending.current = body
-    mutation.mutate(undefined, { onSuccess })
+    mutation.mutate(undefined, { onSuccess, onError })
   } }
 }
 

@@ -16,10 +16,13 @@
 .trust-trusted { border-color: var(--success-border); background: var(--success-soft); color: var(--success); }
 /* A changed key is the one state that must stop the user. */
 .trust-mismatch { border: 2px solid var(--danger); background: var(--danger-soft); color: var(--danger); }
-.fingerprint-field { display: grid; gap: 6px; }
 .fingerprint {
   display: block; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md);
   background: var(--surface-muted); font-family: var(--font-mono); font-size: var(--font-size-small); overflow-wrap: anywhere;
 }
 .fingerprint.empty { color: var(--text-tertiary); font-family: var(--font-family); }
 .fingerprint-changed { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+/* The fingerprint with its copy action; the full value wraps so it can always be compared. */
+.fingerprint-value { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.fingerprint-value .fingerprint { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; word-break: break-all; }
+.identity-grid .property-row { align-items: center; }

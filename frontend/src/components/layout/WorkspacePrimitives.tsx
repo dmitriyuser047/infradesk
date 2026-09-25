@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react'
-import { AlertTriangle, ArrowLeft, CheckCircle2, CircleAlert, Info, type LucideIcon } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { AlertTriangle, ArrowLeft, Check, CheckCircle2, CircleAlert, Copy, Info, type LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { useI18n } from '../../i18n'
@@ -150,4 +150,37 @@ export function SegmentedControl<T extends string>({ name, label, options, value
       {option.label}
     </label>)}
   </fieldset>
+}
+
+/**
+ * Copies a value when pressed, never on its own. The confirmation lasts a moment and is announced;
+ * a browser that refuses the clipboard gets a short note instead of an error page.
+ */
+export function CopyButton({ value, label }: { value: string; label?: string }) {
+  const { t } = useI18n()
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  useEffect(() => {
+    if (state === 'idle') return undefined
+    const timer = window.setTimeout(() => setState('idle'), 2_000)
+    return () => window.clearTimeout(timer)
+  }, [state])
+
+  const copy = async () => {
+    try {
+      if (!navigator.clipboard) throw new Error('Clipboard unavailable')
+      await navigator.clipboard.writeText(value)
+      setState('copied')
+    } catch {
+      setState('failed')
+    }
+  }
+
+  return <span className="copy-control">
+    <button className="text-button copy-button" type="button" onClick={() => void copy()} aria-label={label ?? t.common.copy}>
+      {state === 'copied' ? <Check aria-hidden size={14} /> : <Copy aria-hidden size={14} />}
+      {state === 'copied' ? t.common.copied : t.common.copy}
+    </button>
+    {/* Announced either way; seen only when copying failed, since the button already says "Copied". */}
+    <span className={state === 'failed' ? 'copy-feedback' : 'visually-hidden'} role="status">{state === 'failed' ? t.common.copyFailed : state === 'copied' ? t.common.copied : ''}</span>
+  </span>
 }

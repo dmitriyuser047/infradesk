@@ -79,10 +79,11 @@ describe('server trust in the connection form', () => {
 
     function expectNeedsVerification() {
       expect(state()?.className).toContain('trust-changed')
-      expect(state()?.textContent).toContain('Адрес сервера изменён')
+      expect(state()?.textContent).toContain('Этот адрес сервера ещё не подтверждён')
       expect(state()?.textContent).toContain('example.test:22')
       expect(confirmedKey()).toBe('Не подтверждён')
-      expect(document.body.textContent).not.toContain('Сервер подтверждён')
+      // The draft section, not the summary of the saved connection above it.
+      expect(document.querySelector('.trust-body')?.textContent).not.toContain('Сервер подтверждён')
     }
 
     it('does not trust a changed host, and saving it is refused before any request', () => {

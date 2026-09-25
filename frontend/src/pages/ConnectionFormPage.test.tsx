@@ -58,14 +58,14 @@ describe('SSH connection form', () => {
 
     expect(html).toContain('1. Сервер')
     expect(html).toContain('2. Аутентификация')
-    expect(html).toContain('3. Проверка подлинности сервера')
+    expect(html).toContain('3. Подлинность сервера')
     expect(html).toContain('4. Синхронизация')
     expect(html).toMatch(/checked="" value="PRIVATE_KEY"/)
     expect(html).toContain('Приватный ключ')
     expect(html).toContain('Пароль')
     expect(html).toContain('<textarea')
     // A new connection has nothing stored yet.
-    expect(html).not.toContain('Учётные данные сохранены')
+    expect(html).not.toContain('настроен')
   })
 
   it('keeps an existing password connection on password, with its stored credential untouched', () => {
@@ -74,7 +74,7 @@ describe('SSH connection form', () => {
     expect(html).toMatch(/checked="" value="PASSWORD"/)
     expect(html).toContain('type="password"')
     expect(html).not.toContain('<textarea')
-    expect(html).toContain('Учётные данные сохранены')
+    expect(html).toContain('Пароль настроен')
     expect(html).toContain('Оставьте поле пустым, чтобы сохранить текущий ключ или пароль.')
   })
 
@@ -108,6 +108,6 @@ describe('SSH connection form', () => {
     const html = render()
 
     expect(html).toContain('Проверить подключение')
-    expect(html).toMatch(/<button class="secondary-button" type="button" disabled="">Проверить подключение/)
+    expect(html).toMatch(/<button class="secondary-button" type="button" aria-busy="false" disabled="">Проверить подключение/)
   })
 })

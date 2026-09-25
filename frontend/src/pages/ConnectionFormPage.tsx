@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from 'react'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { KeyRound, LockKeyhole, ScanSearch, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
@@ -10,7 +10,9 @@ import { useEnvironments, useProjects } from '../api/navigation'
 import { buildSshConnectionRequest, MIN_SSH_SYNC_INTERVAL_SECONDS, SyncIntervalError } from '../components/connections/buildSshConnectionRequest'
 import { canOrganization } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
-import { InlineAlert, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { CopyButton, InlineAlert, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { checkKey, currentResult, type BoundResult } from '../components/connections/connectionCheck'
+import { getLastSyncSummary } from '../components/connections/connectionPresentation'
 import { contextSearch } from '../components/layout/workspaceNavigation'
 import { confirm, endpointId, hostTrust, initialConfirmations, type EndpointKey } from '../components/connections/hostTrust'
 import type { ConnectionResponse, SshAuthenticationType } from '../types/connection'
@@ -54,15 +56,20 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
   const [password, setPassword] = useState('')
   const [privateKey, setPrivateKey] = useState('')
   const [passphrase, setPassphrase] = useState('')
+  // Grows with every edit of a secret, so a check can tell it ran with other credentials without keeping them.
+  const [credentialRevision, setCredentialRevision] = useState(0)
   // The endpoint the server trusts now, and the confirmations made in this draft, per endpoint.
   const storedEndpoint: EndpointKey | null = existing?.ssh?.hostKeyFingerprint
     ? { host: existing.ssh.host, port: existing.ssh.port, fingerprint: existing.ssh.hostKeyFingerprint } : null
   const [confirmations, setConfirmations] = useState(() => initialConfirmations(storedEndpoint))
+  // Key reads and connection checks, each labelled with what it was made for (see connectionCheck).
   const [probed, setProbed] = useState<EndpointKey | null>(null)
+  const [probeFailure, setProbeFailure] = useState<BoundResult<unknown> | null>(null)
+  const [check, setCheck] = useState<BoundResult<{ ok: true } | { ok: false; error: unknown }> | null>(null)
   const [intervalSeconds, setIntervalSeconds] = useState(String(existing?.schedule?.intervalSeconds ?? 600))
   const [validationError, setValidationError] = useState<string | null>(null)
+  const validationRef = useRef<HTMLDivElement>(null)
   const [scheduleEnabled, setScheduleEnabled] = useState(existing?.schedule?.enabled ?? true)
-  const [testedFingerprint, setTestedFingerprint] = useState<string | null>(null)
   const environments = useEnvironments(organizationId, projectId || null)
   useEffect(() => {
     if (!existing && !scopeTouched && !projectId && projects.data?.length) setProjectId(projects.data[0].id)
@@ -72,6 +79,8 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
       setEnvironmentId(environments.data[0].id)
     }
   }, [existing, environmentTouched, projectId, environmentId, environments.data])
+  // A refused save puts the reason in front of the keyboard and the screen reader.
+  useEffect(() => { if (validationError) validationRef.current?.focus() }, [validationError])
   const create = useCreateConnection(organizationId)
   const update = useUpdateConnection(organizationId, existing?.id ?? '')
   const test = useTestSshConnection(organizationId)
@@ -87,8 +96,23 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
   const hostConfirmed = hostKey.confirmed !== null
   const hostKeyChanged = hostKey.state === 'mismatch'
   const probedFingerprint = hostKey.presented
+  const draftKey = checkKey({ ...currentEndpoint, username, authenticationType, fingerprint: hostKeyFingerprint, credentialRevision })
+  const currentCheck = currentResult(check, draftKey)
+  const currentProbeFailure = currentResult(probeFailure, endpointId(currentEndpoint))
+  // What the form looks like when an answer arrives, as opposed to when its request was sent.
+  const endpointKey = endpointId(currentEndpoint)
+  const latestDraft = useRef({ draftKey, endpoint: endpointKey })
+  // Any change to what was checked retires the result; going back to the same values does not revive it.
+  useEffect(() => {
+    latestDraft.current = { draftKey, endpoint: endpointKey }
+    setCheck(previous => previous !== null && previous.key !== draftKey ? null : previous)
+  }, [draftKey, endpointKey])
   const save = existing ? update : create
   const back = existing ? `/organizations/${organizationId}/connections/${existing.id}${context}` : `/organizations/${organizationId}/connections${context}`
+  const editSecret = (setter: (value: string) => void) => (value: string) => {
+    setter(value)
+    setCredentialRevision(revision => revision + 1)
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault()
@@ -118,13 +142,47 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
     }
   }
 
+  function readHostKey() {
+    const endpoint = currentEndpoint
+    setProbed(null)
+    setProbeFailure(null)
+    probe.submit(
+      { ...endpoint, username: username.trim() },
+      // The key is bound to the address it was read from, not to whatever the form shows later.
+      result => setProbed({ ...endpoint, fingerprint: result.hostKeyFingerprint }),
+      error => { if (latestDraft.current.endpoint === endpointId(endpoint)) setProbeFailure({ key: endpointId(endpoint), value: error }) },
+    )
+  }
+
+  function testConnection() {
+    // The result answers for this draft only; later edits make it stale, and a late answer stays unseen.
+    const key = draftKey
+    setCheck(null)
+    test.submit({
+      host: currentEndpoint.host,
+      port: currentEndpoint.port,
+      username: username.trim(),
+      hostKeyFingerprint: hostKeyFingerprint.trim(),
+      credentials: authenticationType === 'PRIVATE_KEY'
+        ? { type: 'PRIVATE_KEY', privateKey, ...(passphrase === '' ? {} : { passphrase }) }
+        : { type: 'PASSWORD', password },
+    }, () => { if (latestDraft.current.draftKey === key) setCheck({ key, value: { ok: true } }) },
+    error => { if (latestDraft.current.draftKey === key) setCheck({ key, value: { ok: false, error } }) })
+  }
+
   const trust = hostKey.state
   const storedCredential = existing?.ssh?.credentialConfigured === true && !methodChanged
+  const storedType = existing?.ssh?.authenticationType
+  const identityBadge = trust === 'trusted' ? <StatusIndicator label={t.statusTrusted} tone="success" icon={ShieldCheck} />
+    : trust === 'mismatch' ? <StatusIndicator label={t.fingerprintMismatch} tone="danger" icon={ShieldAlert} />
+      : probedFingerprint !== null ? <StatusIndicator label={t.requiresConfirmation} tone="warning" icon={ShieldQuestion} />
+        : <StatusIndicator label={t.notVerified} tone="neutral" icon={ShieldQuestion} />
 
   return <AppShell><div className="workspace-page form-page">
     <WorkspaceHeader title={existing ? t.titleEdit : t.titleNew}
       subtitle={t.subtitle} back={{ label: t.back, to: back }} />
     <form className="workspace-form" onSubmit={submit}>
+      {existing?.ssh ? <ExistingConnectionState connection={existing} /> : null}
       <WorkspaceSection title={t.general} description={t.generalHint}><div className="section-body"><div className="field-grid">
         <label>{i18n.t.common.name} <input required maxLength={255} value={name} onChange={e => setName(e.target.value)} /></label>
         <label>{i18n.t.common.code} <input required maxLength={64} value={code} onChange={e => setCode(e.target.value)} /></label>
@@ -159,15 +217,17 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
             {i18n.t.connections.authTypes[method]}
           </label>)}
         </fieldset>
+        {/* What is stored is named, never shown: the backend returns no secret, so there is nothing to mask. */}
         {storedCredential ? <div className="credential-state">
-          <StatusIndicator label={t.credentialsStored} tone="success" icon={ShieldCheck} />
+          <StatusIndicator label={storedType === 'PASSWORD' ? t.passwordConfigured : t.privateKeyConfigured} tone="success" icon={ShieldCheck} />
           <span className="field-hint">{t.keepStored}</span>
         </div> : null}
+        {methodChanged && existing?.ssh?.credentialConfigured ? <InlineAlert tone="info" title={t.newCredentialsRequired} /> : null}
         {authenticationType === 'PASSWORD' ? (
           <div className="field-grid field-grid-spaced">
             <label>{t.password}
               <input type="password" required={credentialRequired} autoComplete="new-password"
-                value={password} onChange={e => setPassword(e.target.value)} />
+                value={password} onChange={e => editSecret(setPassword)(e.target.value)} />
             </label>
           </div>
         ) : (
@@ -175,19 +235,19 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
             <label className="field-span">{t.privateKey}
               <textarea rows={6} required={credentialRequired} spellCheck={false} className="monospace-input"
                 autoComplete="off" value={privateKey}
-                onChange={e => setPrivateKey(e.target.value)} />
+                onChange={e => editSecret(setPrivateKey)(e.target.value)} />
               <small>{t.privateKeyHint}</small>
             </label>
             <label>{t.passphrase}
               <input type="password" autoComplete="new-password" value={passphrase}
-                onChange={e => setPassphrase(e.target.value)} />
+                onChange={e => editSecret(setPassphrase)(e.target.value)} />
             </label>
           </div>
         )}
       </div></WorkspaceSection>
 
       <WorkspaceSection title={t.trust} description={t.trustHint}><div className="section-body trust-body">
-        <div className={`trust-state trust-${trust}`} role={trust === 'mismatch' ? 'alert' : 'status'}>
+        <div className={`trust-state trust-${trust}`} role={trust === 'mismatch' || trust === 'changed' ? 'alert' : 'status'}>
           {trust === 'mismatch' ? <ShieldAlert aria-hidden size={20} /> : trust === 'trusted'
             ? <ShieldCheck aria-hidden size={20} /> : <ShieldQuestion aria-hidden size={20} />}
           <div>
@@ -198,26 +258,26 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
                 : t.statusUntrustedDetail}</p>
           </div>
         </div>
-        <div className="fingerprint-field">
-          <span className="field-label" id="fingerprint-label">{t.fingerprint}</span>
-          <output className={`fingerprint ${hostKeyFingerprint ? '' : 'empty'}`} aria-label={t.fingerprintLabel}>{hostKeyFingerprint || t.notVerified}</output>
-        </div>
-        {probedFingerprint !== null && probedFingerprint !== hostKeyFingerprint ? <div className="fingerprint-field">
-          <span className="field-label">{t.presented}</span>
-          <output className={`fingerprint ${hostKeyChanged ? 'fingerprint-changed' : ''}`}>{probedFingerprint}</output>
-        </div> : null}
+        <dl className="property-grid identity-grid">
+          <div className="property-row"><dt>{t.address}</dt>
+            <dd className="property-technical">{currentEndpoint.host ? endpointId(currentEndpoint) : '—'}</dd></div>
+          <div className="property-row"><dt>{t.identityStatus}</dt><dd>{identityBadge}</dd></div>
+          <div className="property-row"><dt id="fingerprint-label">{t.fingerprint}</dt>
+            <dd className="fingerprint-value">
+              <output className={`fingerprint ${hostKeyFingerprint ? '' : 'empty'}`} aria-label={t.fingerprintLabel}>{hostKeyFingerprint || t.notVerified}</output>
+              {hostKeyFingerprint ? <CopyButton value={hostKeyFingerprint} label={`${i18n.t.common.copy}: ${t.fingerprint}`} /> : null}
+            </dd></div>
+          {probedFingerprint !== null && probedFingerprint !== hostKeyFingerprint ? <div className="property-row"><dt>{t.presented}</dt>
+            <dd className="fingerprint-value">
+              <StatusIndicator label={t.fingerprintReceived} tone="info" />
+              <output className={`fingerprint ${hostKeyChanged ? 'fingerprint-changed' : ''}`} aria-label={t.presented}>{probedFingerprint}</output>
+              <CopyButton value={probedFingerprint} label={`${i18n.t.common.copy}: ${t.presented}`} />
+            </dd></div> : null}
+        </dl>
         <div className="form-toolbar form-toolbar-start">
-          <button className="secondary-button" type="button"
-            disabled={!host || probe.isPending || save.isPending}
-            onClick={() => {
-              const endpoint = currentEndpoint
-              setProbed(null)
-              probe.submit(
-                { ...endpoint, username: username.trim() },
-                // The key is bound to the address it was read from, not to whatever the form shows later.
-                result => setProbed({ ...endpoint, fingerprint: result.hostKeyFingerprint }),
-              )
-            }}><ScanSearch aria-hidden size={16} />{probe.isPending ? t.reading : t.readHostKey}</button>
+          <button className="secondary-button" type="button" aria-busy={probe.isPending}
+            disabled={!host.trim() || probe.isPending || save.isPending} onClick={readHostKey}>
+            <ScanSearch aria-hidden size={16} />{probe.isPending ? t.reading : t.readHostKey}</button>
           {probedFingerprint !== null && probedFingerprint !== hostKeyFingerprint ? (
             <button className={hostKeyChanged ? 'danger-button' : 'primary-button'} type="button"
               onClick={() => setConfirmations(previous => confirm(previous, { ...currentEndpoint, fingerprint: probedFingerprint }))}>
@@ -225,7 +285,7 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
             </button>
           ) : null}
         </div>
-        {probe.isError ? <InlineAlert tone="danger" title={describeError(probe.error, i18n)} /> : null}
+        {currentProbeFailure !== null ? <InlineAlert tone="danger" title={describeError(currentProbeFailure, i18n)} /> : null}
       </div></WorkspaceSection>
 
       <WorkspaceSection title={t.synchronization} description={t.synchronizationHint}><div className="section-body"><div className="field-grid">
@@ -233,28 +293,44 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
         <label className="checkbox-field checkbox-aligned"><input type="checkbox" checked={scheduleEnabled} onChange={e => setScheduleEnabled(e.target.checked)} /> {t.scheduleEnabled}</label>
       </div></div></WorkspaceSection>
 
-      {validationError ? <InlineAlert tone="danger" title={validationError} /> : null}
-      {testedFingerprint ? <InlineAlert tone="success" title={t.verified(testedFingerprint)} /> : null}
-      {test.isError ? <InlineAlert tone="danger" title={describeError(test.error, i18n)} /> : null}
+      {validationError ? <div ref={validationRef} tabIndex={-1} className="focus-target"><InlineAlert tone="danger" title={validationError} /></div> : null}
+      {/* A check result is shown only while the form still has the settings it was made with. */}
+      {currentCheck?.ok === true ? <InlineAlert tone="success" title={t.checkSucceeded}>{t.checkSucceededDetail}</InlineAlert> : null}
+      {currentCheck?.ok === false ? <InlineAlert tone="danger" title={t.checkFailed}>{describeError(currentCheck.error, i18n)}</InlineAlert> : null}
       {save.isError ? <InlineAlert tone="danger" title={describeError(save.error, i18n)} /> : null}
       <div className="form-toolbar form-footer">
-        <button className="secondary-button" type="button"
-          disabled={!credentialEntered || !hostConfirmed || test.isPending || save.isPending}
-          onClick={() => {
-            setTestedFingerprint(null)
-            test.submit({
-              host: host.trim(),
-              port: Number(port),
-              username: username.trim(),
-              hostKeyFingerprint: hostKeyFingerprint.trim(),
-              credentials: authenticationType === 'PRIVATE_KEY'
-                ? { type: 'PRIVATE_KEY', privateKey, ...(passphrase === '' ? {} : { passphrase }) }
-                : { type: 'PASSWORD', password },
-            }, result => setTestedFingerprint(result.hostKeyFingerprint))
-          }}>{test.isPending ? t.testing : t.test}</button>
+        <button className="secondary-button" type="button" aria-busy={test.isPending}
+          disabled={!credentialEntered || !hostConfirmed || test.isPending || save.isPending} onClick={testConnection}>
+          {test.isPending ? t.testing : t.test}</button>
         <Link className="secondary-button" to={back}>{i18n.t.common.cancel}</Link>
         <button className="primary-button" type="submit" disabled={save.isPending}>{save.isPending ? i18n.t.common.saving : t.submit}</button>
       </div>
     </form>
   </div></AppShell>
+}
+
+/**
+ * What the saved connection is today, from the response already loaded: how it signs in, whether
+ * a credential is stored, whom it trusts and how its last synchronization went.
+ */
+function ExistingConnectionState({ connection }: { connection: ConnectionResponse }) {
+  const i18n = useI18n()
+  const t = i18n.t.connections.form
+  const page = i18n.t.connections.page
+  const ssh = connection.ssh
+  if (!ssh) return null
+  const mismatch = connection.lastSync?.errorCode === 'SSH_HOST_KEY_MISMATCH'
+  return <WorkspaceSection title={t.currentState}><PropertyGrid columns={2} items={[
+    { label: page.authentication, value: i18n.t.connections.authTypes[ssh.authenticationType] ?? ssh.authenticationType },
+    { label: page.credentials, value: ssh.credentialConfigured
+      ? <StatusIndicator label={ssh.authenticationType === 'PASSWORD' ? t.passwordConfigured : t.privateKeyConfigured} tone="success" />
+      : page.credentialsMissing },
+    { label: t.identity, value: mismatch ? <StatusIndicator label={t.fingerprintMismatch} tone="danger" icon={ShieldAlert} />
+      : ssh.hostTrusted ? <StatusIndicator label={t.statusTrusted} tone="success" icon={ShieldCheck} />
+        : <StatusIndicator label={t.requiresConfirmation} tone="warning" icon={ShieldQuestion} /> },
+    { label: page.latest, value: connection.lastSync ? getLastSyncSummary(connection.lastSync, i18n) : page.neverSynced },
+    { label: page.hostKey, value: ssh.hostKeyFingerprint
+      ? <span className="fingerprint-value"><code className="fingerprint">{ssh.hostKeyFingerprint}</code><CopyButton value={ssh.hostKeyFingerprint} /></span>
+      : page.notPinned, technical: false },
+  ]} /></WorkspaceSection>
 }
