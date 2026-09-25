@@ -1,6 +1,7 @@
 package ru.bitec.app.ops
 package application.port
 
+import domain.connection.ConnectionScope
 import domain.history.{HistoryEvent, HistoryEventCursor, HistoryEventSource, HistoryEventType}
 
 import java.time.Instant
@@ -32,7 +33,7 @@ final case class HistoryEventView(
   sync: Option[HistorySyncView]
 )
 
-final case class HistoryResourceView(id: UUID, name: String, resourceTypeCode: String)
+final case class HistoryResourceView(id: UUID, name: String, resourceTypeCode: String, environmentId: UUID)
 final case class HistoryConnectionView(id: UUID, name: String)
 final case class HistoryActorView(id: UUID, displayName: String)
 final case class HistoryIncidentView(id: UUID, status: String, reason: String, monitorRuleId: UUID)
@@ -60,4 +61,11 @@ trait HistoryEventQuery[F[_]] {
     before: Option[HistoryEventCursor],
     limit: Int
   ): F[List[HistoryEventView]]
+
+  /** The newest entries of a part of the hierarchy.
+    *
+    * An entry belongs to a project or an environment through its resource when it has one, and
+    * through its connection otherwise. The organization scope is the whole timeline.
+    */
+  def listByScope(organizationId: UUID, scope: ConnectionScope, limit: Int): F[List[HistoryEventView]]
 }

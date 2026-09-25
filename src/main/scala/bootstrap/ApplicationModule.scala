@@ -19,6 +19,7 @@ import application.connection.{
 import application.connector.{RunConnectionSync, SyncConnection, SyncConnectionById}
 import application.discovery.{CreateDiscoveredResource, ReconcileDiscoveredResource, SyncDiscoveredSnapshot}
 import application.incident.{GetIncident, ListIncidents}
+import application.overview.GetOperationsOverview
 import application.monitor.{CreateMonitorRule, EvaluateMonitorRules, ListMonitorRules, UpdateMonitorRule}
 import application.notification.{
   NotificationDispatcher,
@@ -77,6 +78,7 @@ final case class ApplicationComponents(
   bootstrapAdmin: BootstrapAdmin[ConnectionIO],
   listAuditEvents: ListAuditEvents[ConnectionIO],
   listHistoryEvents: ListHistoryEvents[ConnectionIO],
+  getOperationsOverview: GetOperationsOverview[ConnectionIO],
   resourceOperationPreparation: ResourceOperationPreparation[ConnectionIO],
   executeResourceOperation: ExecuteResourceOperation[ConnectionIO],
   listResourceOperationExecutions: ListResourceOperationExecutions[ConnectionIO],
@@ -314,6 +316,13 @@ object ApplicationModule {
       ),
       listAuditEvents = new ListAuditEvents[ConnectionIO](auditEventRepository),
       listHistoryEvents = new ListHistoryEvents[ConnectionIO](historyEventQuery),
+      getOperationsOverview = new GetOperationsOverview[ConnectionIO](
+        operationsOverviewQuery,
+        historyEventQuery,
+        projectRepository,
+        navigationQueryRepository,
+        transactionTimeProvider
+      ),
       resourceOperationPreparation = resourceOperationPreparation,
       executeResourceOperation = new ExecuteResourceOperation[ConnectionIO](
         resourceOperationPreparation, operationExecutionRepository,

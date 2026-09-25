@@ -8,6 +8,12 @@ describe('workspace module navigation', () => {
     expect(activeWorkspaceModule('/organizations/o/environments/e/resources/r')).toBe('infrastructure')
     expect(activeWorkspaceModule('/organizations/o/incidents/i')).toBe('incidents')
     expect(activeWorkspaceModule('/organizations/o/connections/c/sync-sessions/s')).toBe('connections')
+    expect(activeWorkspaceModule('/organizations/o/overview')).toBe('overview')
+  })
+
+  it('opens the overview of the selected organization', () => {
+    expect(workspaceModulePaths(undefined, undefined).overview).toBeUndefined()
+    expect(workspaceModulePaths('org', undefined).overview).toBe('/organizations/org/overview')
   })
 
   it('never fabricates an infrastructure path without environment context', () => {

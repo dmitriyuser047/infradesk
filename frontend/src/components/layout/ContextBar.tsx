@@ -1,13 +1,15 @@
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useMyOrganizations } from '../../api/auth'
 import { useEnvironmentContext, useEnvironments, useProjects } from '../../api/navigation'
 import { canOrganization } from '../auth/authorization'
 import { getEnvironmentKindLabel } from '../navigation/navigationPresentation'
 import { useWorkspaceRouteContext } from './useWorkspaceRouteContext'
+import { activeWorkspaceModule } from './workspaceNavigation'
 
 export function ContextBar() {
   const { organizationId, projectId, environmentId } = useWorkspaceRouteContext()
   const navigate = useNavigate()
+  const location = useLocation()
   const memberships = useMyOrganizations()
 
   if (!organizationId) {
@@ -18,15 +20,18 @@ export function ContextBar() {
   return <OrganizationContext key={organizationId} organizationId={organizationId}
     projectId={projectId}
     environmentId={environmentId}
-    organizations={memberships.data ?? []} navigate={navigate} />
+    organizations={memberships.data ?? []} navigate={navigate}
+    onOverview={activeWorkspaceModule(location.pathname) === 'overview'} />
 }
 
-function OrganizationContext({ organizationId, projectId, environmentId, organizations, navigate }: {
+function OrganizationContext({ organizationId, projectId, environmentId, organizations, navigate, onOverview }: {
   organizationId: string
   projectId?: string
   environmentId?: string
   organizations: NonNullable<ReturnType<typeof useMyOrganizations>['data']>
   navigate: ReturnType<typeof useNavigate>
+  /** The overview is scoped by the same selection, so changing it keeps the overview open. */
+  onOverview: boolean
 }) {
   const projects = useProjects(organizationId)
   const environmentContext = useEnvironmentContext(
@@ -37,24 +42,28 @@ function OrganizationContext({ organizationId, projectId, environmentId, organiz
   const resolvedProjectId = projectId ?? environmentContext.data?.project.id
   const environments = useEnvironments(organizationId, resolvedProjectId ?? null)
   const base = `/organizations/${encodeURIComponent(organizationId)}`
+  const scopeBase = onOverview ? `${base}/overview` : base
+  const environmentPath = (id: string) => onOverview
+    ? `${scopeBase}?project=${encodeURIComponent(resolvedProjectId ?? '')}&environment=${encodeURIComponent(id)}`
+    : `${base}/environments/${encodeURIComponent(id)}?project=${encodeURIComponent(resolvedProjectId ?? '')}`
 
   const canManageWorkspace = canOrganization(
     organizations.find(item => item.id === organizationId)?.role, 'manageWorkspace')
 
   return <div className="context-bar" aria-label="Workspace context">
-    <label>Organization<select value={organizationId} onChange={event => navigate(`/organizations/${encodeURIComponent(event.target.value)}`)}>
+    <label>Organization<select value={organizationId} onChange={event => navigate(`/organizations/${encodeURIComponent(event.target.value)}${onOverview ? '/overview' : ''}`)}>
       {!organizations.some(item => item.id === organizationId) ? <option value={organizationId}>Current organization</option> : null}
       {organizations.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
     </select></label>
     <label>Project<select value={resolvedProjectId ?? ''} onChange={event => navigate(event.target.value
-      ? `${base}?project=${encodeURIComponent(event.target.value)}` : base)}>
+      ? `${scopeBase}?project=${encodeURIComponent(event.target.value)}` : scopeBase)}>
       <option value="">Select project</option>
       {projects.data?.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
     </select></label>
     <label>Environment<select value={environmentId ?? ''} disabled={!resolvedProjectId}
       onChange={event => navigate(event.target.value
-        ? `${base}/environments/${encodeURIComponent(event.target.value)}?project=${encodeURIComponent(resolvedProjectId ?? '')}`
-        : `${base}?project=${encodeURIComponent(resolvedProjectId ?? '')}`)}>
+        ? environmentPath(event.target.value)
+        : `${scopeBase}?project=${encodeURIComponent(resolvedProjectId ?? '')}`)}>
       <option value="">Select environment</option>
       {environmentId && !environments.data?.some(item => item.id === environmentId) ?
         <option value={environmentId}>{environmentId.slice(0, 8)}</option> : null}

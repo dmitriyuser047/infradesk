@@ -24,7 +24,7 @@ final case class HistoryEventResponse(
   sync: Option[HistorySyncResponse]
 )
 
-final case class HistoryResourceResponse(id: UUID, name: String, resourceTypeCode: String)
+final case class HistoryResourceResponse(id: UUID, name: String, resourceTypeCode: String, environmentId: UUID)
 final case class HistoryConnectionResponse(id: UUID, name: String)
 final case class HistoryActorResponse(id: UUID, displayName: String)
 final case class HistoryIncidentResponse(id: UUID, status: String, reason: String, monitorRuleId: UUID)
@@ -45,7 +45,8 @@ object HistoryEventResponse {
       view.eventType.code,
       view.source.code,
       view.occurredAt,
-      view.resource.map(value => HistoryResourceResponse(value.id, value.name, value.resourceTypeCode)),
+      view.resource.map(value => HistoryResourceResponse(value.id, value.name, value.resourceTypeCode,
+        value.environmentId)),
       view.connection.map(value => HistoryConnectionResponse(value.id, value.name)),
       view.actor.map(value => HistoryActorResponse(value.id, value.displayName)),
       view.incident.map(value =>

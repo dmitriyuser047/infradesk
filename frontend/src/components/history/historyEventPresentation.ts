@@ -57,6 +57,16 @@ export function getHistoryEventPresentation(event: HistoryEventResponse): Histor
   }
 }
 
+/** How an operation code reads, wherever an operation is mentioned. */
+export function getOperationLabel(operationCode: string): string {
+  return operationLabels[operationCode] ?? operationCode
+}
+
+/** How an incident reason reads, wherever an incident is mentioned. */
+export function getIncidentReasonLabel(reason: string): string {
+  return incidentReasons[reason] ?? reason
+}
+
 export function getHistoryActorLabel(event: HistoryEventResponse): string {
   return event.actor === null ? 'System' : event.actor.displayName
 }
@@ -82,12 +92,31 @@ function detail(event: HistoryEventResponse): string | null {
   }
 
   if (event.incident !== null) {
-    return incidentReasons[event.incident.reason] ?? event.incident.reason
+    return getIncidentReasonLabel(event.incident.reason)
   }
 
   if (event.sync?.errorCode != null) {
     return `Error code ${event.sync.errorCode}`
   }
 
+  return null
+}
+
+/** The object an entry is about, as a link to its existing page. */
+export function getHistorySubjectLink(
+  organizationId: string,
+  event: HistoryEventResponse,
+): { label: string; to: string } | null {
+  const base = `/organizations/${encodeURIComponent(organizationId)}`
+  if (event.resource !== null) {
+    return {
+      label: event.resource.name,
+      to: `${base}/environments/${encodeURIComponent(event.resource.environmentId)}` +
+        `/resources/${encodeURIComponent(event.resource.id)}`,
+    }
+  }
+  if (event.connection !== null) {
+    return { label: event.connection.name, to: `${base}/connections/${encodeURIComponent(event.connection.id)}` }
+  }
   return null
 }

@@ -43,7 +43,7 @@ object ConnectionHttpMapper {
     )
   }
 
-  private def toScopeResponse(scope: ConnectionScope): ConnectionScopeResponse =
+  def toScopeResponse(scope: ConnectionScope): ConnectionScopeResponse =
     scope match {
       case ConnectionScope.Organization =>
         OrganizationConnectionScopeResponse(scope.code)

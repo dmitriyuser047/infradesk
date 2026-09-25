@@ -3,6 +3,7 @@ package persistence.postgres
 
 import application.port._
 import cats.syntax.all._
+import domain.connection.ConnectionScope
 import domain.history.{HistoryEventCursor, HistoryEventSource, HistoryEventType}
 import org.typelevel.doobie.{ConnectionIO, Fragment}
 import org.typelevel.doobie.implicits._
@@ -31,6 +32,31 @@ final class PostgresHistoryEventQuery extends HistoryEventQuery[ConnectionIO] {
   ): ConnectionIO[List[HistoryEventView]] =
     run(fr"where h.organization_id = $organizationId and h.resource_id = $resourceId", before, limit)
 
+  override def listByScope(
+    organizationId: UUID,
+    scope: ConnectionScope,
+    limit: Int
+  ): ConnectionIO[List[HistoryEventView]] =
+    run(fr"where h.organization_id = $organizationId" ++ inScope(scope), None, limit)
+
+  /** An entry with a resource belongs where that resource lives; one without it (a failed
+    * synchronization) belongs where its connection is attached. Both joins are already part of
+    * the projection, so the scope adds a predicate and never another statement.
+    */
+  private def inScope(scope: ConnectionScope): Fragment = scope match {
+    case ConnectionScope.Organization => fr""
+    case ConnectionScope.Project(projectId) =>
+      fr"""and case when h.resource_id is not null
+        then exists (select 1 from environment e
+          where e.id = r.environment_id and e.organization_id = h.organization_id
+            and e.project_id = $projectId)
+        else c.project_id = $projectId end"""
+    case ConnectionScope.Environment(_, environmentId) =>
+      fr"""and case when h.resource_id is not null
+        then r.environment_id = $environmentId
+        else c.environment_id = $environmentId end"""
+  }
+
   private def run(
     scope: Fragment,
     before: Option[HistoryEventCursor],
@@ -49,7 +75,7 @@ final class PostgresHistoryEventQuery extends HistoryEventQuery[ConnectionIO] {
   private val select =
     fr"""
       select h.id, h.event_type, h.source, h.occurred_at,
-        r.id, r.name, rt.code,
+        r.id, r.name, rt.code, r.environment_id,
         c.id, c.name,
         u.id, u.display_name,
         i.id, i.status, i.reason, i.monitor_rule_id,
@@ -77,6 +103,7 @@ object PostgresHistoryEventQuery {
     resourceId: Option[UUID],
     resourceName: Option[String],
     resourceTypeCode: Option[String],
+    resourceEnvironmentId: Option[UUID],
     connectionId: Option[UUID],
     connectionName: Option[String],
     actorId: Option[UUID],
@@ -103,8 +130,8 @@ object PostgresHistoryEventQuery {
         typedEventType,
         typedSource,
         occurredAt,
-        (resourceId, resourceName, resourceTypeCode).tupled.map {
-          case (id, name, code) => HistoryResourceView(id, name, code)
+        (resourceId, resourceName, resourceTypeCode, resourceEnvironmentId).tupled.map {
+          case (id, name, code, environmentId) => HistoryResourceView(id, name, code, environmentId)
         },
         (connectionId, connectionName).tupled.map {
           case (id, name) => HistoryConnectionView(id, name)
