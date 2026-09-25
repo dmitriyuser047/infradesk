@@ -10,6 +10,7 @@ import { useWorkspaceRouteContext } from './useWorkspaceRouteContext'
 interface AppShellProps { children: ReactNode }
 
 const modules: { id: WorkspaceModule; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
   { id: 'workspace', label: 'Workspace' },
   { id: 'infrastructure', label: 'Infrastructure' },
   { id: 'incidents', label: 'Incidents' },

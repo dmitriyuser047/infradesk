@@ -16,7 +16,7 @@ export interface HistoryEventResponse {
   eventType: HistoryEventType
   source: HistoryEventSource
   occurredAt: string
-  resource: { id: string; name: string; resourceTypeCode: string } | null
+  resource: { id: string; name: string; resourceTypeCode: string; environmentId: string } | null
   connection: { id: string; name: string } | null
   actor: { id: string; displayName: string } | null
   incident: { id: string; status: string; reason: string; monitorRuleId: string } | null

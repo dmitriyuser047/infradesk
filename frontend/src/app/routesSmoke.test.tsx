@@ -15,6 +15,7 @@ import { InvalidRoutePage } from '../pages/InvalidRoutePage'
 import { LoginPage } from '../pages/LoginPage'
 import { OrganizationPage } from '../pages/OrganizationPage'
 import { OrganizationsPage } from '../pages/OrganizationsPage'
+import { OverviewPage } from '../pages/OverviewPage'
 import { ProjectCreatePage } from '../pages/ProjectCreatePage'
 import { ResourcePage } from '../pages/ResourcePage'
 
@@ -54,6 +55,7 @@ const pages = [
   { path: '/login', route: '/login', element: <LoginPage />, title: 'Sign in' },
   { path: '/organizations', route: '/organizations', element: <OrganizationsPage />, title: 'Organizations' },
   { path: '/organizations/org', route: '/organizations/:organizationId', element: <OrganizationPage />, title: 'Example org' },
+  { path: '/organizations/org/overview', route: '/organizations/:organizationId/overview', element: <OverviewPage />, title: 'Overview' },
   { path: '/organizations/org/projects/new', route: '/organizations/:organizationId/projects/new', element: <ProjectCreatePage />, title: 'Create project' },
   { path: '/organizations/org/projects/project/environments/new', route: '/organizations/:organizationId/projects/:projectId/environments/new', element: <EnvironmentCreatePage />, title: 'Create environment' },
   { path: '/organizations/org/environments/environment?project=project', route: '/organizations/:organizationId/environments/:environmentId', element: <EnvironmentPage />, title: 'Infrastructure' },

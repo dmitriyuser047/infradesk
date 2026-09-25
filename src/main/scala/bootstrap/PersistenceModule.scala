@@ -18,6 +18,7 @@ import application.port.{
   MonitorRuleStateRepository,
   NotificationDeliveryRepository,
   NavigationQueryRepository,
+  OperationsOverviewQuery,
   OrganizationMembershipRepository,
   OrganizationRepository,
   OperationExecutionRepository,
@@ -31,7 +32,7 @@ import application.port.{
   UserAccountRepository
 }
 import cats.effect.IO
-import infrastructure.database.{DoobieTransactionRunner, PostgresReadinessCheck}
+import infrastructure.database.{DoobieReadOnlySnapshotRunner, DoobieTransactionRunner, PostgresReadinessCheck}
 import org.typelevel.doobie.{ConnectionIO, Transactor}
 import serialization.resource.{ResourceDataCodec, ResourceDefinitionRegistry}
 import serialization.resource.container.ContainerResourceDataCodec
@@ -40,6 +41,7 @@ import persistence.postgres.{
   PostgresAuditEventRepository,
   PostgresHistoryEventQuery,
   PostgresHistoryEventRepository,
+  PostgresOperationsOverviewQuery,
   PostgresAuthSessionRepository,
   PostgresConnectionRepository,
   PostgresConnectionScheduleRepository,
@@ -72,6 +74,8 @@ import persistence.postgres.{
   */
 final case class PersistenceComponents(
   transactionRunner: TransactionRunner[IO, ConnectionIO],
+  /** One read-only snapshot, for read models composed of several statements. */
+  readOnlySnapshotRunner: TransactionRunner[IO, ConnectionIO],
   readinessCheck: ReadinessCheck[IO],
   resourceRepository: ResourceRepository[ConnectionIO],
   resourceTypeRepository: ResourceTypeRepository[ConnectionIO],
@@ -95,7 +99,8 @@ final case class PersistenceComponents(
   membershipRepository: OrganizationMembershipRepository[ConnectionIO],
   auditEventRepository: AuditEventRepository[ConnectionIO],
   historyEventRepository: HistoryEventRepository[ConnectionIO],
-  historyEventQuery: HistoryEventQuery[ConnectionIO]
+  historyEventQuery: HistoryEventQuery[ConnectionIO],
+  operationsOverviewQuery: OperationsOverviewQuery[ConnectionIO]
   ,operationExecutionRepository: OperationExecutionRepository[ConnectionIO]
   ,resourceOperationTargetQuery: ResourceOperationTargetQuery[ConnectionIO]
 )
@@ -119,6 +124,7 @@ object PersistenceModule {
   def build(xa: Transactor[IO], resourceTypes: ResourceDefinitionRegistry): PersistenceComponents =
     PersistenceComponents(
       transactionRunner = new DoobieTransactionRunner(xa),
+      readOnlySnapshotRunner = new DoobieReadOnlySnapshotRunner(xa),
       readinessCheck = new PostgresReadinessCheck(xa),
       resourceRepository = new PostgresResourceRepository(new ResourceDataJsonCodec(resourceTypes)),
       resourceTypeRepository = new PostgresResourceTypeRepository,
@@ -143,6 +149,7 @@ object PersistenceModule {
       auditEventRepository = new PostgresAuditEventRepository,
       historyEventRepository = new PostgresHistoryEventRepository,
       historyEventQuery = new PostgresHistoryEventQuery,
+      operationsOverviewQuery = new PostgresOperationsOverviewQuery,
       operationExecutionRepository = new PostgresOperationExecutionRepository,
       resourceOperationTargetQuery = new PostgresResourceOperationTargetQuery
     )

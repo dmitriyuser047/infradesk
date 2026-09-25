@@ -154,6 +154,33 @@ owner-only: it answers who changed the configuration, while this one answers wha
 `GET /api/v1/organizations/{id}/resources/{id}/history-events` return bounded, keyset-paginated
 pages to any member of the organization.
 
+## Operations Dashboard
+
+The Overview page is the landing page of an organization: a fleet summary, what needs attention
+now, and the recent activity, for the organization, one project or one environment. It is a
+derived read model. Nothing about it is stored: resources, connections and their sync sessions,
+incidents, operation executions and the activity history stay the sources of truth, and every
+number is computed from them when the page is read.
+
+`GET /api/v1/organizations/{id}/overview[?projectId=…[&environmentId=…]]` needs only read access,
+so members see it as owners do. A project or environment outside the organization is not found.
+One request runs in a single read-only snapshot: at most one scope check, one aggregate row for
+the summary, at most 20 attention items and 15 activity entries. It opens no SSH session and makes
+no other network call.
+
+- Summary: active nodes by their stored `online` flag, active containers by their stored Docker
+  state, active connections by the outcome of their latest finished synchronization, open
+  incidents by reason, and resources whose latest operation of the last 24 hours failed or has an
+  unknown result. A failure counts only while its resource is active; an unknown result counts
+  even after inventory deactivated the resource, because its effect on the host still needs a
+  manual check.
+- Needs attention lists current problems only, ordered by the backend: unknown operation results,
+  open incidents, offline nodes, failed synchronizations, failed operations. A connection appears
+  once for its latest failure and disappears after a successful synchronization; the history keeps
+  every failure.
+- The page refreshes every 30 seconds and after a manual sync, an operation or a monitor rule
+  change. It never predicts the effect of an operation; inventory synchronization does.
+
 Frontend: `cd frontend`, then `npm ci`, `npm test`, `npm run build`, or `npm run dev`.
 
 Applied Flyway migrations are immutable. Add a new versioned migration instead of modifying an applied one. An existing non-empty database without Flyway history is not auto-baselined; assess it before switching startup to Flyway.

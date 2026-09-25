@@ -1,6 +1,6 @@
 import { useResourceHistory } from '../../api/history'
 import { EmptyWorkspaceState, WorkspaceSection } from '../layout/WorkspacePrimitives'
-import { getHistoryActorLabel, getHistoryEventPresentation } from './historyEventPresentation'
+import { ActivityTimeline } from './ActivityTimeline'
 
 /** The timeline of one resource: what happened to it, newest first. */
 export function ResourceActivitySection({ organizationId, resourceId }: {
@@ -18,17 +18,7 @@ export function ResourceActivitySection({ organizationId, resourceId }: {
       <EmptyWorkspaceState title="Nothing has happened yet"
         detail="Discovery, incidents and operations appear here as they happen." />
     ) : null}
-    {events.length > 0 ? <ol className="activity-timeline">
-      {events.map(event => {
-        const presentation = getHistoryEventPresentation(event)
-        return <li key={event.id} className={`activity-entry activity-${presentation.tone}`}>
-          <span className="activity-time">{new Date(event.occurredAt).toLocaleString()}</span>
-          <span className="activity-title">{presentation.title}</span>
-          {presentation.detail !== null ? <span className="activity-detail">{presentation.detail}</span> : null}
-          <span className="activity-actor">{getHistoryActorLabel(event)}</span>
-        </li>
-      })}
-    </ol> : null}
+    {events.length > 0 ? <ActivityTimeline events={events} /> : null}
     {history.hasNextPage ? (
       <button className="secondary-button" type="button" disabled={history.isFetchingNextPage}
         onClick={() => history.fetchNextPage()}>

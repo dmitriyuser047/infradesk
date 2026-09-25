@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef } from 'react'
 
 import { ApiError, requestJson } from './httpClient'
+import { invalidateOverview } from './overview'
 import type { ConnectionResponse, SaveSshConnectionRequest, SshCredentialsRequest, SyncSessionResponse } from '../types/connection'
 import { requestVoid } from './httpClient'
 
@@ -79,6 +80,7 @@ export function useRunConnectionSync(organizationId: string, connectionId: strin
       void queryClient.invalidateQueries({ queryKey: ['connections', organizationId] })
       void queryClient.invalidateQueries({ queryKey: ['sync-sessions', organizationId, connectionId] })
       void queryClient.invalidateQueries({ queryKey: ['environment-resources', organizationId] })
+      void invalidateOverview(queryClient, organizationId)
     },
     onError: error => {
       if (error instanceof ApiError && error.code === 'SYNC_ALREADY_RUNNING') {

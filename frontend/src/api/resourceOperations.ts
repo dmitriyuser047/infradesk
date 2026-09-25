@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { requestJson } from './httpClient'
+import { invalidateOverview } from './overview'
 import type { AvailableResourceOperationsResponse, OperationExecutionResponse, ResourceOperationCode } from '../types/resourceOperation'
 
 const root = (organizationId: string, resourceId: string) =>
@@ -29,6 +30,7 @@ export function useExecuteResourceOperation(organizationId: string, resourceId: 
         queryClient.invalidateQueries({ queryKey: ['resource-operation-executions', organizationId, resourceId] }),
         queryClient.invalidateQueries({ queryKey: ['resource-operations', organizationId, resourceId] }),
         queryClient.invalidateQueries({ queryKey: ['resource', organizationId, resourceId] }),
+        invalidateOverview(queryClient, organizationId),
       ])
     },
   })

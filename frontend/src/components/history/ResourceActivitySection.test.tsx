@@ -12,7 +12,7 @@ function event(overrides: Partial<HistoryEventResponse>): HistoryEventResponse {
     eventType: 'RESOURCE_DISCOVERED',
     source: 'SYSTEM',
     occurredAt: '2026-09-24T10:00:00Z',
-    resource: { id: 'resource', name: 'api-1', resourceTypeCode: 'CONTAINER' },
+    resource: { id: 'resource', name: 'api-1', resourceTypeCode: 'CONTAINER', environmentId: 'environment' },
     connection: null,
     actor: null,
     incident: null,

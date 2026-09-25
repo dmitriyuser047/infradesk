@@ -16,6 +16,7 @@ import infrastructure.http.{
   IncidentRoutes,
   MonitorRuleRoutes,
   NavigationRoutes,
+  OperationsOverviewRoutes,
   OrganizationAuthorization,
   ResourceRoutes,
   ResourceOperationRoutes,
@@ -91,7 +92,10 @@ object HttpModule {
         ).routes <+>
         new AuditRoutes(application.listAuditEvents, transactionRunner, authorization).routes <+>
         new HistoryRoutes(application.listHistoryEvents, persistence.resourceRepository,
-          transactionRunner, authorization).routes
+          transactionRunner, authorization).routes <+>
+        // Several statements that must agree with each other: one read-only snapshot.
+        new OperationsOverviewRoutes(application.getOperationsOverview,
+          persistence.readOnlySnapshotRunner, authorization).routes
     ).orNotFound
 
     val authRoutes = new AuthRoutes(application.login, application.authentication, authSettings)

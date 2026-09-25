@@ -71,7 +71,8 @@ object HttpJsonCodecs {
       (value.id, value.actorUserId, value.action, value.targetType, value.targetId, value.occurredAt)
     }
   implicit val historyResourceResponseEncoder: Encoder[HistoryResourceResponse] =
-    Encoder.forProduct3("id", "name", "resourceTypeCode")(v => (v.id, v.name, v.resourceTypeCode))
+    Encoder.forProduct4("id", "name", "resourceTypeCode", "environmentId")(v =>
+      (v.id, v.name, v.resourceTypeCode, v.environmentId))
   implicit val historyConnectionResponseEncoder: Encoder[HistoryConnectionResponse] =
     Encoder.forProduct2("id", "name")(v => (v.id, v.name))
   implicit val historyActorResponseEncoder: Encoder[HistoryActorResponse] =
@@ -236,4 +237,40 @@ object HttpJsonCodecs {
         value.updatedAt
       )
     }
+
+  // Declared after the connection scope and history encoders it is built from.
+  implicit val overviewNodesResponseEncoder: Encoder[OverviewNodesResponse] =
+    Encoder.forProduct3("total", "online", "offline")(v => (v.total, v.online, v.offline))
+  implicit val overviewContainersResponseEncoder: Encoder[OverviewContainersResponse] =
+    Encoder.forProduct3("total", "running", "stopped")(v => (v.total, v.running, v.stopped))
+  implicit val overviewConnectionsResponseEncoder: Encoder[OverviewConnectionsResponse] =
+    Encoder.forProduct4("total", "healthy", "failing", "neverSynced")(v =>
+      (v.total, v.healthy, v.failing, v.neverSynced))
+  implicit val overviewIncidentsResponseEncoder: Encoder[OverviewIncidentsResponse] =
+    Encoder.forProduct3("open", "threshold", "noData")(v => (v.open, v.threshold, v.noData))
+  implicit val overviewOperationsResponseEncoder: Encoder[OverviewOperationsResponse] =
+    Encoder.forProduct2("failed", "unknown")(v => (v.failed, v.unknown))
+  implicit val overviewSummaryResponseEncoder: Encoder[OverviewSummaryResponse] =
+    Encoder.forProduct5("nodes", "containers", "connections", "incidents", "operations")(v =>
+      (v.nodes, v.containers, v.connections, v.incidents, v.operations))
+  implicit val overviewResourceResponseEncoder: Encoder[OverviewResourceResponse] =
+    Encoder.forProduct4("id", "name", "resourceTypeCode", "environmentId")(v =>
+      (v.id, v.name, v.resourceTypeCode, v.environmentId))
+  implicit val attentionIncidentResponseEncoder: Encoder[AttentionIncidentResponse] =
+    Encoder.forProduct2("reason", "metricCode")(v => (v.reason, v.metricCode))
+  implicit val attentionOperationResponseEncoder: Encoder[AttentionOperationResponse] =
+    Encoder.forProduct3("operationCode", "errorCode", "errorMessage")(v =>
+      (v.operationCode, v.errorCode, v.errorMessage))
+  implicit val attentionSyncResponseEncoder: Encoder[AttentionSyncResponse] =
+    Encoder.forProduct2("errorCode", "errorMessage")(v => (v.errorCode, v.errorMessage))
+  implicit val attentionItemResponseEncoder: Encoder[AttentionItemResponse] =
+    Encoder.forProduct9("kind", "priority", "id", "occurredAt", "resource", "connection",
+      "incident", "operation", "sync")(v =>
+      (v.kind, v.priority, v.id, v.occurredAt, v.resource, v.connection, v.incident, v.operation,
+        v.sync))
+  implicit val overviewAttentionResponseEncoder: Encoder[OverviewAttentionResponse] =
+    Encoder.forProduct2("items", "total")(v => (v.items, v.total))
+  implicit val operationsOverviewResponseEncoder: Encoder[OperationsOverviewResponse] =
+    Encoder.forProduct5("scope", "summary", "attention", "recentActivity", "operationsHorizonHours")(v =>
+      (v.scope, v.summary, v.attention, v.recentActivity, v.operationsHorizonHours))
 }

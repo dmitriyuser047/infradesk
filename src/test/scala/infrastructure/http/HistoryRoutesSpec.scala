@@ -6,6 +6,7 @@ import application.port._
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.auth.OrganizationRole
+import domain.connection.ConnectionScope
 import domain.history.{HistoryEventCursor, HistoryEventSource, HistoryEventType}
 import domain.resource.{Resource, ResourceData}
 import io.circe.Json
@@ -120,7 +121,8 @@ final class HistoryRoutesSpec extends FunSuite {
       HistoryEventType.OperationFailed,
       HistoryEventSource.System,
       At.plusSeconds(60),
-      Some(HistoryResourceView(resourceId, "api-1", "CONTAINER")),
+      Some(HistoryResourceView(resourceId, "api-1", "CONTAINER",
+        UUID.fromString("40000000-0000-0000-0000-000000000001"))),
       None,
       None,
       None,
@@ -154,6 +156,13 @@ final class HistoryRoutesSpec extends FunSuite {
     ): IO[List[HistoryEventView]] =
       IO { resourceCalls = resourceCalls :+ ((organizationId, resourceId, before, limit)) } *>
         failure.fold(IO.pure(List(failed, requested)))(IO.raiseError[List[HistoryEventView]])
+
+    // The timeline routes never read by scope; only the operations overview does.
+    override def listByScope(
+      organizationId: UUID,
+      scope: ConnectionScope,
+      limit: Int
+    ): IO[List[HistoryEventView]] = IO.raiseError(new UnsupportedOperationException("listByScope"))
   }
 
   /** Knows one resource of one organization, which is what tenant safety is tested against. */

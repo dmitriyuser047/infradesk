@@ -11,7 +11,7 @@ export function OrganizationsPage() {
   return (
     <AppShell>
       <div className="workspace-page">
-        <WorkspaceHeader title="Organizations" subtitle="Choose an organization to open its workspace" />
+        <WorkspaceHeader title="Organizations" subtitle="Choose an organization to open its overview" />
         <WorkspaceSection title="Available organizations">
           {organizations.isPending ? <div className="context-skeleton" aria-label="Loading organizations"><span /><span /></div> : null}
           {organizations.isError ? (
@@ -26,7 +26,7 @@ export function OrganizationsPage() {
           {organizations.isSuccess && organizations.data.length > 0 ? <div className="table-scroll"><table className="data-grid">
             <thead><tr><th>Organization</th><th>Code</th><th>Role</th></tr></thead>
             <tbody>{organizations.data.map(organization => <tr key={organization.id}>
-              <td><Link className="grid-link" to={`/organizations/${encodeURIComponent(organization.id)}`}>{organization.name}</Link></td>
+              <td><Link className="grid-link" to={`/organizations/${encodeURIComponent(organization.id)}/overview`}>{organization.name}</Link></td>
               <td className="muted-cell">{organization.code}</td><td>{getOrganizationRoleLabel(organization.role)}</td>
             </tr>)}</tbody>
           </table></div> : null}
