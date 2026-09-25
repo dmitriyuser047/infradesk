@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createI18n } from '../../../i18n'
-import { containerStatusPresentation } from './containerStatusPresentation'
+import { containerCondition, containerStatusPresentation } from './containerStatusPresentation'
 
 describe('container status presentation', () => {
   it('uses the existing Docker state to choose a semantic tone', () => {
@@ -19,5 +19,14 @@ describe('container status presentation', () => {
     expect(containerStatusPresentation('running', ru)).toEqual({ label: 'Работает', tone: 'success' })
     expect(containerStatusPresentation('exited', ru).label).toBe('Остановлен')
     expect(containerStatusPresentation('removing', ru)).toEqual({ label: 'removing', tone: 'neutral' })
+  })
+
+  it('groups Docker states for the list filter: running, stopped, or neither', () => {
+    expect(containerCondition('running')).toBe('running')
+    expect(containerCondition(' Running ')).toBe('running')
+    for (const state of ['exited', 'dead', 'paused', 'created']) expect(containerCondition(state)).toBe('inactive')
+    expect(containerCondition('restarting')).toBe('unknown')
+    expect(containerCondition('removing')).toBe('unknown')
+    expect(containerCondition(null)).toBe('unknown')
   })
 })

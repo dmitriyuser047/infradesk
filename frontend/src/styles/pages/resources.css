@@ -23,6 +23,13 @@
 .resource-name { font-weight: 600; }
 .resource-code { color: var(--text-tertiary); font-family: var(--font-mono); font-size: var(--font-size-caption); }
 .resource-type-cell { color: var(--text-secondary); }
+/* Filters line up in one row on a wide screen and wrap on a narrow one. */
+.resource-filter-bar { align-items: center; }
+.resource-filter-bar .segmented { flex-wrap: wrap; }
+/* A server shown only because something on it matched: present, but quieter than the results. */
+.resource-row-context .resource-name { color: var(--text-secondary); font-weight: 500; }
+.resource-row-context .resource-icon, .resource-row-context .resource-type-cell { color: var(--text-disabled); }
+.resource-row-context .status-indicator { opacity: .75; }
 
 .operation-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .data-table { display: grid; border: 1px solid var(--border); border-radius: var(--radius-md); }

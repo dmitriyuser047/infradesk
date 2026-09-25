@@ -66,6 +66,9 @@ export const nodePresentation: ResourcePresentation = {
   label: i18n => i18n.t.resources.types.NODE ?? 'NODE',
   Icon: Server,
   rowStatus: nodeStatus,
+  // The same flag the badge shows: online runs, offline does not, no report is unknown.
+  condition: resource => { const online = nodeData(resource)?.status?.online; return online === true ? 'running' : online === false ? 'inactive' : 'unknown' },
+  searchTerms: resource => { const hostname = nodeData(resource)?.spec?.hostname; return hostname ? [hostname] : [] },
   headerStatus: nodeStatus,
   Overview: NodeOverview,
   MetricSummary: NodeMetricSummary,

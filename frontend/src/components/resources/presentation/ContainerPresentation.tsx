@@ -2,7 +2,7 @@ import { Box } from 'lucide-react'
 
 import { useI18n } from '../../../i18n'
 import { PropertyGrid, StatusIndicator, WorkspaceSection } from '../../layout/WorkspacePrimitives'
-import { containerStatusPresentation } from './containerStatusPresentation'
+import { containerCondition, containerStatusPresentation } from './containerStatusPresentation'
 import type { ResourcePresentation, ResourcePresentationProps } from './ResourcePresentation'
 import type { ContainerResourceData, ResourceResponse } from '../../../types/resource'
 
@@ -33,6 +33,8 @@ export const containerPresentation: ResourcePresentation = {
   label: i18n => i18n.t.resources.types.CONTAINER ?? 'CONTAINER',
   Icon: Box,
   rowStatus: (resource, i18n) => containerStatusPresentation(containerData(resource)?.status?.state, i18n),
+  condition: resource => containerCondition(containerData(resource)?.status?.state),
+  searchTerms: resource => { const image = containerData(resource)?.spec?.image; return image ? [image] : [] },
   headerStatus: (resource, i18n) => containerStatusPresentation(containerData(resource)?.status?.state, i18n),
   Overview: ContainerOverview,
 }

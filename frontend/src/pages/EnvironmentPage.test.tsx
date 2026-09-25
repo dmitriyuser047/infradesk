@@ -1,0 +1,136 @@
+// @vitest-environment jsdom
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { I18nProvider, type Locale } from '../i18n'
+import type { ResourceResponse } from '../types/resource'
+import { EnvironmentPage } from './EnvironmentPage'
+
+const base = { organizationId: 'org', environmentId: 'env', resourceTypeId: 'type', active: true, createdAt: '', updatedAt: '' }
+const fleet: ResourceResponse[] = [
+  { ...base, id: 'finland', parentResourceId: null, code: 'finland', name: 'finland_node', resourceTypeCode: 'NODE',
+    data: { kind: 'NODE', spec: null, status: { online: true, cpuUsagePercent: null, memoryUsagePercent: null, uptimeSeconds: null } } },
+  { ...base, id: 'postgres', parentResourceId: 'finland', code: 'postgres', name: 'postgres', resourceTypeCode: 'CONTAINER',
+    data: { kind: 'CONTAINER', spec: { image: 'postgres:17' }, status: { state: 'running' } } },
+  { ...base, id: 'cron', parentResourceId: 'finland', code: 'cron', name: 'report-cron', resourceTypeCode: 'CONTAINER',
+    data: { kind: 'CONTAINER', spec: { image: 'cron:1' }, status: { state: 'exited' } } },
+  { ...base, id: 'frankfurt', parentResourceId: null, code: 'frankfurt', name: 'frankfurt_node', resourceTypeCode: 'NODE',
+    data: { kind: 'NODE', spec: null, status: { online: false, cpuUsagePercent: null, memoryUsagePercent: null, uptimeSeconds: null } } },
+]
+
+/** Renders the page with the shell data seeded; the resource list is the only request it can make. */
+async function renderPage(resources: ResourceResponse[], locale: Locale = 'ru') {
+  const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(resources),
+    { status: 200, headers: { 'Content-Type': 'application/json' } })))
+  vi.stubGlobal('fetch', fetchMock)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+  client.setQueryData(['me'], { id: 'user', email: 'member@example.com', displayName: 'Member' })
+  client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Org', role: 'MEMBER' }])
+  client.setQueryData(['projects', 'org'], [{ id: 'project', organizationId: 'org', code: 'app', name: 'App', description: null }])
+  client.setQueryData(['environments', 'org', 'project'], [
+    { id: 'env', organizationId: 'org', projectId: 'project', code: 'prod', name: 'Production', kind: 'PROD' }])
+  render(<I18nProvider initialLocale={locale}><QueryClientProvider client={client}>
+    <MemoryRouter initialEntries={['/organizations/org/environments/env?project=project']}><Routes>
+      <Route path="/organizations/:organizationId/environments/:environmentId" element={<EnvironmentPage />} />
+    </Routes></MemoryRouter>
+  </QueryClientProvider></I18nProvider>)
+  await act(async () => { await Promise.resolve() })
+  return fetchMock
+}
+
+const rows = () => screen.queryAllByRole('treeitem').map(item => item.querySelector('.resource-name')?.firstChild?.textContent)
+
+describe('resources page filters', () => {
+  afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+  it('searches, filters and resets the loaded list without another request', async () => {
+    const fetchMock = await renderPage(fleet)
+    await screen.findByRole('tree')
+    const search = screen.getByRole('searchbox', { name: 'Поиск ресурсов' })
+
+    // Nothing is filtered yet: no count, no reset.
+    expect(screen.queryByText(/Показано/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Сбросить фильтры' })).toBeNull()
+
+    for (const value of ['p', 'po', 'pos', 'POSTGRES', '  postgres  ']) fireEvent.change(search, { target: { value } })
+    expect(rows()).toEqual(['finland_node', 'postgres'])
+    // The server is context, not a result.
+    expect(screen.getByRole('status').textContent).toBe('Показано 1 из 4')
+
+    fireEvent.change(search, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Контейнеры' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Неактивны' }))
+    expect(rows()).toEqual(['finland_node', 'report-cron'])
+    expect(screen.getByRole('status').textContent).toBe('Показано 1 из 4')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сбросить фильтры' }))
+    expect(rows()).toEqual(['finland_node', 'postgres', 'report-cron', 'frankfurt_node'])
+    expect((screen.getByRole('radio', { name: 'Контейнеры' }) as HTMLInputElement).checked).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Сбросить фильтры' })).toBeNull()
+
+    // One request loaded the list; typing and filtering made none.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/organizations/org/environments/env/resources')
+  })
+
+  it('clears the search with its button or with Escape', async () => {
+    await renderPage(fleet)
+    await screen.findByRole('tree')
+    const search = screen.getByRole('searchbox', { name: 'Поиск ресурсов' }) as HTMLInputElement
+
+    fireEvent.change(search, { target: { value: 'cron' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Очистить поиск' }))
+    expect(search.value).toBe('')
+    expect(screen.queryByRole('button', { name: 'Очистить поиск' })).toBeNull()
+
+    fireEvent.change(search, { target: { value: 'cron' } })
+    fireEvent.keyDown(search, { key: 'Escape' })
+    expect(search.value).toBe('')
+  })
+
+  it('tells no results apart from no infrastructure', async () => {
+    await renderPage(fleet)
+    await screen.findByRole('tree')
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Поиск ресурсов' }), { target: { value: 'no-such-thing' } })
+
+    expect(screen.getByText('Ресурсы не найдены')).toBeTruthy()
+    expect(screen.getByText('Измените поиск или фильтры')).toBeTruthy()
+    expect(screen.queryByRole('tree')).toBeNull()
+    expect(screen.queryByText('Ресурсы ещё не обнаружены')).toBeNull()
+    // The empty state offers its own way back, next to the one in the filter bar.
+    const [, emptyStateReset] = screen.getAllByRole('button', { name: 'Сбросить фильтры' })
+    fireEvent.click(emptyStateReset)
+    expect(rows()).toHaveLength(4)
+
+    cleanup()
+    await renderPage([])
+    expect(await screen.findByText('Ресурсы ещё не обнаружены')).toBeTruthy()
+    expect(screen.queryByText('Ресурсы не найдены')).toBeNull()
+    // Nothing to search in: no filter bar at all.
+    expect(screen.queryByRole('searchbox')).toBeNull()
+  })
+
+  it('speaks English as well', async () => {
+    await renderPage(fleet, 'en')
+    await screen.findByRole('tree')
+    const search = screen.getByRole('searchbox', { name: 'Search resources' })
+
+    const type = screen.getByRole('group', { name: 'Resource type' })
+    expect(within(type).getAllByRole('radio').map(radio => radio.parentElement?.textContent)).toEqual(['All', 'Servers', 'Containers'])
+    const state = screen.getByRole('group', { name: 'State' })
+    expect(within(state).getAllByRole('radio').map(radio => radio.parentElement?.textContent)).toEqual(['All', 'Running', 'Inactive'])
+
+    fireEvent.change(search, { target: { value: 'nothing' } })
+    expect(screen.getByText('No resources found')).toBeTruthy()
+    expect(screen.getByText('Change the search or the filters')).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toBe('Showing 0 of 4')
+    expect(screen.getAllByRole('button', { name: 'Reset filters' }).length).toBeGreaterThan(0)
+  })
+
+  it('says so in English when nothing has been discovered', async () => {
+    await renderPage([], 'en')
+    expect(await screen.findByText('No resources discovered yet')).toBeTruthy()
+  })
+})

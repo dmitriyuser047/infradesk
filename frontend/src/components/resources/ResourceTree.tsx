@@ -1,21 +1,20 @@
-import type { ResourceResponse } from '../../types/resource'
-import { buildResourceTree } from './resourceTreeModel'
+import type { FilteredResourceNode } from './resourceFilter'
 import { ResourceTreeItem } from './ResourceTreeItem'
 import { useI18n } from '../../i18n'
 
 interface ResourceTreeProps {
-  resources: readonly ResourceResponse[]
+  /** The tree as the filters left it; see `buildFilteredResourceTree`. */
+  roots: readonly FilteredResourceNode[]
   organizationId: string
   environmentId: string
 }
 
-export function ResourceTree({ resources, organizationId, environmentId }: ResourceTreeProps) {
+export function ResourceTree({ roots, organizationId, environmentId }: ResourceTreeProps) {
   const { t } = useI18n()
-  const tree = buildResourceTree(resources)
 
   return (
     <div className="resource-tree" role="tree" aria-label={t.resources.treeLabel}>
-      {tree.map((node) => (
+      {roots.map((node) => (
         <ResourceTreeItem
           key={node.resource.id}
           node={node}

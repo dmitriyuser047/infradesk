@@ -10,6 +10,13 @@ export interface ResourceStatusPresentation {
   tone: StatusTone
 }
 
+/**
+ * Where a resource stands for the list filter: running, not running, or not known. This is a
+ * frontend grouping of each type's own status (a node's online flag, a container's Docker state);
+ * the backend and the domain have no such status and never receive it.
+ */
+export type ResourceCondition = 'running' | 'inactive' | 'unknown'
+
 export interface ResourcePresentationProps {
   resource: ResourceResponse
 }
@@ -23,6 +30,10 @@ export interface ResourceRendering {
   Icon: LucideIcon
   /** Status badge in the infrastructure tree row, in the active language. */
   rowStatus: (resource: ResourceResponse, i18n: I18n) => ResourceStatusPresentation
+  /** The filter group of this resource's status; a type without one is always `unknown`. */
+  condition?: (resource: ResourceResponse) => ResourceCondition
+  /** Further identity the loaded resource already carries that a search should find, such as a hostname. */
+  searchTerms?: (resource: ResourceResponse) => readonly string[]
   /** Status badge next to the title on the resource page, when this kind has one. */
   headerStatus?: (resource: ResourceResponse, i18n: I18n) => ResourceStatusPresentation
   /** Type-specific content of the Overview tab. */

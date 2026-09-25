@@ -5,6 +5,10 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { ResourcePage } from '../../../pages/ResourcePage'
 import { ResourceTree } from '../ResourceTree'
+import { buildFilteredResourceTree, noResourceFilter } from '../resourceFilter'
+
+/** The whole tree, as the page shows it before any filter. */
+const unfiltered = (list: ResourceResponse[]) => buildFilteredResourceTree(list, noResourceFilter, () => { throw new Error('not filtering') }).roots
 import type { ResourceResponse } from '../../../types/resource'
 
 /**
@@ -66,7 +70,7 @@ describe('registering a new resource presentation', () => {
 
   it('shows the new type through the generic infrastructure tree', () => {
     const html = renderToStaticMarkup(<MemoryRouter>
-      <ResourceTree resources={[resource]} organizationId="org" environmentId="environment" />
+      <ResourceTree roots={unfiltered([resource])} organizationId="org" environmentId="environment" />
     </MemoryRouter>)
 
     expect(html).toContain('Test resource name')

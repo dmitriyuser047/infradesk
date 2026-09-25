@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { SearchX } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router-dom'
 
 import { useEnvironmentResources } from '../api/resources'
@@ -8,7 +9,13 @@ import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } f
 import { getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
 import { ResourceTree } from '../components/resources/ResourceTree'
 import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
-import { filterResourcesForTree } from '../components/resources/filterResourcesForTree'
+import { ResourceFilterBar } from '../components/resources/ResourceFilterBar'
+import {
+  buildFilteredResourceTree,
+  describeWithPresentations,
+  isResourceFilterActive,
+  noResourceFilter,
+} from '../components/resources/resourceFilter'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import { InvalidRoutePage } from './InvalidRoutePage'
@@ -36,37 +43,39 @@ function EnvironmentContent({ organizationId, environmentId }: EnvironmentConten
   const projectId = searchParams.get('project')
   const environments = useEnvironments(organizationId, projectId)
   const environment = environments.data?.find(item => item.id === environmentId)
-  const [search, setSearch] = useState('')
-  const [type, setType] = useState('ALL')
-  const visibleResources = filterResourcesForTree(resourcesQuery.data ?? [], search, type)
+  // Local to this page: filtering the loaded list changes nothing in the URL and requests nothing.
+  const [criteria, setCriteria] = useState(noResourceFilter)
+  const resources = resourcesQuery.data
+  const filtered = useMemo(() => resources === undefined ? null
+    : buildFilteredResourceTree(resources, criteria, describeWithPresentations(resourcePresentationRegistry, i18n)),
+  [resources, criteria, i18n])
+  const filtering = isResourceFilterActive(criteria)
+  const f = t.filter
 
   return (
     <AppShell>
       <div className="workspace-page">
       <WorkspaceHeader title={t.title}
         subtitle={environment ? t.subtitle(environment.name, getEnvironmentKindLabel(environment.kind, i18n)) : t.subtitleFallback} />
-      <WorkspaceSection title={t.section} actions={resourcesQuery.data ? <span className="resource-count">{i18n.t.common.shown(visibleResources.length, resourcesQuery.data.length)}</span> : null}>
-        <div className="filter-bar">
-          <label>{i18n.t.common.search}<input type="search" placeholder={i18n.t.common.searchPlaceholder} value={search} onChange={event => setSearch(event.target.value)} /></label>
-          <label>{i18n.t.common.type}<select value={type} onChange={event => setType(event.target.value)}><option value="ALL">{i18n.t.common.all}</option>
-            {resourcePresentationRegistry.list().map(presentation =>
-              <option key={presentation.code} value={presentation.code}>{presentation.label(i18n)}</option>)}</select></label>
-          <button className="secondary-button" type="button" onClick={() => resourcesQuery.refetch()}>{i18n.t.common.refresh}</button>
-        </div>
+      <WorkspaceSection title={t.section}
+        actions={filtered !== null && filtering ? <span className="resource-count" role="status">{f.shown(filtered.matched, filtered.total)}</span> : null}>
+        {resources !== undefined && resources.length > 0
+          ? <ResourceFilterBar criteria={criteria} onChange={setCriteria} onRefresh={() => resourcesQuery.refetch()} /> : null}
         {resourcesQuery.isPending ? <div className="tree-skeleton" aria-label={t.loading}><span /><span /><span /><span /></div> : null}
         {resourcesQuery.isError ? (
           <InlineAlert tone="danger" title={t.loadError}
             action={<button className="secondary-button" type="button" onClick={() => resourcesQuery.refetch()}>{i18n.t.common.retry}</button>}>
             {describeError(resourcesQuery.error, i18n)}</InlineAlert>
         ) : null}
-        {resourcesQuery.data !== undefined && resourcesQuery.data.length === 0 ? <EmptyWorkspaceState title={t.empty} detail={t.emptyDetail} /> : null}
-        {resourcesQuery.data !== undefined && resourcesQuery.data.length > 0 ? (
-          visibleResources.length ? <div className="table-scroll"><div className="tree-grid-header"><span>{t.columns.name}</span><span>{t.columns.type}</span><span>{t.columns.status}</span></div><ResourceTree
-            resources={visibleResources}
-            organizationId={organizationId}
-            environmentId={environmentId}
-          /></div> : <EmptyWorkspaceState title={t.noMatch} />
-        ) : null}
+        {resources !== undefined && resources.length === 0 ? <EmptyWorkspaceState title={t.empty} detail={t.emptyDetail}
+          action={<button className="secondary-button" type="button" onClick={() => resourcesQuery.refetch()}>{i18n.t.common.refresh}</button>} /> : null}
+        {filtered !== null && filtered.total > 0 && filtered.roots.length === 0 ? <EmptyWorkspaceState icon={SearchX}
+          title={f.noResults} detail={f.noResultsDetail}
+          action={<button className="secondary-button" type="button" onClick={() => setCriteria(noResourceFilter)}>{f.reset}</button>} /> : null}
+        {filtered !== null && filtered.roots.length > 0 ? <div className="table-scroll">
+          <div className="tree-grid-header"><span>{t.columns.name}</span><span>{t.columns.type}</span><span>{t.columns.status}</span></div>
+          <ResourceTree roots={filtered.roots} organizationId={organizationId} environmentId={environmentId} />
+        </div> : null}
       </WorkspaceSection></div>
     </AppShell>
   )
