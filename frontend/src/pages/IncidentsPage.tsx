@@ -2,7 +2,7 @@ import { useSearchParams, useParams } from 'react-router-dom'
 
 import { useIncidents } from '../api/incidents'
 import { AppShell } from '../components/layout/AppShell'
-import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { IncidentList } from '../components/incidents/IncidentList'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
@@ -46,11 +46,9 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
           </div>
           {incidentsQuery.isPending ? <div className="incident-skeleton" aria-label={t.loading}><span /><span /><span /></div> : null}
           {incidentsQuery.isError ? (
-            <div className="incident-state incident-state-error" role="alert">
-              <h3>{t.loadError}</h3>
-              <p>{describeError(incidentsQuery.error, i18n)}</p>
-              <button className="retry-button" type="button" onClick={() => incidentsQuery.refetch()}>{i18n.t.common.retry}</button>
-            </div>
+            <InlineAlert tone="danger" title={t.loadError}
+              action={<button className="secondary-button" type="button" onClick={() => incidentsQuery.refetch()}>{i18n.t.common.retry}</button>}>
+              {describeError(incidentsQuery.error, i18n)}</InlineAlert>
           ) : null}
           {!incidentsQuery.isPending && !incidentsQuery.isError && incidentsQuery.data?.length === 0 ? (
             <EmptyWorkspaceState title={t.empty[filter].title} detail={t.empty[filter].detail} />

@@ -174,6 +174,16 @@ export const en = {
     noEnvironments: 'No environments in this project yet',
     noEnvironmentsDetail: 'Add an environment such as Production or Test, then connect its servers.',
     environmentCount: (count: number) => count === 1 ? '1 environment' : `${count} environments`,
+    hierarchy: {
+      organization: 'Organization',
+      organizationDetail: 'Your company or team. Members and connections belong to it.',
+      project: 'Project',
+      projectDetail: 'One system or product, for example “Billing”.',
+      environment: 'Environment',
+      environmentDetail: 'A stage of the project: Production, Staging, Test. Servers and containers are discovered into it.',
+    },
+    openOverview: 'Overview',
+    addEnvironmentTo: (project: string) => `Add environment to ${project}`,
   },
 
   projectForm: {
@@ -225,7 +235,6 @@ export const en = {
     collapse: (name: string) => `Collapse ${name}`,
     expand: (name: string) => `Expand ${name}`,
     types: { NODE: 'Server', CONTAINER: 'Container' } as Record<string, string>,
-    chooseEnvironment: 'Choose an environment',
     chooseEnvironmentDetail: 'Resources are discovered per environment. Pick the one you want to look at.',
     detailsUnavailable: 'Details are not available for this resource type',
     page: {
@@ -572,6 +581,28 @@ export const en = {
     emptyInfrastructureDetail: 'Add an SSH connection and synchronize it to discover servers and containers.',
     openConnections: 'Open connections',
     open: 'Open',
+    openItem: (subject: string) => `Open ${subject}`,
+    onboarding: {
+      title: 'Welcome to InfraDesk',
+      detail: 'A few steps, and this page will show the state of your infrastructure.',
+      progress: (done: number, total: number) => `${done} of ${total} done`,
+      nextStep: 'Next step',
+      ownerOnly: 'This step is done by an organization owner.',
+      steps: {
+        organization: { title: 'Organization created', detail: 'Everything you set up lives inside it.' },
+        project: { title: 'Create a project', detail: 'A project groups the environments of one system.' },
+        environment: { title: 'Add an environment', detail: 'For example Production or Test: servers are discovered per environment.' },
+        connection: { title: 'Connect a server', detail: 'InfraDesk connects over SSH and confirms the server identity.' },
+        sync: { title: 'Run the first synchronization', detail: 'InfraDesk discovers the server and its Docker containers.' },
+        monitoring: { title: 'Set up monitoring', detail: 'Add monitor rules on a server page once it is discovered.' },
+      },
+      actions: {
+        project: 'Create project',
+        environment: 'Add environment',
+        connection: 'Connect a server',
+        sync: 'Open connection',
+      } as Record<string, string>,
+    },
     cards: {
       nodes: 'Servers',
       containers: 'Containers',

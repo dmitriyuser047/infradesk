@@ -9,7 +9,7 @@ import type { MonitorRuleRequest, MonitorRuleResponse } from '../../types/monito
 import { useOrganizationPermissions } from '../auth/authorization'
 import { MonitorRuleDialog } from './MonitorRuleDialog'
 import { MonitorRuleRow } from './MonitorRuleRow'
-import { EmptyWorkspaceState, WorkspaceSection } from '../layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { Plus } from 'lucide-react'
 
 import { useI18n } from '../../i18n'
@@ -71,11 +71,9 @@ export function MonitorRulesSection({ organizationId, resourceId }: MonitorRules
       <button className="primary-button" type="button" onClick={openCreate}><Plus aria-hidden size={16} />{t.addRule}</button> : undefined}>
       {rulesQuery.isPending ? <RulesSkeleton label={t.loading} /> : null}
       {rulesQuery.isError ? (
-        <div className="monitor-rules-error" role="alert">
-          <p>{t.loadError}</p>
-          <span>{describeError(rulesQuery.error, i18n)}</span>
-          <button className="retry-button" type="button" onClick={() => rulesQuery.refetch()}>{i18n.t.common.retry}</button>
-        </div>
+        <InlineAlert tone="danger" title={t.loadError}
+          action={<button className="secondary-button" type="button" onClick={() => rulesQuery.refetch()}>{i18n.t.common.retry}</button>}>
+          {describeError(rulesQuery.error, i18n)}</InlineAlert>
       ) : null}
       {!rulesQuery.isPending && !rulesQuery.isError && rulesQuery.data?.length === 0 ? (
         <EmptyWorkspaceState title={t.empty} detail={t.emptyDetail} />

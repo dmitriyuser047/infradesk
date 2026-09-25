@@ -53,33 +53,52 @@ function render(existing?: ConnectionResponse) {
 }
 
 describe('SSH connection form', () => {
-  it('offers both authentication methods and shows the password fields by default', () => {
+  it('presents the private key first for a new connection and keeps password available', () => {
     const html = render()
 
-    expect(html).toContain('>Пароль</option>')
-    expect(html).toContain('>Приватный ключ</option>')
-    expect(html).toContain('type="password"')
-    // The private key field only appears once that method is selected.
-    expect(html).not.toContain('<textarea')
+    expect(html).toContain('1. Сервер')
+    expect(html).toContain('2. Аутентификация')
+    expect(html).toContain('3. Проверка подлинности сервера')
+    expect(html).toContain('4. Синхронизация')
+    expect(html).toMatch(/checked="" value="PRIVATE_KEY"/)
+    expect(html).toContain('Приватный ключ')
+    expect(html).toContain('Пароль')
+    expect(html).toContain('<textarea')
+    // A new connection has nothing stored yet.
+    expect(html).not.toContain('Учётные данные сохранены')
   })
 
-  it('shows the private key and its optional passphrase for a key connection', () => {
+  it('keeps an existing password connection on password, with its stored credential untouched', () => {
+    const html = render(connection({ authenticationType: 'PASSWORD' }))
+
+    expect(html).toMatch(/checked="" value="PASSWORD"/)
+    expect(html).toContain('type="password"')
+    expect(html).not.toContain('<textarea')
+    expect(html).toContain('Учётные данные сохранены')
+    expect(html).toContain('Оставьте поле пустым, чтобы сохранить текущий ключ или пароль.')
+  })
+
+  it('shows the private key and its optional passphrase for a key connection, never the stored key', () => {
     const html = render(connection({ authenticationType: 'PRIVATE_KEY' }))
 
     expect(html).toContain('<textarea')
     expect(html).toContain('Парольная фраза (если есть)')
-    // An existing credential is kept when the field is left blank.
     expect(html).toContain('Оставьте поле пустым, чтобы сохранить текущий ключ или пароль.')
-    // The form never receives the stored credential to display.
+    // The form never receives the stored credential, and does not pretend to with a fake mask.
     expect(html).not.toContain('BEGIN OPENSSH')
+    expect(html).not.toContain('•••')
+    expect(html).not.toContain('****')
   })
 
-  it('states the host identity and never renders a credential', () => {
+  it('explains why the fingerprint exists and states whether the server is confirmed', () => {
     const trusted = render(connection())
     const unverified = render()
 
+    expect(unverified).toContain('Отпечаток подтверждает, что InfraDesk подключается именно к нужному серверу')
     expect(trusted).toContain('SHA256:trusted')
+    expect(trusted).toContain('trust-state trust-trusted')
     expect(trusted).toContain('Сервер подтверждён')
+    expect(unverified).toContain('trust-state trust-untrusted')
     expect(unverified).toContain('Сервер не подтверждён')
     expect(unverified).toContain('Получить ключ сервера')
     expect(trusted).not.toContain('value="secret"')
@@ -88,8 +107,7 @@ describe('SSH connection form', () => {
   it('cannot test a connection before the host identity is confirmed', () => {
     const html = render()
 
-    // Both the test button and the probe button are present, and testing starts disabled.
     expect(html).toContain('Проверить подключение')
-    expect(html).toContain('disabled=""')
+    expect(html).toMatch(/<button class="secondary-button" type="button" disabled="">Проверить подключение/)
   })
 })

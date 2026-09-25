@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { Link, useLocation, useParams } from 'react-router-dom'
+import { Cable, Plus } from 'lucide-react'
 
 import { useConnections } from '../api/connections'
 import { getEnvironments, useProjects } from '../api/navigation'
@@ -8,7 +9,7 @@ import { ConnectionList } from '../components/connections/ConnectionList'
 import { filterConnections } from '../components/connections/connectionFilters'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
-import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import { InvalidRoutePage } from './InvalidRoutePage'
@@ -48,7 +49,7 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
     <AppShell>
       <div className="workspace-page">
         <WorkspaceHeader title={t.title} subtitle={t.subtitle}
-          actions={isOwner ? <Link className="primary-button" to={newPath}>{t.add}</Link> : null} />
+          actions={isOwner ? <Link className="primary-button" to={newPath}><Plus aria-hidden size={16} />{t.add}</Link> : null} />
         <WorkspaceSection title={t.section} actions={connectionsQuery.data ? <span className="resource-count">{i18n.t.common.shown(filtered.length, connectionsQuery.data.length)}</span> : null}>
           <div className="filter-bar">
             <label>{i18n.t.common.search}<input type="search" value={search} placeholder={i18n.t.common.searchPlaceholder} onChange={event => setSearch(event.target.value)} /></label>
@@ -59,16 +60,12 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
             <button className="secondary-button" type="button" onClick={() => connectionsQuery.refetch()}>{i18n.t.common.refresh}</button>
           </div>
           {connectionsQuery.isPending ? <div className="connection-skeleton" aria-label={t.loading}><span /><span /><span /></div> : null}
-          {connectionsQuery.isError ? (
-            <div className="connection-state connection-state-error" role="alert">
-              <h3>{t.loadError}</h3>
-              <p>{describeError(connectionsQuery.error, i18n)}</p>
-              <button className="retry-button" type="button" onClick={() => connectionsQuery.refetch()}>{i18n.t.common.retry}</button>
-            </div>
-          ) : null}
+          {connectionsQuery.isError ? <InlineAlert tone="danger" title={t.loadError}
+            action={<button className="secondary-button" type="button" onClick={() => connectionsQuery.refetch()}>{i18n.t.common.retry}</button>}>
+            {describeError(connectionsQuery.error, i18n)}</InlineAlert> : null}
           {!connectionsQuery.isPending && !connectionsQuery.isError && connectionsQuery.data?.length === 0 ? (
-            <EmptyWorkspaceState title={t.empty} detail={isOwner ? t.emptyDetail : t.emptyMember}
-              action={isOwner ? <Link className="primary-button" to={newPath}>{t.add}</Link> : undefined} />
+            <EmptyWorkspaceState icon={Cable} title={t.empty} detail={isOwner ? t.emptyDetail : t.emptyMember}
+              action={isOwner ? <Link className="primary-button" to={newPath}><Plus aria-hidden size={16} />{t.add}</Link> : undefined} />
           ) : null}
           {!connectionsQuery.isPending && !connectionsQuery.isError && connectionsQuery.data !== undefined && connectionsQuery.data.length > 0 ? (
             filtered.length ? <ConnectionList organizationId={organizationId} connections={filtered}

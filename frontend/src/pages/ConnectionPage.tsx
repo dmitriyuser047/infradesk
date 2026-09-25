@@ -13,8 +13,9 @@ import { formatScheduleInterval, formatSyncDuration, getConnectionScopeLabel,
   getConnectorTypeLabel, getSyncFailureMessage } from '../components/connections/connectionPresentation'
 import { SyncStatusBadge } from '../components/connections/SyncStatusBadge'
 import { AppShell } from '../components/layout/AppShell'
-import { EmptyWorkspaceState, PropertyGrid, WorkspaceHeader, WorkspaceSection, WorkspaceTabs } from '../components/layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs } from '../components/layout/WorkspacePrimitives'
 import { contextSearch } from '../components/layout/workspaceNavigation'
+import { ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { ConnectionScopeType, SyncStatus, type ConnectionResponse } from '../types/connection'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
@@ -76,10 +77,12 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
           </details>
         </> : null}
       </>} />
-    {deactivate.isError ? <p className="inline-error" role="alert">{describeError(deactivate.error, i18n)}</p> : null}
-    {sync.isError ? <p className="inline-error" role="alert">{describeError(sync.error, i18n)}</p> : null}
-    {sync.isSuccess ? <p className="inline-feedback" role="status">{sync.data.status === SyncStatus.failed
-      ? getSyncFailureMessage(sync.data, i18n) : t.syncCompleted}</p> : null}
+    {connection.lastSync?.errorCode === 'SSH_HOST_KEY_MISMATCH' ? <InlineAlert tone="danger"
+      title={i18n.t.connections.form.statusMismatch}>{i18n.t.connections.form.statusMismatchDetail}</InlineAlert> : null}
+    {deactivate.isError ? <InlineAlert tone="danger" title={describeError(deactivate.error, i18n)} /> : null}
+    {sync.isError ? <InlineAlert tone="danger" title={describeError(sync.error, i18n)} /> : null}
+    {sync.isSuccess ? <InlineAlert tone={sync.data.status === SyncStatus.failed ? 'danger' : 'success'}
+      title={sync.data.status === SyncStatus.failed ? getSyncFailureMessage(sync.data, i18n) : t.syncCompleted} /> : null}
     <WorkspaceTabs tabs={tabs} active={tab} onChange={setTab} />
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
       {tab === 'overview' ? <ConnectionOverview connection={connection}
@@ -125,9 +128,14 @@ function ConnectionOverview({ connection, projects, environments }: {
       { label: t.host, value: ssh.host }, { label: t.port, value: ssh.port },
       { label: t.username, value: ssh.username },
       { label: t.authentication, value: i18n.t.connections.authTypes[ssh.authenticationType] ?? ssh.authenticationType },
+      { label: i18n.t.connections.columns.trust, value: latest?.errorCode === 'SSH_HOST_KEY_MISMATCH'
+        ? <StatusIndicator label={i18n.t.connections.form.statusMismatch} tone="danger" icon={ShieldAlert} />
+        : ssh.hostTrusted ? <StatusIndicator label={i18n.t.connections.trust.trusted} tone="success" icon={ShieldCheck} />
+          : <StatusIndicator label={i18n.t.connections.trust.untrusted} tone="warning" icon={ShieldQuestion} /> },
       { label: t.hostKey, value: ssh.hostKeyFingerprint
         ? <code className="technical-value">{ssh.hostKeyFingerprint}</code> : t.notPinned },
-      { label: t.credentials, value: ssh.credentialConfigured ? t.credentialsStored : t.credentialsMissing },
+      { label: t.credentials, value: ssh.credentialConfigured
+        ? <StatusIndicator label={t.credentialsStored} tone="success" /> : t.credentialsMissing },
     ]} /></WorkspaceSection> : null}
   </>
 }

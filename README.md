@@ -181,6 +181,23 @@ no other network call.
 - The page refreshes every 30 seconds and after a manual sync, an operation or a monitor rule
   change. It never predicts the effect of an operation; inventory synchronization does.
 
+## Interface and localization
+
+The interface is Russian by default, with English as the second language. The language switch is
+in the account menu. It applies without a reload and is remembered in the browser under
+`infradesk.locale`. Dictionaries live in `frontend/src/i18n` and are typed: a key missing from
+either language fails the build. Domain codes such as statuses, error codes and resource types stay
+in English in the API, and only their display text is translated. Error messages map a
+backend error code to text in the active language and never show stack traces or internal
+identifiers.
+
+The layout has a sidebar with grouped sections, a top bar with the organization, project and
+environment switcher, and the account menu. The URL stays the source of truth for the current
+context: changing the project resets the environment, and changing the organization resets both.
+The first-run guide on the Overview page is derived from existing data (projects, environments,
+connections, synchronized resources) and is not stored. Styles use the design tokens in
+`frontend/src/styles/tokens.css`, with no UI framework.
+
 Frontend: `cd frontend`, then `npm ci`, `npm test`, `npm run build`, or `npm run dev`.
 
 Applied Flyway migrations are immutable. Add a new versioned migration instead of modifying an applied one. An existing non-empty database without Flyway history is not auto-baselined; assess it before switching startup to Flyway.

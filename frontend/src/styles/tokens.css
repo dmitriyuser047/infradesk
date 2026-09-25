@@ -37,6 +37,10 @@
   --info-soft: #eef3fd;
   --neutral: #475467;
   --neutral-soft: #f2f4f7;
+  --success-border: #abefc6;
+  --warning-border: #fedf89;
+  --danger-border: #fecdca;
+  --info-border: #c7d7fe;
 
   /* Sidebar */
   --sidebar-bg: #101828;

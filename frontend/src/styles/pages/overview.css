@@ -1,0 +1,110 @@
+/* Overview: summary cards, what needs attention, recent activity, first-run guide. */
+
+.overview-loading { display: grid; gap: var(--space-5); }
+.overview-loading .workspace-section { padding: var(--space-5); }
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-4); }
+.summary-card {
+  display: grid; gap: var(--space-2); padding: var(--space-4) var(--space-5); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-sm); color: var(--text-primary);
+  text-decoration: none;
+}
+.summary-card-link { transition: border-color .12s, box-shadow .12s; }
+.summary-card-link:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+.summary-card-danger { border-color: var(--danger-border); }
+.summary-card-warning { border-color: var(--warning-border); }
+.summary-card-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.summary-card-label { color: var(--text-secondary); font-weight: 500; }
+.summary-card-icon {
+  display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md);
+  background: var(--neutral-soft); color: var(--text-secondary);
+}
+.summary-card-icon.tone-success { background: var(--success-soft); color: var(--success); }
+.summary-card-icon.tone-danger { background: var(--danger-soft); color: var(--danger); }
+.summary-card-icon.tone-warning { background: var(--warning-soft); color: var(--warning); }
+.summary-card-value { font-size: 28px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.summary-card-detail { color: var(--text-tertiary); font-size: var(--font-size-small); }
+.text-success { color: var(--success); }
+.text-danger { color: var(--danger); }
+.text-warning { color: var(--warning); }
+
+.overview-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--space-5); align-items: start; }
+
+/* Needs attention: the main working list */
+.attention-list { display: grid; margin: 0; padding: 0; list-style: none; gap: var(--space-2); }
+.attention-item {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-3);
+  padding: var(--space-3); border: 1px solid var(--border); border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-md); background: var(--surface);
+}
+.attention-item.tone-danger { border-left-color: var(--danger); }
+.attention-item.tone-warning { border-left-color: var(--warning); }
+.attention-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--radius-md); }
+.tone-danger .attention-icon { background: var(--danger-soft); color: var(--danger); }
+.tone-warning .attention-icon { background: var(--warning-soft); color: var(--warning); }
+.tone-neutral .attention-icon { background: var(--neutral-soft); color: var(--neutral); }
+/* An unknown result is not a failure: it asks for a check, and looks like it. */
+.attention-item[data-kind="OPERATION_UNKNOWN"] { background: var(--warning-soft); border-color: var(--warning-border); border-left-color: var(--warning); }
+.attention-body { display: grid; gap: 2px; min-width: 0; }
+.attention-title { font-weight: 600; }
+.attention-subject { color: var(--text-primary); font-family: var(--font-mono); font-size: var(--font-size-small); overflow-wrap: anywhere; }
+.attention-detail { color: var(--text-secondary); font-size: var(--font-size-small); }
+.attention-meta { display: grid; justify-items: end; gap: 4px; color: var(--text-tertiary); font-size: var(--font-size-small); white-space: nowrap; }
+.attention-open { min-height: 32px; padding: 0 12px; }
+
+/* Timeline */
+.activity-timeline { position: relative; display: grid; margin: 0; padding: 0; list-style: none; }
+.activity-entry { position: relative; display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: var(--space-3); padding: 10px 0; }
+.activity-entry:not(:last-child)::before {
+  content: ""; position: absolute; left: 5px; top: 26px; bottom: -10px; width: 2px; background: var(--border);
+}
+.activity-marker { width: 12px; height: 12px; margin-top: 4px; border: 2px solid var(--surface); border-radius: 50%; background: var(--text-disabled); box-shadow: 0 0 0 1px var(--border-strong); }
+.activity-positive .activity-marker { background: var(--success); box-shadow: 0 0 0 1px var(--success-border); }
+.activity-warning .activity-marker { background: var(--warning); box-shadow: 0 0 0 1px var(--warning-border); }
+.activity-critical .activity-marker { background: var(--danger); box-shadow: 0 0 0 1px var(--danger-border); }
+.activity-body { display: grid; gap: 2px; min-width: 0; }
+.activity-title { font-weight: 600; }
+.activity-subject { width: fit-content; color: var(--text-primary); font-family: var(--font-mono); font-size: var(--font-size-small); text-decoration: none; overflow-wrap: anywhere; }
+a.activity-subject:hover { color: var(--primary); text-decoration: underline; }
+.activity-detail { color: var(--text-secondary); font-size: var(--font-size-small); }
+.activity-meta { display: grid; justify-items: end; align-content: start; gap: 2px; color: var(--text-tertiary); font-size: var(--font-size-small); white-space: nowrap; }
+.activity-actor { font-size: var(--font-size-caption); }
+
+/* First run */
+.onboarding {
+  display: grid; gap: var(--space-4); padding: var(--space-6); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-sm);
+}
+.onboarding-heading { display: grid; gap: 6px; }
+.onboarding-heading h2 { font-size: 20px; }
+.onboarding-heading p { color: var(--text-secondary); }
+.onboarding-steps { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; counter-reset: step; }
+.onboarding-step {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-3);
+  padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+.onboarding-step.current { border-color: var(--primary); background: var(--primary-soft); }
+.onboarding-mark { display: inline-flex; color: var(--text-disabled); }
+.onboarding-step.done .onboarding-mark { color: var(--success); }
+.onboarding-step.current .onboarding-mark { color: var(--primary); }
+.onboarding-text { display: grid; gap: 2px; min-width: 0; }
+.onboarding-text span { color: var(--text-secondary); font-size: var(--font-size-small); }
+.onboarding-step.done .onboarding-text strong { color: var(--text-secondary); font-weight: 500; }
+.onboarding-note { color: var(--warning) !important; }
+
+@media (max-width: 1180px) {
+  .overview-columns { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+  .summary-card { padding: var(--space-3) var(--space-4); }
+  .summary-card-value { font-size: 24px; }
+  .attention-item { grid-template-columns: auto minmax(0, 1fr); }
+  .attention-meta { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); white-space: normal; }
+  .attention-meta .status-indicator { white-space: normal; }
+  .attention-open { grid-column: 2; justify-self: start; }
+  .activity-entry { grid-template-columns: 12px minmax(0, 1fr); }
+  .activity-meta { grid-column: 2; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .onboarding { padding: var(--space-4); }
+  .onboarding-step { grid-template-columns: auto minmax(0, 1fr); }
+  .onboarding-step .primary-button { grid-column: 2; justify-self: start; }
+}

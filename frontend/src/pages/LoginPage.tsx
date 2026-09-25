@@ -25,7 +25,7 @@ export function LoginPage() {
   return (
     <main className="login-page">
       <form className="login-panel" onSubmit={submit}>
-        <p className="eyebrow">InfraDesk</p>
+        <p className="eyebrow"><span className="brand-mark" aria-hidden>ID</span>InfraDesk</p>
         <h1>{t.auth.signIn}</h1>
         <label>{t.auth.email}
           <input type="email" autoComplete="email" value={email} required onChange={(event) => setEmail(event.target.value)} />

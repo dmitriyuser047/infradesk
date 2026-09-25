@@ -178,6 +178,16 @@ export const ru: Messages = {
     noEnvironments: 'В этом проекте пока нет окружений',
     noEnvironmentsDetail: 'Добавьте окружение, например Продакшен или Тест, и подключите его серверы.',
     environmentCount: (count: number) => plural(count, 'окружение', 'окружения', 'окружений'),
+    hierarchy: {
+      organization: 'Организация',
+      organizationDetail: 'Ваша компания или команда. Ей принадлежат участники и подключения.',
+      project: 'Проект',
+      projectDetail: 'Одна система или продукт, например «Биллинг».',
+      environment: 'Окружение',
+      environmentDetail: 'Стадия проекта: Продакшен, Предпрод, Тест. В нём обнаруживаются серверы и контейнеры.',
+    },
+    openOverview: 'Обзор',
+    addEnvironmentTo: (project: string) => `Добавить окружение в ${project}`,
   },
 
   projectForm: {
@@ -229,7 +239,6 @@ export const ru: Messages = {
     collapse: (name: string) => `Свернуть ${name}`,
     expand: (name: string) => `Развернуть ${name}`,
     types: { NODE: 'Сервер', CONTAINER: 'Контейнер' },
-    chooseEnvironment: 'Выберите окружение',
     chooseEnvironmentDetail: 'Ресурсы обнаруживаются в каждом окружении отдельно. Выберите нужное.',
     detailsUnavailable: 'Подробности для этого типа ресурса недоступны',
     page: {
@@ -576,6 +585,28 @@ export const ru: Messages = {
     emptyInfrastructureDetail: 'Добавьте SSH-подключение и синхронизируйте его, чтобы обнаружить серверы и контейнеры.',
     openConnections: 'Открыть подключения',
     open: 'Открыть',
+    openItem: (subject: string) => `Открыть ${subject}`,
+    onboarding: {
+      title: 'Добро пожаловать в InfraDesk',
+      detail: 'Несколько шагов — и здесь появится состояние вашей инфраструктуры.',
+      progress: (done: number, total: number) => `Выполнено ${done} из ${total}`,
+      nextStep: 'Следующий шаг',
+      ownerOnly: 'Этот шаг выполняет владелец организации.',
+      steps: {
+        organization: { title: 'Организация создана', detail: 'Всё, что вы настроите, находится внутри неё.' },
+        project: { title: 'Создайте проект', detail: 'Проект объединяет окружения одной системы.' },
+        environment: { title: 'Добавьте окружение', detail: 'Например, Продакшен или Тест: серверы обнаруживаются в окружении.' },
+        connection: { title: 'Подключите сервер', detail: 'InfraDesk подключается по SSH и проверяет подлинность сервера.' },
+        sync: { title: 'Выполните первую синхронизацию', detail: 'InfraDesk обнаружит сервер и его Docker-контейнеры.' },
+        monitoring: { title: 'Настройте мониторинг', detail: 'Добавьте правила мониторинга на странице сервера, когда он появится.' },
+      },
+      actions: {
+        project: 'Создать проект',
+        environment: 'Добавить окружение',
+        connection: 'Подключить сервер',
+        sync: 'Открыть подключение',
+      },
+    },
     cards: {
       nodes: 'Серверы',
       containers: 'Контейнеры',

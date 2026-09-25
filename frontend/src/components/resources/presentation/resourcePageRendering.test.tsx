@@ -112,7 +112,7 @@ describe('resource page presentation', () => {
 
       expect(html).toContain('Resource name')
       expect(html).toContain(`${value.resourceTypeCode === 'NODE' ? 'Server' : 'Container'} · resource-code`)
-      expect(html).toContain('← Resources')
+      expect(html).toMatch(/class="workspace-back"[^>]*>.*Resources<\/a>/)
       expect(html).toContain('Overview')
     }
   })

@@ -1,0 +1,32 @@
+/* Projects and environments, the organization list, and sign-in. */
+
+.hierarchy {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); margin: 0; padding: 0; list-style: none;
+}
+.hierarchy li {
+  position: relative; display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted);
+}
+.hierarchy li svg { flex: 0 0 auto; margin-top: 2px; color: var(--primary); }
+.hierarchy li div { display: grid; gap: 2px; }
+.hierarchy li span { color: var(--text-secondary); font-size: var(--font-size-small); }
+.project-card { overflow: hidden; }
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: var(--space-4); align-items: start; }
+.environment-row { display: flex; align-items: center; gap: var(--space-2); }
+.environment-row .link-row { flex: 1 1 auto; min-width: 0; }
+.environment-overview { flex: 0 0 auto; padding: 0 var(--space-2); font-size: var(--font-size-small); }
+.project-card-footer { margin: 0 calc(-1 * var(--space-5)) calc(-1 * var(--space-5)); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--border); }
+
+.login-page { display: grid; min-height: 100vh; place-items: center; padding: var(--space-5); background: var(--bg-app); }
+.login-panel {
+  display: grid; gap: var(--space-4); width: min(100%, 400px); padding: var(--space-6) 28px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-md);
+}
+.login-panel h1 { font-size: 22px; }
+.login-panel .primary-button { width: 100%; }
+.eyebrow { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-primary); font-weight: 600; font-size: 16px; }
+
+@media (max-width: 860px) {
+  .hierarchy { grid-template-columns: 1fr; }
+  .project-grid { grid-template-columns: 1fr; }
+}

@@ -6,8 +6,12 @@ import { App } from './app/App'
 import { queryClient } from './app/queryClient'
 import { I18nProvider } from './i18n'
 import './styles/tokens.css'
+import './styles/components.css'
 import './styles/shell.css'
-import './styles/globals.css'
+import './styles/pages/overview.css'
+import './styles/pages/connections.css'
+import './styles/pages/resources.css'
+import './styles/pages/workspace.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

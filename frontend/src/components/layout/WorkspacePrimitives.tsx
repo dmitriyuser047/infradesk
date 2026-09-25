@@ -1,7 +1,13 @@
 import type { ReactNode } from 'react'
+import { AlertTriangle, ArrowLeft, CheckCircle2, CircleAlert, Info, type LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { useI18n } from '../../i18n'
+
+/**
+ * The few building blocks every screen shares: page header, section card, tabs, status badge,
+ * property list, empty state and inline alert. Anything used by one screen only stays in it.
+ */
 
 export function WorkspaceHeader({ title, subtitle, back, actions, status }: {
   title: string
@@ -12,7 +18,7 @@ export function WorkspaceHeader({ title, subtitle, back, actions, status }: {
 }) {
   return <header className="workspace-header">
     <div className="workspace-heading">
-      {back ? <Link className="workspace-back" to={back.to}>← {back.label}</Link> : null}
+      {back ? <Link className="workspace-back" to={back.to}><ArrowLeft aria-hidden size={14} />{back.label}</Link> : null}
       <div className="workspace-title-line"><h1>{title}</h1>{status}</div>
       {subtitle ? <p className="workspace-subtitle">{subtitle}</p> : null}
     </div>
@@ -20,15 +26,17 @@ export function WorkspaceHeader({ title, subtitle, back, actions, status }: {
   </header>
 }
 
-export function WorkspaceSection({ title, actions, children, className = '' }: {
+export function WorkspaceSection({ title, description, actions, children, className = '' }: {
   title: string
+  description?: ReactNode
   actions?: ReactNode
   children: ReactNode
   className?: string
 }) {
   return <section className={`workspace-section ${className}`}>
     <div className="workspace-section-heading"><h2>{title}</h2>{actions}</div>
-    {children}
+    {description ? <p className="section-description">{description}</p> : null}
+    <div className="section-content">{children}</div>
   </section>
 }
 
@@ -59,11 +67,15 @@ export function WorkspaceTabs<T extends string>({ tabs, active, onChange }: {
 
 export type StatusTone = 'success' | 'danger' | 'info' | 'warning' | 'neutral'
 
-export function StatusIndicator({ label, tone = 'neutral' }: {
+/** A status as a badge: text and a mark, colored by tone — the color is never the only signal. */
+export function StatusIndicator({ label, tone = 'neutral', icon: Icon }: {
   label: string
   tone?: StatusTone
+  icon?: LucideIcon
 }) {
-  return <span className={`status-indicator status-${tone}`}><span className="status-dot" aria-hidden />{label}</span>
+  return <span className={`status-indicator status-${tone}`}>
+    {Icon ? <Icon aria-hidden size={13} /> : <span className="status-dot" aria-hidden />}{label}
+  </span>
 }
 
 export function PropertyGrid({ items }: { items: readonly { label: string; value: ReactNode }[] }) {
@@ -71,10 +83,35 @@ export function PropertyGrid({ items }: { items: readonly { label: string; value
     <div className="property-row" key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
 }
 
-export function EmptyWorkspaceState({ title, detail, action }: {
+/** What an empty list means and what to do next; a healthy "nothing wrong" state uses the success tone. */
+export function EmptyWorkspaceState({ title, detail, action, icon: Icon, tone = 'neutral' }: {
   title: string
   detail?: string
   action?: ReactNode
+  icon?: LucideIcon
+  tone?: 'neutral' | 'success'
 }) {
-  return <div className="empty-workspace"><strong>{title}</strong>{detail ? <p>{detail}</p> : null}{action}</div>
+  return <div className={`empty-workspace ${tone === 'success' ? 'empty-success' : ''}`}>
+    {Icon ? <Icon className="empty-workspace-icon" aria-hidden size={22} /> : null}
+    <strong>{title}</strong>{detail ? <p>{detail}</p> : null}{action}
+  </div>
+}
+
+const alertIcons: Record<'danger' | 'warning' | 'info' | 'success', LucideIcon> = {
+  danger: CircleAlert, warning: AlertTriangle, info: Info, success: CheckCircle2,
+}
+
+/** A message inside the page: an error with a retry, a warning, or a confirmation. */
+export function InlineAlert({ tone, title, children, action }: {
+  tone: 'danger' | 'warning' | 'info' | 'success'
+  title?: string
+  children?: ReactNode
+  action?: ReactNode
+}) {
+  const Icon = alertIcons[tone]
+  return <div className={`inline-alert alert-${tone}`} role={tone === 'danger' || tone === 'warning' ? 'alert' : 'status'}>
+    <Icon aria-hidden size={18} />
+    <div className="inline-alert-body">{title ? <strong>{title}</strong> : null}{children ? <p>{children}</p> : null}</div>
+    {action ? <div className="inline-alert-action">{action}</div> : null}
+  </div>
 }

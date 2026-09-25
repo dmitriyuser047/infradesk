@@ -19,6 +19,7 @@ import { OrganizationsPage } from '../pages/OrganizationsPage'
 import { OverviewPage } from '../pages/OverviewPage'
 import { ProjectCreatePage } from '../pages/ProjectCreatePage'
 import { ResourcePage } from '../pages/ResourcePage'
+import { ResourcesIndexPage } from '../pages/ResourcesIndexPage'
 
 function queryClient(): QueryClient {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -68,6 +69,7 @@ const pages = [
   { path: '/organizations/org/connections/connection/sync-sessions/session', route: '/organizations/:organizationId/connections/:connectionId/sync-sessions/:sessionId', element: <ConnectionSyncSessionPage />, title: 'Синхронизация', titleEn: 'Synchronization' },
   { path: '/organizations/org/incidents', route: '/organizations/:organizationId/incidents', element: <IncidentsPage />, title: 'Инциденты', titleEn: 'Incidents' },
   { path: '/organizations/org/incidents/incident', route: '/organizations/:organizationId/incidents/:incidentId', element: <IncidentPage />, title: 'Превышен порог · Node', titleEn: 'Threshold exceeded · Node' },
+  { path: '/organizations/org/resources', route: '/organizations/:organizationId/resources', element: <ResourcesIndexPage />, title: 'Ресурсы обнаруживаются в каждом окружении отдельно', titleEn: 'Resources are discovered per environment' },
   { path: '/missing', route: '*', element: <InvalidRoutePage />, title: 'Страница недоступна', titleEn: 'Page unavailable' },
 ]
 

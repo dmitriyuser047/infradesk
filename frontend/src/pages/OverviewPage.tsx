@@ -1,23 +1,32 @@
+import { useQueries } from '@tanstack/react-query'
+import {
+  Box, Cable, CheckCircle2, Circle, CircleAlert, CircleHelp, Server, TriangleAlert, WifiOff, Wrench,
+  type LucideIcon,
+} from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
+import { useConnections } from '../api/connections'
 import { ApiError } from '../api/httpClient'
-import { useEnvironments, useProjects } from '../api/navigation'
+import { getEnvironments, useEnvironments, useProjects } from '../api/navigation'
 import { useOperationsOverview } from '../api/overview'
+import { useOrganizationPermissions } from '../components/auth/authorization'
 import { ActivityTimeline } from '../components/history/ActivityTimeline'
 import { AppShell } from '../components/layout/AppShell'
 import {
   EmptyWorkspaceState,
+  InlineAlert,
   StatusIndicator,
   WorkspaceHeader,
   WorkspaceSection,
 } from '../components/layout/WorkspacePrimitives'
+import { needsOnboarding, onboardingState, type OnboardingStep } from '../components/overview/onboarding'
 import {
   getAttentionPresentation,
   getSummaryCards,
-  isEmptyInfrastructure,
+  type SummaryCard,
 } from '../components/overview/overviewPresentation'
 import { useI18n } from '../i18n'
-import type { OperationsOverviewResponse } from '../types/overview'
+import type { AttentionItemResponse, OperationsOverviewResponse } from '../types/overview'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
 export function OverviewPage() {
@@ -67,7 +76,11 @@ export interface OverviewState {
   refetch: () => unknown
 }
 
-/** The three sections for one state of the overview query: loading, failed or loaded. */
+const cardIcons: Record<SummaryCard['id'], LucideIcon> = {
+  nodes: Server, containers: Box, incidents: TriangleAlert, connections: Cable, operations: Wrench,
+}
+
+/** The overview for one state of its query: loading, failed, a new organization, or loaded. */
 export function OverviewBody({ organizationId, projectId, environmentId, state }: {
   organizationId: string
   projectId: string | null
@@ -76,73 +89,179 @@ export function OverviewBody({ organizationId, projectId, environmentId, state }
 }) {
   const i18n = useI18n()
   const t = i18n.t.overview
+
   if (state.isPending) {
-    return <div className="row-skeleton" aria-label={t.loading}><span /><span /><span /></div>
+    return <div className="overview-loading" aria-label={t.loading}>
+      <div className="card-skeleton" aria-hidden><span /><span /><span /><span /><span /></div>
+      <div className="workspace-section"><div className="row-skeleton" aria-hidden><span /><span /><span /></div></div>
+    </div>
   }
 
   if (state.isError || state.data === undefined) {
     const code = state.error instanceof ApiError ? state.error.code : null
-    return <section className="inline-error" role="alert">
-      {code === 'PROJECT_NOT_FOUND' ? t.projectNotFound
-        : code === 'ENVIRONMENT_NOT_FOUND' ? t.environmentNotFound : t.loadError}
-      <button className="text-button" type="button" onClick={() => state.refetch()}>{i18n.t.common.retry}</button>
-    </section>
+    return <InlineAlert tone="danger"
+      title={code === 'PROJECT_NOT_FOUND' ? t.projectNotFound : code === 'ENVIRONMENT_NOT_FOUND' ? t.environmentNotFound : t.loadError}
+      action={<button className="secondary-button" type="button" onClick={() => state.refetch()}>{i18n.t.common.retry}</button>} />
   }
 
   const overview = state.data
   const base = `/organizations/${encodeURIComponent(organizationId)}`
   const context = projectId ? `?project=${encodeURIComponent(projectId)}` +
     (environmentId ? `&environment=${encodeURIComponent(environmentId)}` : '') : ''
+  const resources = overview.summary.nodes.total + overview.summary.containers.total
+  const onboarding = needsOnboarding(projectId === null, { resources })
+
+  if (onboarding) {
+    return <>
+      <OnboardingGuide organizationId={organizationId} overview={overview} />
+      {overview.attention.items.length > 0 ? <AttentionSection organizationId={organizationId} overview={overview} /> : null}
+    </>
+  }
+
   const cards = getSummaryCards(overview.summary, {
-    infrastructure: environmentId ? `${base}/environments/${encodeURIComponent(environmentId)}${context}` : null,
+    infrastructure: environmentId ? `${base}/environments/${encodeURIComponent(environmentId)}${context}` : `${base}/resources${context}`,
     incidents: `${base}/incidents${context}`,
     connections: `${base}/connections${context}`,
   }, overview.operationsHorizonHours, i18n)
 
   return <>
-    <WorkspaceSection title={t.summary}>
-      {isEmptyInfrastructure(overview.summary) ? <EmptyWorkspaceState title={t.emptyInfrastructure}
-        detail={t.emptyInfrastructureDetail}
-        action={<Link className="secondary-button" to={`${base}/connections${context}`}>{t.openConnections}</Link>} />
-        : null}
-      <div className="metric-strip overview-summary" aria-label={t.summary}>
-        {cards.map(card => {
-          const content = <>
-            <span>{card.label}</span>
-            <strong className={card.tone === 'neutral' ? undefined : `status-${card.tone}`}>{card.value}</strong>
-            <small>{card.detail}</small>
-          </>
-          return card.to === null
-            ? <div key={card.id} data-card={card.id}>{content}</div>
-            : <Link key={card.id} data-card={card.id} to={card.to}>{content}</Link>
-        })}
-      </div>
-    </WorkspaceSection>
-
-    <WorkspaceSection title={t.attention} actions={overview.attention.total > overview.attention.items.length
-      ? <span className="muted-cell">{t.showing(overview.attention.items.length, overview.attention.total)}</span> : null}>
-      {overview.attention.items.length === 0 ? <EmptyWorkspaceState title={t.noAttention} detail={t.noAttentionDetail} /> :
-        <ol className="activity-timeline" aria-label={t.attention}>
-          {overview.attention.items.map(item => {
-            const presentation = getAttentionPresentation(organizationId, item, i18n)
-            return <li key={`${item.kind}-${item.id}`} className="activity-entry" data-kind={item.kind}>
-              <span className="activity-time">{i18n.format.relative(item.occurredAt)}</span>
-              <span className="activity-title">{presentation.title}</span>
-              <span className="activity-detail">
-                {presentation.to !== null
-                  ? <Link className="grid-link" to={presentation.to}>{presentation.subject}</Link>
-                  : presentation.subject}
-                {presentation.detail !== null ? ` · ${presentation.detail}` : null}
-              </span>
-              <StatusIndicator label={presentation.status} tone={presentation.tone} />
-            </li>
-          })}
-        </ol>}
-    </WorkspaceSection>
-
-    <WorkspaceSection title={t.activity}>
-      {overview.recentActivity.length === 0 ? <EmptyWorkspaceState title={t.noActivity} detail={t.noActivityDetail} />
-        : <ActivityTimeline events={overview.recentActivity} organizationId={organizationId} />}
-    </WorkspaceSection>
+    <section aria-label={t.summary} className="summary-grid">
+      {cards.map(card => <SummaryCardView key={card.id} card={card} />)}
+    </section>
+    {resources === 0 ? <EmptyWorkspaceState icon={Server} title={t.emptyInfrastructure} detail={t.emptyInfrastructureDetail}
+      action={<Link className="secondary-button" to={`${base}/connections${context}`}>{t.openConnections}</Link>} /> : null}
+    <div className="overview-columns">
+      <AttentionSection organizationId={organizationId} overview={overview} />
+      <WorkspaceSection title={t.activity} className="activity-section">
+        {overview.recentActivity.length === 0
+          ? <EmptyWorkspaceState title={t.noActivity} detail={t.noActivityDetail} />
+          : <ActivityTimeline events={overview.recentActivity} organizationId={organizationId} />}
+      </WorkspaceSection>
+    </div>
   </>
+}
+
+function SummaryCardView({ card }: { card: SummaryCard }) {
+  const Icon = cardIcons[card.id]
+  const content = <>
+    <span className="summary-card-top">
+      <span className="summary-card-label">{card.label}</span>
+      <span className={`summary-card-icon tone-${card.tone}`} aria-hidden><Icon size={18} /></span>
+    </span>
+    <strong className="summary-card-value">{card.value}</strong>
+    <span className={`summary-card-detail ${card.tone === 'neutral' ? '' : `text-${card.tone}`}`}>{card.detail}</span>
+  </>
+  const className = `summary-card ${card.tone === 'danger' || card.tone === 'warning' ? `summary-card-${card.tone}` : ''}`
+  return card.to === null
+    ? <div className={className} data-card={card.id}>{content}</div>
+    : <Link className={`${className} summary-card-link`} data-card={card.id} to={card.to}>{content}</Link>
+}
+
+const attentionIcons: Record<string, LucideIcon> = {
+  OPERATION_UNKNOWN: CircleHelp,
+  INCIDENT: TriangleAlert,
+  NODE_OFFLINE: WifiOff,
+  SYNC_FAILED: CircleAlert,
+  OPERATION_FAILED: CircleAlert,
+}
+
+function AttentionSection({ organizationId, overview }: { organizationId: string; overview: OperationsOverviewResponse }) {
+  const i18n = useI18n()
+  const t = i18n.t.overview
+  const { items, total } = overview.attention
+  return <WorkspaceSection title={t.attention} className="attention-section"
+    actions={total > items.length ? <span className="section-meta">{t.showing(items.length, total)}</span> : null}>
+    {items.length === 0
+      ? <EmptyWorkspaceState tone="success" icon={CheckCircle2} title={t.noAttention} detail={t.noAttentionDetail} />
+      : <ol className="attention-list" aria-label={t.attention}>
+        {items.map(item => <AttentionRow key={`${item.kind}-${item.id}`} organizationId={organizationId} item={item} />)}
+      </ol>}
+  </WorkspaceSection>
+}
+
+function AttentionRow({ organizationId, item }: { organizationId: string; item: AttentionItemResponse }) {
+  const i18n = useI18n()
+  const presentation = getAttentionPresentation(organizationId, item, i18n)
+  const Icon = attentionIcons[item.kind] ?? CircleAlert
+  return <li className={`attention-item tone-${presentation.tone}`} data-kind={item.kind}>
+    <span className="attention-icon" aria-hidden><Icon size={18} /></span>
+    <div className="attention-body">
+      <span className="attention-title">{presentation.title}</span>
+      <span className="attention-subject">{presentation.subject}</span>
+      {presentation.detail !== null ? <span className="attention-detail">{presentation.detail}</span> : null}
+    </div>
+    <div className="attention-meta">
+      <StatusIndicator label={presentation.status} tone={presentation.tone} />
+      <time dateTime={item.occurredAt} title={i18n.format.dateTime(item.occurredAt)}>{i18n.format.relative(item.occurredAt)}</time>
+    </div>
+    {presentation.to !== null ? <Link className="secondary-button attention-open" to={presentation.to}
+      aria-label={i18n.t.overview.openItem(presentation.subject)}>{i18n.t.overview.open}</Link> : null}
+  </li>
+}
+
+/**
+ * First-run setup. Every step is derived from what exists — projects, environments, connections,
+ * discovered resources — so there is no onboarding state to keep. Only the next step offers an
+ * action, and only to someone allowed to take it.
+ */
+function OnboardingGuide({ organizationId, overview }: { organizationId: string; overview: OperationsOverviewResponse }) {
+  const i18n = useI18n()
+  const t = i18n.t.overview.onboarding
+  const permissions = useOrganizationPermissions(organizationId)
+  const projects = useProjects(organizationId)
+  const connections = useConnections(organizationId)
+  // The same cache entries the context switcher and the projects page use.
+  const environmentQueries = useQueries({ queries: (projects.data ?? []).map(project => ({
+    queryKey: ['environments', organizationId, project.id],
+    queryFn: () => getEnvironments(organizationId, project.id),
+  })) })
+  const environmentsLoaded = projects.isSuccess && environmentQueries.every(query => query.isSuccess)
+  const firstProject = projects.data?.[0]
+  const firstConnection = connections.data?.find(connection => connection.active)
+
+  const state = onboardingState({
+    projects: projects.data?.length ?? 0,
+    environments: environmentsLoaded ? environmentQueries.reduce((sum, query) => sum + (query.data?.length ?? 0), 0) : null,
+    connections: overview.summary.connections.total,
+    synchronized: overview.summary.connections.healthy > 0,
+    resources: overview.summary.nodes.total + overview.summary.containers.total,
+  })
+  const base = `/organizations/${encodeURIComponent(organizationId)}`
+
+  function actionPath(step: OnboardingStep): string | null {
+    switch (step.id) {
+      case 'project': return `${base}/projects/new`
+      case 'environment': return firstProject ? `${base}/projects/${encodeURIComponent(firstProject.id)}/environments/new` : null
+      case 'connection': return `${base}/connections/new`
+      case 'sync': return firstConnection ? `${base}/connections/${encodeURIComponent(firstConnection.id)}` : `${base}/connections`
+      default: return null
+    }
+  }
+
+  const loading = projects.isPending || (projects.isSuccess && !environmentsLoaded)
+  return <section className="onboarding" aria-labelledby="onboarding-title">
+    <div className="onboarding-heading">
+      <h2 id="onboarding-title">{t.title}</h2>
+      <p>{t.detail}</p>
+      <span className="section-meta">{t.progress(state.completed, state.steps.length)}</span>
+    </div>
+    {loading ? <div className="row-skeleton" aria-label={i18n.t.common.loading}><span /><span /><span /></div> :
+      <ol className="onboarding-steps">
+        {state.steps.map(step => {
+          const current = state.next?.id === step.id
+          const allowed = step.permission === null || permissions.can(step.permission)
+          const path = current && allowed ? actionPath(step) : null
+          return <li key={step.id} className={`onboarding-step ${step.done ? 'done' : ''} ${current ? 'current' : ''}`}
+            aria-current={current ? 'step' : undefined}>
+            <span className="onboarding-mark" aria-hidden>{step.done ? <CheckCircle2 size={20} /> : <Circle size={20} />}</span>
+            <div className="onboarding-text">
+              <strong>{t.steps[step.id].title}</strong>
+              <span>{t.steps[step.id].detail}</span>
+              {current && !allowed ? <span className="onboarding-note">{t.ownerOnly}</span> : null}
+            </div>
+            {path ? <Link className="primary-button" to={path}>{t.actions[step.id]}</Link> : null}
+          </li>
+        })}
+      </ol>}
+  </section>
 }

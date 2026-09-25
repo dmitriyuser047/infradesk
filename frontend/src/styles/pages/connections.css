@@ -1,0 +1,33 @@
+/* Connections: list, detail, and the setup form with its server-trust step. */
+
+.field-grid-spaced { margin: 0; }
+.monospace-input { font-family: var(--font-mono); font-size: var(--font-size-small); }
+.checkbox-aligned { align-self: end; min-height: var(--control-height); }
+.form-toolbar-start { justify-content: flex-start; }
+.form-footer { padding-bottom: var(--space-4); }
+
+.segmented { display: inline-flex; gap: 4px; margin: 0; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+.segmented-option {
+  display: inline-flex; align-items: center; gap: var(--space-2); min-height: 32px; padding: 0 var(--space-3);
+  border-radius: var(--radius-sm); color: var(--text-secondary); font-weight: 500; cursor: pointer;
+}
+.segmented-option input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented-option.selected { background: var(--surface); color: var(--text-primary); box-shadow: var(--shadow-sm); }
+.segmented-option:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.credential-state { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
+
+.trust-body { display: grid; gap: var(--space-4); }
+.trust-state { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid; border-radius: var(--radius-md); }
+.trust-state svg { flex: 0 0 auto; margin-top: 1px; }
+.trust-state p { margin-top: 2px; color: var(--text-secondary); }
+.trust-untrusted { border-color: var(--warning-border); background: var(--warning-soft); color: var(--warning); }
+.trust-trusted { border-color: var(--success-border); background: var(--success-soft); color: var(--success); }
+/* A changed key is the one state that must stop the user. */
+.trust-mismatch { border: 2px solid var(--danger); background: var(--danger-soft); color: var(--danger); }
+.fingerprint-field { display: grid; gap: 6px; }
+.fingerprint {
+  display: block; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface-muted); font-family: var(--font-mono); font-size: var(--font-size-small); overflow-wrap: anywhere;
+}
+.fingerprint.empty { color: var(--text-tertiary); font-family: var(--font-family); }
+.fingerprint-changed { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }

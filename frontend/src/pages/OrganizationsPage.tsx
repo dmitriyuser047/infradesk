@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useMyOrganizations } from '../api/auth'
 import { getOrganizationRoleLabel } from '../components/auth/authPresentation'
 import { AppShell } from '../components/layout/AppShell'
-import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 
 export function OrganizationsPage() {
@@ -18,10 +18,8 @@ export function OrganizationsPage() {
         <WorkspaceSection title={t.available}>
           {organizations.isPending ? <div className="context-skeleton" aria-label={t.loading}><span /><span /></div> : null}
           {organizations.isError ? (
-            <div className="context-area-error" role="alert">
-              <p>{t.loadError}</p>
-              <button className="retry-button" type="button" onClick={() => organizations.refetch()}>{i18n.t.common.retry}</button>
-            </div>
+            <InlineAlert tone="danger" title={t.loadError}
+              action={<button className="secondary-button" type="button" onClick={() => organizations.refetch()}>{i18n.t.common.retry}</button>} />
           ) : null}
           {organizations.isSuccess && organizations.data.length === 0 ? (
             <EmptyWorkspaceState title={t.empty} />

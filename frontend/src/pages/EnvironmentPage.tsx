@@ -4,7 +4,7 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import { useEnvironmentResources } from '../api/resources'
 import { useEnvironments } from '../api/navigation'
 import { AppShell } from '../components/layout/AppShell'
-import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
 import { ResourceTree } from '../components/resources/ResourceTree'
 import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
@@ -55,11 +55,9 @@ function EnvironmentContent({ organizationId, environmentId }: EnvironmentConten
         </div>
         {resourcesQuery.isPending ? <div className="tree-skeleton" aria-label={t.loading}><span /><span /><span /><span /></div> : null}
         {resourcesQuery.isError ? (
-          <div className="state-message state-message-error" role="alert">
-            <h3>{t.loadError}</h3>
-            <p>{describeError(resourcesQuery.error, i18n)}</p>
-            <button className="retry-button" type="button" onClick={() => resourcesQuery.refetch()}>{i18n.t.common.retry}</button>
-          </div>
+          <InlineAlert tone="danger" title={t.loadError}
+            action={<button className="secondary-button" type="button" onClick={() => resourcesQuery.refetch()}>{i18n.t.common.retry}</button>}>
+            {describeError(resourcesQuery.error, i18n)}</InlineAlert>
         ) : null}
         {resourcesQuery.data !== undefined && resourcesQuery.data.length === 0 ? <EmptyWorkspaceState title={t.empty} detail={t.emptyDetail} /> : null}
         {resourcesQuery.data !== undefined && resourcesQuery.data.length > 0 ? (

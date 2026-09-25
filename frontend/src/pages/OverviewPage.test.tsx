@@ -71,6 +71,7 @@ function render(path: string, role: 'OWNER' | 'MEMBER', data?: { key: unknown[];
   client.setQueryData(['environments', 'org', 'project'], [
     { id: 'environment', organizationId: 'org', projectId: 'project', code: 'prod', name: 'Production', kind: 'PROD' },
   ])
+  client.setQueryData(['connections', 'org'], [])
   if (data !== undefined) client.setQueryData(data.key, data.value)
   return renderToStaticMarkup(<I18nProvider initialLocale={locale}><QueryClientProvider client={client}>
     <MemoryRouter initialEntries={[path]}><Routes>
@@ -156,13 +157,41 @@ describe('operations overview page', () => {
     expect(html).toContain('aria-label="Loading overview"')
   })
 
-  it('treats an empty scope as empty, not as an error', () => {
-    const html = render('/organizations/org/overview', 'OWNER', { key: ['overview', 'org', null, null], value: empty })
+  it('guides a new organization through setup instead of showing zeros', () => {
+    const html = render('/organizations/org/overview', 'OWNER', { key: ['overview', 'org', null, null], value: empty }, 'ru')
+
+    expect(html).toContain('Добро пожаловать в InfraDesk')
+    expect(html).toContain('Организация создана')
+    // The seeded project and environment exist; the next step is connecting a server.
+    expect(html).toMatch(/aria-current="step".*Подключите сервер/s)
+    expect(html).toContain('href="/organizations/org/connections/new"')
+    expect(html).not.toContain('summary-grid')
+    expect(html).not.toContain('role="alert"')
+  })
+
+  it('shows a member the setup state without actions they cannot take', () => {
+    const html = render('/organizations/org/overview', 'MEMBER', { key: ['overview', 'org', null, null], value: empty }, 'ru')
+
+    expect(html).toContain('Этот шаг выполняет владелец организации.')
+    expect(html).not.toContain('href="/organizations/org/connections/new"')
+  })
+
+  it('treats an empty project scope as empty, not as an error, and says when all is well', () => {
+    const html = render('/organizations/org/overview?project=project', 'OWNER',
+      { key: ['overview', 'org', 'project', null], value: empty })
 
     expect(html).toContain('No infrastructure discovered yet')
     expect(html).toContain('Everything is working')
     expect(html).toContain('No recent activity')
+    expect(html).not.toContain('Welcome to InfraDesk')
     expect(html).not.toContain('role="alert"')
+  })
+
+  it('marks an unknown operation result differently from a failure', () => {
+    const html = render('/organizations/org/overview', 'OWNER', { key: ['overview', 'org', null, null], value: loaded })
+
+    expect(html).toMatch(/class="attention-item tone-warning" data-kind="OPERATION_UNKNOWN"/)
+    expect(html).toMatch(/class="attention-item tone-danger" data-kind="SYNC_FAILED"/)
   })
 
   it('shows a safe error with a retry instead of a blank page', () => {

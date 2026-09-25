@@ -1,3 +1,4 @@
+import { ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { useI18n } from '../../i18n'
@@ -27,8 +28,12 @@ export function ConnectionRow({ organizationId, connection, projects, environmen
         {connection.active ? null : ` · ${i18n.t.common.inactive}`}</small></td>
     <td>{ssh ? <code className="technical-value">{ssh.username}@{ssh.host}{ssh.port === 22 ? '' : `:${ssh.port}`}</code>
       : <span className="muted-cell">{t.connectorTypes[connection.connectorType] ?? connection.connectorType}</span>}</td>
-    <td>{ssh ? <StatusIndicator label={ssh.hostTrusted ? t.trust.trusted : t.trust.untrusted}
-      tone={ssh.hostTrusted ? 'success' : 'warning'} /> : <span className="muted-cell">—</span>}</td>
+    <td>{!ssh ? <span className="muted-cell">—</span>
+      : connection.lastSync?.errorCode === 'SSH_HOST_KEY_MISMATCH'
+        // The latest attempt met a different key: the trust recorded here no longer holds.
+        ? <StatusIndicator label={t.form.statusMismatch} tone="danger" icon={ShieldAlert} />
+        : <StatusIndicator label={ssh.hostTrusted ? t.trust.trusted : t.trust.untrusted}
+          tone={ssh.hostTrusted ? 'success' : 'warning'} icon={ssh.hostTrusted ? ShieldCheck : ShieldQuestion} />}</td>
     <td>{connection.lastSync ? <><SyncStatusBadge status={connection.lastSync.status} />
       <small className="cell-secondary">{getLastSyncSummary(connection.lastSync, i18n)}</small></>
       : <span className="muted-cell">{t.neverSynchronized}</span>}</td>
