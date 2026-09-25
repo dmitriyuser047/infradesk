@@ -129,7 +129,7 @@ final class NotificationDispatcher[F[_]: Async, Tx[_]: MonadThrow](
 
   private def context(delivery: NotificationDelivery): String =
     s"deliveryId=${delivery.id} organizationId=${delivery.organizationId} " +
-      s"incidentId=${delivery.incidentId} eventType=${delivery.eventType.code} channel=${delivery.channel.code}"
+      s"incidentId=${delivery.incidentId} eventType=${delivery.eventType.code} channelType=${delivery.channelType.code}"
 
   private def logInfo(message: String): F[Unit] =
     logger.info(message).handleErrorWith(_ => ().pure[F])

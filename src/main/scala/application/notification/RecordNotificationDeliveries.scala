@@ -6,7 +6,7 @@ import application.port.{IdGenerator, NotificationDeliveryRepository, TimeProvid
 import cats.MonadThrow
 import cats.syntax.all._
 import domain.notification.{
-  NotificationChannel,
+  NotificationChannelType,
   NotificationDelivery,
   NotificationDeliveryStatus,
   NotificationEventType
@@ -23,16 +23,16 @@ final class RecordNotificationDeliveries[Tx[_]: MonadThrow](
   deliveries: NotificationDeliveryRepository[Tx],
   idGenerator: IdGenerator[Tx],
   timeProvider: TimeProvider[Tx],
-  channels: List[NotificationChannel]
+  channelTypes: List[NotificationChannelType]
 ) {
 
   def record(transitions: List[MonitorTransition]): Tx[Unit] =
-    if (channels.isEmpty || transitions.isEmpty) ().pure[Tx]
+    if (channelTypes.isEmpty || transitions.isEmpty) ().pure[Tx]
     else
       for {
         now <- timeProvider.now
-        rows <- transitions.flatMap(transition => channels.map(transition -> _))
-          .traverse { case (transition, channel) =>
+        rows <- transitions.flatMap(transition => channelTypes.map(transition -> _))
+          .traverse { case (transition, channelType) =>
             idGenerator.nextId.map(id => NotificationDelivery(
               id = id,
               organizationId = transition.organizationId,
@@ -41,7 +41,7 @@ final class RecordNotificationDeliveries[Tx[_]: MonadThrow](
               monitorRuleId = transition.monitorRuleId,
               eventType = eventTypeOf(transition),
               reason = transition.reason,
-              channel = channel,
+              channelType = channelType,
               occurredAt = transition.evaluatedAt,
               status = NotificationDeliveryStatus.Pending,
               attemptCount = 0,

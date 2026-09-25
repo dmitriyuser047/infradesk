@@ -5,7 +5,7 @@ import application.port.NotificationDeliveryRepository
 import cats.syntax.all._
 import domain.incident.IncidentReason
 import domain.notification.{
-  NotificationChannel,
+  NotificationChannelType,
   NotificationDelivery,
   NotificationDeliveryStatus,
   NotificationEventType
@@ -46,7 +46,7 @@ final class PostgresNotificationDeliveryRepository extends NotificationDeliveryR
         on conflict (organization_id, incident_id, event_type, channel) do nothing
       """).updateMany(deliveries.map(delivery =>
         (delivery.id, delivery.organizationId, delivery.incidentId, delivery.resourceId,
-          delivery.monitorRuleId, delivery.eventType.code, delivery.reason.code, delivery.channel.code,
+          delivery.monitorRuleId, delivery.eventType.code, delivery.reason.code, delivery.channelType.code,
           delivery.occurredAt, delivery.status.code, delivery.attemptCount, delivery.nextAttemptAt,
           delivery.claimedBy, delivery.claimedUntil, delivery.sentAt, delivery.lastErrorCode,
           delivery.createdAt, delivery.updatedAt)
@@ -187,7 +187,7 @@ object PostgresNotificationDeliveryRepository {
       for {
         typedEventType <- NotificationEventType.fromCode(eventType)
         typedReason <- IncidentReason.fromCode(reason)
-        typedChannel <- NotificationChannel.fromCode(channel)
+        typedChannel <- NotificationChannelType.fromCode(channel)
         typedStatus <- NotificationDeliveryStatus.fromCode(status)
       } yield NotificationDelivery(
         id, organizationId, incidentId, resourceId, monitorRuleId,

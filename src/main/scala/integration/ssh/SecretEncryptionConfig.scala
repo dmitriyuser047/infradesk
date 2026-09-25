@@ -4,7 +4,8 @@ package integration.ssh
 import java.util.Base64
 
 final class SecretEncryptionConfig private (private val key: Array[Byte]) {
-  private[ssh] def keyBytes: Array[Byte] = key.clone()
+  // Shared by every secret cipher of the integration layer, and by nothing above it.
+  private[integration] def keyBytes: Array[Byte] = key.clone()
   override def toString: String = "SecretEncryptionConfig(<redacted>)"
 }
 

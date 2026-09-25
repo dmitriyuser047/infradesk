@@ -28,24 +28,6 @@ object NotificationEventType {
       .toRight(new IllegalArgumentException(s"Unsupported notification event type '$code'"))
 }
 
-/** Where an event is delivered. Webhook is the only channel this version ships. */
-sealed trait NotificationChannel {
-  def code: String
-}
-
-object NotificationChannel {
-
-  case object Webhook extends NotificationChannel {
-    override val code: String = "WEBHOOK"
-  }
-
-  val All: List[NotificationChannel] = List(Webhook)
-
-  def fromCode(code: String): Either[IllegalArgumentException, NotificationChannel] =
-    All.find(_.code == code)
-      .toRight(new IllegalArgumentException(s"Unsupported notification channel '$code'"))
-}
-
 sealed trait NotificationDeliveryStatus {
   def code: String
 }
@@ -87,7 +69,7 @@ final case class NotificationDelivery(
   monitorRuleId: UUID,
   eventType: NotificationEventType,
   reason: IncidentReason,
-  channel: NotificationChannel,
+  channelType: NotificationChannelType,
   occurredAt: Instant,
   status: NotificationDeliveryStatus,
   attemptCount: Long,

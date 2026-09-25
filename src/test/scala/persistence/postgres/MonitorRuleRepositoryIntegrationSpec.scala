@@ -12,7 +12,7 @@ import application.history.HistoryRecorder
 import application.auth.ActorContext
 import application.monitor.{EvaluateMonitorRules, MonitorEvaluationInput, MonitorRuleCommand, UpdateMonitorRule}
 import application.notification.RecordNotificationDeliveries
-import domain.notification.NotificationChannel
+import domain.notification.NotificationChannelType
 import application.port.MonitorEvaluationQuery
 import domain.resource.{Resource, ResourceData}
 import domain.resource.node.{NodeSpec, NodeStatus}
@@ -379,7 +379,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       val incidents = new PostgresIncidentRepository
       val notifications = new PostgresNotificationDeliveryRepository
       val recorder = new RecordNotificationDeliveries[ConnectionIO](notifications,
-        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
+        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannelType.Webhook))
       val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
         new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
           new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),
@@ -454,7 +454,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       val incidents = new PostgresIncidentRepository
       val recorder = new RecordNotificationDeliveries[ConnectionIO](
         new PostgresNotificationDeliveryRepository, new ConnectionIOIdGenerator,
-        new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
+        new ConnectionIOTimeProvider, List(NotificationChannelType.Webhook))
       // An actor without a user_account row: the audit insert violates its foreign key.
       val unknownActor = ActorContext(UUID.randomUUID(), OrganizationId)
       val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
@@ -508,7 +508,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
       val metrics = new PostgresMetricObservationRepository
       val notifications = new PostgresNotificationDeliveryRepository
       val recorder = new RecordNotificationDeliveries[ConnectionIO](notifications,
-        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
+        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannelType.Webhook))
       val update = UpdateMonitorRule[ConnectionIO](rules, states, incidents, recorder,
         new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
           new ConnectionIOIdGenerator, new ConnectionIOTimeProvider),

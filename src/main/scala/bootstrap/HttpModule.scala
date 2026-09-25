@@ -16,6 +16,7 @@ import infrastructure.http.{
   IncidentRoutes,
   MonitorRuleRoutes,
   NavigationRoutes,
+  NotificationChannelRoutes,
   OperationsOverviewRoutes,
   OrganizationAuthorization,
   ResourceRoutes,
@@ -87,6 +88,13 @@ object HttpModule {
         new WorkspaceMutationRoutes(
           application.createProject,
           application.createEnvironment,
+          transactionRunner,
+          authorization
+        ).routes <+>
+        new NotificationChannelRoutes(
+          application.listNotificationChannels,
+          application.getNotificationChannel,
+          application.notificationChannelManagement,
           transactionRunner,
           authorization
         ).routes <+>

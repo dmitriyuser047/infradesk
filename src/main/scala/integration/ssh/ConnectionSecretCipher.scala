@@ -3,14 +3,11 @@ package integration.ssh
 
 import application.port.{ConnectionSecret, ConnectionSecretCryptography}
 import domain.connection.{SshAuthenticationType, SshCredential}
+import integration.secret.AesGcmSecretEnvelope
 import io.circe.syntax._
 import io.circe.{Json, parser}
 
-import java.nio.charset.StandardCharsets
-import java.security.SecureRandom
 import java.util.UUID
-import javax.crypto.Cipher
-import javax.crypto.spec.{GCMParameterSpec, SecretKeySpec}
 
 /** Encrypts the whole credential, whatever kind it is.
   *
@@ -19,24 +16,18 @@ import javax.crypto.spec.{GCMParameterSpec, SecretKeySpec}
   * type, so a connection can never end up with an authentication method and a credential of
   * another kind.
   */
-final class ConnectionSecretCipher private (key: Array[Byte]) extends ConnectionSecretCryptography {
-  private val random = new SecureRandom()
+final class ConnectionSecretCipher private (envelope: AesGcmSecretEnvelope)
+  extends ConnectionSecretCryptography {
 
   override def encrypt(id: UUID, organizationId: UUID, credential: SshCredential): ConnectionSecret = {
-    val nonce = new Array[Byte](12)
-    random.nextBytes(nonce)
-    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-    cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, nonce))
-    cipher.updateAAD(aad(id, organizationId, ConnectionSecretCipher.CredentialKind))
-    ConnectionSecret(id, organizationId, ConnectionSecretCipher.CredentialKind, nonce,
-      cipher.doFinal(encode(credential).getBytes(StandardCharsets.UTF_8)))
+    val (nonce, ciphertext) =
+      envelope.seal(id, organizationId, ConnectionSecretCipher.CredentialKind, encode(credential))
+    ConnectionSecret(id, organizationId, ConnectionSecretCipher.CredentialKind, nonce, ciphertext)
   }
 
   override def decrypt(secret: ConnectionSecret): SshCredential = {
-    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-    cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, secret.nonce))
-    cipher.updateAAD(aad(secret.id, secret.organizationId, secret.kind))
-    val plaintext = new String(cipher.doFinal(secret.ciphertext), StandardCharsets.UTF_8)
+    val plaintext =
+      envelope.open(secret.id, secret.organizationId, secret.kind, secret.nonce, secret.ciphertext)
 
     secret.kind match {
       // Written before credentials became typed: the payload is the password itself.
@@ -79,9 +70,6 @@ final class ConnectionSecretCipher private (key: Array[Byte]) extends Connection
 
   private def required(value: Either[io.circe.DecodingFailure, String]): String =
     value.getOrElse(throw new IllegalArgumentException("Stored SSH credential is not readable"))
-
-  private def aad(id: UUID, organizationId: UUID, kind: String): Array[Byte] =
-    s"$id:$organizationId:$kind".getBytes(StandardCharsets.UTF_8)
 }
 
 object ConnectionSecretCipher {
@@ -91,5 +79,5 @@ object ConnectionSecretCipher {
   val CredentialKind = "SSH_CREDENTIAL"
 
   def fromConfig(config: SecretEncryptionConfig): ConnectionSecretCipher =
-    new ConnectionSecretCipher(config.keyBytes)
+    new ConnectionSecretCipher(new AesGcmSecretEnvelope(config.keyBytes))
 }

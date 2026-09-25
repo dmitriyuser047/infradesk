@@ -16,7 +16,7 @@ import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.metric.{MetricCode, MetricObservation}
 import domain.monitor.{MonitorOperator, MonitorRule, MonitorRuleStatus}
 import domain.notification.{
-  NotificationChannel,
+  NotificationChannelType,
   NotificationDelivery,
   NotificationDeliveryStatus,
   NotificationEventType
@@ -226,7 +226,7 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
       val failing = new NotificationRecordingMonitorRuleEvaluator[ConnectionIO](
         fixture.evaluator,
         new RecordNotificationDeliveries[ConnectionIO](new FailingDeliveryRepository,
-          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
+          new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, List(NotificationChannelType.Webhook))
       )
 
       for {
@@ -282,7 +282,7 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
     val recordingEvaluator = new NotificationRecordingMonitorRuleEvaluator[ConnectionIO](
       evaluator,
       new RecordNotificationDeliveries[ConnectionIO](deliveries, new ConnectionIOIdGenerator,
-        new ConnectionIOTimeProvider, List(NotificationChannel.Webhook))
+        new ConnectionIOTimeProvider, List(NotificationChannelType.Webhook))
     )
 
     def run[A](program: ConnectionIO[A]): IO[A] = runner.run(program)
@@ -383,7 +383,7 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
     eventType: NotificationEventType = NotificationEventType.IncidentOpened
   ): NotificationDelivery =
     NotificationDelivery(id, OrganizationId, IncidentId, fixture.resourceId, fixture.ruleId,
-      eventType, IncidentReason.ThresholdViolation, NotificationChannel.Webhook, Now,
+      eventType, IncidentReason.ThresholdViolation, NotificationChannelType.Webhook, Now,
       NotificationDeliveryStatus.Pending, 0, Now, None, None, None, None, Now, Now)
 
   private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")

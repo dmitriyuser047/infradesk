@@ -35,6 +35,22 @@ object HttpJsonCodecs {
   implicit val testSshConnectionResponseEncoder: Encoder[TestSshConnectionResponse] =
     Encoder.forProduct2("success", "hostKeyFingerprint")(v => (v.success, v.hostKeyFingerprint))
 
+  implicit val telegramChannelRequestDecoder: Decoder[TelegramChannelRequest] =
+    Decoder.forProduct2("chatId", "botToken")(TelegramChannelRequest.apply)
+  implicit val webhookChannelRequestDecoder: Decoder[WebhookChannelRequest] =
+    Decoder.forProduct1("url")(WebhookChannelRequest.apply)
+  implicit val saveNotificationChannelRequestDecoder: Decoder[SaveNotificationChannelRequest] =
+    Decoder.forProduct7("name", "type", "enabled", "events", "reasons", "telegram", "webhook")(
+      SaveNotificationChannelRequest.apply)
+  // Only what is safe to show: whether a credential exists, and the chat a Telegram channel
+  // posts to. The credential itself has no field here.
+  implicit val notificationChannelConfigResponseEncoder: Encoder[NotificationChannelConfigResponse] =
+    Encoder.forProduct2("credentialConfigured", "chatId")(v => (v.credentialConfigured, v.chatId))
+  implicit val notificationChannelResponseEncoder: Encoder[NotificationChannelResponse] =
+    Encoder.forProduct9("id", "name", "type", "enabled", "events", "reasons", "config",
+      "createdAt", "updatedAt")(v => (v.id, v.name, v.channelType, v.enabled, v.events, v.reasons,
+      v.config, v.createdAt, v.updatedAt))
+
   implicit val apiErrorResponseEncoder: Encoder[ApiErrorResponse] =
     Encoder.forProduct2("code", "message")(value => (value.code, value.message))
 

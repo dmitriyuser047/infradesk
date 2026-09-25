@@ -43,6 +43,15 @@ object OrganizationPermission {
     override val code: String = "VIEW_AUDIT"
   }
 
+  /** Configuring where notifications go: channels, their subscriptions and their credentials.
+    *
+    * A channel holds a credential and decides who learns about an incident, so reading the list
+    * requires the same capability as changing it: this is settings, not reporting.
+    */
+  case object ManageNotifications extends OrganizationPermission {
+    override val code: String = "MANAGE_NOTIFICATIONS"
+  }
+
   case object ExecuteOperations extends OrganizationPermission {
     override val code: String = "EXECUTE_OPERATIONS"
   }
@@ -54,6 +63,7 @@ object OrganizationPermission {
     RunConnectionSync,
     ManageMonitoring,
     ViewAudit,
+    ManageNotifications,
     ExecuteOperations
   )
 

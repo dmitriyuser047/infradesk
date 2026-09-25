@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package application.notification
 
 import domain.incident.IncidentReason
-import domain.notification.{NotificationChannel, NotificationDeliveryStatus, NotificationEventType}
+import domain.notification.{NotificationChannelType, NotificationDeliveryStatus, NotificationEventType}
 import integration.notification.WebhookNotificationSender
 import application.port.NotificationSendResult
 import munit.FunSuite
@@ -17,19 +17,19 @@ final class NotificationUnitSpec extends FunSuite {
     NotificationEventType.All.foreach(value =>
       assertEquals(NotificationEventType.fromCode(value.code), Right(value))
     )
-    NotificationChannel.All.foreach(value =>
-      assertEquals(NotificationChannel.fromCode(value.code), Right(value))
+    NotificationChannelType.All.foreach(value =>
+      assertEquals(NotificationChannelType.fromCode(value.code), Right(value))
     )
     NotificationDeliveryStatus.All.foreach(value =>
       assertEquals(NotificationDeliveryStatus.fromCode(value.code), Right(value))
     )
 
     assertEquals(NotificationEventType.All.map(_.code), List("INCIDENT_OPENED", "INCIDENT_RESOLVED"))
-    assertEquals(NotificationChannel.All.map(_.code), List("WEBHOOK"))
+    assertEquals(NotificationChannelType.All.map(_.code), List("WEBHOOK", "TELEGRAM"))
     assertEquals(NotificationDeliveryStatus.All.map(_.code), List("PENDING", "SENT", "DEAD"))
 
     assert(NotificationEventType.fromCode("INCIDENT_FLAPPED").isLeft)
-    assert(NotificationChannel.fromCode("TELEGRAM").isLeft)
+    assert(NotificationChannelType.fromCode("EMAIL").isLeft)
     assert(NotificationDeliveryStatus.fromCode("QUEUED").isLeft)
   }
 

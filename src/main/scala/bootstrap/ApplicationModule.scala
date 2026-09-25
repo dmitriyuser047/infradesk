@@ -22,6 +22,9 @@ import application.incident.{GetIncident, ListIncidents}
 import application.overview.GetOperationsOverview
 import application.monitor.{CreateMonitorRule, EvaluateMonitorRules, ListMonitorRules, UpdateMonitorRule}
 import application.notification.{
+  GetNotificationChannel,
+  ListNotificationChannels,
+  NotificationChannelManagement,
   NotificationDispatcher,
   NotificationRecordingMonitorRuleEvaluator,
   RecordNotificationDeliveries
@@ -37,7 +40,7 @@ import application.resource.{
 }
 import application.operation.{ExecuteResourceOperation, ListResourceOperationExecutions, ResourceOperationPreparation}
 import application.scheduler.SyncScheduler
-import domain.notification.NotificationChannel
+import domain.notification.NotificationChannelType
 import application.workspace.{CreateEnvironment, CreateProject}
 import cats.effect.IO
 import infrastructure.config.AppConfig
@@ -77,6 +80,9 @@ final case class ApplicationComponents(
   authentication: Authentication[ConnectionIO],
   bootstrapAdmin: BootstrapAdmin[ConnectionIO],
   listAuditEvents: ListAuditEvents[ConnectionIO],
+  listNotificationChannels: ListNotificationChannels[ConnectionIO],
+  getNotificationChannel: GetNotificationChannel[ConnectionIO],
+  notificationChannelManagement: NotificationChannelManagement[ConnectionIO],
   listHistoryEvents: ListHistoryEvents[ConnectionIO],
   getOperationsOverview: GetOperationsOverview[ConnectionIO],
   resourceOperationPreparation: ResourceOperationPreparation[ConnectionIO],
@@ -153,15 +159,15 @@ object ApplicationModule {
       )
 
     // Only channels the deployment can actually deliver to are recorded.
-    val notificationChannels: List[NotificationChannel] =
-      if (notificationSender.isDefined) List(NotificationChannel.Webhook) else Nil
+    val notificationChannelTypes: List[NotificationChannelType] =
+      if (notificationSender.isDefined) List(NotificationChannelType.Webhook) else Nil
 
     val recordNotificationDeliveries =
       new RecordNotificationDeliveries[ConnectionIO](
         notificationDeliveryRepository,
         transactionIdGenerator,
         transactionTimeProvider,
-        notificationChannels
+        notificationChannelTypes
       )
 
     // The outbox rows are written inside the evaluation transaction, so an incident change and
@@ -315,6 +321,18 @@ object ApplicationModule {
         passwordHasher
       ),
       listAuditEvents = new ListAuditEvents[ConnectionIO](auditEventRepository),
+      listNotificationChannels =
+        new ListNotificationChannels[ConnectionIO](notificationChannelRepository),
+      getNotificationChannel =
+        new GetNotificationChannel[ConnectionIO](notificationChannelRepository),
+      notificationChannelManagement = new NotificationChannelManagement[ConnectionIO](
+        notificationChannelRepository,
+        notificationChannelSecretRepository,
+        transactionIdGenerator,
+        transactionTimeProvider,
+        integrations.notificationChannelCipher,
+        auditRecorder
+      ),
       listHistoryEvents = new ListHistoryEvents[ConnectionIO](historyEventQuery),
       getOperationsOverview = new GetOperationsOverview[ConnectionIO](
         operationsOverviewQuery,

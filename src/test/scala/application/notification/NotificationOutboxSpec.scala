@@ -6,7 +6,7 @@ import application.port.{IdGenerator, NotificationDeliveryRepository, Notificati
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.incident.IncidentReason
-import domain.notification.{NotificationChannel, NotificationDelivery, NotificationDeliveryStatus, NotificationEventType}
+import domain.notification.{NotificationChannelType, NotificationDelivery, NotificationDeliveryStatus, NotificationEventType}
 import munit.FunSuite
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
@@ -29,7 +29,7 @@ final class NotificationOutboxSpec extends FunSuite {
     assertEquals(repository.saved.size, 1)
     assertEquals(delivery.eventType, NotificationEventType.IncidentOpened)
     assertEquals(delivery.reason, IncidentReason.ThresholdViolation)
-    assertEquals(delivery.channel, NotificationChannel.Webhook)
+    assertEquals(delivery.channelType, NotificationChannelType.Webhook)
     assertEquals(delivery.status, NotificationDeliveryStatus.Pending)
     assertEquals(delivery.attemptCount, 0L)
     // The event reports when the incident changed, the row remembers when it was written.
@@ -189,7 +189,7 @@ final class NotificationOutboxSpec extends FunSuite {
 
   private def recorder(repository: NotificationDeliveryRepository[IO]): RecordNotificationDeliveries[IO] =
     new RecordNotificationDeliveries[IO](repository, new SequenceIdGenerator, new FixedTimeProvider,
-      List(NotificationChannel.Webhook))
+      List(NotificationChannelType.Webhook))
 
   private def dispatcher(
     repository: NotificationDeliveryRepository[IO],
@@ -206,7 +206,7 @@ final class NotificationOutboxSpec extends FunSuite {
   private def pending(id: UUID = DeliveryId, attemptCount: Long = 0): NotificationDelivery =
     NotificationDelivery(id, OrganizationId, IncidentId, ResourceId, RuleId,
       NotificationEventType.IncidentOpened, IncidentReason.ThresholdViolation,
-      NotificationChannel.Webhook, EvaluatedAt, NotificationDeliveryStatus.Pending, attemptCount,
+      NotificationChannelType.Webhook, EvaluatedAt, NotificationDeliveryStatus.Pending, attemptCount,
       EvaluatedAt, Some(DispatcherId), Some(Now.plusSeconds(60)), None, None, EvaluatedAt, EvaluatedAt)
 
   private final class FixedEvaluator(transitions: List[MonitorTransition]) extends MonitorRuleEvaluator[IO] {

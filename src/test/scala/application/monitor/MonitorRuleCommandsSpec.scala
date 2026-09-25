@@ -8,7 +8,7 @@ import cats.effect.unsafe.implicits.global
 import domain.incident.{Incident, IncidentReason, IncidentStatus}
 import domain.metric.MetricCode
 import domain.monitor.{InvalidMonitorRule, MonitorOperator, MonitorRule, MonitorRuleState, MonitorRuleStatus}
-import domain.notification.{NotificationChannel, NotificationDelivery}
+import domain.notification.{NotificationChannelType, NotificationDelivery}
 import domain.resource.{Resource, ResourceData}
 import munit.FunSuite
 
@@ -213,7 +213,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
       states,
       incidents,
       new RecordNotificationDeliveries[IO](notificationDeliveries, new FixedIdGenerator,
-        new FixedTimeProvider, List(NotificationChannel.Webhook)),
+        new FixedTimeProvider, List(NotificationChannelType.Webhook)),
       auditRecorder,
       historyRecorder,
       new FixedTimeProvider

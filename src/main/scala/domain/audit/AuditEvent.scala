@@ -25,6 +25,11 @@ object AuditAction {
   case object ContainerStopRequested extends AuditAction { override val code: String = "CONTAINER_STOP_REQUESTED" }
   case object ContainerRestartRequested extends AuditAction { override val code: String = "CONTAINER_RESTART_REQUESTED" }
 
+  case object NotificationChannelCreated extends AuditAction { override val code: String = "NOTIFICATION_CHANNEL_CREATED" }
+  case object NotificationChannelUpdated extends AuditAction { override val code: String = "NOTIFICATION_CHANNEL_UPDATED" }
+  case object NotificationChannelEnabled extends AuditAction { override val code: String = "NOTIFICATION_CHANNEL_ENABLED" }
+  case object NotificationChannelDisabled extends AuditAction { override val code: String = "NOTIFICATION_CHANNEL_DISABLED" }
+
   val All: List[AuditAction] = List(
     ProjectCreated,
     EnvironmentCreated,
@@ -36,7 +41,11 @@ object AuditAction {
     ManualSyncRequested,
     ContainerStartRequested,
     ContainerStopRequested,
-    ContainerRestartRequested
+    ContainerRestartRequested,
+    NotificationChannelCreated,
+    NotificationChannelUpdated,
+    NotificationChannelEnabled,
+    NotificationChannelDisabled
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =
@@ -56,8 +65,10 @@ object AuditTargetType {
   case object Connection extends AuditTargetType { override val code: String = "CONNECTION" }
   case object MonitorRule extends AuditTargetType { override val code: String = "MONITOR_RULE" }
   case object Resource extends AuditTargetType { override val code: String = "RESOURCE" }
+  case object NotificationChannel extends AuditTargetType { override val code: String = "NOTIFICATION_CHANNEL" }
 
-  val All: List[AuditTargetType] = List(Project, Environment, Connection, MonitorRule, Resource)
+  val All: List[AuditTargetType] =
+    List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel)
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditTargetType] =
     All.find(_.code == code)

@@ -13,7 +13,7 @@ import application.port.{
 import domain.operation.ResourceOperationCode
 import cats.effect.{IO, Resource}
 import infrastructure.config.{AppConfig, NotificationConfig}
-import integration.notification.WebhookNotificationSender
+import integration.notification.{NotificationChannelCipher, WebhookNotificationSender}
 import org.http4s.client.Client
 import org.http4s.ember.client.EmberClientBuilder
 import integration.docker.{DockerConnector, DockerJavaEngineClient}
@@ -35,6 +35,7 @@ import org.typelevel.doobie.ConnectionIO
   */
 final case class IntegrationComponents(
   secretCipher: ConnectionSecretCipher,
+  notificationChannelCipher: NotificationChannelCipher,
   sshConnectionProbe: SshConnectionProbe[IO],
   sshCredentialResolver: SshCredentialResolver[IO],
   resourceOperationExecutor: ResourceOperationExecutor[IO],
@@ -47,6 +48,9 @@ object IntegrationModule {
 
   def build(config: AppConfig, persistence: PersistenceComponents): IntegrationComponents = {
     val secretCipher = ConnectionSecretCipher.fromConfig(config.secretEncryption)
+    // The same key and the same primitive as an SSH credential; a different payload and a
+    // different table.
+    val notificationChannelCipher = NotificationChannelCipher.fromConfig(config.secretEncryption)
 
     val sshClient = new SshjClient[IO]
 
@@ -72,6 +76,7 @@ object IntegrationModule {
 
     IntegrationComponents(
       secretCipher = secretCipher,
+      notificationChannelCipher = notificationChannelCipher,
       sshConnectionProbe = new SshConnectionProbeAdapter(sshClient),
       sshCredentialResolver = sshAuthenticationProvider,
       resourceOperationExecutor = sshContainerOperations,
