@@ -331,7 +331,6 @@ final class NotificationRoutingIntegrationSpec extends FunSuite {
         mail <- fixture.channel("Email Ops", NotificationChannelType.Email, Set(opened), Set(threshold))
         hook <- fixture.channel("Webhook Ops", NotificationChannelType.Webhook, Set(opened), Set(threshold))
         _ <- fixture.run(fixture.recorder(legacy = true).record(List(fixture.opened(threshold))))
-        _ <- fixture.makeDue
 
         legacyClaim <- fixture.claimed(NotificationDeliveryScope.Legacy)
         managedClaim <- fixture.claimed(NotificationDeliveryScope.Managed)
@@ -440,22 +439,23 @@ final class NotificationRoutingIntegrationSpec extends FunSuite {
         new ConnectionIOIdGenerator, NotAnyTimeSoon,
         if (legacy) List(NotificationDeliveryTarget.LegacyWebhook) else Nil)
 
-    /** Brings this spec's own deliveries forward, for the tests that are about claiming. */
-    def makeDue: IO[Unit] = run(sql"""
-      update notification_delivery set next_attempt_at = current_timestamp
-       where organization_id = $OrganizationId
-    """.update.run.void)
-
     /** What a worker of this scope would reach, of this organization's deliveries.
       *
-      * The claim runs in a transaction that is rolled back, so the rows of other suites that it
-      * touched on the way are released untouched, and this spec's own rows stay as they were.
+      * Becoming due and being claimed happen in one transaction that is then rolled back, so no
+      * other suite ever observes a moment where this spec's deliveries are due: committing the
+      * two separately would leave a window in which a neighbouring worker could lease them.
+      * The rows of other suites that the claim touched on the way are released untouched, and
+      * this spec's own rows come out exactly as they went in.
       */
     def claimed(scope: NotificationDeliveryScope): IO[List[NotificationDelivery]] = {
       val captured = new java.util.concurrent.atomic.AtomicReference(List.empty[NotificationDelivery])
       // The error is raised inside the transaction and caught outside it: caught inside, doobie
       // would commit the very lease this is trying not to take.
       run(for {
+        _ <- sql"""
+          update notification_delivery set next_attempt_at = current_timestamp
+           where organization_id = $OrganizationId
+        """.update.run.void
         rows <- deliveries.claimPending(scope, workerId, 100, 60)
         _ <- cats.effect.Sync[ConnectionIO].delay(
           captured.set(rows.filter(_.organizationId == OrganizationId)))
