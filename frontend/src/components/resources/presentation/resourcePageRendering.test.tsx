@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { ResourcePage } from '../../../pages/ResourcePage'
 import type { ResourceResponse } from '../../../types/resource'
+import { I18nProvider, type Locale } from '../../../i18n'
 
 function resource(resourceTypeCode: string, data: ResourceResponse['data']): ResourceResponse {
   return {
@@ -14,18 +15,18 @@ function resource(resourceTypeCode: string, data: ResourceResponse['data']): Res
   }
 }
 
-function renderResourcePage(value: ResourceResponse): string {
+function renderResourcePage(value: ResourceResponse, locale: Locale = 'en'): string {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   client.setQueryData(['me'], { id: 'user', email: 'owner@example.com', displayName: 'Owner' })
   client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Example org', role: 'OWNER' }])
   client.setQueryData(['resource', 'org', 'resource'], value)
 
-  return renderToStaticMarkup(<QueryClientProvider client={client}>
+  return renderToStaticMarkup(<I18nProvider initialLocale={locale}><QueryClientProvider client={client}>
     <MemoryRouter initialEntries={['/organizations/org/environments/environment/resources/resource']}><Routes>
       <Route path="/organizations/:organizationId/environments/:environmentId/resources/:resourceId"
         element={<ResourcePage />} />
     </Routes></MemoryRouter>
-  </QueryClientProvider>)
+  </QueryClientProvider></I18nProvider>)
 }
 
 describe('resource page presentation', () => {
@@ -75,16 +76,24 @@ describe('resource page presentation', () => {
     expect(html).toContain('<dt>CPU</dt><dd>12.5%</dd>')
     expect(html).toContain('<dt>Memory</dt><dd>37.5%</dd>')
     expect(html).toContain('<dt>Uptime</dt><dd>1h 0m</dd>')
+    expect(renderResourcePage(withoutOptionalFacts, 'ru')).toContain('<dt>Время работы</dt><dd>1 ч 0 мин</dd>')
   })
 
-  it('renders container properties without the node-only tabs and header status', () => {
+  it('renders container properties and state without the node-only tabs', () => {
     const html = renderResourcePage(container)
 
     expect(html).toContain('<dt>Image</dt><dd>backend:2.0</dd>')
-    expect(html).toContain('<dt>State</dt><dd>running</dd>')
+    expect(html).toMatch(/<dt>State<\/dt><dd><span class="status-indicator status-success">.*Running/)
     expect(html).not.toContain('id="tab-metrics"')
     expect(html).not.toContain('id="tab-rules"')
-    expect(html).not.toContain('status-indicator')
+  })
+
+  it('names the resource type and its state in Russian by default', () => {
+    const html = renderResourcePage(container, 'ru')
+
+    expect(html).toContain('Контейнер · resource-code')
+    expect(html).toContain('Работает')
+    expect(html).toContain('<dt>Образ</dt><dd>backend:2.0</dd>')
   })
 
   it('renders the common shell and a safe fallback for an unknown resource type', () => {
@@ -102,8 +111,8 @@ describe('resource page presentation', () => {
       const html = renderResourcePage(value)
 
       expect(html).toContain('Resource name')
-      expect(html).toContain(`${value.resourceTypeCode} · resource-code`)
-      expect(html).toContain('← Infrastructure')
+      expect(html).toContain(`${value.resourceTypeCode === 'NODE' ? 'Server' : 'Container'} · resource-code`)
+      expect(html).toContain('← Resources')
       expect(html).toContain('Overview')
     }
   })

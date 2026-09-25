@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 
 import type { MonitorRuleRequest, MonitorRuleResponse } from '../../types/monitorRule'
 import { MonitorRuleForm } from './MonitorRuleForm'
+import { useI18n } from '../../i18n'
 
 interface MonitorRuleDialogProps {
   rule?: MonitorRuleResponse
@@ -18,6 +19,7 @@ export function MonitorRuleDialog({
   onSubmit,
   onClose,
 }: MonitorRuleDialogProps) {
+  const { t } = useI18n()
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !pending) {
@@ -36,8 +38,8 @@ export function MonitorRuleDialog({
     }}>
       <section className="monitor-rule-dialog" role="dialog" aria-modal="true" aria-labelledby="monitor-rule-dialog-title">
         <div className="dialog-heading">
-          <h2 id="monitor-rule-dialog-title">{rule === undefined ? 'Add monitor rule' : 'Edit monitor rule'}</h2>
-          <button className="dialog-close" type="button" aria-label="Close" onClick={onClose} disabled={pending}>×</button>
+          <h2 id="monitor-rule-dialog-title">{rule === undefined ? t.monitoring.dialogAdd : t.monitoring.dialogEdit}</h2>
+          <button className="dialog-close" type="button" aria-label={t.common.close} onClick={onClose} disabled={pending}>×</button>
         </div>
         <MonitorRuleForm
           key={rule?.id ?? 'new'}

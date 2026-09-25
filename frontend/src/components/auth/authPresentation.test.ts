@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
+import { createI18n } from '../../i18n'
 import { getOrganizationRoleLabel, safeReturnPath } from './authPresentation'
 
 describe('auth presentation', () => {
-  it('labels known roles and preserves future codes', () => {
-    expect(getOrganizationRoleLabel('OWNER')).toBe('Owner')
-    expect(getOrganizationRoleLabel('MEMBER')).toBe('Member')
-    expect(getOrganizationRoleLabel('FUTURE')).toBe('FUTURE')
+  it('labels known roles in both languages and preserves future codes', () => {
+    const en = createI18n('en')
+    const ru = createI18n('ru')
+    expect(getOrganizationRoleLabel('OWNER', en)).toBe('Owner')
+    expect(getOrganizationRoleLabel('MEMBER', en)).toBe('Member')
+    expect(getOrganizationRoleLabel('OWNER', ru)).toBe('Владелец')
+    expect(getOrganizationRoleLabel('MEMBER', ru)).toBe('Участник')
+    expect(getOrganizationRoleLabel('FUTURE', ru)).toBe('FUTURE')
   })
 
   it('accepts only internal return paths', () => {

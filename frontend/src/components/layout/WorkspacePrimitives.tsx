@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
+import { useI18n } from '../../i18n'
+
 export function WorkspaceHeader({ title, subtitle, back, actions, status }: {
   title: string
   subtitle?: ReactNode
@@ -35,7 +37,8 @@ export function WorkspaceTabs<T extends string>({ tabs, active, onChange }: {
   active: T
   onChange: (value: T) => void
 }) {
-  return <div className="workspace-tabs" role="tablist" aria-label="Object sections">
+  const { t } = useI18n()
+  return <div className="workspace-tabs" role="tablist" aria-label={t.common.sections}>
     {tabs.map((tab, index) => <button key={tab.id} id={`tab-${tab.id}`} type="button" role="tab" aria-selected={active === tab.id}
       aria-controls={`panel-${tab.id}`} tabIndex={active === tab.id ? 0 : -1}
       className={active === tab.id ? 'workspace-tab active' : 'workspace-tab'} onClick={() => onChange(tab.id)}

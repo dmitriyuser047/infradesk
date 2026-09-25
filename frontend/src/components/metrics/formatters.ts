@@ -1,55 +1,24 @@
-export function formatDuration(seconds: number | null): string {
-  if (seconds === null || seconds < 0 || !Number.isFinite(seconds)) {
-    return '—'
-  }
+import type { I18n } from '../../i18n'
 
-  const wholeSeconds = Math.floor(seconds)
-  const days = Math.floor(wholeSeconds / 86_400)
-  const hours = Math.floor((wholeSeconds % 86_400) / 3_600)
-  const minutes = Math.floor((wholeSeconds % 3_600) / 60)
-  const remainingSeconds = wholeSeconds % 60
+const tags = { ru: 'ru-RU', en: 'en-US' } as const
 
-  if (days > 0) {
-    return `${days}d ${hours}h`
-  }
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${remainingSeconds}s`
-  }
-  return `${remainingSeconds}s`
-}
-
-export function formatMemoryMb(memoryMb: number | null): string {
+export function formatMemoryMb(memoryMb: number | null, i18n: I18n): string {
   if (memoryMb === null || memoryMb < 0 || !Number.isFinite(memoryMb)) {
     return '—'
   }
 
+  const number = new Intl.NumberFormat(tags[i18n.locale], { maximumFractionDigits: 1 })
   if (memoryMb >= 1_024) {
-    const gigabytes = memoryMb / 1_024
-    return `${Number.isInteger(gigabytes) ? gigabytes : gigabytes.toFixed(1)} GB`
+    return `${number.format(memoryMb / 1_024)} ${i18n.t.units.gigabytes}`
   }
 
-  return `${memoryMb} MB`
+  return `${number.format(memoryMb)} ${i18n.t.units.megabytes}`
 }
 
-export function formatPercent(value: number | null): string {
+export function formatPercent(value: number | null, i18n: I18n): string {
   if (value === null || !Number.isFinite(value)) {
     return '—'
   }
 
-  return `${value.toFixed(1)}%`
-}
-
-export function formatMetricTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return '—'
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date)
+  return `${new Intl.NumberFormat(tags[i18n.locale], { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)}%`
 }

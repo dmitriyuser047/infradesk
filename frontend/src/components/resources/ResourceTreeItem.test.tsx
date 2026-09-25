@@ -17,6 +17,7 @@ describe('resource tree row', () => {
       organizationId="org" environmentId="env" /></MemoryRouter>)
     expect(html).toMatch(/resource-name-stack.*resource-name.*backend.*resource-code.*container-code/s)
     expect(html).toContain('status-indicator status-success')
-    expect(html).toContain('Running')
+    expect(html).toContain('Работает')
+    expect(html).toContain('Контейнер')
   })
 })

@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest'
 import { ResourceActivitySection } from './ResourceActivitySection'
 import { getHistoryActorLabel, getHistoryEventPresentation } from './historyEventPresentation'
 import type { HistoryEventResponse } from '../../types/historyEvent'
+import { createI18n, I18nProvider, type Locale } from '../../i18n'
+
+const en = createI18n('en')
+const ru = createI18n('ru')
 
 function event(overrides: Partial<HistoryEventResponse>): HistoryEventResponse {
   return {
@@ -51,14 +55,14 @@ const timeline: HistoryEventResponse[] = [
   event({ eventType: 'RESOURCE_DISCOVERED', occurredAt: '2026-09-24T15:15:00Z' }),
 ]
 
-function render(pages: HistoryEventResponse[][]) {
+function render(pages: HistoryEventResponse[][], locale: Locale = 'en') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   client.setQueryData(['resource-history', 'org', 'resource'], {
     pages, pageParams: pages.map(() => undefined),
   })
-  return renderToStaticMarkup(<QueryClientProvider client={client}>
+  return renderToStaticMarkup(<I18nProvider initialLocale={locale}><QueryClientProvider client={client}>
     <ResourceActivitySection organizationId="org" resourceId="resource" />
-  </QueryClientProvider>)
+  </QueryClientProvider></I18nProvider>)
 }
 
 describe('resource activity', () => {
@@ -69,7 +73,7 @@ describe('resource activity', () => {
     expect(html.indexOf('Restart: operation requested')).toBeLessThan(html.indexOf('Incident resolved'))
     expect(html.indexOf('Incident opened')).toBeLessThan(html.indexOf('Resource discovered'))
     // The failure is shown once, on the entry that reports the outcome.
-    expect(html.match(/Docker container restart failed/g)?.length).toBe(1)
+    expect(html.match(/Docker could not perform the operation/g)?.length).toBe(1)
     expect(html).toContain('Metric threshold exceeded')
     expect(html).toContain('No metrics received')
     expect(html).toContain('Dmitriy')
@@ -77,6 +81,16 @@ describe('resource activity', () => {
     // Nothing about how the command reached the host.
     expect(html).not.toContain('docker restart')
     expect(html).not.toContain('stderr')
+  })
+
+  it('renders the same timeline in Russian, without English server messages', () => {
+    const html = render([timeline], 'ru')
+
+    expect(html).toContain('Перезапустить: операция завершилась ошибкой')
+    expect(html).toContain('Docker не смог выполнить операцию.')
+    expect(html).toContain('Метрика превысила порог')
+    expect(html).toContain('Система')
+    expect(html).not.toContain('Docker container restart failed')
   })
 
   it('offers more only while a full page came back', () => {
@@ -96,16 +110,16 @@ describe('resource activity', () => {
   it('never shows a later outcome on the entry that only requested it', () => {
     const requested = timeline[1]
 
-    expect(getHistoryEventPresentation(requested)).toEqual({
+    expect(getHistoryEventPresentation(requested, en)).toEqual({
       title: 'Restart: operation requested',
       detail: null,
       tone: 'neutral',
     })
     // The failure belongs to the entry that reports it.
-    expect(getHistoryEventPresentation(timeline[0]).detail).toBe('Docker container restart failed')
+    expect(getHistoryEventPresentation(timeline[0], en).detail).toBe('Docker could not perform the operation.')
     expect(getHistoryEventPresentation({
       ...requested, eventType: 'OPERATION_SUCCEEDED', source: 'SYSTEM', actor: null,
-    }).detail).toBe(null)
+    }, en).detail).toBe(null)
   })
 
   it('maps every event type to a title and a tone', () => {
@@ -124,19 +138,20 @@ describe('resource activity', () => {
     })
     const deactivated = event({ eventType: 'RESOURCE_DEACTIVATED' })
 
-    expect(getHistoryEventPresentation(unknown)).toEqual({
+    expect(getHistoryEventPresentation(unknown, en)).toEqual({
       title: 'Stop: operation result unknown',
-      detail: 'Operation result is unknown because execution was interrupted',
+      detail: 'The operation result is unknown.',
       tone: 'warning',
     })
-    expect(getHistoryEventPresentation(syncFailure)).toEqual({
+    expect(getHistoryEventPresentation(syncFailure, en)).toEqual({
       title: 'Synchronization failed',
-      detail: 'Error code SSH_CONNECT_TIMEOUT',
+      detail: 'The server did not answer in time.',
       tone: 'critical',
     })
-    expect(getHistoryEventPresentation(deactivated).tone).toBe('warning')
-    expect(getHistoryEventPresentation(timeline[4]).tone).toBe('neutral')
-    expect(getHistoryActorLabel(syncFailure)).toBe('System')
-    expect(getHistoryActorLabel(timeline[1])).toBe('Dmitriy')
+    expect(getHistoryEventPresentation(deactivated, en).tone).toBe('warning')
+    expect(getHistoryEventPresentation(timeline[4], en).tone).toBe('neutral')
+    expect(getHistoryActorLabel(syncFailure, en)).toBe('System')
+    expect(getHistoryActorLabel(syncFailure, ru)).toBe('Система')
+    expect(getHistoryActorLabel(timeline[1], en)).toBe('Dmitriy')
   })
 })

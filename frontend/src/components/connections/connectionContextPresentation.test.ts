@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+
+import { createI18n } from '../../i18n'
 import { connectionScopeDisplayLabel, environmentName, projectName } from './connectionContextPresentation'
 
 describe('connection context names', () => {
@@ -9,11 +11,13 @@ describe('connection context names', () => {
     expect(projectName('p', projects)).toBe('App')
     expect(environmentName('e', environments)).toBe('Production')
     expect(connectionScopeDisplayLabel({ type: 'ENVIRONMENT', projectId: 'p', environmentId: 'e' },
-      projects, environments)).toBe('Environment · Production')
+      projects, environments, createI18n('en'))).toBe('Environment · Production')
+    expect(connectionScopeDisplayLabel({ type: 'ENVIRONMENT', projectId: 'p', environmentId: 'e' },
+      projects, environments, createI18n('ru'))).toBe('Окружение · Production')
   })
 
   it('keeps a short identifier as the loading or missing fallback', () => {
     expect(projectName('12345678-0000-0000-0000-000000000001', undefined)).toBe('12345678…0001')
-    expect(connectionScopeDisplayLabel({ type: 'ORGANIZATION' }, undefined, undefined)).toBe('Organization')
+    expect(connectionScopeDisplayLabel({ type: 'ORGANIZATION' }, undefined, undefined, createI18n('en'))).toBe('Organization')
   })
 })

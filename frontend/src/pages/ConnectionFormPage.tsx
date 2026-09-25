@@ -3,9 +3,10 @@ import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-route
 
 import { useMyOrganizations } from '../api/auth'
 import { useConnection, useCreateConnection, useProbeSshHostKey, useTestSshConnection, useUpdateConnection } from '../api/connections'
-import { ApiError } from '../api/httpClient'
+import { useI18n } from '../i18n'
+import { describeError } from '../i18n/errors'
 import { useEnvironments, useProjects } from '../api/navigation'
-import { buildSshConnectionRequest, MIN_SSH_SYNC_INTERVAL_SECONDS } from '../components/connections/buildSshConnectionRequest'
+import { buildSshConnectionRequest, MIN_SSH_SYNC_INTERVAL_SECONDS, SyncIntervalError } from '../components/connections/buildSshConnectionRequest'
 import { canOrganization } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
@@ -14,15 +15,16 @@ import type { ConnectionResponse, SshAuthenticationType } from '../types/connect
 import { InvalidRoutePage } from './InvalidRoutePage'
 
 export function ConnectionFormPage() {
+  const { t } = useI18n()
   const { organizationId, connectionId } = useParams()
   const membership = useMyOrganizations()
   const existing = useConnection(organizationId, connectionId)
   if (!organizationId) return <InvalidRoutePage />
-  if (membership.isPending || (connectionId && existing.isPending)) return <AppShell><p className="compact-state">Loading connection…</p></AppShell>
+  if (membership.isPending || (connectionId && existing.isPending)) return <AppShell><p className="compact-state">{t.connections.form.loading}</p></AppShell>
   if (!canOrganization(membership.data?.find(value => value.id === organizationId)?.role, 'manageConnections')) {
-    return <AppShell><p className="compact-state">Only organization owners can manage connections.</p></AppShell>
+    return <AppShell><p className="compact-state">{t.connections.form.ownersOnly}</p></AppShell>
   }
-  if (connectionId && (existing.isError || !existing.data)) return <AppShell><p className="compact-state">Connection not found.</p></AppShell>
+  if (connectionId && (existing.isError || !existing.data)) return <AppShell><p className="compact-state">{t.connections.form.notFound}</p></AppShell>
   if (existing.data && (existing.data.connectorType !== 'SSH' || !existing.data.active)) {
     return <Navigate to={`/organizations/${organizationId}/connections/${connectionId}`} replace />
   }
@@ -30,6 +32,8 @@ export function ConnectionFormPage() {
 }
 
 function ConnectionForm({ organizationId, existing }: { organizationId: string; existing?: ConnectionResponse }) {
+  const i18n = useI18n()
+  const t = i18n.t.connections.form
   const navigate = useNavigate()
   const location = useLocation()
   const context = contextSearch(new URLSearchParams(location.search))
@@ -83,12 +87,12 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
     event.preventDefault()
     try {
       if (!hostConfirmed) {
-        throw new Error('Confirm the host fingerprint before saving')
+        throw new Error(t.validation.confirmHost)
       }
       if (credentialRequired && !credentialEntered) {
         throw new Error(authenticationType === 'PRIVATE_KEY'
-          ? 'A private key is required for this authentication method'
-          : 'A password is required for this authentication method')
+          ? t.validation.keyRequired
+          : t.validation.passwordRequired)
       }
       const body = buildSshConnectionRequest({ code, name, projectId, environmentId, host, port,
         username, authenticationType, password, privateKey, passphrase, hostKeyFingerprint,
@@ -101,69 +105,70 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
         setPassphrase('')
         navigate(`/organizations/${organizationId}/connections/${connection.id}${context}`)
       })
-    } catch (error) { setValidationError(error instanceof Error ? error.message : 'Invalid sync interval') }
+    } catch (error) {
+      setValidationError(error instanceof SyncIntervalError ? t.validation.interval(MIN_SSH_SYNC_INTERVAL_SECONDS)
+        : error instanceof Error ? error.message : i18n.t.errors.generic)
+    }
   }
 
   return <AppShell><div className="workspace-page form-page">
-    <WorkspaceHeader title={existing ? 'Edit connection' : 'Add SSH connection'}
-      subtitle="A working SSH login is verified before saving" back={{ label: 'Connections', to: back }} />
+    <WorkspaceHeader title={existing ? t.titleEdit : t.titleNew}
+      subtitle={t.subtitle} back={{ label: t.back, to: back }} />
     <form className="workspace-form" onSubmit={submit}>
-      <WorkspaceSection title="Connection"><div className="field-grid">
-        <label>Name <input required maxLength={255} value={name} onChange={e => setName(e.target.value)} /></label>
-        <label>Code <input required maxLength={64} value={code} onChange={e => setCode(e.target.value)} /></label>
-        <label>Project <select value={projectId} onChange={e => { setScopeTouched(true); setEnvironmentTouched(false); setProjectId(e.target.value); setEnvironmentId('') }}>
-          <option value="">Organization-wide</option>
+      <WorkspaceSection title={t.general}><div className="field-grid">
+        <label>{i18n.t.common.name} <input required maxLength={255} value={name} onChange={e => setName(e.target.value)} /></label>
+        <label>{i18n.t.common.code} <input required maxLength={64} value={code} onChange={e => setCode(e.target.value)} /></label>
+        <label>{i18n.t.context.project} <select value={projectId} onChange={e => { setScopeTouched(true); setEnvironmentTouched(false); setProjectId(e.target.value); setEnvironmentId('') }}>
+          <option value="">{t.organizationWide}</option>
           {projects.data?.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
         </select></label>
-        {projectId ? <label>Environment <select value={environmentId} onChange={e => { setEnvironmentTouched(true); setEnvironmentId(e.target.value) }}>
-          <option value="">Project-wide</option>
+        {projectId ? <label>{i18n.t.context.environment} <select value={environmentId} onChange={e => { setEnvironmentTouched(true); setEnvironmentId(e.target.value) }}>
+          <option value="">{t.projectWide}</option>
           {environments.data?.map(environment => <option key={environment.id} value={environment.id}>{environment.name}</option>)}
         </select></label> : null}
       </div></WorkspaceSection>
-      <WorkspaceSection title="SSH"><div className="field-grid host-port-grid">
-        <label>Host <input required value={host} onChange={e => setHost(e.target.value)} /></label>
-        <label>Port <input required type="number" min="1" max="65535" value={port} onChange={e => setPort(e.target.value)} /></label>
+      <WorkspaceSection title={t.server}><div className="field-grid host-port-grid">
+        <label>{t.host} <input required value={host} onChange={e => setHost(e.target.value)} /></label>
+        <label>{t.port} <input required type="number" min="1" max="65535" value={port} onChange={e => setPort(e.target.value)} /></label>
       </div><div className="field-grid ssh-credentials-grid">
-        <label>Username <input required value={username} onChange={e => setUsername(e.target.value)} /></label>
-        <label>Authentication
+        <label>{t.username} <input required value={username} onChange={e => setUsername(e.target.value)} /></label>
+        <label>{t.method}
           <select value={authenticationType}
             onChange={e => setAuthenticationType(e.target.value as SshAuthenticationType)}>
-            <option value="PASSWORD">Password</option>
-            <option value="PRIVATE_KEY">Private key</option>
+            <option value="PASSWORD">{t.password}</option>
+            <option value="PRIVATE_KEY">{t.privateKey}</option>
           </select>
         </label>
         {authenticationType === 'PASSWORD' ? (
-          <label>Password {existing && !methodChanged ? '(leave blank to keep current)' : ''}
+          <label>{t.password} {existing && !methodChanged ? <small>{t.keepStored}</small> : null}
             <input type="password" required={credentialRequired} autoComplete="new-password"
               value={password} onChange={e => setPassword(e.target.value)} />
           </label>
         ) : (
           <>
-            <label>Private key {existing && !methodChanged ? '(leave blank to keep current)' : ''}
+            <label>{t.privateKey} {existing && !methodChanged ? <small>{t.keepStored}</small> : null}
               <textarea rows={6} required={credentialRequired} spellCheck={false}
                 autoComplete="off" value={privateKey}
                 onChange={e => setPrivateKey(e.target.value)} />
             </label>
-            <label>Passphrase (optional)
+            <label>{t.passphrase}
               <input type="password" autoComplete="new-password" value={passphrase}
                 onChange={e => setPassphrase(e.target.value)} />
             </label>
           </>
         )}
       </div></WorkspaceSection>
-      <WorkspaceSection title="Host identity"><div className="field-grid">
-        <label>Trusted fingerprint
-          <input readOnly value={hostKeyFingerprint} placeholder="Not verified"
-            aria-label="Trusted host fingerprint" />
+      <WorkspaceSection title={t.trust}><div className="field-grid">
+        <label>{t.fingerprint}
+          <input readOnly value={hostKeyFingerprint} placeholder={t.notVerified}
+            aria-label={t.fingerprintLabel} />
         </label>
         <p className={hostKeyChanged ? 'inline-error' : 'muted-copy'} role={hostKeyChanged ? 'alert' : undefined}>
           {hostKeyChanged
-            ? `Host identity changed. The server now presents ${probedFingerprint}, not the ` +
-              `fingerprint this connection trusts. Confirm the replacement only if you changed ` +
-              `the host key yourself.`
+            ? `${t.statusMismatch}. ${t.statusMismatchDetail}`
             : hostConfirmed
-              ? 'Trusted. A credential is only ever sent to this identity.'
-              : 'Not verified. Read the host key and confirm it before saving.'}
+              ? `${t.statusTrusted}. ${t.statusTrustedDetail}`
+              : `${t.statusUntrusted}. ${t.statusUntrustedDetail}`}
         </p>
         <div className="form-toolbar">
           <button className="secondary-button" type="button"
@@ -174,24 +179,24 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
                 { host: host.trim(), port: Number(port), username: username.trim() },
                 result => setProbedFingerprint(result.hostKeyFingerprint),
               )
-            }}>{probe.isPending ? 'Reading…' : 'Read host key'}</button>
+            }}>{probe.isPending ? t.reading : t.readHostKey}</button>
           {probedFingerprint !== null && probedFingerprint !== hostKeyFingerprint ? (
             <button className="secondary-button" type="button"
               onClick={() => setHostKeyFingerprint(probedFingerprint)}>
-              {hostKeyChanged ? `Replace with ${probedFingerprint}` : `Trust ${probedFingerprint}`}
+              {hostKeyChanged ? t.replaceWith : t.trustThis}
             </button>
           ) : null}
         </div>
-        {probe.isError ? <p className="inline-error" role="alert">{errorText(probe.error)}</p> : null}
+        {probe.isError ? <p className="inline-error" role="alert">{describeError(probe.error, i18n)}</p> : null}
       </div></WorkspaceSection>
-      <WorkspaceSection title="Synchronization"><div className="field-grid">
-        <label>Interval (seconds) <input required type="number" min={MIN_SSH_SYNC_INTERVAL_SECONDS} value={intervalSeconds} onChange={e => setIntervalSeconds(e.target.value)} /></label>
-        <label className="checkbox-field"><input type="checkbox" checked={scheduleEnabled} onChange={e => setScheduleEnabled(e.target.checked)} /> Enable scheduled sync</label>
+      <WorkspaceSection title={t.synchronization}><div className="field-grid">
+        <label>{t.interval} <input required type="number" min={MIN_SSH_SYNC_INTERVAL_SECONDS} value={intervalSeconds} onChange={e => setIntervalSeconds(e.target.value)} /></label>
+        <label className="checkbox-field"><input type="checkbox" checked={scheduleEnabled} onChange={e => setScheduleEnabled(e.target.checked)} /> {t.scheduleEnabled}</label>
       </div></WorkspaceSection>
       {validationError ? <p className="inline-error" role="alert">{validationError}</p> : null}
-      {testedFingerprint ? <p className="inline-feedback" role="status">Connection verified · {testedFingerprint}</p> : null}
-      {test.isError ? <p className="inline-error" role="alert">{errorText(test.error)}</p> : null}
-      {save.isError ? <p className="inline-error" role="alert">{errorText(save.error)}</p> : null}
+      {testedFingerprint ? <p className="inline-feedback" role="status">{t.verified(testedFingerprint)}</p> : null}
+      {test.isError ? <p className="inline-error" role="alert">{describeError(test.error, i18n)}</p> : null}
+      {save.isError ? <p className="inline-error" role="alert">{describeError(save.error, i18n)}</p> : null}
       <div className="form-toolbar">
         <button className="secondary-button" type="button"
           disabled={!credentialEntered || !hostConfirmed || test.isPending || save.isPending}
@@ -206,14 +211,10 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
                 ? { type: 'PRIVATE_KEY', privateKey, ...(passphrase === '' ? {} : { passphrase }) }
                 : { type: 'PASSWORD', password },
             }, result => setTestedFingerprint(result.hostKeyFingerprint))
-          }}>{test.isPending ? 'Testing…' : 'Test connection'}</button>
-        <Link className="secondary-button" to={back}>Cancel</Link>
-        <button className="primary-button" type="submit" disabled={save.isPending}>{save.isPending ? 'Saving…' : 'Save connection'}</button>
+          }}>{test.isPending ? t.testing : t.test}</button>
+        <Link className="secondary-button" to={back}>{i18n.t.common.cancel}</Link>
+        <button className="primary-button" type="submit" disabled={save.isPending}>{save.isPending ? i18n.t.common.saving : t.submit}</button>
       </div>
     </form>
   </div></AppShell>
-}
-
-function errorText(error: Error): string {
-  return error instanceof ApiError ? error.message : 'Unable to complete request. Please try again.'
 }

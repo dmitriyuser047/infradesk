@@ -24,9 +24,9 @@ function renderAt(path: string): string {
 describe('workspace shell', () => {
   it('shows module navigation, route-backed context and primary object action', () => {
     const html = renderAt('/organizations/org/environments/environment?project=project')
-    expect(html).toContain('aria-label="Primary navigation"')
+    expect(html).toContain('aria-label="Основная навигация"')
     expect(html).toContain('nav-item-active')
-    expect(html).toContain('Infrastructure')
+    expect(html).toContain('Ресурсы')
     expect(html).toContain('Example org')
     expect(html).toContain('App')
     expect(html).toContain('Production')

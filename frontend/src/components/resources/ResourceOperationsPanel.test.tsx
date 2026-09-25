@@ -37,18 +37,21 @@ function renderWith(
 describe('resource operations panel', () => {
   it('shows controlled actions and distinct UNKNOWN history to an owner', () => {
     const html = render('OWNER')
-    expect(html).toContain('>Start</button>')
-    expect(html).toContain('>Stop</button>')
-    expect(html).toContain('>Restart</button>')
-    expect(html).toContain('operation-status-unknown')
-    expect(html).toContain('Operation result is unknown because execution was interrupted')
+    expect(html).toContain('>Запустить</button>')
+    expect(html).toContain('>Остановить</button>')
+    expect(html).toContain('>Перезапустить</button>')
+    // UNKNOWN is its own state, not a failure.
+    expect(html).toContain('status-warning')
+    expect(html).toContain('Результат неизвестен')
+    expect(html).toContain('Результат операции неизвестен.')
+    expect(html).not.toContain('Operation result is unknown because execution was interrupted')
   })
 
   it('keeps history visible and controls hidden for a member', () => {
     const html = render('MEMBER')
-    expect(html).toContain('Recent executions')
-    expect(html).toContain('UNKNOWN')
-    expect(html).not.toContain('>Start</button>')
+    expect(html).toContain('Последние запуски')
+    expect(html).toContain('Результат неизвестен')
+    expect(html).not.toContain('>Запустить</button>')
   })
 
   it('stays out of the page for a resource without operations or history', () => {
@@ -63,8 +66,8 @@ describe('resource operations panel', () => {
       errorCode: 'DOCKER_OPERATION_FAILED', errorMessage: 'Docker container restart failed',
     }])
 
-    expect(html).toContain('operation-status-failed')
-    expect(html).toContain('Docker container restart failed')
+    expect(html).toContain('status-danger')
+    expect(html).toContain('Docker не смог выполнить операцию.')
     expect(html).not.toContain('permission denied')
   })
 
@@ -72,7 +75,7 @@ describe('resource operations panel', () => {
     const html = renderWith(['CONTAINER_STOP'], [])
 
     // The button opens the confirmation dialog; nothing is sent until it is confirmed.
-    expect(html).toContain('>Stop</button>')
+    expect(html).toContain('>Остановить</button>')
     expect(html).not.toContain('aria-modal="true"')
   })
 })

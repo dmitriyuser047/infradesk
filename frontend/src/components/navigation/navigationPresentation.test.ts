@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest'
 
+import { createI18n } from '../../i18n'
 import { getEnvironmentKindLabel, selectProject, validSelection } from './navigationPresentation'
 
 describe('navigation presentation', () => {
   it('labels known environment kinds and preserves unknown codes', () => {
-    expect(getEnvironmentKindLabel('DEV')).toBe('Development')
-    expect(getEnvironmentKindLabel('TEST')).toBe('Test')
-    expect(getEnvironmentKindLabel('STAGE')).toBe('Staging')
-    expect(getEnvironmentKindLabel('PROD')).toBe('Production')
-    expect(getEnvironmentKindLabel('CUSTOM')).toBe('Custom')
-    expect(getEnvironmentKindLabel('FUTURE')).toBe('FUTURE')
+    const en = createI18n('en')
+    expect(getEnvironmentKindLabel('DEV', en)).toBe('Development')
+    expect(getEnvironmentKindLabel('TEST', en)).toBe('Test')
+    expect(getEnvironmentKindLabel('STAGE', en)).toBe('Staging')
+    expect(getEnvironmentKindLabel('PROD', en)).toBe('Production')
+    expect(getEnvironmentKindLabel('CUSTOM', en)).toBe('Custom')
+    expect(getEnvironmentKindLabel('PROD', createI18n('ru'))).toBe('Продакшен')
+    expect(getEnvironmentKindLabel('FUTURE', en)).toBe('FUTURE')
   })
 
   it('chooses the first item initially and when a selection disappears', () => {

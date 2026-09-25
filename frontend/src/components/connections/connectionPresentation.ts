@@ -1,118 +1,68 @@
+import type { I18n } from '../../i18n'
+import { describeFailure } from '../../i18n/errors'
+import { secondsBetween } from '../../i18n/format'
 import {
-  ConnectionScopeType,
   SyncStatus,
   type ConnectionScheduleResponse,
   type ConnectionScopeResponse,
   type SyncSessionResponse,
 } from '../../types/connection'
 
-export function getConnectorTypeLabel(code: string): string {
-  switch (code) {
-    case 'SSH':
-      return 'SSH'
-    case 'DOCKER':
-      return 'Docker'
-    default:
-      return code
-  }
+export function getConnectorTypeLabel(code: string, i18n: I18n): string {
+  return i18n.t.connections.connectorTypes[code] ?? code
 }
 
-export function getConnectionScopeLabel(scope: ConnectionScopeResponse): string {
-  switch (scope.type) {
-    case ConnectionScopeType.organization:
-      return 'Organization'
-    case ConnectionScopeType.project:
-      return 'Project'
-    case ConnectionScopeType.environment:
-      return 'Environment'
-  }
+export function getConnectionScopeLabel(scope: ConnectionScopeResponse, i18n: I18n): string {
+  return i18n.t.connections.scopes[scope.type] ?? scope.type
 }
 
-export function getSyncStatusLabel(status: string): string {
-  switch (status) {
-    case SyncStatus.running:
-      return 'Running'
-    case SyncStatus.completed:
-      return 'Completed'
-    case SyncStatus.failed:
-      return 'Failed'
-    default:
-      return status
-  }
+export function getSyncStatusLabel(status: string, i18n: I18n): string {
+  return i18n.t.connections.syncStatuses[status] ?? status
 }
 
-export function getSyncFailureMessage(message: string | null): string {
-  return message?.trim() || 'Synchronization failed'
+/** A failed session's reason by its code; the server's own sentence only where it is English. */
+export function getSyncFailureMessage(session: Pick<SyncSessionResponse, 'errorCode' | 'errorMessage'>, i18n: I18n): string {
+  return describeFailure(session.errorCode, session.errorMessage, i18n, i18n.t.connections.syncFailed)
 }
 
-export function formatScheduleInterval(intervalSeconds: number): string {
+export function formatScheduleInterval(intervalSeconds: number, i18n: I18n): string {
   if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
     return '—'
   }
 
+  const every = i18n.t.connections.every
   if (intervalSeconds % 3_600 === 0) {
-    return `Every ${intervalSeconds / 3_600}h`
+    return every.hours(intervalSeconds / 3_600)
   }
   if (intervalSeconds % 60 === 0) {
-    return `Every ${intervalSeconds / 60}m`
+    return every.minutes(intervalSeconds / 60)
   }
-  return `Every ${intervalSeconds}s`
+  return every.seconds(intervalSeconds)
 }
 
-export function getScheduleSummary(schedule: ConnectionScheduleResponse | null): string {
+export function getScheduleSummary(schedule: ConnectionScheduleResponse | null, i18n: I18n): string {
   if (schedule === null) {
-    return 'Not configured'
+    return i18n.t.connections.scheduleNotConfigured
   }
-  return schedule.enabled ? formatScheduleInterval(schedule.intervalSeconds) : 'Disabled'
+  return schedule.enabled ? formatScheduleInterval(schedule.intervalSeconds, i18n) : i18n.t.connections.scheduleDisabled
 }
 
-export function formatConnectionDateTime(iso: string): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) {
-    return '—'
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date)
-}
-
-export function formatSyncDuration(startedAt: string, finishedAt: string | null): string {
+export function formatSyncDuration(startedAt: string, finishedAt: string | null, i18n: I18n): string {
   if (finishedAt === null) {
-    return 'In progress'
+    return i18n.t.common.inProgress
   }
-
-  const started = new Date(startedAt).getTime()
-  const finished = new Date(finishedAt).getTime()
-  if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) {
-    return '—'
-  }
-
-  const seconds = Math.floor((finished - started) / 1_000)
-  const hours = Math.floor(seconds / 3_600)
-  const minutes = Math.floor((seconds % 3_600) / 60)
-  const remainderSeconds = seconds % 60
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${remainderSeconds}s`
-  }
-  return `${remainderSeconds}s`
+  return i18n.format.duration(secondsBetween(startedAt, finishedAt))
 }
 
-export function getLastSyncSummary(lastSync: SyncSessionResponse | null): string {
+export function getLastSyncSummary(lastSync: SyncSessionResponse | null, i18n: I18n): string {
   if (lastSync === null) {
-    return 'Never synchronized'
+    return i18n.t.connections.neverSynchronized
   }
   if (lastSync.status === SyncStatus.running) {
-    return `Started ${formatConnectionDateTime(lastSync.startedAt)}`
+    return i18n.t.connections.lastSyncStarted(i18n.format.dateTime(lastSync.startedAt))
   }
 
-  return formatConnectionDateTime(lastSync.finishedAt ?? lastSync.startedAt)
+  return i18n.format.relative(lastSync.finishedAt ?? lastSync.startedAt)
 }
 
 export function shortConnectionIdentifier(id: string): string {

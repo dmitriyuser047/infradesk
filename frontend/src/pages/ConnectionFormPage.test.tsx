@@ -56,8 +56,8 @@ describe('SSH connection form', () => {
   it('offers both authentication methods and shows the password fields by default', () => {
     const html = render()
 
-    expect(html).toContain('>Password</option>')
-    expect(html).toContain('>Private key</option>')
+    expect(html).toContain('>Пароль</option>')
+    expect(html).toContain('>Приватный ключ</option>')
     expect(html).toContain('type="password"')
     // The private key field only appears once that method is selected.
     expect(html).not.toContain('<textarea')
@@ -67,9 +67,9 @@ describe('SSH connection form', () => {
     const html = render(connection({ authenticationType: 'PRIVATE_KEY' }))
 
     expect(html).toContain('<textarea')
-    expect(html).toContain('Passphrase (optional)')
+    expect(html).toContain('Парольная фраза (если есть)')
     // An existing credential is kept when the field is left blank.
-    expect(html).toContain('(leave blank to keep current)')
+    expect(html).toContain('Оставьте поле пустым, чтобы сохранить текущий ключ или пароль.')
     // The form never receives the stored credential to display.
     expect(html).not.toContain('BEGIN OPENSSH')
   })
@@ -79,9 +79,9 @@ describe('SSH connection form', () => {
     const unverified = render()
 
     expect(trusted).toContain('SHA256:trusted')
-    expect(trusted).toContain('Trusted. A credential is only ever sent to this identity.')
-    expect(unverified).toContain('Not verified. Read the host key and confirm it before saving.')
-    expect(unverified).toContain('Read host key')
+    expect(trusted).toContain('Сервер подтверждён')
+    expect(unverified).toContain('Сервер не подтверждён')
+    expect(unverified).toContain('Получить ключ сервера')
     expect(trusted).not.toContain('value="secret"')
   })
 
@@ -89,7 +89,7 @@ describe('SSH connection form', () => {
     const html = render()
 
     // Both the test button and the probe button are present, and testing starts disabled.
-    expect(html).toContain('Test connection')
+    expect(html).toContain('Проверить подключение')
     expect(html).toContain('disabled=""')
   })
 })

@@ -4,8 +4,10 @@ import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
 import { useMe } from '../../api/auth'
 import { ApiError } from '../../api/httpClient'
+import { useI18n } from '../../i18n'
 
 export function RequireAuth() {
+  const { t } = useI18n()
   const me = useMe()
   const location = useLocation()
   const queryClient = useQueryClient()
@@ -17,7 +19,7 @@ export function RequireAuth() {
   }, [queryClient])
 
   if (me.isPending) {
-    return <div className="auth-loading" aria-label="Checking session">Checking session…</div>
+    return <div className="auth-loading" aria-label={t.auth.checkingSession}>{t.auth.checkingSession}</div>
   }
 
   if (me.isError) {
@@ -26,8 +28,8 @@ export function RequireAuth() {
     }
     return (
       <div className="auth-loading" role="alert">
-        <p>Unable to check session</p>
-        <button className="retry-button" type="button" onClick={() => me.refetch()}>Retry</button>
+        <p>{t.auth.unableToCheckSession}</p>
+        <button className="retry-button" type="button" onClick={() => me.refetch()}>{t.common.retry}</button>
       </div>
     )
   }

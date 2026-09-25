@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { ResourceTreeNode } from './resourceTreeModel'
 import { StatusIndicator } from '../layout/WorkspacePrimitives'
 import { resourcePresentationRegistry } from './presentation/resourcePresentations'
+import { useI18n } from '../../i18n'
 
 interface ResourceTreeItemProps {
   node: ResourceTreeNode
@@ -19,13 +20,14 @@ export function ResourceTreeItem({
   organizationId,
   environmentId,
 }: ResourceTreeItemProps) {
+  const i18n = useI18n()
   const [expanded, setExpanded] = useState(true)
   const location = useLocation()
   const hasChildren = node.children.length > 0
   const presentation = resourcePresentationRegistry.resolve(node.resource.resourceTypeCode)
   const Icon = presentation.Icon
   const destination = `/organizations/${organizationId}/environments/${environmentId}/resources/${node.resource.id}${location.search}`
-  const status = presentation.rowStatus(node.resource)
+  const status = presentation.rowStatus(node.resource, i18n)
 
   return (
     <div className="resource-tree-item" role="treeitem" aria-expanded={hasChildren ? expanded : undefined}>
@@ -34,7 +36,7 @@ export function ResourceTreeItem({
           <button
             className="tree-toggle"
             type="button"
-            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.resource.name}`}
+            aria-label={expanded ? i18n.t.resources.collapse(node.resource.name) : i18n.t.resources.expand(node.resource.name)}
             aria-expanded={expanded}
             onClick={() => setExpanded((current) => !current)}
           >
@@ -52,7 +54,7 @@ export function ResourceTreeItem({
             <span className="resource-name-stack"><span className="resource-name">{node.resource.name}</span>
               <small className="resource-code">{node.resource.code}</small></span>
           </span>
-          <span className="resource-type-cell">{node.resource.resourceTypeCode}</span>
+          <span className="resource-type-cell">{i18n.t.resources.types[node.resource.resourceTypeCode] ?? node.resource.resourceTypeCode}</span>
           <span className="resource-state-cell">
             <StatusIndicator label={status.label} tone={status.tone} /></span>
         </Link>

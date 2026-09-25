@@ -4,8 +4,10 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useLogin } from '../api/auth'
 import { ApiError } from '../api/httpClient'
 import { safeReturnPath } from '../components/auth/authPresentation'
+import { useI18n } from '../i18n'
 
 export function LoginPage() {
+  const { t } = useI18n()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const login = useLogin()
@@ -24,18 +26,18 @@ export function LoginPage() {
     <main className="login-page">
       <form className="login-panel" onSubmit={submit}>
         <p className="eyebrow">InfraDesk</p>
-        <h1>Sign in</h1>
-        <label>Email
+        <h1>{t.auth.signIn}</h1>
+        <label>{t.auth.email}
           <input type="email" autoComplete="email" value={email} required onChange={(event) => setEmail(event.target.value)} />
         </label>
-        <label>Password
+        <label>{t.auth.password}
           <input type="password" autoComplete="current-password" value={password} required onChange={(event) => setPassword(event.target.value)} />
         </label>
         {login.isError ? (
           <p className="form-error" role="alert">{login.error instanceof ApiError && login.error.code === 'INVALID_CREDENTIALS'
-            ? 'Invalid email or password' : 'Unable to sign in'}</p>
+            ? t.auth.invalidCredentials : t.auth.unableToSignIn}</p>
         ) : null}
-        <button className="primary-button" type="submit" disabled={login.isPending}>Sign in</button>
+        <button className="primary-button" type="submit" disabled={login.isPending}>{t.auth.signIn}</button>
       </form>
     </main>
   )

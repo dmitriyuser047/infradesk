@@ -3,13 +3,14 @@ import { useQueries } from '@tanstack/react-query'
 import { Link, useLocation, useParams } from 'react-router-dom'
 
 import { useConnections } from '../api/connections'
-import { ApiError } from '../api/httpClient'
 import { getEnvironments, useProjects } from '../api/navigation'
 import { ConnectionList } from '../components/connections/ConnectionList'
 import { filterConnections } from '../components/connections/connectionFilters'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { useI18n } from '../i18n'
+import { describeError } from '../i18n/errors'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
 export function ConnectionsPage() {
@@ -23,6 +24,8 @@ export function ConnectionsPage() {
 }
 
 function ConnectionsContent({ organizationId }: { organizationId: string }) {
+  const i18n = useI18n()
+  const t = i18n.t.connections
   const connectionsQuery = useConnections(organizationId)
   const projectsQuery = useProjects(organizationId)
   const scopedProjectIds = [...new Set((connectionsQuery.data ?? []).flatMap(connection =>
@@ -39,48 +42,41 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
   const [type, setType] = useState('ALL')
   const [status, setStatus] = useState('ALL')
   const filtered = filterConnections(connectionsQuery.data ?? [], search, type, status)
+  const newPath = `/organizations/${organizationId}/connections/new${location.search}`
 
   return (
     <AppShell>
       <div className="workspace-page">
-        <WorkspaceHeader title="Connections" subtitle="Infrastructure integrations and synchronization"
-          actions={isOwner ? <Link className="primary-button" to={`/organizations/${organizationId}/connections/new${location.search}`}>+ New connection</Link> : null} />
-        <WorkspaceSection title="Configured connections" actions={connectionsQuery.data ? <span className="resource-count">{filtered.length} of {connectionsQuery.data.length}</span> : null}>
+        <WorkspaceHeader title={t.title} subtitle={t.subtitle}
+          actions={isOwner ? <Link className="primary-button" to={newPath}>{t.add}</Link> : null} />
+        <WorkspaceSection title={t.section} actions={connectionsQuery.data ? <span className="resource-count">{i18n.t.common.shown(filtered.length, connectionsQuery.data.length)}</span> : null}>
           <div className="filter-bar">
-            <label>Search<input type="search" value={search} placeholder="Name or code" onChange={event => setSearch(event.target.value)} /></label>
-            <label>Type<select value={type} onChange={event => setType(event.target.value)}><option value="ALL">All</option>
+            <label>{i18n.t.common.search}<input type="search" value={search} placeholder={i18n.t.common.searchPlaceholder} onChange={event => setSearch(event.target.value)} /></label>
+            <label>{i18n.t.common.type}<select value={type} onChange={event => setType(event.target.value)}><option value="ALL">{i18n.t.common.all}</option>
               <option value="SSH">SSH</option><option value="DOCKER">Docker</option></select></label>
-            <label>Status<select value={status} onChange={event => setStatus(event.target.value)}><option value="ALL">All</option>
-              <option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>
-            <button className="secondary-button" type="button" onClick={() => connectionsQuery.refetch()}>Refresh</button>
+            <label>{i18n.t.common.status}<select value={status} onChange={event => setStatus(event.target.value)}><option value="ALL">{i18n.t.common.all}</option>
+              <option value="ACTIVE">{i18n.t.common.active}</option><option value="INACTIVE">{i18n.t.common.inactive}</option></select></label>
+            <button className="secondary-button" type="button" onClick={() => connectionsQuery.refetch()}>{i18n.t.common.refresh}</button>
           </div>
-          {connectionsQuery.isPending ? <ConnectionsListSkeleton /> : null}
+          {connectionsQuery.isPending ? <div className="connection-skeleton" aria-label={t.loading}><span /><span /><span /></div> : null}
           {connectionsQuery.isError ? (
             <div className="connection-state connection-state-error" role="alert">
-              <h3>Unable to load connections</h3>
-              <p>{safeErrorMessage(connectionsQuery.error)}</p>
-              <button className="retry-button" type="button" onClick={() => connectionsQuery.refetch()}>Retry</button>
+              <h3>{t.loadError}</h3>
+              <p>{describeError(connectionsQuery.error, i18n)}</p>
+              <button className="retry-button" type="button" onClick={() => connectionsQuery.refetch()}>{i18n.t.common.retry}</button>
             </div>
           ) : null}
           {!connectionsQuery.isPending && !connectionsQuery.isError && connectionsQuery.data?.length === 0 ? (
-            <EmptyWorkspaceState title="No connections configured" detail="Add a connection to synchronize infrastructure."
-              action={isOwner ? <Link to={`/organizations/${organizationId}/connections/new${location.search}`}>New connection</Link> : undefined} />
+            <EmptyWorkspaceState title={t.empty} detail={isOwner ? t.emptyDetail : t.emptyMember}
+              action={isOwner ? <Link className="primary-button" to={newPath}>{t.add}</Link> : undefined} />
           ) : null}
           {!connectionsQuery.isPending && !connectionsQuery.isError && connectionsQuery.data !== undefined && connectionsQuery.data.length > 0 ? (
             filtered.length ? <ConnectionList organizationId={organizationId} connections={filtered}
               projects={projectsQuery.data} environments={environments} /> :
-              <EmptyWorkspaceState title="No connections match these filters" />
+              <EmptyWorkspaceState title={t.noMatch} />
           ) : null}
         </WorkspaceSection>
       </div>
     </AppShell>
   )
-}
-
-function ConnectionsListSkeleton() {
-  return <div className="connection-skeleton" aria-label="Loading connections"><span /><span /><span /></div>
-}
-
-function safeErrorMessage(error: Error): string {
-  return error instanceof ApiError ? error.message : 'Please try again shortly.'
 }

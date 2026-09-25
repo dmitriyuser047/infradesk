@@ -1,4 +1,5 @@
-import { getSyncFailureMessage } from '../connections/connectionPresentation'
+import type { I18n } from '../../i18n'
+import { describeFailure } from '../../i18n/errors'
 import { getIncidentReasonLabel, getOperationLabel } from '../history/historyEventPresentation'
 import type { StatusTone } from '../layout/WorkspacePrimitives'
 import { getMetricLabel } from '../monitoring/monitorRulePresentation'
@@ -13,52 +14,44 @@ export interface AttentionPresentation {
   to: string | null
 }
 
-const syncFailureTitles: Record<string, string> = {
-  SSH_HOST_KEY_MISMATCH: 'Host identity changed',
-  SSH_HOST_KEY_NOT_TRUSTED: 'Host key not trusted',
-  SSH_AUTH_FAILED: 'SSH authentication failed',
-  SSH_AUTHENTICATION_FAILED: 'SSH authentication failed',
-  SSH_CONNECTION_REFUSED: 'SSH connection refused',
-  SSH_CONNECT_TIMEOUT: 'Host unreachable',
-}
-
 /**
  * How one current problem reads and where it leads.
  *
  * The backend sends typed facts in priority order; this only words them. A result the server does
  * not know stays "unknown" and is never shown as a failure.
  */
-export function getAttentionPresentation(organizationId: string, item: AttentionItemResponse): AttentionPresentation {
+export function getAttentionPresentation(organizationId: string, item: AttentionItemResponse, i18n: I18n): AttentionPresentation {
+  const t = i18n.t.overview.items
   const base = `/organizations/${encodeURIComponent(organizationId)}`
   const resourcePath = item.resource === null ? null
     : `${base}/environments/${encodeURIComponent(item.resource.environmentId)}/resources/${encodeURIComponent(item.resource.id)}`
-  const resourceName = item.resource?.name ?? 'Unknown resource'
+  const resourceName = item.resource?.name ?? t.unknownResource
 
   switch (item.kind) {
     case 'OPERATION_UNKNOWN':
       return {
-        title: `${operationLabel(item)}: result unknown`,
+        title: t.unknownTitle(operationLabel(item, i18n)),
         subject: resourceName,
-        detail: 'The command may or may not have run. Check the container before retrying.',
-        status: 'Result unknown',
+        detail: t.unknownDetail,
+        status: t.unknownStatus,
         tone: 'warning',
         to: resourcePath,
       }
     case 'INCIDENT':
       return {
-        title: getIncidentReasonLabel(item.incident?.reason ?? ''),
+        title: getIncidentReasonLabel(item.incident?.reason ?? '', i18n.t),
         subject: resourceName,
-        detail: item.incident === null ? null : getMetricLabel(item.incident.metricCode),
-        status: 'Incident open',
-        tone: 'danger',
+        detail: item.incident === null ? null : getMetricLabel(item.incident.metricCode, i18n),
+        status: t.incidentStatus,
+        tone: item.incident?.reason === 'NO_DATA' ? 'warning' : 'danger',
         to: `${base}/incidents/${encodeURIComponent(item.id)}`,
       }
     case 'NODE_OFFLINE':
       return {
-        title: 'Node offline',
+        title: t.nodeOfflineTitle,
         subject: resourceName,
-        detail: 'Reported offline by the latest inventory',
-        status: 'Offline',
+        detail: t.nodeOfflineDetail,
+        status: t.nodeOfflineStatus,
         tone: 'danger',
         to: resourcePath,
       }
@@ -67,30 +60,31 @@ export function getAttentionPresentation(organizationId: string, item: Attention
       const connectionPath = item.connection === null ? null
         : `${base}/connections/${encodeURIComponent(item.connection.id)}`
       return {
-        title: syncFailureTitles[code] ?? 'Synchronization failed',
-        subject: item.connection?.name ?? 'Unknown connection',
-        detail: getSyncFailureMessage(item.sync?.errorMessage ?? null),
-        status: 'Sync failed',
+        title: t.syncTitles[code] ?? i18n.t.connections.syncFailed,
+        subject: item.connection?.name ?? t.unknownConnection,
+        detail: describeFailure(item.sync?.errorCode, item.sync?.errorMessage, i18n, i18n.t.connections.syncFailed),
+        status: t.syncStatus,
         tone: 'danger',
         to: connectionPath === null ? null : `${connectionPath}/sync-sessions/${encodeURIComponent(item.id)}`,
       }
     }
     case 'OPERATION_FAILED':
       return {
-        title: `${operationLabel(item)}: operation failed`,
+        title: t.failedTitle(operationLabel(item, i18n)),
         subject: resourceName,
-        detail: item.operation?.errorMessage?.trim() || 'Operation failed',
-        status: 'Failed',
+        detail: describeFailure(item.operation?.errorCode, item.operation?.errorMessage, i18n,
+          i18n.t.errors.codes.OPERATION_EXECUTION_FAILED),
+        status: t.failedStatus,
         tone: 'danger',
         to: resourcePath,
       }
     default:
-      return { title: item.kind, subject: resourceName, detail: null, status: 'Needs attention', tone: 'neutral', to: resourcePath }
+      return { title: item.kind, subject: resourceName, detail: null, status: t.needsAttention, tone: 'neutral', to: resourcePath }
   }
 }
 
-function operationLabel(item: AttentionItemResponse): string {
-  return item.operation === null ? 'Operation' : getOperationLabel(item.operation.operationCode)
+function operationLabel(item: AttentionItemResponse, i18n: I18n): string {
+  return item.operation === null ? i18n.t.overview.items.operation : getOperationLabel(item.operation.operationCode, i18n.t)
 }
 
 export interface SummaryCard {
@@ -110,37 +104,40 @@ export function getSummaryCards(
   summary: OverviewSummaryResponse,
   links: { infrastructure: string | null; incidents: string; connections: string },
   operationsHorizonHours: number,
+  i18n: I18n,
 ): SummaryCard[] {
+  const t = i18n.t.overview.cards
+  const count = i18n.format.number
   const { nodes, containers, incidents, connections, operations } = summary
   const operationProblems = operations.failed + operations.unknown
   return [
     {
-      id: 'nodes', label: 'Nodes', value: count(nodes.total),
-      detail: join([`${count(nodes.online)} online`, `${count(nodes.offline)} offline`]),
+      id: 'nodes', label: t.nodes, value: count(nodes.total),
+      detail: nodes.total === 0 ? t.nothing
+        : nodes.offline === 0 && nodes.online === nodes.total ? t.allOnline
+          : t.nodesDetail(count(nodes.online), count(nodes.offline)),
       tone: nodes.offline > 0 ? 'danger' : 'neutral', to: links.infrastructure,
     },
     {
-      id: 'containers', label: 'Containers', value: count(containers.total),
-      detail: join([`${count(containers.running)} running`, `${count(containers.stopped)} stopped`]),
+      id: 'containers', label: t.containers, value: count(containers.total),
+      detail: containers.total === 0 ? t.nothing : t.containersDetail(count(containers.running), count(containers.stopped)),
       tone: 'neutral', to: links.infrastructure,
     },
     {
-      id: 'incidents', label: 'Open incidents', value: count(incidents.open),
-      detail: incidents.open === 0 ? 'None open'
-        : join([`${count(incidents.threshold)} threshold`, `${count(incidents.noData)} no data`]),
+      id: 'incidents', label: t.incidents, value: count(incidents.open),
+      detail: incidents.open === 0 ? t.noIncidents : t.incidentsDetail(count(incidents.threshold), count(incidents.noData)),
       tone: incidents.open > 0 ? 'danger' : 'success', to: links.incidents,
     },
     {
-      id: 'connections', label: 'Connections', value: count(connections.total),
-      detail: connections.failing > 0 ? `${count(connections.failing)} failing`
-        : connections.neverSynced > 0 ? `${count(connections.neverSynced)} never synchronized`
-          : connections.total === 0 ? 'None configured' : 'All synchronized',
+      id: 'connections', label: t.connections, value: count(connections.total),
+      detail: connections.failing > 0 ? t.connectionsFailing(count(connections.failing))
+        : connections.neverSynced > 0 ? t.connectionsNeverSynced(count(connections.neverSynced))
+          : connections.total === 0 ? t.connectionsNone : t.connectionsOk,
       tone: connections.failing > 0 ? 'danger' : 'neutral', to: links.connections,
     },
     {
-      id: 'operations', label: `Operations · ${operationsHorizonHours}h`, value: count(operationProblems),
-      detail: operationProblems === 0 ? 'No problems'
-        : join([`${count(operations.unknown)} unknown`, `${count(operations.failed)} failed`]),
+      id: 'operations', label: t.operations(operationsHorizonHours), value: count(operationProblems),
+      detail: operationProblems === 0 ? t.operationsOk : t.operationsDetail(count(operations.unknown), count(operations.failed)),
       tone: operations.unknown > 0 ? 'warning' : operations.failed > 0 ? 'danger' : 'neutral', to: null,
     },
   ]
@@ -149,12 +146,4 @@ export function getSummaryCards(
 /** No inventory yet: nothing has been discovered and no connection has been added. */
 export function isEmptyInfrastructure(summary: OverviewSummaryResponse): boolean {
   return summary.nodes.total === 0 && summary.containers.total === 0 && summary.connections.total === 0
-}
-
-function count(value: number): string {
-  return value.toLocaleString()
-}
-
-function join(parts: string[]): string {
-  return parts.join(' · ')
 }

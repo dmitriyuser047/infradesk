@@ -36,16 +36,16 @@ describe('monitor rules authorization', () => {
   it('shows management actions to an owner', () => {
     const html = render('OWNER')
 
-    expect(html).toContain('+ Add rule')
-    expect(html).toContain('Edit rule')
+    expect(html).toContain('Добавить правило')
+    expect(html).toContain('Изменить правило')
   })
 
   it('keeps the list read-only for a member', () => {
     const html = render('MEMBER')
 
-    expect(html).toContain('CPU usage')
-    expect(html).not.toContain('+ Add rule')
-    expect(html).not.toContain('Edit rule')
-    expect(html).not.toContain('<th>Action</th>')
+    expect(html).toContain('Загрузка процессора')
+    expect(html).not.toContain('Добавить правило')
+    expect(html).not.toContain('Изменить правило')
+    expect(html).not.toContain('<th>Действие</th>')
   })
 })

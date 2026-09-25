@@ -45,11 +45,19 @@ export function buildSshCredentials(
 
 export const MIN_SSH_SYNC_INTERVAL_SECONDS = 300
 
+/** The interval is below the minimum the backend accepts; the form words it in the active language. */
+export class SyncIntervalError extends Error {
+  constructor() {
+    super(`SSH sync interval must be at least ${MIN_SSH_SYNC_INTERVAL_SECONDS} seconds`)
+    this.name = 'SyncIntervalError'
+  }
+}
+
 export function buildSshConnectionRequest(values: SshConnectionFormValues): SaveSshConnectionRequest {
   const credentials = buildSshCredentials(values)
   const intervalSeconds = Number(values.intervalSeconds)
   if (!Number.isSafeInteger(intervalSeconds) || intervalSeconds < MIN_SSH_SYNC_INTERVAL_SECONDS) {
-    throw new Error('SSH sync interval must be at least 300 seconds')
+    throw new SyncIntervalError()
   }
   return {
     connectorType: 'SSH',

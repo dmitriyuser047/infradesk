@@ -15,6 +15,8 @@ import { MonitorRulesSection } from '../components/monitoring/MonitorRulesSectio
 import { supportsResourceMonitoring } from '../components/monitoring/resourceMonitoringSupport'
 import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
 import type { ResourcePresentationProps } from '../components/resources/presentation/ResourcePresentation'
+import { useI18n } from '../i18n'
+import { describeError } from '../i18n/errors'
 import { MetricCode, type MetricObservationResponse } from '../types/metric'
 import type { ResourceResponse } from '../types/resource'
 import { ResourceOperationsPanel } from '../components/resources/ResourceOperationsPanel'
@@ -31,6 +33,8 @@ export function ResourcePage() {
 function ResourceContent({ organizationId, environmentId, resourceId }: {
   organizationId: string; environmentId: string; resourceId: string
 }) {
+  const i18n = useI18n()
+  const t = i18n.t.resources.page
   const location = useLocation()
   const [tab, setTab] = useState<Tab>('overview')
   const [metricWindow, setMetricWindow] = useState(() => createLastHourWindow())
@@ -41,24 +45,26 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
     monitored && tab === 'metrics')
   const back = `/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(environmentId)}${location.search}`
 
-  if (resourceQuery.isPending) return <AppShell><div className="row-skeleton" aria-label="Loading resource"><span /><span /></div></AppShell>
+  if (resourceQuery.isPending) return <AppShell><div className="row-skeleton" aria-label={t.loading}><span /><span /></div></AppShell>
   if (resourceQuery.isError || !resourceQuery.data) {
     const notFound = resourceQuery.error instanceof ApiError && resourceQuery.error.code === 'RESOURCE_NOT_FOUND'
-    return <AppShell><div className="inline-error" role="alert">{notFound ? 'Resource not found' : 'Unable to load resource'}
-      {!notFound ? <button className="text-button" type="button" onClick={() => resourceQuery.refetch()}>Retry</button> : null}</div></AppShell>
+    return <AppShell><div className="inline-error" role="alert">{notFound ? t.notFound : t.loadError}
+      {!notFound ? <button className="text-button" type="button" onClick={() => resourceQuery.refetch()}>{i18n.t.common.retry}</button> : null}</div></AppShell>
   }
   const resource = resourceQuery.data
   const tabs: { id: Tab; label: string }[] = (monitored ? [
-    { id: 'overview' as Tab, label: 'Overview' }, { id: 'metrics' as Tab, label: 'Metrics' },
-    { id: 'rules' as Tab, label: 'Monitor rules' },
-  ] : [{ id: 'overview' as Tab, label: 'Overview' }]).concat([{ id: 'activity', label: 'Activity' }])
-  const status = presentation.headerStatus?.(resource)
+    { id: 'overview' as Tab, label: t.tabs.overview }, { id: 'metrics' as Tab, label: t.tabs.metrics },
+    { id: 'rules' as Tab, label: t.tabs.rules },
+  ] : [{ id: 'overview' as Tab, label: t.tabs.overview }]).concat([{ id: 'activity', label: t.tabs.activity }])
+  const status = presentation.headerStatus?.(resource, i18n)
   const Overview = presentation.Overview
+  const typeLabel = i18n.t.resources.types[resource.resourceTypeCode] ?? resource.resourceTypeCode
 
   return <AppShell><div className="workspace-page">
-    <WorkspaceHeader title={resource.name} subtitle={`${resource.resourceTypeCode} · ${resource.code}`}
-      back={{ label: 'Infrastructure', to: back }}
-      status={status ? <StatusIndicator label={status.label} tone={status.tone} /> : undefined} />
+    <WorkspaceHeader title={resource.name} subtitle={t.subtitle(typeLabel, resource.code)}
+      back={{ label: t.back, to: back }}
+      status={<>{status ? <StatusIndicator label={status.label} tone={status.tone} /> : null}
+        {!resource.active ? <StatusIndicator label={t.inactive} tone="neutral" /> : null}</>} />
     <WorkspaceTabs tabs={tabs} active={tab} onChange={setTab} />
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
       {tab === 'overview' ? <><Overview resource={resource} />
@@ -85,17 +91,19 @@ function MetricsSection({ resource, Summary, isPending, isError, error, observat
   refresh: () => void
   retry: () => void
 }) {
+  const i18n = useI18n()
+  const t = i18n.t.metrics
   const cpuSeries = filterMetricSeries(observations ?? [], MetricCode.cpuUsagePercent)
   const memorySeries = filterMetricSeries(observations ?? [], MetricCode.memoryUsagePercent)
-  return <WorkspaceSection title="Metrics · last 1 hour" actions={<button className="secondary-button" type="button" onClick={refresh}>
-    <RefreshCw aria-hidden size={14} /> Refresh</button>}>
+  return <WorkspaceSection title={t.title} actions={<button className="secondary-button" type="button" onClick={refresh}>
+    <RefreshCw aria-hidden size={14} /> {i18n.t.common.refresh}</button>}>
     {Summary ? <Summary resource={resource} /> : null}
-    {isPending ? <div className="row-skeleton" aria-label="Loading metrics"><span /><span /></div> : null}
-    {isError ? <div className="inline-error" role="alert">Unable to load metrics. {error instanceof ApiError ? error.message : 'Please try again shortly.'}
-      <button className="text-button" type="button" onClick={retry}>Retry</button></div> : null}
+    {isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
+    {isError ? <div className="inline-error" role="alert">{t.loadError} {describeError(error, i18n)}
+      <button className="text-button" type="button" onClick={retry}>{i18n.t.common.retry}</button></div> : null}
     {!isPending && !isError ? <div className="charts-grid">
-      <section className="chart-pane" aria-label="CPU usage chart"><h3>CPU usage</h3><MetricChart title="CPU usage" data={cpuSeries} /></section>
-      <section className="chart-pane" aria-label="Memory usage chart"><h3>Memory usage</h3><MetricChart title="Memory usage" data={memorySeries} /></section>
+      <section className="chart-pane" aria-label={t.chart(t.cpu)}><h3>{t.cpu}</h3><MetricChart title={t.cpu} data={cpuSeries} /></section>
+      <section className="chart-pane" aria-label={t.chart(t.memory)}><h3>{t.memory}</h3><MetricChart title={t.memory} data={memorySeries} /></section>
     </div> : null}
   </WorkspaceSection>
 }

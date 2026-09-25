@@ -16,6 +16,7 @@ import {
   getSummaryCards,
   isEmptyInfrastructure,
 } from '../components/overview/overviewPresentation'
+import { useI18n } from '../i18n'
 import type { OperationsOverviewResponse } from '../types/overview'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
@@ -42,16 +43,17 @@ function OverviewContent({ organizationId, projectId, environmentId }: {
   projectId: string | null
   environmentId: string | null
 }) {
+  const { t } = useI18n()
   const overview = useOperationsOverview(organizationId, { projectId, environmentId })
   const projects = useProjects(organizationId)
   const environments = useEnvironments(organizationId, projectId)
   const project = projects.data?.find(item => item.id === projectId)
   const environment = environments.data?.find(item => item.id === environmentId)
-  const subtitle = environmentId ? `Environment · ${environment?.name ?? '…'}`
-    : projectId ? `Project · ${project?.name ?? '…'}` : 'Organization · all projects'
+  const subtitle = environmentId ? t.overview.scopeEnvironment(environment?.name ?? '…')
+    : projectId ? t.overview.scopeProject(project?.name ?? '…') : t.overview.scopeOrganization
 
   return <div className="workspace-page">
-    <WorkspaceHeader title="Overview" subtitle={subtitle} />
+    <WorkspaceHeader title={t.overview.title} subtitle={subtitle} />
     <OverviewBody organizationId={organizationId} environmentId={environmentId} projectId={projectId}
       state={overview} />
   </div>
@@ -72,16 +74,18 @@ export function OverviewBody({ organizationId, projectId, environmentId, state }
   environmentId: string | null
   state: OverviewState
 }) {
+  const i18n = useI18n()
+  const t = i18n.t.overview
   if (state.isPending) {
-    return <div className="row-skeleton" aria-label="Loading overview"><span /><span /><span /></div>
+    return <div className="row-skeleton" aria-label={t.loading}><span /><span /><span /></div>
   }
 
   if (state.isError || state.data === undefined) {
     const code = state.error instanceof ApiError ? state.error.code : null
     return <section className="inline-error" role="alert">
-      {code === 'PROJECT_NOT_FOUND' ? 'Project not found'
-        : code === 'ENVIRONMENT_NOT_FOUND' ? 'Environment not found' : 'Unable to load overview'}
-      <button className="text-button" type="button" onClick={() => state.refetch()}>Retry</button>
+      {code === 'PROJECT_NOT_FOUND' ? t.projectNotFound
+        : code === 'ENVIRONMENT_NOT_FOUND' ? t.environmentNotFound : t.loadError}
+      <button className="text-button" type="button" onClick={() => state.refetch()}>{i18n.t.common.retry}</button>
     </section>
   }
 
@@ -93,15 +97,15 @@ export function OverviewBody({ organizationId, projectId, environmentId, state }
     infrastructure: environmentId ? `${base}/environments/${encodeURIComponent(environmentId)}${context}` : null,
     incidents: `${base}/incidents${context}`,
     connections: `${base}/connections${context}`,
-  }, overview.operationsHorizonHours)
+  }, overview.operationsHorizonHours, i18n)
 
   return <>
-    <WorkspaceSection title="Fleet summary">
-      {isEmptyInfrastructure(overview.summary) ? <EmptyWorkspaceState title="No infrastructure discovered yet"
-        detail="Add an SSH connection and synchronize it to discover nodes and containers."
-        action={<Link className="secondary-button" to={`${base}/connections${context}`}>Open connections</Link>} />
+    <WorkspaceSection title={t.summary}>
+      {isEmptyInfrastructure(overview.summary) ? <EmptyWorkspaceState title={t.emptyInfrastructure}
+        detail={t.emptyInfrastructureDetail}
+        action={<Link className="secondary-button" to={`${base}/connections${context}`}>{t.openConnections}</Link>} />
         : null}
-      <div className="metric-strip overview-summary" aria-label="Fleet summary">
+      <div className="metric-strip overview-summary" aria-label={t.summary}>
         {cards.map(card => {
           const content = <>
             <span>{card.label}</span>
@@ -115,14 +119,14 @@ export function OverviewBody({ organizationId, projectId, environmentId, state }
       </div>
     </WorkspaceSection>
 
-    <WorkspaceSection title="Needs attention" actions={overview.attention.total > overview.attention.items.length
-      ? <span className="muted-cell">Showing {overview.attention.items.length} of {overview.attention.total}</span> : null}>
-      {overview.attention.items.length === 0 ? <EmptyWorkspaceState title="No items need attention" /> :
-        <ol className="activity-timeline" aria-label="Needs attention">
+    <WorkspaceSection title={t.attention} actions={overview.attention.total > overview.attention.items.length
+      ? <span className="muted-cell">{t.showing(overview.attention.items.length, overview.attention.total)}</span> : null}>
+      {overview.attention.items.length === 0 ? <EmptyWorkspaceState title={t.noAttention} detail={t.noAttentionDetail} /> :
+        <ol className="activity-timeline" aria-label={t.attention}>
           {overview.attention.items.map(item => {
-            const presentation = getAttentionPresentation(organizationId, item)
+            const presentation = getAttentionPresentation(organizationId, item, i18n)
             return <li key={`${item.kind}-${item.id}`} className="activity-entry" data-kind={item.kind}>
-              <span className="activity-time">{new Date(item.occurredAt).toLocaleString()}</span>
+              <span className="activity-time">{i18n.format.relative(item.occurredAt)}</span>
               <span className="activity-title">{presentation.title}</span>
               <span className="activity-detail">
                 {presentation.to !== null
@@ -136,8 +140,8 @@ export function OverviewBody({ organizationId, projectId, environmentId, state }
         </ol>}
     </WorkspaceSection>
 
-    <WorkspaceSection title="Recent activity">
-      {overview.recentActivity.length === 0 ? <EmptyWorkspaceState title="No recent activity" />
+    <WorkspaceSection title={t.activity}>
+      {overview.recentActivity.length === 0 ? <EmptyWorkspaceState title={t.noActivity} detail={t.noActivityDetail} />
         : <ActivityTimeline events={overview.recentActivity} organizationId={organizationId} />}
     </WorkspaceSection>
   </>

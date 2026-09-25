@@ -1,14 +1,7 @@
-import { EnvironmentKind } from '../../types/navigation'
+import type { I18n } from '../../i18n'
 
-export function getEnvironmentKindLabel(kind: string): string {
-  switch (kind) {
-    case EnvironmentKind.dev: return 'Development'
-    case EnvironmentKind.test: return 'Test'
-    case EnvironmentKind.stage: return 'Staging'
-    case EnvironmentKind.prod: return 'Production'
-    case EnvironmentKind.custom: return 'Custom'
-    default: return kind
-  }
+export function getEnvironmentKindLabel(kind: string, i18n: I18n): string {
+  return (i18n.t.environmentKinds as Record<string, string>)[kind] ?? kind
 }
 
 export function validSelection<T extends { id: string }>(

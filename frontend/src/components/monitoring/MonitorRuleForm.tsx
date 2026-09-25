@@ -13,6 +13,7 @@ import {
   isSupportedOperator,
   type DurationUnit,
 } from './monitorRulePresentation'
+import { useI18n } from '../../i18n'
 
 interface MonitorRuleFormProps {
   rule?: MonitorRuleResponse
@@ -51,6 +52,8 @@ export function MonitorRuleForm({
   onSubmit,
   onCancel,
 }: MonitorRuleFormProps) {
+  const i18n = useI18n()
+  const t = i18n.t.monitoring
   const [form, setForm] = useState<FormState | null>(() => rule === undefined ? defaultState : stateFromRule(rule))
   const [validationError, setValidationError] = useState<string | undefined>()
 
@@ -72,19 +75,19 @@ export function MonitorRuleForm({
     const noDataValue = Number(form.noDataValue)
 
     if (form.threshold.trim() === '' || !Number.isFinite(threshold)) {
-      setValidationError('Enter a finite threshold.')
+      setValidationError(t.validation.threshold)
       return
     }
     if (threshold < 0 || threshold > 100) {
-      setValidationError('Threshold must be between 0 and 100 percent.')
+      setValidationError(t.validation.thresholdRange)
       return
     }
     if (form.durationValue.trim() === '' || !Number.isFinite(durationValue) || durationValue < 0) {
-      setValidationError('Duration must be zero or greater.')
+      setValidationError(t.validation.duration)
       return
     }
     if (form.noDataValue.trim() === '' || !Number.isFinite(noDataValue) || noDataValue < 0) {
-      setValidationError('No data timeout must be zero or greater.')
+      setValidationError(t.validation.noData)
       return
     }
 
@@ -101,9 +104,9 @@ export function MonitorRuleForm({
   if (form === null) {
     return (
       <div className="monitor-rule-form">
-        <p className="form-error" role="alert">This rule type is not supported for editing yet.</p>
+        <p className="form-error" role="alert">{t.unsupportedForm}</p>
         <div className="dialog-actions">
-          <button className="secondary-button" type="button" onClick={onCancel}>Close</button>
+          <button className="secondary-button" type="button" onClick={onCancel}>{i18n.t.common.close}</button>
         </div>
       </div>
     )
@@ -114,62 +117,62 @@ export function MonitorRuleForm({
   return (
     <form className="monitor-rule-form" onSubmit={submit}>
       <label>
-        Metric
+        {t.form.metric}
         <select value={form.metricCode} onChange={(event) => update('metricCode', event.target.value as KnownMetricCode)}>
           {supportedMetricCodes().map((metricCode) => (
-            <option key={metricCode} value={metricCode}>{getMetricLabel(metricCode)}</option>
+            <option key={metricCode} value={metricCode}>{getMetricLabel(metricCode, i18n)}</option>
           ))}
         </select>
       </label>
       <label>
-        Operator
+        {t.form.operator}
         <select value={form.operator} onChange={(event) => update('operator', event.target.value as MonitorOperatorCode)}>
           {supportedOperators().map((operator) => (
-            <option key={operator} value={operator}>{getOperatorLabel(operator)}</option>
+            <option key={operator} value={operator}>{getOperatorLabel(operator, i18n)}</option>
           ))}
         </select>
       </label>
       <label>
-        Threshold
+        {t.form.threshold}
         <input type="number" step="0.1" value={form.threshold} onChange={(event) => update('threshold', event.target.value)} />
       </label>
       <div className="duration-fields">
         <label>
-          For
+          {t.form.for}
           <input type="number" min="0" step="1" value={form.durationValue} onChange={(event) => update('durationValue', event.target.value)} />
         </label>
         <label>
-          Unit
+          {t.form.unit}
           <select value={form.durationUnit} onChange={(event) => update('durationUnit', event.target.value as DurationUnit)}>
-            <option value="seconds">Seconds</option>
-            <option value="minutes">Minutes</option>
-            <option value="hours">Hours</option>
+            <option value="seconds">{t.form.units.seconds}</option>
+            <option value="minutes">{t.form.units.minutes}</option>
+            <option value="hours">{t.form.units.hours}</option>
           </select>
         </label>
       </div>
       <div className="duration-fields">
         <label>
-          No data for
+          {t.form.noDataFor}
           <input type="number" min="0" step="1" value={form.noDataValue} onChange={(event) => update('noDataValue', event.target.value)} />
         </label>
         <label>
-          Unit
+          {t.form.unit}
           <select value={form.noDataUnit} onChange={(event) => update('noDataUnit', event.target.value as DurationUnit)}>
-            <option value="seconds">Seconds</option>
-            <option value="minutes">Minutes</option>
-            <option value="hours">Hours</option>
+            <option value="seconds">{t.form.units.seconds}</option>
+            <option value="minutes">{t.form.units.minutes}</option>
+            <option value="hours">{t.form.units.hours}</option>
           </select>
         </label>
       </div>
       <label className="checkbox-field">
         <input type="checkbox" checked={form.enabled} onChange={(event) => update('enabled', event.target.checked)} />
-        Enabled
+        {t.form.enabled}
       </label>
       {error !== undefined ? <p className="form-error" role="alert">{error}</p> : null}
       <div className="dialog-actions">
-        <button className="secondary-button" type="button" onClick={onCancel}>Cancel</button>
+        <button className="secondary-button" type="button" onClick={onCancel}>{i18n.t.common.cancel}</button>
         <button className="primary-button" type="submit" disabled={pending}>
-          {pending ? 'Saving…' : 'Save'}
+          {pending ? i18n.t.common.saving : i18n.t.common.save}
         </button>
       </div>
     </form>

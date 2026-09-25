@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 
-import { ApiError } from '../api/httpClient'
 import { useEnvironmentResources } from '../api/resources'
 import { useEnvironments } from '../api/navigation'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
 import { ResourceTree } from '../components/resources/ResourceTree'
 import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
 import { filterResourcesForTree } from '../components/resources/filterResourcesForTree'
+import { useI18n } from '../i18n'
+import { describeError } from '../i18n/errors'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
 export function EnvironmentPage() {
@@ -27,6 +29,8 @@ interface EnvironmentContentProps {
 }
 
 function EnvironmentContent({ organizationId, environmentId }: EnvironmentContentProps) {
+  const i18n = useI18n()
+  const t = i18n.t.resources
   const resourcesQuery = useEnvironmentResources(organizationId, environmentId)
   const [searchParams] = useSearchParams()
   const projectId = searchParams.get('project')
@@ -39,64 +43,33 @@ function EnvironmentContent({ organizationId, environmentId }: EnvironmentConten
   return (
     <AppShell>
       <div className="workspace-page">
-      <WorkspaceHeader title="Infrastructure" subtitle={environment ? `${environment.name} · ${environment.kind}` : `Environment · ${shortId(environmentId)}`} />
-      <WorkspaceSection title="Resources" actions={resourcesQuery.data ? <span className="resource-count">{visibleResources.length} of {resourcesQuery.data.length}</span> : null}>
+      <WorkspaceHeader title={t.title}
+        subtitle={environment ? t.subtitle(environment.name, getEnvironmentKindLabel(environment.kind, i18n)) : t.subtitleFallback} />
+      <WorkspaceSection title={t.section} actions={resourcesQuery.data ? <span className="resource-count">{i18n.t.common.shown(visibleResources.length, resourcesQuery.data.length)}</span> : null}>
         <div className="filter-bar">
-          <label>Search<input type="search" placeholder="Name or code" value={search} onChange={event => setSearch(event.target.value)} /></label>
-          <label>Type<select value={type} onChange={event => setType(event.target.value)}><option value="ALL">All</option>
+          <label>{i18n.t.common.search}<input type="search" placeholder={i18n.t.common.searchPlaceholder} value={search} onChange={event => setSearch(event.target.value)} /></label>
+          <label>{i18n.t.common.type}<select value={type} onChange={event => setType(event.target.value)}><option value="ALL">{i18n.t.common.all}</option>
             {resourcePresentationRegistry.list().map(presentation =>
-              <option key={presentation.code} value={presentation.code}>{presentation.label}</option>)}</select></label>
-          <button className="secondary-button" type="button" onClick={() => resourcesQuery.refetch()}>Refresh</button>
+              <option key={presentation.code} value={presentation.code}>{presentation.label(i18n)}</option>)}</select></label>
+          <button className="secondary-button" type="button" onClick={() => resourcesQuery.refetch()}>{i18n.t.common.refresh}</button>
         </div>
-        {resourcesQuery.isPending ? <ResourceTreeSkeleton /> : null}
-        {resourcesQuery.isError ? <ResourceTreeError error={resourcesQuery.error} retry={resourcesQuery.refetch} /> : null}
-        {resourcesQuery.data !== undefined && resourcesQuery.data.length === 0 ? <ResourceTreeEmpty /> : null}
+        {resourcesQuery.isPending ? <div className="tree-skeleton" aria-label={t.loading}><span /><span /><span /><span /></div> : null}
+        {resourcesQuery.isError ? (
+          <div className="state-message state-message-error" role="alert">
+            <h3>{t.loadError}</h3>
+            <p>{describeError(resourcesQuery.error, i18n)}</p>
+            <button className="retry-button" type="button" onClick={() => resourcesQuery.refetch()}>{i18n.t.common.retry}</button>
+          </div>
+        ) : null}
+        {resourcesQuery.data !== undefined && resourcesQuery.data.length === 0 ? <EmptyWorkspaceState title={t.empty} detail={t.emptyDetail} /> : null}
         {resourcesQuery.data !== undefined && resourcesQuery.data.length > 0 ? (
-          visibleResources.length ? <div className="table-scroll"><div className="tree-grid-header"><span>Name</span><span>Type</span><span>Status</span></div><ResourceTree
+          visibleResources.length ? <div className="table-scroll"><div className="tree-grid-header"><span>{t.columns.name}</span><span>{t.columns.type}</span><span>{t.columns.status}</span></div><ResourceTree
             resources={visibleResources}
             organizationId={organizationId}
             environmentId={environmentId}
-          /></div> : <EmptyWorkspaceState title="No resources match these filters" />
+          /></div> : <EmptyWorkspaceState title={t.noMatch} />
         ) : null}
       </WorkspaceSection></div>
     </AppShell>
   )
-}
-
-function ResourceTreeSkeleton() {
-  return (
-    <div className="tree-skeleton" aria-label="Loading resources">
-      <span />
-      <span />
-      <span />
-      <span />
-    </div>
-  )
-}
-
-function ResourceTreeEmpty() {
-  return (
-    <EmptyWorkspaceState title="No resources discovered yet" detail="Resources appear after a connection is synchronized." />
-  )
-}
-
-interface ResourceTreeErrorProps {
-  error: Error
-  retry: () => void
-}
-
-function ResourceTreeError({ error, retry }: ResourceTreeErrorProps) {
-  const message = error instanceof ApiError ? error.message : 'Please try again shortly.'
-
-  return (
-    <div className="state-message state-message-error" role="alert">
-      <h3>Unable to load infrastructure</h3>
-      <p>{message}</p>
-      <button className="retry-button" type="button" onClick={() => retry()}>Retry</button>
-    </div>
-  )
-}
-
-function shortId(value: string): string {
-  return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value
 }

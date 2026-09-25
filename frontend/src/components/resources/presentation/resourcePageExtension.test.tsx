@@ -19,7 +19,7 @@ vi.mock('./resourcePresentations', async () => {
 
   const testPresentation = {
     code: 'TEST_RESOURCE',
-    label: 'Test resource',
+    label: () => 'Test resource',
     Icon: Database,
     rowStatus: () => ({ label: 'Test row status', tone: 'info' as const }),
     headerStatus: () => ({ label: 'Test header status', tone: 'warning' as const }),
@@ -58,7 +58,7 @@ describe('registering a new resource presentation', () => {
     expect(html).toContain('Test resource name')
     expect(html).toContain('<dt>Test detail</dt><dd>test-code</dd>')
     expect(html).toContain('Test header status')
-    expect(html).not.toContain('Details are not available for this resource type')
+    expect(html).not.toContain('Подробности для этого типа ресурса недоступны')
     // A new presentation does not make monitoring apply to the type: that is a feature rule.
     expect(html).not.toContain('id="tab-metrics"')
     expect(html).not.toContain('id="tab-rules"')

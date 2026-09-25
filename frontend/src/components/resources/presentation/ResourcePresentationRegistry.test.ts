@@ -6,6 +6,10 @@ import { nodePresentation } from './NodePresentation'
 import { createResourcePresentationRegistry } from './ResourcePresentationRegistry'
 import { resourcePresentationRegistry, resourcePresentations } from './resourcePresentations'
 import type { ResourceResponse } from '../../../types/resource'
+import { createI18n } from '../../../i18n'
+
+const en = createI18n('en')
+const ru = createI18n('ru')
 
 function resource(resourceTypeCode: string, data: ResourceResponse['data']): ResourceResponse {
   return {
@@ -26,7 +30,7 @@ describe('resource presentation registry', () => {
     const rendering = resourcePresentationRegistry.resolve('NEW_SERVER_TYPE')
 
     expect(rendering).toBe(defaultResourcePresentation)
-    expect(rendering.rowStatus(resource('NEW_SERVER_TYPE', { kind: 'NODE', spec: null, status: null })))
+    expect(rendering.rowStatus(resource('NEW_SERVER_TYPE', { kind: 'NODE', spec: null, status: null }), en))
       .toEqual({ label: 'Unknown', tone: 'neutral' })
     expect(rendering.headerStatus).toBeUndefined()
     expect(rendering.MetricSummary).toBeUndefined()
@@ -40,20 +44,26 @@ describe('resource presentation registry', () => {
   it('keeps the row status of each shipped type', () => {
     expect(nodePresentation.rowStatus(resource('NODE', {
       kind: 'NODE', spec: null, status: { online: true, cpuUsagePercent: null, memoryUsagePercent: null, uptimeSeconds: null },
-    }))).toEqual({ label: 'Online', tone: 'success' })
-    expect(nodePresentation.rowStatus(resource('NODE', { kind: 'NODE', spec: null, status: null })))
-      .toEqual({ label: 'Unknown', tone: 'neutral' })
+    }), en)).toEqual({ label: 'Online', tone: 'success' })
+    expect(nodePresentation.rowStatus(resource('NODE', { kind: 'NODE', spec: null, status: null }), ru))
+      .toEqual({ label: 'Неизвестно', tone: 'neutral' })
     expect(containerPresentation.rowStatus(resource('CONTAINER', {
       kind: 'CONTAINER', spec: null, status: { state: 'running' },
-    }))).toEqual({ label: 'Running', tone: 'success' })
-    expect(containerPresentation.rowStatus(resource('CONTAINER', { kind: 'CONTAINER', spec: null, status: null })))
+    }), ru)).toEqual({ label: 'Работает', tone: 'success' })
+    expect(containerPresentation.rowStatus(resource('CONTAINER', { kind: 'CONTAINER', spec: null, status: null }), en))
       .toEqual({ label: 'Unknown', tone: 'neutral' })
+  })
+
+  it('labels each type in the active language', () => {
+    expect(nodePresentation.label(ru)).toBe('Сервер')
+    expect(nodePresentation.label(en)).toBe('Server')
+    expect(containerPresentation.label(ru)).toBe('Контейнер')
   })
 
   it('carries only the optional rendering pieces each type actually has', () => {
     expect(nodePresentation.MetricSummary).toBeDefined()
     expect(containerPresentation.MetricSummary).toBeUndefined()
     expect(nodePresentation.headerStatus).toBeDefined()
-    expect(containerPresentation.headerStatus).toBeUndefined()
+    expect(containerPresentation.headerStatus).toBeDefined()
   })
 })

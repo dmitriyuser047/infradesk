@@ -8,8 +8,8 @@ import {
   YAxis,
 } from 'recharts'
 
+import { useI18n } from '../../i18n'
 import type { MetricPoint } from '../../types/metric'
-import { formatMetricTime } from './formatters'
 
 interface MetricChartProps {
   title: string
@@ -17,12 +17,13 @@ interface MetricChartProps {
 }
 
 export function MetricChart({ title, data }: MetricChartProps) {
+  const i18n = useI18n()
   if (data.length === 0) {
-    return <p className="metric-empty">No metric observations in the selected period.</p>
+    return <p className="metric-empty">{i18n.t.metrics.noObservations}</p>
   }
 
   return (
-    <div className="metric-chart" aria-label={`${title} history`}>
+    <div className="metric-chart" aria-label={i18n.t.metrics.history(title)}>
       <ResponsiveContainer width="100%" height={220}>
         <LineChart data={data} margin={{ top: 10, right: 12, bottom: 0, left: -18 }}>
           <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 3" vertical={false} />
@@ -31,7 +32,7 @@ export function MetricChart({ title, data }: MetricChartProps) {
             axisLine={false}
             tickLine={false}
             tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
-            tickFormatter={formatMetricTime}
+            tickFormatter={(value: string) => i18n.format.time(value)}
           />
           <YAxis
             domain={[0, 100]}
@@ -43,12 +44,12 @@ export function MetricChart({ title, data }: MetricChartProps) {
           <Tooltip
             contentStyle={{
               border: '1px solid var(--border)',
-              borderRadius: 6,
+              borderRadius: 8,
               backgroundColor: 'var(--surface)',
               color: 'var(--text)',
             }}
             cursor={{ stroke: 'var(--accent)', strokeWidth: 1 }}
-            labelFormatter={(label) => formatMetricTime(String(label))}
+            labelFormatter={(label) => i18n.format.time(String(label))}
             formatter={(value) => [`${Number(value).toFixed(1)}%`, title]}
           />
           <Line

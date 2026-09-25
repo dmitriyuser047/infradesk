@@ -1,3 +1,4 @@
+import type { I18n } from '../../i18n'
 import type { StatusTone } from '../layout/WorkspacePrimitives'
 import { MetricCode, type KnownMetricCode } from '../../types/metric'
 import { MonitorOperator, MonitorRuleStatus, type MonitorOperatorCode } from '../../types/monitorRule'
@@ -15,30 +16,12 @@ const secondsPerUnit: Record<DurationUnit, number> = {
   hours: 3_600,
 }
 
-export function getMetricLabel(metricCode: string): string {
-  switch (metricCode) {
-    case MetricCode.cpuUsagePercent:
-      return 'CPU usage'
-    case MetricCode.memoryUsagePercent:
-      return 'Memory usage'
-    default:
-      return metricCode
-  }
+export function getMetricLabel(metricCode: string, i18n: I18n): string {
+  return i18n.t.monitoring.metrics[metricCode] ?? metricCode
 }
 
-export function getOperatorLabel(operator: string): string {
-  switch (operator) {
-    case MonitorOperator.greaterThan:
-      return 'Greater than'
-    case MonitorOperator.greaterThanOrEqual:
-      return 'Greater than or equal'
-    case MonitorOperator.lessThan:
-      return 'Less than'
-    case MonitorOperator.lessThanOrEqual:
-      return 'Less than or equal'
-    default:
-      return operator
-  }
+export function getOperatorLabel(operator: string, i18n: I18n): string {
+  return i18n.t.monitoring.operators[operator] ?? operator
 }
 
 export function getOperatorSymbol(operator: string): string {
@@ -57,28 +40,30 @@ export function getOperatorSymbol(operator: string): string {
 }
 
 /** A rule with no no-data timeout keeps evaluating whatever observation it last received. */
-export function formatNoDataTimeout(seconds: number): string {
-  return seconds === 0 ? 'off' : formatRuleDuration(seconds)
+export function formatNoDataTimeout(seconds: number, i18n: I18n): string {
+  return seconds === 0 ? i18n.t.monitoring.off : formatRuleDuration(seconds, i18n)
 }
 
 export function getMonitorRuleStatusPresentation(
   status: string | null,
   enabled: boolean,
+  i18n: I18n,
 ): { label: string; tone: StatusTone } {
+  const t = i18n.t.monitoring
   if (!enabled) {
-    return { label: 'Disabled', tone: 'neutral' }
+    return { label: t.disabled, tone: 'neutral' }
   }
   switch (status) {
     case MonitorRuleStatus.ok:
-      return { label: 'OK', tone: 'success' }
+      return { label: t.statuses.OK, tone: 'success' }
     case MonitorRuleStatus.pending:
-      return { label: 'Pending', tone: 'warning' }
+      return { label: t.statuses.PENDING, tone: 'warning' }
     case MonitorRuleStatus.firing:
-      return { label: 'Firing', tone: 'danger' }
+      return { label: t.statuses.FIRING, tone: 'danger' }
     case MonitorRuleStatus.noData:
-      return { label: 'No data', tone: 'warning' }
+      return { label: t.statuses.NO_DATA, tone: 'warning' }
     default:
-      return { label: 'Enabled', tone: 'success' }
+      return { label: t.enabled, tone: 'success' }
   }
 }
 
@@ -96,13 +81,14 @@ export function secondsToDurationInput(seconds: number): DurationInput {
   return { value: seconds, unit: 'seconds' }
 }
 
-export function formatRuleDuration(seconds: number): string {
+export function formatRuleDuration(seconds: number, i18n: I18n): string {
   if (seconds === 0) {
-    return 'Immediately'
+    return i18n.t.monitoring.immediately
   }
 
   const duration = secondsToDurationInput(seconds)
-  const unit = duration.unit === 'seconds' ? 's' : duration.unit === 'minutes' ? 'm' : 'h'
+  const units = i18n.t.units
+  const unit = duration.unit === 'seconds' ? units.second : duration.unit === 'minutes' ? units.minute : units.hour
   return `${duration.value}${unit}`
 }
 

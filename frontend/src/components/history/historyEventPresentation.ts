@@ -1,3 +1,5 @@
+import type { I18n, Messages } from '../../i18n'
+import { describeFailure } from '../../i18n/errors'
 import type { HistoryEventResponse, HistoryEventType } from '../../types/historyEvent'
 
 export type HistoryTone = 'neutral' | 'positive' | 'warning' | 'critical'
@@ -6,18 +8,6 @@ export interface HistoryEventPresentation {
   title: string
   detail: string | null
   tone: HistoryTone
-}
-
-const titles: Record<HistoryEventType, string> = {
-  RESOURCE_DISCOVERED: 'Resource discovered',
-  RESOURCE_DEACTIVATED: 'Resource deactivated',
-  INCIDENT_OPENED: 'Incident opened',
-  INCIDENT_RESOLVED: 'Incident resolved',
-  OPERATION_REQUESTED: 'Operation requested',
-  OPERATION_SUCCEEDED: 'Operation succeeded',
-  OPERATION_FAILED: 'Operation failed',
-  OPERATION_UNKNOWN: 'Operation result unknown',
-  SYNC_FAILED: 'Synchronization failed',
 }
 
 const tones: Record<HistoryEventType, HistoryTone> = {
@@ -32,50 +22,37 @@ const tones: Record<HistoryEventType, HistoryTone> = {
   SYNC_FAILED: 'critical',
 }
 
-const operationLabels: Record<string, string> = {
-  CONTAINER_START: 'Start',
-  CONTAINER_STOP: 'Stop',
-  CONTAINER_RESTART: 'Restart',
-}
-
-const incidentReasons: Record<string, string> = {
-  THRESHOLD: 'Metric threshold exceeded',
-  NO_DATA: 'No metrics received',
-}
-
 /**
- * One place where an event type becomes something to read.
+ * One place where an event type becomes something to read, in the active language.
  *
  * The backend sends typed references and safe codes only, so the timeline never displays a
  * message the server rendered, and never a raw technical detail.
  */
-export function getHistoryEventPresentation(event: HistoryEventResponse): HistoryEventPresentation {
+export function getHistoryEventPresentation(event: HistoryEventResponse, i18n: I18n): HistoryEventPresentation {
   return {
-    title: title(event),
-    detail: detail(event),
+    title: title(event, i18n.t),
+    detail: detail(event, i18n),
     tone: tones[event.eventType] ?? 'neutral',
   }
 }
 
 /** How an operation code reads, wherever an operation is mentioned. */
-export function getOperationLabel(operationCode: string): string {
-  return operationLabels[operationCode] ?? operationCode
+export function getOperationLabel(operationCode: string, t: Messages): string {
+  return t.operations.labels[operationCode] ?? operationCode
 }
 
-/** How an incident reason reads, wherever an incident is mentioned. */
-export function getIncidentReasonLabel(reason: string): string {
-  return incidentReasons[reason] ?? reason
+/** How an incident reason reads as a sentence, wherever an incident is described. */
+export function getIncidentReasonLabel(reason: string, t: Messages): string {
+  return t.incidents.reasonDetails[reason] ?? reason
 }
 
-export function getHistoryActorLabel(event: HistoryEventResponse): string {
-  return event.actor === null ? 'System' : event.actor.displayName
+export function getHistoryActorLabel(event: HistoryEventResponse, i18n: I18n): string {
+  return event.actor === null ? i18n.t.history.system : event.actor.displayName
 }
 
-function title(event: HistoryEventResponse): string {
-  const base = titles[event.eventType] ?? event.eventType
-  const operation = event.operation === null ? null : operationLabels[event.operation.operationCode]
-
-  return operation === null || operation === undefined ? base : `${operation}: ${base.toLowerCase()}`
+function title(event: HistoryEventResponse, t: Messages): string {
+  const base = t.history.events[event.eventType] ?? event.eventType
+  return event.operation === null ? base : t.history.withOperation(getOperationLabel(event.operation.operationCode, t), base)
 }
 
 /**
@@ -86,17 +63,19 @@ function title(event: HistoryEventResponse): string {
  */
 const outcomeEvents: ReadonlySet<HistoryEventType> = new Set(['OPERATION_FAILED', 'OPERATION_UNKNOWN'])
 
-function detail(event: HistoryEventResponse): string | null {
-  if (outcomeEvents.has(event.eventType) && event.operation?.errorMessage != null) {
-    return event.operation.errorMessage
+function detail(event: HistoryEventResponse, i18n: I18n): string | null {
+  if (outcomeEvents.has(event.eventType) && event.operation !== null &&
+    (event.operation.errorCode !== null || event.operation.errorMessage !== null)) {
+    return describeFailure(event.operation.errorCode, event.operation.errorMessage, i18n,
+      i18n.t.history.events[event.eventType] ?? event.eventType)
   }
 
   if (event.incident !== null) {
-    return getIncidentReasonLabel(event.incident.reason)
+    return getIncidentReasonLabel(event.incident.reason, i18n.t)
   }
 
   if (event.sync?.errorCode != null) {
-    return `Error code ${event.sync.errorCode}`
+    return describeFailure(event.sync.errorCode, null, i18n, i18n.t.history.errorCode(event.sync.errorCode))
   }
 
   return null

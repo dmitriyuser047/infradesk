@@ -7,6 +7,7 @@ import { ApiError } from '../api/httpClient'
 import type { HistoryEventResponse } from '../types/historyEvent'
 import type { OperationsOverviewResponse } from '../types/overview'
 import { OverviewBody, OverviewPage, type OverviewState } from './OverviewPage'
+import { I18nProvider, type Locale } from '../i18n'
 
 const activity: HistoryEventResponse = {
   id: 'event', eventType: 'SYNC_FAILED', source: 'SYSTEM', occurredAt: '2026-09-25T09:00:00Z',
@@ -62,7 +63,7 @@ const empty: OperationsOverviewResponse = {
   recentActivity: [],
 }
 
-function render(path: string, role: 'OWNER' | 'MEMBER', data?: { key: unknown[]; value: OperationsOverviewResponse }) {
+function render(path: string, role: 'OWNER' | 'MEMBER', data?: { key: unknown[]; value: OperationsOverviewResponse }, locale: Locale = 'en') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   client.setQueryData(['me'], { id: 'user', email: 'member@example.com', displayName: 'Member' })
   client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Example org', role }])
@@ -71,26 +72,26 @@ function render(path: string, role: 'OWNER' | 'MEMBER', data?: { key: unknown[];
     { id: 'environment', organizationId: 'org', projectId: 'project', code: 'prod', name: 'Production', kind: 'PROD' },
   ])
   if (data !== undefined) client.setQueryData(data.key, data.value)
-  return renderToStaticMarkup(<QueryClientProvider client={client}>
+  return renderToStaticMarkup(<I18nProvider initialLocale={locale}><QueryClientProvider client={client}>
     <MemoryRouter initialEntries={[path]}><Routes>
       <Route path="/organizations/:organizationId/overview" element={<OverviewPage />} />
     </Routes></MemoryRouter>
-  </QueryClientProvider>)
+  </QueryClientProvider></I18nProvider>)
 }
 
 function body(state: Partial<OverviewState>): string {
   const full: OverviewState = { isPending: false, isError: false, error: null, data: undefined, refetch: () => undefined, ...state }
-  return renderToStaticMarkup(<MemoryRouter>
+  return renderToStaticMarkup(<I18nProvider initialLocale="en"><MemoryRouter>
     <OverviewBody organizationId="org" projectId={null} environmentId={null} state={full} />
-  </MemoryRouter>)
+  </MemoryRouter></I18nProvider>)
 }
 
 describe('operations overview page', () => {
   it('renders the fleet summary, attention in server order and recent activity', () => {
     const html = render('/organizations/org/overview', 'OWNER', { key: ['overview', 'org', null, null], value: loaded })
 
-    expect(html).toContain('Overview')
-    expect(html).toContain('Organization · all projects')
+    expect(html).toContain('Infrastructure overview')
+    expect(html).toContain('Whole organization')
     expect(html).toContain('2 online · 1 offline')
     expect(html).toContain('21 running · 3 stopped')
     expect(html).toContain('1 threshold · 1 no data')
@@ -98,12 +99,24 @@ describe('operations overview page', () => {
     expect(html).toContain('1 unknown · 1 failed')
     // The backend decides the order; the page keeps it.
     expect(html.indexOf('Stop: result unknown')).toBeLessThan(html.indexOf('No metrics received'))
-    expect(html.indexOf('No metrics received')).toBeLessThan(html.indexOf('Host identity changed'))
+    expect(html.indexOf('No metrics received')).toBeLessThan(html.indexOf('Server key has changed'))
     expect(html).toContain('Result unknown')
     expect(html).toContain('Incident open')
-    expect(html).toContain('Synchronization failed')
+    expect(html).toContain('Sync failed')
     // No raw identifiers are shown as text.
     expect(html).not.toMatch(/>[^<]*execution[^<]*</)
+  })
+
+  it('renders the overview in Russian by default', () => {
+    const html = render('/organizations/org/overview', 'OWNER', { key: ['overview', 'org', null, null], value: loaded }, 'ru')
+
+    expect(html).toContain('Обзор инфраструктуры')
+    expect(html).toContain('Требует внимания')
+    expect(html).toContain('Последние события')
+    expect(html).toContain('Остановить: результат неизвестен')
+    expect(html).toContain('Метрики не поступают')
+    expect(html).toContain('Ключ сервера изменился')
+    expect(html).not.toContain('Needs attention')
   })
 
   it('leads every attention item and activity entry to the real object', () => {
@@ -147,7 +160,7 @@ describe('operations overview page', () => {
     const html = render('/organizations/org/overview', 'OWNER', { key: ['overview', 'org', null, null], value: empty })
 
     expect(html).toContain('No infrastructure discovered yet')
-    expect(html).toContain('No items need attention')
+    expect(html).toContain('Everything is working')
     expect(html).toContain('No recent activity')
     expect(html).not.toContain('role="alert"')
   })
