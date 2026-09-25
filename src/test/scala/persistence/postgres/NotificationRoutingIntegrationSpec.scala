@@ -323,7 +323,7 @@ final class NotificationRoutingIntegrationSpec extends FunSuite {
   }
 
   /** The blocker: a worker never takes a delivery whose transport it cannot speak. */
-  test("the legacy worker claims its own deliveries and leaves every managed one pending") {
+  test("the legacy worker sees no managed delivery, and the managed worker sees them all") {
     withFixture { fixture =>
       for {
         telegram <- fixture.channel("Telegram Ops", NotificationChannelType.Telegram,
@@ -331,35 +331,24 @@ final class NotificationRoutingIntegrationSpec extends FunSuite {
         mail <- fixture.channel("Email Ops", NotificationChannelType.Email, Set(opened), Set(threshold))
         hook <- fixture.channel("Webhook Ops", NotificationChannelType.Webhook, Set(opened), Set(threshold))
         _ <- fixture.run(fixture.recorder(legacy = true).record(List(fixture.opened(threshold))))
+        _ <- fixture.makeDue
 
-        legacyClaim <- fixture.run(fixture.deliveries.claimPending(
-          NotificationDeliveryScope.Legacy, fixture.workerId, 100, 60))
+        legacyClaim <- fixture.claimed(NotificationDeliveryScope.Legacy)
+        managedClaim <- fixture.claimed(NotificationDeliveryScope.Managed)
         rows <- fixture.deliveryRows
       } yield IO {
         assertEquals(rows.size, 4)
-        // The legacy worker sees exactly one delivery: its own.
+        // The legacy worker reaches its own delivery and no other.
         assertEquals(legacyClaim.map(_.target), List(NotificationDeliveryTarget.LegacyWebhook))
-
-        val managed = rows.filter(_.target.channelId.isDefined)
-        assertEquals(managed.flatMap(_.target.channelId).toSet, Set(telegram, mail, hook))
         // A managed delivery addressed to a webhook is still not the legacy webhook's to send.
-        assertEquals(managed.map(_.status.code).distinct, List("PENDING"))
-        assert(managed.forall(_.claimedBy.isEmpty), "the legacy worker leased a managed delivery")
-        assert(managed.forall(_.claimedUntil.isEmpty))
-      }
-    }
-  }
+        assertEquals(managedClaim.flatMap(_.target.channelId).toSet, Set(telegram, mail, hook))
+        assertEquals(managedClaim.map(_.channelType.code).sorted,
+          List("EMAIL", "TELEGRAM", "WEBHOOK"))
 
-  test("a managed worker sees the managed deliveries and not the legacy one") {
-    withFixture { fixture =>
-      for {
-        _ <- fixture.channel("Telegram Ops", NotificationChannelType.Telegram, Set(opened), Set(threshold))
-        _ <- fixture.run(fixture.recorder(legacy = true).record(List(fixture.opened(threshold))))
-        managedClaim <- fixture.run(fixture.deliveries.claimPending(
-          NotificationDeliveryScope.Managed, fixture.workerId, 100, 60))
-      } yield IO {
-        assertEquals(managedClaim.size, 1)
-        assert(managedClaim.forall(_.target.channelId.isDefined))
+        // Nothing was sent and nothing is held: until a managed worker exists, these wait.
+        assertEquals(rows.map(_.status.code).distinct, List("PENDING"))
+        assert(rows.forall(_.claimedBy.isEmpty), "a delivery was left leased")
+        assert(rows.forall(_.claimedUntil.isEmpty))
       }
     }
   }
@@ -369,6 +358,12 @@ final class NotificationRoutingIntegrationSpec extends FunSuite {
       val fixture = new RoutingFixture(new DoobieTransactionRunner(xa))
       fixture.setUp *> body(fixture).flatten.guarantee(fixture.reset)
     }.unsafeRunSync()
+
+  /** A clock far enough ahead that nothing this spec records is ever due for a worker. */
+  private object NotAnyTimeSoon extends application.port.TimeProvider[ConnectionIO] {
+    private val moment = Instant.parse("2099-01-01T00:00:00Z")
+    override def now: ConnectionIO[Instant] = cats.effect.Sync[ConnectionIO].pure(moment)
+  }
 
   /** Counts the questions routing asks, so an N+1 shows up as a number rather than a hunch. */
   private final class CountingRoutingQuery(delegate: NotificationChannelRoutingQuery[ConnectionIO])
@@ -435,10 +430,39 @@ final class NotificationRoutingIntegrationSpec extends FunSuite {
         new application.audit.AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
           new ConnectionIOIdGenerator, new ConnectionIOTimeProvider))
 
+    /** Records with a clock far in the future, so the rows this spec writes are never due and no
+      * worker of another suite can lease them while this one is asserting about them. The claim
+      * path has no tenant of its own — a worker serves every organization — so the only way for
+      * suites sharing a database to stay out of each other's way is to not be due.
+      */
     def recorder(legacy: Boolean): RecordNotificationDeliveries[ConnectionIO] =
       new RecordNotificationDeliveries[ConnectionIO](deliveries, routing,
-        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider,
+        new ConnectionIOIdGenerator, NotAnyTimeSoon,
         if (legacy) List(NotificationDeliveryTarget.LegacyWebhook) else Nil)
+
+    /** Brings this spec's own deliveries forward, for the tests that are about claiming. */
+    def makeDue: IO[Unit] = run(sql"""
+      update notification_delivery set next_attempt_at = current_timestamp
+       where organization_id = $OrganizationId
+    """.update.run.void)
+
+    /** What a worker of this scope would reach, of this organization's deliveries.
+      *
+      * The claim runs in a transaction that is rolled back, so the rows of other suites that it
+      * touched on the way are released untouched, and this spec's own rows stay as they were.
+      */
+    def claimed(scope: NotificationDeliveryScope): IO[List[NotificationDelivery]] = {
+      val captured = new java.util.concurrent.atomic.AtomicReference(List.empty[NotificationDelivery])
+      // The error is raised inside the transaction and caught outside it: caught inside, doobie
+      // would commit the very lease this is trying not to take.
+      run(for {
+        rows <- deliveries.claimPending(scope, workerId, 100, 60)
+        _ <- cats.effect.Sync[ConnectionIO].delay(
+          captured.set(rows.filter(_.organizationId == OrganizationId)))
+        _ <- cats.effect.Sync[ConnectionIO].raiseError[Unit](
+          new IllegalStateException("rolling the claim back"))
+      } yield ()).attempt *> IO(captured.get())
+    }
 
     def run[A](program: ConnectionIO[A]): IO[A] = runner.run(program)
 
