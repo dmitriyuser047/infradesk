@@ -31,18 +31,42 @@ final case class TelegramChannelRequest(chatId: Option[String], botToken: Option
 
 final case class WebhookChannelRequest(url: Option[String])
 
-/** One request shape for both channel types: the type decides which section is read, and a
-  * section of the other type is simply not consulted.
+/** What both write requests have in common.
   *
-  * On an update an absent token or URL means "keep the stored credential"; it never means "clear
-  * it", and there is no way to ask for the stored one back.
+  * A request carries the configuration of the type it declares and of no other: sending a
+  * Telegram section on a webhook channel is a contradiction, not a section to ignore.
   */
-final case class SaveNotificationChannelRequest(
+sealed trait SaveNotificationChannelRequest {
+  def name: String
+  def channelType: String
+  def events: List[String]
+  def reasons: List[String]
+  def telegram: Option[TelegramChannelRequest]
+  def webhook: Option[WebhookChannelRequest]
+}
+
+final case class CreateNotificationChannelRequest(
   name: String,
   channelType: String,
-  enabled: Boolean,
+  enabled: Option[Boolean],
   events: List[String],
   reasons: List[String],
   telegram: Option[TelegramChannelRequest],
   webhook: Option[WebhookChannelRequest]
-)
+) extends SaveNotificationChannelRequest
+
+/** An update carries no `enabled`: a channel is switched on and off through its own operations,
+  * which are journalled as what they are. A body that asks for the lifecycle here is rejected
+  * rather than quietly dropped.
+  *
+  * An absent token or URL means "keep the stored credential"; it never means "clear it", and
+  * there is no way to ask for the stored one back.
+  */
+final case class UpdateNotificationChannelRequest(
+  name: String,
+  channelType: String,
+  events: List[String],
+  reasons: List[String],
+  telegram: Option[TelegramChannelRequest],
+  webhook: Option[WebhookChannelRequest]
+) extends SaveNotificationChannelRequest

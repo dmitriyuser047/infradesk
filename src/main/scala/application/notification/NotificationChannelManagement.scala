@@ -25,19 +25,40 @@ import java.util.UUID
 final case class NotificationChannelError(code: String, override val getMessage: String)
   extends RuntimeException(getMessage)
 
-/** What a caller asks for when creating or changing a channel.
+/** What every request to write a channel carries.
   *
-  * The settings carry the channel type, so there is no way to describe a Telegram channel with a
-  * webhook configuration. The credential is optional on update only: absent means "keep the one
-  * that is stored".
+  * The settings hold the channel type, so there is no way to describe a Telegram channel with a
+  * webhook configuration. A credential is required to create a channel; on an update an absent
+  * one means "keep the stored credential".
   */
-final case class NotificationChannelCommand(
+sealed trait NotificationChannelWrite {
+  def name: String
+  def subscriptions: NotificationSubscriptions
+  def settings: NotificationChannelSettings
+  def credential: Option[NotificationChannelCredential]
+}
+
+/** A new channel decides whether it starts switched on. */
+final case class CreateNotificationChannelCommand(
   name: String,
   enabled: Boolean,
   subscriptions: NotificationSubscriptions,
   settings: NotificationChannelSettings,
   credential: Option[NotificationChannelCredential]
-)
+) extends NotificationChannelWrite
+
+/** An update changes the configuration of a channel and nothing about its lifecycle.
+  *
+  * Switching a channel on or off is its own operation with its own journal entry, so this command
+  * simply has nowhere to put an `enabled`: changing the lifecycle through an update has no
+  * representation rather than being silently ignored.
+  */
+final case class UpdateNotificationChannelCommand(
+  name: String,
+  subscriptions: NotificationSubscriptions,
+  settings: NotificationChannelSettings,
+  credential: Option[NotificationChannelCredential]
+) extends NotificationChannelWrite
 
 /** Creating, changing and switching off notification channels.
   *
@@ -54,7 +75,10 @@ final class NotificationChannelManagement[Tx[_]: MonadThrow](
   audit: AuditRecorder[Tx]
 ) {
 
-  def create(actor: ActorContext, command: NotificationChannelCommand): Tx[NotificationChannel] =
+  def create(
+    actor: ActorContext,
+    command: CreateNotificationChannelCommand
+  ): Tx[NotificationChannel] =
     for {
       _ <- raiseIfInvalid(validate(command))
       credential <- command.credential.liftTo[Tx](
@@ -78,7 +102,7 @@ final class NotificationChannelManagement[Tx[_]: MonadThrow](
   def update(
     actor: ActorContext,
     id: UUID,
-    command: NotificationChannelCommand
+    command: UpdateNotificationChannelCommand
   ): Tx[NotificationChannel] =
     for {
       _ <- raiseIfInvalid(validate(command))
@@ -92,7 +116,9 @@ final class NotificationChannelManagement[Tx[_]: MonadThrow](
       replacement <- command.credential.traverse(credential =>
         ids.nextId.map(secretId => cipher.encrypt(secretId, actor.organizationId, credential)))
       _ <- replacement.traverse_(secrets.save)
-      next = stored.copy(name = command.name.trim, enabled = command.enabled,
+      // The lifecycle is not part of an update: a stored channel keeps the state that enable
+      // and disable gave it.
+      next = stored.copy(name = command.name.trim,
         subscriptions = command.subscriptions, settings = trimmed(command.settings),
         secretId = replacement.map(_.id).getOrElse(stored.secretId), updatedAt = now)
       _ <- channels.save(next)
@@ -104,17 +130,23 @@ final class NotificationChannelManagement[Tx[_]: MonadThrow](
 
   /** Switching a channel off is the lifecycle of this version: nothing is deleted, so the
     * delivery history of a channel keeps its subject.
+    *
+    * Asking for the state a channel is already in changes nothing and is journalled as nothing:
+    * the journal claims a transition only where a transition happened, and the answer is the row
+    * as it stands rather than a timestamp the database does not hold.
     */
   def setEnabled(actor: ActorContext, id: UUID, enabled: Boolean): Tx[NotificationChannel] =
-    for {
-      stored <- load(actor.organizationId, id)
-      now <- time.now
-      next = stored.copy(enabled = enabled, updatedAt = now)
-      _ <- if (stored.enabled == enabled) ().pure[Tx] else channels.save(next)
-      action = if (enabled) AuditAction.NotificationChannelEnabled
-        else AuditAction.NotificationChannelDisabled
-      _ <- audit.record(actor, action, AuditTargetType.NotificationChannel, Some(id))
-    } yield next
+    load(actor.organizationId, id).flatMap { stored =>
+      if (stored.enabled == enabled) stored.pure[Tx]
+      else for {
+        now <- time.now
+        next = stored.copy(enabled = enabled, updatedAt = now)
+        _ <- channels.save(next)
+        action = if (enabled) AuditAction.NotificationChannelEnabled
+          else AuditAction.NotificationChannelDisabled
+        _ <- audit.record(actor, action, AuditTargetType.NotificationChannel, Some(id))
+      } yield next
+    }
 
   /** Reads the row and holds it for the rest of the transaction, so two concurrent edits of one
     * channel are applied one after the other instead of one overwriting the other.
@@ -131,7 +163,7 @@ final class NotificationChannelManagement[Tx[_]: MonadThrow](
       case NotificationChannelSettings.Webhook => NotificationChannelSettings.Webhook
     }
 
-  private def validate(command: NotificationChannelCommand): Either[NotificationChannelError, Unit] =
+  private def validate(command: NotificationChannelWrite): Either[NotificationChannelError, Unit] =
     for {
       _ <- check(command.name.trim.nonEmpty && command.name.trim.length <= 255,
         "Invalid notification channel name")
@@ -169,7 +201,7 @@ final class NotificationChannelManagement[Tx[_]: MonadThrow](
 
   private def requireCredentialForTypeChange(
     stored: NotificationChannel,
-    command: NotificationChannelCommand
+    command: UpdateNotificationChannelCommand
   ): Either[NotificationChannelError, Unit] =
     if (stored.channelType == command.settings.channelType || command.credential.nonEmpty) Right(())
     else Left(NotificationChannelError("NOTIFICATION_CREDENTIAL_REQUIRED",

@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package infrastructure.http.mapper
 
-import application.notification.NotificationChannelCommand
+import application.notification.{CreateNotificationChannelCommand, UpdateNotificationChannelCommand}
 import domain.incident.IncidentReason
 import domain.notification.{
   NotificationChannel,
@@ -12,9 +12,11 @@ import domain.notification.{
   NotificationSubscriptions
 }
 import infrastructure.http.dto.{
+  CreateNotificationChannelRequest,
   NotificationChannelConfigResponse,
   NotificationChannelResponse,
-  SaveNotificationChannelRequest
+  SaveNotificationChannelRequest,
+  UpdateNotificationChannelRequest
 }
 
 /** Between the wire and the domain, in both directions.
@@ -48,21 +50,65 @@ object NotificationChannelHttpMapper {
   /** Rejects anything the domain does not recognise before it reaches a use case: unknown codes,
     * and a configuration that belongs to another channel type.
     */
-  def toCommand(
+  def toCreateCommand(
+    request: CreateNotificationChannelRequest
+  ): Either[IllegalArgumentException, CreateNotificationChannelCommand] =
+    parse(request).map { case (settings, credential) =>
+      CreateNotificationChannelCommand(
+        name = request.name,
+        // A channel that does not say otherwise is created switched on: it was configured to be
+        // used, and switching it off is a decision of its own.
+        enabled = request.enabled.getOrElse(true),
+        subscriptions = subscriptions(request),
+        settings = settings,
+        credential = credential
+      )
+    }
+
+  def toUpdateCommand(
+    request: UpdateNotificationChannelRequest
+  ): Either[IllegalArgumentException, UpdateNotificationChannelCommand] =
+    parse(request).map { case (settings, credential) =>
+      UpdateNotificationChannelCommand(
+        name = request.name,
+        subscriptions = subscriptions(request),
+        settings = settings,
+        credential = credential
+      )
+    }
+
+  private def parse(
     request: SaveNotificationChannelRequest
-  ): Either[IllegalArgumentException, NotificationChannelCommand] =
+  ): Either[IllegalArgumentException, (NotificationChannelSettings, Option[NotificationChannelCredential])] =
     for {
       channelType <- NotificationChannelType.fromCode(request.channelType)
-      events <- traverse(request.events)(NotificationEventType.fromCode)
-      reasons <- traverse(request.reasons)(IncidentReason.fromCode)
+      _ <- traverse(request.events)(NotificationEventType.fromCode)
+      _ <- traverse(request.reasons)(IncidentReason.fromCode)
+      _ <- requireOneSection(channelType, request)
       settings <- settingsOf(channelType, request)
-      credential = credentialOf(channelType, request)
-    } yield NotificationChannelCommand(
-      name = request.name,
-      enabled = request.enabled,
-      subscriptions = NotificationSubscriptions(events.toSet, reasons.toSet),
-      settings = settings,
-      credential = credential
+    } yield (settings, credentialOf(channelType, request))
+
+  /** A request describes one channel type, so it carries the configuration of that type only.
+    * A section belonging to another type is a contradiction the caller has to resolve, not
+    * something to drop on their behalf.
+    */
+  private def requireOneSection(
+    channelType: NotificationChannelType,
+    request: SaveNotificationChannelRequest
+  ): Either[IllegalArgumentException, Unit] = {
+    val foreign = channelType match {
+      case NotificationChannelType.Webhook => request.telegram.isDefined
+      case NotificationChannelType.Telegram => request.webhook.isDefined
+    }
+    Either.cond(!foreign, (), new IllegalArgumentException(
+      s"A ${channelType.code} channel carries no configuration of another channel type"))
+  }
+
+  /** Both lists are already known to parse; this is where they become the domain value. */
+  private def subscriptions(request: SaveNotificationChannelRequest): NotificationSubscriptions =
+    NotificationSubscriptions(
+      request.events.flatMap(NotificationEventType.fromCode(_).toOption).toSet,
+      request.reasons.flatMap(IncidentReason.fromCode(_).toOption).toSet
     )
 
   private def settingsOf(

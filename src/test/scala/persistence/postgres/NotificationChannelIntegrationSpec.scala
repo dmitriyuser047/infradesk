@@ -2,7 +2,11 @@ package ru.bitec.app.ops
 package persistence.postgres
 
 import application.auth.ActorContext
-import application.notification.{NotificationChannelCommand, NotificationChannelManagement}
+import application.notification.{
+  CreateNotificationChannelCommand,
+  NotificationChannelManagement,
+  UpdateNotificationChannelCommand
+}
 import application.port.{NotificationChannelRepository, NotificationChannelSecretRepository}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -106,10 +110,10 @@ final class NotificationChannelIntegrationSpec extends FunSuite {
       for {
         channel <- fixture.run(fixture.management.create(fixture.actor, telegram()))
         renamed <- fixture.run(fixture.management.update(fixture.actor, channel.id,
-          telegram(name = "Renamed", credential = None)))
+          edit(name = "Renamed")))
         keptSecret <- fixture.run(fixture.secrets.find(OrganizationId, renamed.secretId))
         rotated <- fixture.run(fixture.management.update(fixture.actor, channel.id,
-          telegram(name = "Renamed",
+          edit(name = "Renamed",
             credential = Some(NotificationChannelCredential.TelegramBotToken("999:rotated")))))
         remaining <- fixture.run(
           sql"select count(*) from notification_channel_secret where organization_id = $OrganizationId"
@@ -124,6 +128,68 @@ final class NotificationChannelIntegrationSpec extends FunSuite {
         assertEquals(remaining, 1L)
         assertEquals(rotatedSecret.map(fixture.cipher.decrypt),
           Some(NotificationChannelCredential.TelegramBotToken("999:rotated")))
+      }
+    }
+  }
+
+  test("a lifecycle transition is one commit; asking for the state it is in writes nothing") {
+    withFixture { fixture =>
+      for {
+        channel <- fixture.run(fixture.management.create(fixture.actor, telegram(enabled = false)))
+        // What the database holds, which is what a no-op has to answer with.
+        created <- fixture.run(fixture.channels.findById(OrganizationId, channel.id))
+        // The state it is already in: no update, no journal entry, and the row it already has.
+        noop <- fixture.run(fixture.management.setEnabled(fixture.actor, channel.id, enabled = false))
+        afterNoop <- fixture.run(fixture.channels.findById(OrganizationId, channel.id))
+        enabled <- fixture.run(fixture.management.setEnabled(fixture.actor, channel.id, enabled = true))
+        afterEnable <- fixture.run(fixture.channels.findById(OrganizationId, channel.id))
+        disabled <- fixture.run(fixture.management.setEnabled(fixture.actor, channel.id, enabled = false))
+        afterDisable <- fixture.run(fixture.channels.findById(OrganizationId, channel.id))
+        journal <- fixture.run(sql"""
+          select action from audit_event
+           where organization_id = $OrganizationId and target_id = ${channel.id}
+           order by created_at, action
+        """.query[String].to[List])
+      } yield IO {
+        // The answer of a no-op is the stored row, timestamp included, and the row does not move.
+        assertEquals(Some(noop), created)
+        assertEquals(afterNoop, created)
+
+        assertEquals(afterEnable.map(_.enabled), Some(true))
+        assert(afterEnable.exists(_.updatedAt.isAfter(created.get.updatedAt)),
+          "the transition left the timestamp where it was")
+        assertEquals(afterDisable.map(_.enabled), Some(false))
+        assert(afterDisable.exists(_.updatedAt.isAfter(afterEnable.get.updatedAt)),
+          "the second transition left the timestamp where it was")
+        // Both transitions answered with what they stored.
+        assertEquals(afterEnable.map(_.enabled), Some(enabled.enabled))
+        assertEquals(afterDisable.map(_.enabled), Some(disabled.enabled))
+
+        // One entry per transition that happened, and none for the one that did not.
+        assertEquals(journal.sorted, List("NOTIFICATION_CHANNEL_CREATED",
+          "NOTIFICATION_CHANNEL_DISABLED", "NOTIFICATION_CHANNEL_ENABLED").sorted)
+      }
+    }
+  }
+
+  test("two concurrent edits of one channel are applied one after the other") {
+    withFixture { fixture =>
+      for {
+        channel <- fixture.run(fixture.management.create(fixture.actor, telegram()))
+        // The first transaction takes the row and holds it; the second must wait for the lock
+        // rather than write over a snapshot taken before the first one committed.
+        rename = fixture.run(
+          fixture.channels.findByIdForUpdate(OrganizationId, channel.id) *>
+            sql"select pg_sleep(0.4)".query[String].unique *>
+            fixture.management.update(fixture.actor, channel.id, edit(name = "Renamed")))
+        disable = IO.sleep(scala.concurrent.duration.DurationInt(100).millis) *>
+          fixture.run(fixture.management.setEnabled(fixture.actor, channel.id, enabled = false))
+        _ <- IO.both(rename, disable)
+        stored <- fixture.run(fixture.channels.findById(OrganizationId, channel.id))
+      } yield IO {
+        // Neither change was lost: the second edit read what the first one wrote.
+        assertEquals(stored.map(_.name), Some("Renamed"))
+        assertEquals(stored.map(_.enabled), Some(false))
       }
     }
   }
@@ -191,18 +257,30 @@ final class NotificationChannelIntegrationSpec extends FunSuite {
       )
     """.update.run
 
+  private val everything = NotificationSubscriptions(
+    Set(NotificationEventType.IncidentOpened, NotificationEventType.IncidentResolved),
+    Set(IncidentReason.ThresholdViolation, IncidentReason.NoData)
+  )
+
   private def telegram(
     name: String = "Ops Telegram",
-    credential: Option[NotificationChannelCredential] =
-      Some(NotificationChannelCredential.TelegramBotToken(BotToken))
-  ): NotificationChannelCommand =
-    NotificationChannelCommand(
+    enabled: Boolean = true
+  ): CreateNotificationChannelCommand =
+    CreateNotificationChannelCommand(
       name = name,
-      enabled = true,
-      subscriptions = NotificationSubscriptions(
-        Set(NotificationEventType.IncidentOpened, NotificationEventType.IncidentResolved),
-        Set(IncidentReason.ThresholdViolation, IncidentReason.NoData)
-      ),
+      enabled = enabled,
+      subscriptions = everything,
+      settings = NotificationChannelSettings.Telegram("-100777"),
+      credential = Some(NotificationChannelCredential.TelegramBotToken(BotToken))
+    )
+
+  private def edit(
+    name: String = "Ops Telegram",
+    credential: Option[NotificationChannelCredential] = None
+  ): UpdateNotificationChannelCommand =
+    UpdateNotificationChannelCommand(
+      name = name,
+      subscriptions = everything,
       settings = NotificationChannelSettings.Telegram("-100777"),
       credential = credential
     )

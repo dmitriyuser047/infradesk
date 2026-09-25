@@ -2,16 +2,23 @@ package ru.bitec.app.ops
 package infrastructure.http
 
 import application.notification.{
+  CreateNotificationChannelCommand,
   GetNotificationChannel,
   ListNotificationChannels,
   NotificationChannelError,
-  NotificationChannelManagement
+  NotificationChannelManagement,
+  UpdateNotificationChannelCommand
 }
 import application.port.TransactionRunner
 import cats.effect.IO
 import domain.auth.OrganizationPermission
 import domain.notification.NotificationChannel
-import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs, SaveNotificationChannelRequest}
+import infrastructure.http.dto.{
+  ApiErrorResponse,
+  CreateNotificationChannelRequest,
+  HttpJsonCodecs,
+  UpdateNotificationChannelRequest
+}
 import infrastructure.http.mapper.NotificationChannelHttpMapper
 import org.http4s.{HttpRoutes, Response}
 import org.http4s.circe.{CirceEntityDecoder, CirceEntityEncoder}
@@ -66,7 +73,8 @@ final class NotificationChannelRoutes[Tx[_]](
     case request @ POST -> Root / "api" / "v1" / "organizations" / org / "notification-channels" =>
       authorization.require(request, OrganizationPermission.ManageNotifications) { context =>
         withOrganization(org, context.organizationId) { _ =>
-          withCommand(request) { command =>
+          withCommand[CreateNotificationChannelRequest, CreateNotificationChannelCommand](
+            request)(NotificationChannelHttpMapper.toCreateCommand) { command =>
             respond(runner.run(management.create(context.actor, command))
               .flatMap(channel => Created(NotificationChannelHttpMapper.toResponse(channel))))
           }
@@ -76,7 +84,8 @@ final class NotificationChannelRoutes[Tx[_]](
     case request @ PUT -> Root / "api" / "v1" / "organizations" / org / "notification-channels" / id =>
       authorization.require(request, OrganizationPermission.ManageNotifications) { context =>
         withChannel(org, context.organizationId, id) { (_, channelId) =>
-          withCommand(request) { command =>
+          withCommand[UpdateNotificationChannelRequest, UpdateNotificationChannelCommand](
+            request)(NotificationChannelHttpMapper.toUpdateCommand) { command =>
             respond(runner.run(management.update(context.actor, channelId, command)).flatMap(ok))
           }
         }
@@ -102,13 +111,17 @@ final class NotificationChannelRoutes[Tx[_]](
   private def ok(channel: NotificationChannel): IO[Response[IO]] =
     Ok(NotificationChannelHttpMapper.toResponse(channel))
 
-  private def withCommand(request: org.http4s.Request[IO])(
-    next: application.notification.NotificationChannelCommand => IO[Response[IO]]
+  /** A body that does not decode, or that describes a channel the domain does not recognise, is
+    * a bad request: nothing is read, written or journalled on the way.
+    */
+  private def withCommand[Body, Command](request: org.http4s.Request[IO])(
+    toCommand: Body => Either[IllegalArgumentException, Command]
+  )(next: Command => IO[Response[IO]])(
+    implicit decoder: org.http4s.EntityDecoder[IO, Body]
   ): IO[Response[IO]] =
-    request.as[SaveNotificationChannelRequest].attempt.flatMap {
+    request.as[Body].attempt.flatMap {
       case Left(_) => BadRequest(invalidRequest)
-      case Right(body) => NotificationChannelHttpMapper.toCommand(body)
-        .fold(_ => BadRequest(invalidRequest), next)
+      case Right(body) => toCommand(body).fold(_ => BadRequest(invalidRequest), next)
     }
 
   /** The organization of the path has to be the organization the caller was admitted to. */

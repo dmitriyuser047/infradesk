@@ -135,15 +135,12 @@ jobs:
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
-          # Build a representative production V21 dump. Restoring it proves that an older
-          # production schema is migrated forward to the current version before the backend is
-          # ready: the password-only secret schema of V22, and the notification channels of V23.
+          # Build a representative production V22 dump: the version production runs before this
+          # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
+          # V23 to the restored database before the backend reports itself ready.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
-          alter table connection_secret drop constraint ck_connection_secret_kind;
-          alter table connection_secret add constraint connection_secret_kind_check
-            check (kind = 'SSH_PASSWORD');
           drop table notification_channel;
           drop table notification_channel_secret;
           alter table notification_delivery drop constraint ck_notification_delivery_channel;
@@ -157,14 +154,14 @@ jobs:
           alter table audit_event drop constraint ck_audit_event_target_type;
           alter table audit_event add constraint ck_audit_event_target_type check (target_type in (
             'PROJECT','ENVIRONMENT','CONNECTION','MONITOR_RULE','RESOURCE'));
-          delete from flyway_schema_history where version in ('22', '23');
+          delete from flyway_schema_history where version = '23';
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway reapply the missing migration.
+          # recover the marker and let Flyway apply V23 to it.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -194,6 +191,11 @@ jobs:
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('notification_channel', 'notification_channel_secret')")"
           test "${channel_tables}" = "2"
+          # V23 also widened two existing constraints; a restored database carries them too.
+          channel_constraints="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from pg_constraint where (conname = 'ck_notification_delivery_channel' and pg_get_constraintdef(oid) like '%TELEGRAM%') or (conname = 'ck_audit_event_target_type' and pg_get_constraintdef(oid) like '%NOTIFICATION_CHANNEL%') or (conname = 'ck_notification_channel_settings')")"
+          test "${channel_constraints}" = "3"
           ./scripts/check-production.sh http://127.0.0.1:8081
       - name: Separate liveness from readiness while the database is down
         run: |

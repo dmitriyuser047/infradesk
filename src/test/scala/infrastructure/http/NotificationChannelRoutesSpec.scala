@@ -40,38 +40,42 @@ final class NotificationChannelRoutesSpec extends FunSuite {
   private val BotToken = "123456:AA-very-secret-bot-token"
   private val WebhookUrl = "https://hooks.example.test/t/secret-path"
 
+  /** A request body for either operation. Only a create carries `enabled`; an update has no
+    * lifecycle field at all, so the tests spell out which one they are sending.
+    */
   private def telegramBody(
     name: String = "Ops Telegram",
     chatId: Option[String] = Some("-1001234567890"),
     botToken: Option[String] = Some(BotToken),
     events: List[String] = List("INCIDENT_OPENED", "INCIDENT_RESOLVED"),
     reasons: List[String] = List("THRESHOLD", "NO_DATA"),
-    enabled: Boolean = true
+    enabled: Option[Boolean] = None
   ): Json = Json.obj(
     "name" -> Json.fromString(name),
     "type" -> Json.fromString("TELEGRAM"),
-    "enabled" -> Json.fromBoolean(enabled),
     "events" -> Json.arr(events.map(Json.fromString): _*),
     "reasons" -> Json.arr(reasons.map(Json.fromString): _*),
     "telegram" -> Json.obj(
       "chatId" -> chatId.fold(Json.Null)(Json.fromString),
       "botToken" -> botToken.fold(Json.Null)(Json.fromString)
     )
-  )
+  ).mapObject(fields =>
+    enabled.fold(fields)(value => fields.add("enabled", Json.fromBoolean(value))))
 
   private def webhookBody(
     name: String = "Automation",
     url: Option[String] = Some(WebhookUrl),
     events: List[String] = List("INCIDENT_OPENED"),
-    reasons: List[String] = List("THRESHOLD")
+    reasons: List[String] = List("THRESHOLD"),
+    enabled: Option[Boolean] = None
   ): Json = Json.obj(
     "name" -> Json.fromString(name),
     "type" -> Json.fromString("WEBHOOK"),
-    "enabled" -> Json.fromBoolean(true),
     "events" -> Json.arr(events.map(Json.fromString): _*),
     "reasons" -> Json.arr(reasons.map(Json.fromString): _*),
     "webhook" -> Json.obj("url" -> url.fold(Json.Null)(Json.fromString))
-  )
+  ).mapObject(fields =>
+    enabled.fold(fields)(value => fields.add("enabled", Json.fromBoolean(value))))
 
   test("creates a Telegram channel and answers with its configuration but never its token") {
     val fixture = new ChannelFixture
@@ -219,7 +223,7 @@ final class NotificationChannelRoutesSpec extends FunSuite {
 
   test("enable and disable are the lifecycle, and both are journalled") {
     val fixture = new ChannelFixture
-    val id = fixture.createdId(telegramBody(enabled = true))
+    val id = fixture.createdId(telegramBody(enabled = Some(true)))
 
     val disabled = fixture.post(s"${fixture.path(orgA, id)}/disable", Json.obj())
     assertEquals(disabled._1, Status.Ok)
@@ -239,6 +243,109 @@ final class NotificationChannelRoutesSpec extends FunSuite {
     assertEquals(fixture.audit.recorded.map(_.targetId).distinct, List(Some(id)))
     assertEquals(fixture.audit.recorded.map(_.actorUserId).distinct,
       List(support.AuthorizationFixtures.ActorUserId))
+  }
+
+  test("asking for the state a channel is already in changes nothing and claims nothing") {
+    val fixture = new ChannelFixture
+    val enabledId = fixture.createdId(telegramBody(enabled = Some(true)))
+    val disabledId = fixture.createdId(webhookBody(enabled = Some(false)))
+    val before = fixture.channels.map(channel => channel.id -> channel.updatedAt).toMap
+
+    val stillEnabled = fixture.post(s"${fixture.path(orgA, enabledId)}/enable", Json.obj())
+    val stillDisabled = fixture.post(s"${fixture.path(orgA, disabledId)}/disable", Json.obj())
+
+    assertEquals(stillEnabled._1, Status.Ok)
+    assertEquals(stillEnabled._2.hcursor.get[Boolean]("enabled"), Right(true))
+    assertEquals(stillDisabled._1, Status.Ok)
+    assertEquals(stillDisabled._2.hcursor.get[Boolean]("enabled"), Right(false))
+    // The answer is the row as it stands, not a timestamp the database does not hold.
+    assertEquals(stillEnabled._2.hcursor.get[String]("updatedAt"),
+      Right(before(enabledId).toString))
+    assertEquals(stillDisabled._2.hcursor.get[String]("updatedAt"),
+      Right(before(disabledId).toString))
+    assertEquals(fixture.channels.map(channel => channel.id -> channel.updatedAt).toMap, before)
+    // A transition that did not happen is not journalled as one.
+    assertEquals(fixture.audit.recorded.map(_.action.code),
+      List("NOTIFICATION_CHANNEL_CREATED", "NOTIFICATION_CHANNEL_CREATED"))
+  }
+
+  test("a real transition moves the timestamp and is journalled once") {
+    val fixture = new ChannelFixture
+    val id = fixture.createdId(telegramBody(enabled = Some(false)))
+    val created = fixture.channel(id).updatedAt
+    fixture.at(created.plusSeconds(60))
+
+    val enabled = fixture.post(s"${fixture.path(orgA, id)}/enable", Json.obj())
+    assertEquals(enabled._2.hcursor.get[Boolean]("enabled"), Right(true))
+    assertEquals(fixture.channel(id).updatedAt, created.plusSeconds(60))
+    assertEquals(enabled._2.hcursor.get[String]("updatedAt"),
+      Right(created.plusSeconds(60).toString))
+
+    fixture.at(created.plusSeconds(120))
+    val disabled = fixture.post(s"${fixture.path(orgA, id)}/disable", Json.obj())
+    assertEquals(disabled._2.hcursor.get[Boolean]("enabled"), Right(false))
+    assertEquals(fixture.channel(id).updatedAt, created.plusSeconds(120))
+
+    assertEquals(fixture.audit.recorded.map(_.action.code), List("NOTIFICATION_CHANNEL_CREATED",
+      "NOTIFICATION_CHANNEL_ENABLED", "NOTIFICATION_CHANNEL_DISABLED"))
+  }
+
+  test("an update changes the configuration and never the lifecycle") {
+    val fixture = new ChannelFixture
+    val disabled = fixture.createdId(telegramBody(enabled = Some(false)))
+    val enabled = fixture.createdId(webhookBody(name = "Automation", enabled = Some(true)))
+
+    // A body that asks for the lifecycle is refused rather than quietly obeyed or dropped.
+    val asksToEnable = fixture.put(fixture.path(orgA, disabled),
+      telegramBody(name = "Renamed", enabled = Some(true)))
+    val asksToDisable = fixture.put(fixture.path(orgA, enabled),
+      webhookBody(name = "Renamed", enabled = Some(false)))
+
+    assertEquals(asksToEnable._1, Status.BadRequest)
+    assertEquals(asksToDisable._1, Status.BadRequest)
+    assertEquals(fixture.channel(disabled).enabled, false)
+    assertEquals(fixture.channel(enabled).enabled, true)
+
+    // Without it the very same change is an ordinary update, and the lifecycle stays where it was.
+    assertEquals(fixture.put(fixture.path(orgA, disabled), telegramBody(name = "Renamed"))._1,
+      Status.Ok)
+    assertEquals(fixture.channel(disabled).enabled, false)
+    assertEquals(fixture.channel(disabled).name, "Renamed")
+    assertEquals(fixture.audit.recorded.map(_.action.code), List("NOTIFICATION_CHANNEL_CREATED",
+      "NOTIFICATION_CHANNEL_CREATED", "NOTIFICATION_CHANNEL_UPDATED"))
+  }
+
+  test("a request carries the configuration of one channel type only") {
+    val fixture = new ChannelFixture
+    val telegramWithWebhook = telegramBody().deepMerge(Json.obj(
+      "webhook" -> Json.obj("url" -> Json.fromString(WebhookUrl))))
+    val webhookWithTelegram = webhookBody().deepMerge(Json.obj(
+      "telegram" -> Json.obj("chatId" -> Json.fromString("-100777"))))
+
+    for (body <- List(telegramWithWebhook, webhookWithTelegram)) {
+      val result = fixture.post(fixture.path(orgA), body)
+      assertEquals(result._1, Status.BadRequest, clues(body.noSpaces))
+      assertEquals(result._2.hcursor.get[String]("code"), Right("INVALID_REQUEST"))
+    }
+    // Nothing was written, and nothing was journalled on the way.
+    assertEquals(fixture.channels, List.empty[NotificationChannel])
+    assertEquals(fixture.secrets, List.empty[NotificationChannelSecret])
+    assertEquals(fixture.audit.recorded, List.empty[domain.audit.AuditEvent])
+
+    val id = fixture.createdId(telegramBody())
+    assertEquals(fixture.put(fixture.path(orgA, id), telegramWithWebhook)._1, Status.BadRequest)
+    assertEquals(fixture.audit.recorded.map(_.action.code), List("NOTIFICATION_CHANNEL_CREATED"))
+  }
+
+  test("a channel is created switched on unless the request says otherwise") {
+    val fixture = new ChannelFixture
+
+    assertEquals(fixture.post(fixture.path(orgA), telegramBody())._2.hcursor.get[Boolean]("enabled"),
+      Right(true))
+    assertEquals(
+      fixture.post(fixture.path(orgA), webhookBody(enabled = Some(false)))._2
+        .hcursor.get[Boolean]("enabled"),
+      Right(false))
   }
 
   test("the journal records the change, never the credential") {
@@ -329,9 +436,9 @@ final class NotificationChannelRoutesSpec extends FunSuite {
     }
 
     private val ids = new IdGenerator[IO] { override def nextId: IO[UUID] = IO(UUID.randomUUID()) }
-    private val time = new TimeProvider[IO] {
-      override def now: IO[Instant] = IO.pure(Instant.parse("2026-09-25T10:00:00Z"))
-    }
+    private var clock = Instant.parse("2026-09-25T10:00:00Z")
+    def at(moment: Instant): Unit = clock = moment
+    private val time = new TimeProvider[IO] { override def now: IO[Instant] = IO(clock) }
     private val runner = new TransactionRunner[IO, IO] {
       override def run[A](program: IO[A]): IO[A] = IO { transactions += 1 } *> program
     }
