@@ -4,7 +4,8 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 
 import { ResourcePage } from '../../../pages/ResourcePage'
-import type { ResourceResponse } from '../../../types/resource'
+import pageSource from '../../../pages/ResourcePage.tsx?raw'
+import type { NodeSpecResponse, ResourceResponse } from '../../../types/resource'
 import { I18nProvider, type Locale } from '../../../i18n'
 
 function resource(resourceTypeCode: string, data: ResourceResponse['data']): ResourceResponse {
@@ -29,63 +30,111 @@ function renderResourcePage(value: ResourceResponse, locale: Locale = 'en'): str
   </QueryClientProvider></I18nProvider>)
 }
 
+const nodeSpec: NodeSpecResponse = {
+  hostname: 'node-1', operatingSystem: 'Linux', distribution: 'Ubuntu 24.04 LTS',
+  kernelVersion: '6.8.0', architecture: 'x86_64', cpuModel: 'AMD EPYC', cpuCores: 4, memoryMb: 8192,
+}
+
+function nodeWith(online: boolean | null, usage: { cpu: number | null; memory: number | null; uptime: number | null },
+  spec: typeof nodeSpec | null = nodeSpec): ResourceResponse {
+  return resource('NODE', { kind: 'NODE', spec,
+    status: online === null ? null : { online, cpuUsagePercent: usage.cpu, memoryUsagePercent: usage.memory, uptimeSeconds: usage.uptime } })
+}
+
+function containerIn(state: string | null, image: string | null = 'backend:2.0'): ResourceResponse {
+  return resource('CONTAINER', { kind: 'CONTAINER', spec: { image }, status: state === null ? null : { state } })
+}
+
+/** The status badge next to the page title. */
+function headerStatus(html: string): string | undefined {
+  return html.match(/class="workspace-title-line"><h1>[^<]*<\/h1><span class="status-indicator (status-[a-z]+)"><span class="status-dot" aria-hidden="true"><\/span>([^<]*)</)
+    ?.slice(1).join(' ')
+}
+
 describe('resource page presentation', () => {
-  const node = resource('NODE', {
-    kind: 'NODE',
-    spec: {
-      hostname: 'node-1', operatingSystem: 'Linux', distribution: 'Ubuntu 24.04 LTS',
-      kernelVersion: '6.8.0', architecture: 'x86_64', cpuModel: 'AMD EPYC', cpuCores: 4, memoryMb: 8192,
-    },
-    status: { online: true, cpuUsagePercent: 12.5, memoryUsagePercent: 37.5, uptimeSeconds: 3600 },
-  })
-  const container = resource('CONTAINER', {
-    kind: 'CONTAINER', spec: { image: 'backend:2.0' }, status: { state: 'running' },
+  const node = nodeWith(true, { cpu: 12.5, memory: 37.5, uptime: 3600 })
+  const container = containerIn('running')
+
+  it('puts the node status next to its name: online or offline', () => {
+    expect(headerStatus(renderResourcePage(node))).toBe('status-success Online')
+    expect(headerStatus(renderResourcePage(nodeWith(false, { cpu: null, memory: null, uptime: null })))).toBe('status-danger Offline')
+    expect(headerStatus(renderResourcePage(node, 'ru'))).toBe('status-success В сети')
   })
 
-  it('renders node properties, node status and the node tabs', () => {
+  it('summarizes the node state in one strip: status, CPU, memory and uptime', () => {
     const html = renderResourcePage(node)
+    const strip = html.slice(html.indexOf('<dl class="metric-strip">'), html.indexOf('</dl>', html.indexOf('<dl class="metric-strip">')))
 
-    expect(html).toContain('<dt>Hostname</dt><dd>node-1</dd>')
-    expect(html).toContain('<dt>Operating system</dt><dd>Linux</dd>')
-    expect(html).toContain('<dt>Distribution</dt><dd>Ubuntu 24.04 LTS</dd>')
-    expect(html).toContain('<dt>Kernel</dt><dd>6.8.0</dd>')
-    expect(html).toContain('<dt>CPU model</dt><dd>AMD EPYC</dd>')
-    expect(html).toContain('<dt>Architecture</dt><dd>x86_64</dd>')
-    expect(html).toContain('<dt>CPU cores</dt><dd>4</dd>')
-    expect(html).toContain('status-indicator status-success')
-    expect(html).toContain('Online')
-    expect(html).toContain('id="tab-metrics"')
-    expect(html).toContain('id="tab-rules"')
-    expect(html).toContain('Monitor rules')
+    expect(strip).toMatch(/<dt>Status<\/dt><dd><span class="status-indicator status-success">.*Online/)
+    expect(strip).toContain('<dt>CPU</dt><dd>12.5%</dd>')
+    expect(strip).toContain('<dt>Memory</dt><dd>37.5%</dd>')
+    expect(strip).toContain('<dt>Uptime</dt><dd>1h 0m</dd>')
+    expect(renderResourcePage(node, 'ru')).toContain('<dt>Время работы</dt><dd>1 ч 0 мин</dd>')
   })
 
-  it('renders an em dash for missing optional node inventory fields', () => {
-    if (node.data.kind !== 'NODE') throw new Error('Expected NODE test data')
-    const withoutOptionalFacts = resource('NODE', {
-      kind: 'NODE',
-      status: node.data.status,
-      spec: node.data.spec ? {
-        ...node.data.spec, distribution: null, kernelVersion: null, cpuModel: null,
-      } : null,
-    })
-    const html = renderResourcePage(withoutOptionalFacts)
+  it('shows an unknown value as a dash, and an unreported node as unknown', () => {
+    const html = renderResourcePage(nodeWith(null, { cpu: null, memory: null, uptime: null },
+      { ...nodeSpec, distribution: null, kernelVersion: null, cpuModel: null }))
 
+    expect(html).toContain('<dt>CPU</dt><dd>—</dd>')
+    expect(html).toContain('<dt>Memory</dt><dd>—</dd>')
+    expect(html).toContain('<dt>Uptime</dt><dd>—</dd>')
     expect(html).toContain('<dt>Distribution</dt><dd>—</dd>')
     expect(html).toContain('<dt>Kernel</dt><dd>—</dd>')
     expect(html).toContain('<dt>CPU model</dt><dd>—</dd>')
-    expect(html).toContain('<dt>CPU</dt><dd>12.5%</dd>')
-    expect(html).toContain('<dt>Memory</dt><dd>37.5%</dd>')
-    expect(html).toContain('<dt>Uptime</dt><dd>1h 0m</dd>')
-    expect(renderResourcePage(withoutOptionalFacts, 'ru')).toContain('<dt>Время работы</dt><dd>1 ч 0 мин</dd>')
+    expect(headerStatus(html)).toBe('status-neutral Unknown')
   })
 
-  it('renders container properties and state without the node-only tabs', () => {
+  it('sets technical node values in monospace and plain ones as text', () => {
+    const html = renderResourcePage(node)
+
+    expect(html).toContain('<dt>Hostname</dt><dd class="property-technical">node-1</dd>')
+    expect(html).toContain('<dt>Kernel</dt><dd class="property-technical">6.8.0</dd>')
+    expect(html).toContain('<dt>Architecture</dt><dd class="property-technical">x86_64</dd>')
+    expect(html).toContain('<dt>Code</dt><dd class="property-technical">resource-code</dd>')
+    expect(html).toContain('<dt>Operating system</dt><dd>Linux</dd>')
+    expect(html).toContain('<dt>CPU cores</dt><dd>4</dd>')
+    expect(html).toContain('<dt>Memory</dt><dd>8 GB</dd>')
+    expect(html).toContain('class="property-grid property-grid-2"')
+  })
+
+  it('keeps the same structure whatever the length of the values', () => {
+    const longName = 'x'.repeat(300)
+    const long = { ...nodeWith(true, { cpu: 1, memory: 1, uptime: 1 }, { ...nodeSpec, hostname: longName, kernelVersion: longName }),
+      name: longName, code: longName }
+    const structure = (html: string) => html.replace(/>[^<]*</g, '><')
+
+    expect(structure(renderResourcePage(long))).toBe(structure(renderResourcePage(node)))
+    expect(renderResourcePage(long)).toContain(`<dd class="property-technical">${longName}</dd>`)
+  })
+
+  it('shows a container state through the shared Docker state presentation', () => {
+    const states: [string | null, string][] = [['running', 'status-success Running'], ['exited', 'status-danger Stopped'],
+      ['removing', 'status-neutral removing'], [null, 'status-neutral Unknown']]
+    for (const [state, expected] of states) {
+      const html = renderResourcePage(containerIn(state))
+      expect(headerStatus(html)).toBe(expected)
+      expect(html).toContain(`<dt>State</dt><dd><span class="status-indicator ${expected.split(' ')[0]}">`)
+    }
+    expect(headerStatus(renderResourcePage(containerIn('exited'), 'ru'))).toBe('status-danger Остановлен')
+  })
+
+  it('shows the container image and code in monospace', () => {
     const html = renderResourcePage(container)
 
-    expect(html).toContain('<dt>Image</dt><dd>backend:2.0</dd>')
-    expect(html).toMatch(/<dt>State<\/dt><dd><span class="status-indicator status-success">.*Running/)
-    expect(html).not.toContain('id="tab-metrics"')
-    expect(html).not.toContain('id="tab-rules"')
+    expect(html).toContain('<dt>Image</dt><dd class="property-technical">backend:2.0</dd>')
+    expect(html).toContain('<dt>Code</dt><dd class="property-technical">resource-code</dd>')
+    expect(renderResourcePage(containerIn('running', null))).toContain('<dt>Image</dt><dd>—</dd>')
+    expect(renderResourcePage(container, 'ru')).toContain('<dt>Образ</dt><dd class="property-technical">backend:2.0</dd>')
+  })
+
+  it('offers monitoring only where the monitoring feature applies', () => {
+    expect(renderResourcePage(node)).toContain('id="tab-monitoring"')
+    expect(renderResourcePage(container)).not.toContain('id="tab-monitoring"')
+    for (const html of [renderResourcePage(node), renderResourcePage(container)]) {
+      expect(html).toContain('id="tab-overview"')
+      expect(html).toContain('id="tab-activity"')
+    }
   })
 
   it('names the resource type and its state in Russian by default', () => {
@@ -93,7 +142,7 @@ describe('resource page presentation', () => {
 
     expect(html).toContain('Контейнер · resource-code')
     expect(html).toContain('Работает')
-    expect(html).toContain('<dt>Образ</dt><dd>backend:2.0</dd>')
+    expect(html).toMatch(/role="tablist".*Обзор.*События/s)
   })
 
   it('renders the common shell and a safe fallback for an unknown resource type', () => {
@@ -102,8 +151,8 @@ describe('resource page presentation', () => {
     expect(html).toContain('Resource name')
     expect(html).toContain('NEW_SERVER_TYPE · resource-code')
     expect(html).toContain('Details are not available for this resource type')
-    expect(html).not.toContain('id="tab-metrics"')
-    expect(html).not.toContain('id="tab-rules"')
+    expect(headerStatus(html)).toBeUndefined()
+    expect(html).not.toContain('id="tab-monitoring"')
   })
 
   it('keeps the common shell identical across resource types', () => {
@@ -115,5 +164,14 @@ describe('resource page presentation', () => {
       expect(html).toMatch(/class="workspace-back"[^>]*>.*Resources<\/a>/)
       expect(html).toContain('Overview')
     }
+  })
+
+  it('keeps status mapping out of the page: it has no resource type or state of its own', () => {
+    const page = pageSource
+
+    for (const literal of ["'NODE'", "'CONTAINER'", 'online', "'running'", "'exited'"]) expect(page).not.toContain(literal)
+    expect(page).toContain('presentation.headerStatus')
+    expect(page).toContain('supportsResourceMonitoring')
+    expect(page).toContain('operationsApplicability')
   })
 })

@@ -24,41 +24,42 @@ function nodeStatus(resource: ResourceResponse, i18n: I18n): ResourceStatusPrese
   }
 }
 
+/** The node as inventory last described it: its current state first, then what it is. */
 function NodeOverview({ resource }: ResourcePresentationProps) {
   const i18n = useI18n()
   const t = i18n.t.resources.node
-  const data = nodeData(resource)
-  const spec = data?.spec
-  const status = data?.status
-  const state = nodeStatus(resource, i18n)
-  return <div className="workspace-split detail-split">
-    <WorkspaceSection title={t.properties}><PropertyGrid items={[
-      { label: i18n.t.common.code, value: resource.code },
-      { label: t.hostname, value: spec?.hostname ?? '—' },
+  const spec = nodeData(resource)?.spec
+  return <div className="resource-overview">
+    <WorkspaceSection title={t.currentState}><NodeMetricSummary resource={resource} /></WorkspaceSection>
+    <WorkspaceSection title={t.properties}><PropertyGrid columns={2} items={[
+      { label: t.hostname, value: spec?.hostname ?? '—', technical: spec?.hostname != null },
       { label: t.operatingSystem, value: spec?.operatingSystem ?? '—' },
       { label: t.distribution, value: spec?.distribution ?? '—' },
-      { label: t.kernel, value: spec?.kernelVersion ?? '—' },
-      { label: t.architecture, value: spec?.architecture ?? '—' },
+      { label: t.kernel, value: spec?.kernelVersion ?? '—', technical: spec?.kernelVersion != null },
+      { label: t.architecture, value: spec?.architecture ?? '—', technical: spec?.architecture != null },
       { label: t.cpuModel, value: spec?.cpuModel ?? '—' },
       { label: t.cpuCores, value: spec?.cpuCores ?? '—' },
       { label: t.memory, value: formatMemoryMb(spec?.memoryMb ?? null, i18n) },
-    ]} /></WorkspaceSection>
-    <WorkspaceSection title={t.currentState}><PropertyGrid items={[
-      { label: t.status, value: <StatusIndicator label={state.label} tone={state.tone} /> },
-      { label: t.cpu, value: formatPercent(status?.cpuUsagePercent ?? null, i18n) },
-      { label: t.memoryUsage, value: formatPercent(status?.memoryUsagePercent ?? null, i18n) },
-      { label: t.uptime, value: i18n.format.duration(status?.uptimeSeconds ?? null) },
+      { label: i18n.t.common.code, value: resource.code, technical: true },
     ]} /></WorkspaceSection>
   </div>
 }
 
+/**
+ * The node's current state in one compact line: the status inventory stored and the latest
+ * reported usage. Shown on the overview and above the charts; a missing value reads "—".
+ */
 function NodeMetricSummary({ resource }: ResourcePresentationProps) {
   const i18n = useI18n()
+  const t = i18n.t.resources.node
   const status = nodeData(resource)?.status
-  return <div className="metric-strip">
-    <div><span>{i18n.t.resources.node.cpu}</span><strong>{formatPercent(status?.cpuUsagePercent ?? null, i18n)}</strong></div>
-    <div><span>{i18n.t.resources.node.memoryUsage}</span><strong>{formatPercent(status?.memoryUsagePercent ?? null, i18n)}</strong></div>
-  </div>
+  const state = nodeStatus(resource, i18n)
+  return <dl className="metric-strip">
+    <div><dt>{t.status}</dt><dd><StatusIndicator label={state.label} tone={state.tone} /></dd></div>
+    <div><dt>{t.cpu}</dt><dd>{formatPercent(status?.cpuUsagePercent ?? null, i18n)}</dd></div>
+    <div><dt>{t.memoryUsage}</dt><dd>{formatPercent(status?.memoryUsagePercent ?? null, i18n)}</dd></div>
+    <div><dt>{t.uptime}</dt><dd>{i18n.format.duration(status?.uptimeSeconds ?? null)}</dd></div>
+  </dl>
 }
 
 export const nodePresentation: ResourcePresentation = {

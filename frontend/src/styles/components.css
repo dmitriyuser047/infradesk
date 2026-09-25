@@ -56,7 +56,7 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 .workspace-heading { display: grid; gap: 6px; min-width: 0; }
 .workspace-title-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); min-width: 0; }
 .workspace-title-line h1 { overflow-wrap: anywhere; }
-.workspace-subtitle { max-width: 80ch; color: var(--text-secondary); }
+.workspace-subtitle { max-width: 80ch; color: var(--text-secondary); overflow-wrap: anywhere; }
 .workspace-back {
   display: inline-flex; align-items: center; gap: 6px; width: fit-content; color: var(--text-secondary);
   font-size: var(--font-size-small); font-weight: 500; text-decoration: none;
@@ -88,7 +88,7 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 /* Tabs */
 .workspace-tabs { display: flex; gap: var(--space-1); overflow-x: auto; border-bottom: 1px solid var(--border); }
 .workspace-tab {
-  flex: 0 0 auto; min-height: 40px; padding: 0 var(--space-3); border: 0; border-bottom: 2px solid transparent;
+  flex: 0 0 auto; white-space: nowrap; min-height: 40px; padding: 0 var(--space-3); border: 0; border-bottom: 2px solid transparent;
   background: transparent; color: var(--text-secondary); font-weight: 500;
 }
 .workspace-tab:hover { color: var(--text-primary); }
@@ -116,6 +116,12 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 .property-row:last-child { border-bottom: 0; }
 .property-row dt { color: var(--text-secondary); }
 .property-row dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+/* Hostnames, kernels, images and codes: monospace, and wrapped anywhere rather than widening the page. */
+.property-technical { font-family: var(--font-mono); font-size: var(--font-size-small); }
+.property-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--space-6); }
+.property-grid-2 .property-row:nth-last-child(2):nth-child(odd) { border-bottom: 0; }
+.property-link { color: var(--primary); font-weight: 500; text-decoration: none; }
+.property-link:hover { text-decoration: underline; }
 
 /* Tables */
 .table-scroll { overflow-x: auto; }
@@ -271,15 +277,20 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 .danger-action { color: var(--danger); font-weight: 500; }
 
 /* Metrics */
-.metric-strip { display: flex; flex-wrap: wrap; gap: var(--space-6); }
-.metric-strip div { display: grid; gap: 2px; min-width: 90px; }
-.metric-strip span { color: var(--text-secondary); font-size: var(--font-size-small); }
-.metric-strip strong { font-size: 20px; font-weight: 600; }
+/* A compact line of current values: label above, value below, wrapping on a narrow screen. */
+.metric-strip { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-6); margin: 0; }
+.metric-strip > div { display: grid; align-content: start; gap: 4px; min-width: 96px; }
+.metric-strip dt { color: var(--text-secondary); font-size: var(--font-size-small); }
+.metric-strip dd { display: flex; align-items: center; min-height: 26px; margin: 0; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .charts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .chart-pane { min-width: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); }
 .chart-pane h3 { margin-bottom: var(--space-2); }
 .metric-empty { padding: var(--space-6) 0; color: var(--text-tertiary); text-align: center; }
 
+@media (max-width: 960px) {
+  .property-grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .property-grid-2 .property-row:nth-last-child(2):nth-child(odd) { border-bottom: 1px solid var(--border); }
+}
 @media (max-width: 720px) {
   .workspace-split, .field-grid, .host-port-grid, .charts-grid, .duration-fields { grid-template-columns: 1fr; }
   .filter-bar label, .filter-bar input, .filter-bar select { width: 100%; }
@@ -295,6 +306,8 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
   .section-content { padding: var(--space-3) var(--space-4) var(--space-4); }
   .section-content > .table-scroll:last-child { margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4)); }
   .property-row { grid-template-columns: 1fr; gap: 2px; }
+  .metric-strip { gap: var(--space-3) var(--space-5); }
+  .metric-strip > div { min-width: calc(50% - var(--space-5)); }
   h1 { font-size: 21px; }
 }
 @media (prefers-reduced-motion: reduce) {

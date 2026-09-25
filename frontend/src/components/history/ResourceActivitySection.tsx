@@ -1,6 +1,6 @@
 import { useResourceHistory } from '../../api/history'
 import { useI18n } from '../../i18n'
-import { EmptyWorkspaceState, WorkspaceSection } from '../layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { ActivityTimeline } from './ActivityTimeline'
 
 /** The timeline of one resource: what happened to it, newest first. */
@@ -14,8 +14,8 @@ export function ResourceActivitySection({ organizationId, resourceId }: {
 
   return <WorkspaceSection title={t.history.title}>
     {history.isPending ? <div className="row-skeleton" aria-label={t.history.loading}><span /><span /></div> : null}
-    {history.isError ? <div className="inline-error" role="alert">{t.history.loadError}
-      <button className="text-button" type="button" onClick={() => history.refetch()}>{t.common.retry}</button></div> : null}
+    {history.isError ? <InlineAlert tone="danger" title={t.history.loadError}
+      action={<button className="secondary-button" type="button" onClick={() => history.refetch()}>{t.common.retry}</button>} /> : null}
     {!history.isPending && !history.isError && events.length === 0 ? (
       <EmptyWorkspaceState title={t.history.empty} detail={t.history.emptyDetail} />
     ) : null}

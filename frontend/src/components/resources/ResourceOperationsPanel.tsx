@@ -1,15 +1,20 @@
 import { useState } from 'react'
 import { useAvailableResourceOperations, useExecuteResourceOperation, useResourceOperationExecutions } from '../../api/resourceOperations'
 import { useI18n } from '../../i18n'
+import { secondsBetween } from '../../i18n/format'
 import { describeError, describeFailure } from '../../i18n/errors'
-import { StatusIndicator, WorkspaceSection, type StatusTone } from '../layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { useOrganizationPermissions } from '../auth/authorization'
-import type { OperationExecutionStatus, ResourceOperationCode } from '../../types/resourceOperation'
+import type { ResourceOperationCode } from '../../types/resourceOperation'
+import { operationAppearance, operationStatusTones, operationsApplicability } from './operationPresentation'
 
-const statusTones: Record<OperationExecutionStatus, StatusTone> = {
-  RUNNING: 'info', SUCCEEDED: 'success', FAILED: 'danger', UNKNOWN: 'warning',
-}
+const impactClass = { normal: '', caution: ' impact-caution', disruptive: ' impact-disruptive' } as const
 
+/**
+ * The controlled operations of one resource and what happened to the recent ones. A command is
+ * sent only after confirmation, and nothing on the page assumes its effect: the resource changes
+ * when the next synchronization reports it.
+ */
 export function ResourceOperationsPanel({ organizationId, resourceId, resourceName }: { organizationId: string; resourceId: string; resourceName: string }) {
   const i18n = useI18n()
   const t = i18n.t.operations
@@ -25,33 +30,52 @@ export function ResourceOperationsPanel({ organizationId, resourceId, resourceNa
     mutation.mutate(selected, { onSuccess: () => setSelected(null) })
   }
 
-  if (available.data?.operations.length === 0 && history.data?.length === 0) return null
+  if (operationsApplicability(available, history) === 'not-applicable') return null
+  const running = history.data?.some(item => item.status === 'RUNNING') ?? false
+  const selectedImpact = selected ? operationAppearance(selected).impact : 'normal'
 
-  return <WorkspaceSection title={t.title}>
-    {available.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
-    {available.isError ? <div className="inline-error" role="alert">{t.loadError}
-      <button className="text-button" type="button" onClick={() => available.refetch()}>{i18n.t.common.retry}</button></div> : null}
-    {available.data && canExecute ? <div className="operation-actions">
-      {available.data.operations.map(operation => <button key={operation} className="secondary-button" type="button"
-        disabled={mutation.isPending} onClick={() => setSelected(operation)}>{label(operation)}</button>)}
-      {available.data.operations.length === 0 ? <span className="muted-copy">{t.noneAvailable}</span> : null}
-    </div> : null}
-    {mutation.isError ? <div className="inline-error" role="alert">{describeError(mutation.error, i18n)}</div> : null}
+  return <div className="resource-operations">
+    <WorkspaceSection title={t.actions}>
+      {available.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
+      {available.isError ? <InlineAlert tone="danger" title={t.loadError}
+        action={<button className="secondary-button" type="button" onClick={() => available.refetch()}>{i18n.t.common.retry}</button>} /> : null}
+      {running ? <InlineAlert tone="info" title={t.statuses.RUNNING}>{t.runningNotice}</InlineAlert> : null}
+      {available.data && available.data.operations.length === 0 ? <p className="muted-copy">{t.noneAvailable}</p> : null}
+      {available.data && available.data.operations.length > 0 && canExecute ? <div className="operation-actions">
+        {available.data.operations.map(operation => {
+          const { Icon, impact } = operationAppearance(operation)
+          return <button key={operation} className={`secondary-button operation-button${impactClass[impact]}`} type="button"
+            disabled={mutation.isPending} onClick={() => setSelected(operation)}>
+            <Icon aria-hidden size={15} />{label(operation)}</button>
+        })}
+      </div> : null}
+      {available.data && available.data.operations.length > 0 && !canExecute ? <p className="muted-copy">{t.notPermitted}</p> : null}
+      {mutation.isError ? <InlineAlert tone="danger" title={t.startFailed}>{describeError(mutation.error, i18n)}</InlineAlert> : null}
+    </WorkspaceSection>
 
-    <h3 className="section-subtitle">{t.recent}</h3>
-    {history.isPending ? <div className="row-skeleton" aria-label={t.loadingHistory}><span /><span /></div> : null}
-    {history.isError ? <div className="inline-error" role="alert">{t.historyError}
-      <button className="text-button" type="button" onClick={() => history.refetch()}>{i18n.t.common.retry}</button></div> : null}
-    {history.data?.length === 0 ? <p className="muted-copy">{t.noHistory}</p> : null}
-    {history.data && history.data.length > 0 ? <div className="data-table operation-history" role="table" aria-label={t.historyLabel}>
-      {history.data.map(item => <div className="data-row operation-history-row" role="row" key={item.id}>
-        <span>{label(item.operationCode)}</span>
-        <StatusIndicator label={t.statuses[item.status] ?? item.status} tone={statusTones[item.status] ?? 'neutral'} />
-        <span>{i18n.format.dateTime(item.startedAt)}</span><span>{item.finishedAt ? i18n.format.dateTime(item.finishedAt) : '—'}</span>
-        <span>{item.errorCode !== null || item.errorMessage !== null
-          ? describeFailure(item.errorCode, item.errorMessage, i18n, t.statuses[item.status] ?? item.status) : '—'}</span>
-      </div>)}
-    </div> : null}
+    <WorkspaceSection title={t.recent}>
+      {history.isPending ? <div className="row-skeleton" aria-label={t.loadingHistory}><span /><span /></div> : null}
+      {history.isError ? <InlineAlert tone="danger" title={t.historyError}
+        action={<button className="secondary-button" type="button" onClick={() => history.refetch()}>{i18n.t.common.retry}</button>} /> : null}
+      {history.data?.length === 0 ? <EmptyWorkspaceState compact title={t.noHistory} /> : null}
+      {history.data && history.data.length > 0 ? <ol className="operation-history" aria-label={t.historyLabel}>
+        {history.data.map(item => {
+          const status = t.statuses[item.status] ?? item.status
+          const took = item.finishedAt === null ? null : secondsBetween(item.startedAt, item.finishedAt)
+          const failure = item.errorCode !== null || item.errorMessage !== null
+            ? describeFailure(item.errorCode, item.errorMessage, i18n, status) : null
+          return <li key={item.id} className={`operation-entry operation-${item.status.toLowerCase()}`}>
+            <div className="operation-entry-heading">
+              <span className="operation-entry-title">{label(item.operationCode)}</span>
+              <StatusIndicator label={status} tone={operationStatusTones[item.status] ?? 'neutral'} />
+              <time className="operation-entry-time" dateTime={item.startedAt} title={i18n.format.dateTime(item.startedAt)}>
+                {i18n.format.relative(item.startedAt)}{took !== null ? ` · ${i18n.format.duration(took)}` : ''}</time>
+            </div>
+            {failure !== null ? <p className="operation-entry-detail">{failure}</p> : null}
+          </li>
+        })}
+      </ol> : null}
+    </WorkspaceSection>
 
     {selected ? <div className="dialog-backdrop" role="presentation" onMouseDown={event => {
       if (event.target === event.currentTarget && !mutation.isPending) setSelected(null)
@@ -60,7 +84,8 @@ export function ResourceOperationsPanel({ organizationId, resourceId, resourceNa
       <div className="dialog-body"><p>{t.confirmQuestion(label(selected), resourceName)}</p>
         <p className="muted-copy">{t.confirmDetail}</p></div>
       <div className="dialog-actions"><button className="secondary-button" type="button" disabled={mutation.isPending} onClick={() => setSelected(null)}>{i18n.t.common.cancel}</button>
-        <button className="primary-button" type="button" disabled={mutation.isPending} onClick={execute}>{mutation.isPending ? t.running : i18n.t.common.confirm}</button></div>
+        <button className={selectedImpact === 'disruptive' ? 'danger-button' : 'primary-button'} type="button" disabled={mutation.isPending}
+          onClick={execute}>{mutation.isPending ? t.running : i18n.t.common.confirm}</button></div>
     </section></div> : null}
-  </WorkspaceSection>
+  </div>
 }

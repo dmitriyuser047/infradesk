@@ -78,9 +78,18 @@ export function StatusIndicator({ label, tone = 'neutral', icon: Icon }: {
   </span>
 }
 
-export function PropertyGrid({ items }: { items: readonly { label: string; value: ReactNode }[] }) {
-  return <dl className="property-grid">{items.map(item =>
-    <div className="property-row" key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
+/**
+ * Label and value pairs. A technical value (a hostname, a kernel version, an image) is set in
+ * monospace; long values wrap inside their cell instead of widening the page.
+ */
+export function PropertyGrid({ items, columns = 1 }: {
+  items: readonly { label: string; value: ReactNode; technical?: boolean }[]
+  /** Two columns spread a long list on a wide screen; narrow screens always use one. */
+  columns?: 1 | 2
+}) {
+  return <dl className={columns === 2 ? 'property-grid property-grid-2' : 'property-grid'}>{items.map(item =>
+    <div className="property-row" key={item.label}><dt>{item.label}</dt>
+      <dd className={item.technical ? 'property-technical' : undefined}>{item.value}</dd></div>)}</dl>
 }
 
 /**

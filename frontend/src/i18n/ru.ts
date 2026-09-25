@@ -262,7 +262,8 @@ export const ru: Messages = {
       loadError: 'Не удалось загрузить ресурс',
       back: 'Ресурсы',
       subtitle: (type: string, code: string) => `${type} · ${code}`,
-      tabs: { overview: 'Обзор', metrics: 'Метрики', rules: 'Правила мониторинга', activity: 'События' },
+      tabs: { overview: 'Обзор', monitoring: 'Мониторинг', activity: 'События', operations: 'Операции' },
+      notFoundDetail: 'Возможно, ресурс больше не существует или находится в другом окружении.',
       inactive: 'Больше не обнаруживается',
     },
     node: {
@@ -284,10 +285,10 @@ export const ru: Messages = {
       offline: 'Не в сети',
     },
     container: {
-      properties: 'Характеристики',
-      currentState: 'Текущее состояние',
       image: 'Образ',
       state: 'Состояние',
+      server: 'Сервер',
+      openServer: 'Открыть сервер',
       states: {
         running: 'Работает',
         exited: 'Остановлен',
@@ -331,6 +332,9 @@ export const ru: Messages = {
     confirmTitle: (operation: string) => `Подтвердите: ${operation.toLowerCase()}`,
     confirmQuestion: (operation: string, name: string) => `${operation} контейнер «${name}»?`,
     confirmDetail: 'На обнаруженный контейнер будет отправлена одна управляемая команда. Список ресурсов изменится после следующей синхронизации.',
+    actions: 'Действия',
+    runningNotice: 'Операция выполняется. Состояние контейнера изменится после следующей синхронизации, а не по нажатию кнопки.',
+    notPermitted: 'Запускать операции может владелец организации.',
     running: 'Выполняется…',
   },
 

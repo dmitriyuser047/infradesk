@@ -64,8 +64,7 @@ describe('registering a new resource presentation', () => {
     expect(html).toContain('Test header status')
     expect(html).not.toContain('Подробности для этого типа ресурса недоступны')
     // A new presentation does not make monitoring apply to the type: that is a feature rule.
-    expect(html).not.toContain('id="tab-metrics"')
-    expect(html).not.toContain('id="tab-rules"')
+    expect(html).not.toContain('id="tab-monitoring"')
   })
 
   it('shows the new type through the generic infrastructure tree', () => {

@@ -31,13 +31,22 @@
 .resource-row-context .resource-icon, .resource-row-context .resource-type-cell { color: var(--text-disabled); }
 .resource-row-context .status-indicator { opacity: .75; }
 
-.operation-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.data-table { display: grid; border: 1px solid var(--border); border-radius: var(--radius-md); }
-.data-row { display: grid; align-items: center; gap: var(--space-3); min-height: var(--row-height); padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border); }
-.data-row:last-child { border-bottom: 0; }
-.operation-history-row { grid-template-columns: minmax(100px, .8fr) minmax(140px, 1fr) minmax(130px, 1fr) minmax(130px, 1fr) minmax(160px, 1.6fr); }
-.operation-history-row > span:last-child { color: var(--text-secondary); }
+.resource-overview, .resource-operations { display: grid; gap: var(--space-5); min-width: 0; }
 
-@media (max-width: 720px) {
-  .operation-history-row { grid-template-columns: 1fr 1fr; }
-}
+/* Operations: actions look like actions, and how much they interrupt shows before a click. */
+.operation-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.operation-button.impact-caution { border-color: var(--warning-border); color: var(--warning); }
+.operation-button.impact-caution:hover:not(:disabled) { background: var(--warning-soft); }
+.operation-button.impact-disruptive { border-color: var(--danger-border); color: var(--danger); }
+.operation-button.impact-disruptive:hover:not(:disabled) { background: var(--danger-soft); }
+
+.operation-history { display: grid; margin: 0; padding: 0; list-style: none; }
+.operation-entry { display: grid; gap: 2px; padding: 10px 0 10px var(--space-3); border-bottom: 1px solid var(--border); border-left: 3px solid transparent; }
+.operation-entry:last-child { border-bottom: 0; }
+.operation-running { border-left-color: var(--info); }
+.operation-failed { border-left-color: var(--danger); }
+.operation-unknown { border-left-color: var(--warning); }
+.operation-entry-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--space-2); min-width: 0; }
+.operation-entry-title { font-weight: 600; }
+.operation-entry-time { margin-left: auto; color: var(--text-tertiary); font-size: var(--font-size-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.operation-entry-detail { margin: 0; color: var(--text-secondary); font-size: var(--font-size-small); overflow-wrap: anywhere; }

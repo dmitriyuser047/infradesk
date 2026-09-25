@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from './httpClient'
 import type { ResourceResponse } from '../types/resource'
@@ -12,6 +12,18 @@ export function useEnvironmentResources(
     queryFn: () => getEnvironmentResources(requireId(organizationId), requireId(environmentId)),
     enabled: Boolean(organizationId && environmentId),
   })
+}
+
+/**
+ * A resource the browser already holds — its own page's entry, or its row in the environment
+ * list — or undefined. It reads the cache only and never sends a request.
+ */
+export function useCachedResource(organizationId: string, environmentId: string, resourceId: string | null): ResourceResponse | undefined {
+  const queryClient = useQueryClient()
+  if (resourceId === null) return undefined
+  return queryClient.getQueryData<ResourceResponse>(['resource', organizationId, resourceId])
+    ?? queryClient.getQueryData<ResourceResponse[]>(['environment-resources', organizationId, environmentId])
+      ?.find(resource => resource.id === resourceId)
 }
 
 export function getEnvironmentResources(

@@ -258,7 +258,8 @@ export const en = {
       loadError: 'Unable to load resource',
       back: 'Resources',
       subtitle: (type: string, code: string) => `${type} · ${code}`,
-      tabs: { overview: 'Overview', metrics: 'Metrics', rules: 'Monitor rules', activity: 'Activity' },
+      tabs: { overview: 'Overview', monitoring: 'Monitoring', activity: 'Activity', operations: 'Operations' },
+      notFoundDetail: 'The resource may no longer exist or may belong to another environment.',
       inactive: 'No longer discovered',
     },
     node: {
@@ -280,10 +281,10 @@ export const en = {
       offline: 'Offline',
     },
     container: {
-      properties: 'Properties',
-      currentState: 'Current state',
       image: 'Image',
       state: 'State',
+      server: 'Server',
+      openServer: 'Open server',
       states: {
         running: 'Running',
         exited: 'Stopped',
@@ -327,6 +328,9 @@ export const en = {
     confirmTitle: (operation: string) => `Confirm: ${operation.toLowerCase()}`,
     confirmQuestion: (operation: string, name: string) => `${operation} container “${name}”?`,
     confirmDetail: 'This sends one controlled command to the discovered container. The resource list changes after the next synchronization.',
+    actions: 'Actions',
+    runningNotice: 'An operation is running. The container state changes after the next synchronization, not when a button is pressed.',
+    notPermitted: 'Operations are run by an organization owner.',
     running: 'Running…',
   },
 
