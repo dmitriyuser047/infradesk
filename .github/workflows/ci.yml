@@ -135,15 +135,29 @@ jobs:
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
-          # Build a representative production V21 dump. Restoring it proves that the existing
-          # password-only secret schema is migrated forward to V22 before the backend is ready.
+          # Build a representative production V21 dump. Restoring it proves that an older
+          # production schema is migrated forward to the current version before the backend is
+          # ready: the password-only secret schema of V22, and the notification channels of V23.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
           alter table connection_secret drop constraint ck_connection_secret_kind;
           alter table connection_secret add constraint connection_secret_kind_check
             check (kind = 'SSH_PASSWORD');
-          delete from flyway_schema_history where version = '22';
+          drop table notification_channel;
+          drop table notification_channel_secret;
+          alter table notification_delivery drop constraint ck_notification_delivery_channel;
+          alter table notification_delivery add constraint ck_notification_delivery_channel
+            check (channel in ('WEBHOOK'));
+          alter table audit_event drop constraint ck_audit_event_action;
+          alter table audit_event add constraint ck_audit_event_action check (action in (
+            'PROJECT_CREATED','ENVIRONMENT_CREATED','CONNECTION_CREATED','CONNECTION_UPDATED',
+            'CONNECTION_DELETED','MONITOR_RULE_CREATED','MONITOR_RULE_UPDATED','MANUAL_SYNC_REQUESTED',
+            'CONTAINER_START_REQUESTED','CONTAINER_STOP_REQUESTED','CONTAINER_RESTART_REQUESTED'));
+          alter table audit_event drop constraint ck_audit_event_target_type;
+          alter table audit_event add constraint ck_audit_event_target_type check (target_type in (
+            'PROJECT','ENVIRONMENT','CONNECTION','MONITOR_RULE','RESOURCE'));
+          delete from flyway_schema_history where version in ('22', '23');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
@@ -171,11 +185,15 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "22"
+          test "${migrated}" = "23"
           credential_kind="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where conname = 'ck_connection_secret_kind' and pg_get_constraintdef(oid) like '%SSH_CREDENTIAL%'")"
           test "${credential_kind}" = "1"
+          channel_tables="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('notification_channel', 'notification_channel_secret')")"
+          test "${channel_tables}" = "2"
           ./scripts/check-production.sh http://127.0.0.1:8081
       - name: Separate liveness from readiness while the database is down
         run: |
