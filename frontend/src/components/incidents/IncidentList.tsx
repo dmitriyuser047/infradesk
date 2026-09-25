@@ -3,31 +3,17 @@ import type { IncidentListItemResponse } from '../../types/incident'
 import { IncidentRow } from './IncidentRow'
 
 /**
- * Incidents with the resource each one is about. The list response already names every resource,
- * so the list renders from that one response and never loads a resource per row.
- * Open incidents come first.
+ * Incidents in the order the backend returns them, newest first, each with the resource it is
+ * about. Everything a row shows comes from this one list response: no resource is loaded per row.
  */
-export function IncidentList({
-  organizationId,
-  incidents,
-}: {
+export function IncidentList({ organizationId, incidents, now }: {
   organizationId: string
   incidents: readonly IncidentListItemResponse[]
+  /** One clock for the list, so an ongoing duration moves without a timer per row. */
+  now: number
 }) {
   const { t } = useI18n()
-  const columns = t.incidents.columns
-  const ordered = [...incidents].sort((left, right) =>
-    Number(left.resolvedAt !== null) - Number(right.resolvedAt !== null) || right.openedAt.localeCompare(left.openedAt))
-
-  return (
-    <div className="table-scroll"><table className="data-grid">
-      <thead><tr><th>{columns.status}</th><th>{columns.reason}</th><th>{columns.resource}</th>
-        <th>{columns.opened}</th><th>{columns.duration}</th></tr></thead>
-      <tbody>
-      {ordered.map((incident) => (
-        <IncidentRow key={incident.id} organizationId={organizationId} incident={incident} />
-      ))}
-      </tbody>
-    </table></div>
-  )
+  return <ol className="incident-list" aria-label={t.incidents.listLabel}>
+    {incidents.map(incident => <IncidentRow key={incident.id} organizationId={organizationId} incident={incident} now={now} />)}
+  </ol>
 }

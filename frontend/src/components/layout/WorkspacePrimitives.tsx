@@ -132,3 +132,22 @@ export function InlineAlert({ tone, title, children, action }: {
     {action ? <div className="inline-alert-action">{action}</div> : null}
   </div>
 }
+
+/**
+ * A choice of one among a few, drawn as segments. Native radio buttons underneath: arrow keys move
+ * between them and a screen reader announces the group and the checked option.
+ */
+export function SegmentedControl<T extends string>({ name, label, options, value, onChange }: {
+  name: string
+  label: string
+  options: readonly { value: T; label: string }[]
+  value: T
+  onChange: (value: T) => void
+}) {
+  return <fieldset className="segmented" aria-label={label}>
+    {options.map(option => <label key={option.value} className={`segmented-option ${value === option.value ? 'selected' : ''}`}>
+      <input type="radio" name={name} value={option.value} checked={value === option.value} onChange={() => onChange(option.value)} />
+      {option.label}
+    </label>)}
+  </fieldset>
+}

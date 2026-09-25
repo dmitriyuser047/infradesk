@@ -1,0 +1,43 @@
+/* Incidents: one list surface, a row per incident, separators in between. */
+
+.incident-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.section-content > .incident-list:last-child {
+  margin: 0 calc(-1 * var(--space-5)) calc(-1 * var(--space-5)); border-top: 1px solid var(--border);
+}
+.incident-row {
+  position: relative; display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; align-items: center;
+  gap: var(--space-2) var(--space-4); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--border);
+}
+.incident-row:last-child { border-bottom: 0; }
+.incident-row:hover { background: var(--surface-muted); }
+.incident-row:has(.incident-link:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+
+.incident-main { display: grid; gap: 2px; min-width: 0; }
+.incident-subject { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+/* The resource name is the row's link; its pseudo-element makes the whole row answer to a click. */
+.incident-link { overflow: hidden; color: var(--text-primary); font-weight: 600; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.incident-link::after { content: ""; position: absolute; inset: 0; }
+.incident-link:focus-visible { outline: none; }
+.incident-row:hover .incident-link { color: var(--primary); }
+.incident-type { flex: 0 0 auto; color: var(--text-tertiary); font-size: var(--font-size-caption); }
+.incident-reason { display: inline-flex; align-items: center; gap: 6px; width: fit-content; color: var(--text-secondary); font-weight: 500; }
+.incident-reason.tone-danger { color: var(--danger); }
+.incident-reason.tone-warning { color: var(--warning); }
+
+.incident-time { display: grid; justify-items: end; gap: 2px; color: var(--text-tertiary); font-size: var(--font-size-small); text-align: right; }
+.incident-duration { font-variant-numeric: tabular-nums; }
+.incident-open .incident-duration { color: var(--text-secondary); font-weight: 500; }
+
+/* Resolved incidents read quieter than the ones still open. */
+.incident-resolved .incident-link { color: var(--text-secondary); font-weight: 500; }
+.incident-resolved .status-indicator { opacity: .85; }
+
+@media (max-width: 720px) {
+  .section-content > .incident-list:last-child { margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4)); }
+  .incident-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "status time" "main main"; padding: var(--space-3) var(--space-4); }
+  .incident-status { grid-area: status; }
+  .incident-main { grid-area: main; }
+  .incident-time { grid-area: time; }
+  .incident-link { white-space: normal; overflow-wrap: anywhere; }
+  .incident-subject { flex-wrap: wrap; }
+}

@@ -11,6 +11,7 @@ import './styles/shell.css'
 import './styles/pages/overview.css'
 import './styles/pages/connections.css'
 import './styles/pages/resources.css'
+import './styles/pages/incidents.css'
 import './styles/pages/workspace.css'
 
 createRoot(document.getElementById('root')!).render(

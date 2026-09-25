@@ -1,31 +1,42 @@
-import { EyeOff, TrendingUp } from 'lucide-react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 
 import { useI18n } from '../../i18n'
 import type { IncidentListItemResponse } from '../../types/incident'
-import { StatusIndicator } from '../layout/WorkspacePrimitives'
 import { IncidentStatusBadge } from './IncidentStatusBadge'
-import { formatIncidentDuration, getIncidentReasonPresentation } from './incidentPresentation'
+import { getIncidentReasonPresentation, getIncidentTimePresentation } from './incidentPresentation'
 
-export function IncidentRow({ organizationId, incident }: {
+/**
+ * One incident: its status, the resource it is about and what happened to it, then when. The
+ * resource name is the row's single link, to the incident; the whole row answers to it by pointer,
+ * the keyboard reaches it as an ordinary link.
+ */
+export function IncidentRow({ organizationId, incident, now }: {
   organizationId: string
   incident: IncidentListItemResponse
+  now: number
 }) {
   const i18n = useI18n()
-  const navigate = useNavigate()
   const location = useLocation()
   const destination = `/organizations/${encodeURIComponent(organizationId)}/incidents/${encodeURIComponent(incident.id)}${location.search}`
   const reason = getIncidentReasonPresentation(incident.reason, i18n)
+  const time = getIncidentTimePresentation(incident, i18n, now)
   const open = incident.resolvedAt === null
   const resource = incident.resource
-  return <tr className={`clickable-row ${open ? '' : 'row-quiet'}`} onClick={() => navigate(destination)}>
-    <td><IncidentStatusBadge status={incident.status} /></td>
-    <td><StatusIndicator label={reason.label} tone={open ? reason.tone : 'neutral'}
-      icon={incident.reason === 'NO_DATA' ? EyeOff : TrendingUp} /></td>
-    <td><Link className="grid-link" to={destination}>{resource.name}</Link>
-      <small className="cell-secondary">{i18n.t.resources.types[resource.resourceTypeCode] ?? resource.resourceTypeCode}</small></td>
-    <td><time dateTime={incident.openedAt} title={i18n.format.dateTime(incident.openedAt)}>{i18n.format.relative(incident.openedAt)}</time></td>
-    <td>{open ? <span className="text-danger">{formatIncidentDuration(incident.openedAt, null, i18n)} · {i18n.t.incidents.ongoing}</span>
-      : formatIncidentDuration(incident.openedAt, incident.resolvedAt, i18n)}</td>
-  </tr>
+  const ReasonIcon = reason.Icon
+
+  return <li className={`incident-row ${open ? 'incident-open' : 'incident-resolved'}`} data-reason={incident.reason}>
+    <span className="incident-status"><IncidentStatusBadge status={incident.status} /></span>
+    <div className="incident-main">
+      <div className="incident-subject">
+        <Link className="incident-link" to={destination} title={resource.name}>{resource.name}</Link>
+        <span className="incident-type">{i18n.t.resources.types[resource.resourceTypeCode] ?? resource.resourceTypeCode}</span>
+      </div>
+      <span className={`incident-reason ${open ? `tone-${reason.tone}` : ''}`}>
+        <ReasonIcon aria-hidden size={14} />{reason.label}</span>
+    </div>
+    <div className="incident-time">
+      <time dateTime={time.at} title={i18n.format.dateTime(time.at)}>{time.label}</time>
+      {time.duration !== null ? <span className="incident-duration">{time.duration}</span> : null}
+    </div>
+  </li>
 }

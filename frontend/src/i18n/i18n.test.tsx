@@ -73,7 +73,7 @@ describe('localization', () => {
     const russian = createI18n('ru')
 
     // The dictionaries are keyed by the stable backend codes.
-    expect(russian.t.incidents.reasons.NO_DATA).toBe('Нет данных')
+    expect(russian.t.incidents.reasons.NO_DATA).toBe('Данные не поступают')
     expect(russian.t.operations.statuses.UNKNOWN).toBe('Результат неизвестен')
     expect(russian.t.connections.authTypes.PRIVATE_KEY).toBe('Приватный ключ')
     expect(createI18n('en').t.operations.statuses.UNKNOWN).toBe('Result unknown')

@@ -1,8 +1,12 @@
+import { CheckCircle2, History, Siren } from 'lucide-react'
 import { useSearchParams, useParams } from 'react-router-dom'
 
 import { useIncidents } from '../api/incidents'
 import { AppShell } from '../components/layout/AppShell'
-import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import {
+  EmptyWorkspaceState, InlineAlert, SegmentedControl, WorkspaceHeader, WorkspaceSection,
+} from '../components/layout/WorkspacePrimitives'
+import { useNow } from '../components/layout/useNow'
 import { IncidentList } from '../components/incidents/IncidentList'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
@@ -21,6 +25,13 @@ export function IncidentsPage() {
   return <IncidentsContent organizationId={organizationId} />
 }
 
+/** Each empty filter means something different; only "no open incidents" is the healthy state. */
+const emptyIcons = { OPEN: CheckCircle2, RESOLVED: History, ALL: Siren } as const
+
+/**
+ * The incident list of an organization. The filter is the `status` the list request already
+ * takes, kept in the URL; each choice is one request, however many resources the incidents name.
+ */
 function IncidentsContent({ organizationId }: { organizationId: string }) {
   const i18n = useI18n()
   const t = i18n.t.incidents
@@ -28,33 +39,40 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
   const filter = parseFilter(searchParams.get('status'))
   const queryStatus = filter === 'ALL' ? undefined : filter
   const incidentsQuery = useIncidents(organizationId, queryStatus)
+  const now = useNow(60_000)
+  const incidents = incidentsQuery.data
 
   const selectFilter = (next: Filter) => {
     setSearchParams(previous => { const updated = new URLSearchParams(previous); updated.set('status', next); return updated })
   }
+  const retry = <button className="secondary-button" type="button" onClick={() => incidentsQuery.refetch()}>{i18n.t.common.retry}</button>
 
   return (
     <AppShell>
       <div className="workspace-page">
         <WorkspaceHeader title={t.title} subtitle={t.subtitle} />
-        <WorkspaceSection title={t.section[filter]} actions={incidentsQuery.data ? <span className="resource-count">{t.count(incidentsQuery.data.length)}</span> : null}>
-          <div className="filter-bar" aria-label={t.filterLabel}>
-            <label>{i18n.t.common.status}<select value={filter} onChange={event => selectFilter(event.target.value as Filter)}>
-              <option value="OPEN">{t.filters.OPEN}</option><option value="RESOLVED">{t.filters.RESOLVED}</option><option value="ALL">{t.filters.ALL}</option>
-            </select></label>
+        <WorkspaceSection title={t.section[filter]} actions={incidents ? <span className="resource-count">{t.count(incidents.length)}</span> : null}>
+          <div className="filter-bar">
+            <SegmentedControl name="incident-status" label={t.filterLabel} value={filter} onChange={selectFilter}
+              options={(['OPEN', 'RESOLVED', 'ALL'] as const).map(value => ({ value, label: t.filters[value] }))} />
             <button className="secondary-button" type="button" onClick={() => incidentsQuery.refetch()}>{i18n.t.common.refresh}</button>
           </div>
           {incidentsQuery.isPending ? <div className="incident-skeleton" aria-label={t.loading}><span /><span /><span /></div> : null}
-          {incidentsQuery.isError ? (
-            <InlineAlert tone="danger" title={t.loadError}
-              action={<button className="secondary-button" type="button" onClick={() => incidentsQuery.refetch()}>{i18n.t.common.retry}</button>}>
-              {describeError(incidentsQuery.error, i18n)}</InlineAlert>
+          {incidentsQuery.isError && incidents === undefined ? (
+            <InlineAlert tone="danger" title={t.loadError} action={retry}>{describeError(incidentsQuery.error, i18n)}</InlineAlert>
           ) : null}
-          {!incidentsQuery.isPending && !incidentsQuery.isError && incidentsQuery.data?.length === 0 ? (
-            <EmptyWorkspaceState title={t.empty[filter].title} detail={t.empty[filter].detail} />
+          {/* A failed refresh keeps the last list and says how old it is. */}
+          {incidentsQuery.isError && incidents !== undefined ? (
+            <InlineAlert tone="warning" title={t.refreshError} action={retry}>
+              {t.staleSince(i18n.format.time(new Date(incidentsQuery.dataUpdatedAt).toISOString()))} {describeError(incidentsQuery.error, i18n)}
+            </InlineAlert>
           ) : null}
-          {!incidentsQuery.isPending && !incidentsQuery.isError && incidentsQuery.data !== undefined && incidentsQuery.data.length > 0 ? (
-            <IncidentList organizationId={organizationId} incidents={incidentsQuery.data} />
+          {incidents !== undefined && incidents.length === 0 ? (
+            <EmptyWorkspaceState tone={filter === 'OPEN' ? 'success' : 'neutral'} icon={emptyIcons[filter]}
+              title={t.empty[filter].title} detail={t.empty[filter].detail} />
+          ) : null}
+          {incidents !== undefined && incidents.length > 0 ? (
+            <IncidentList organizationId={organizationId} incidents={incidents} now={now} />
           ) : null}
         </WorkspaceSection>
       </div>
