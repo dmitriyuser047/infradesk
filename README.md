@@ -91,6 +91,10 @@ including a failed one, so a connection that stopped answering turns its rules i
 instead of leaving them on stale data. The evaluation is a secondary step: it never changes the
 outcome the synchronization itself reports.
 
+`GET /api/v1/organizations/{id}/incidents` is a read projection. Each incident carries the identity
+of its resource (`resource: { id, name, resourceTypeCode }`), read in one tenant-scoped statement,
+so the list never needs a request per row.
+
 ## Notifications
 
 Incident events can be delivered to one deployment-level webhook; there is no per-user channel

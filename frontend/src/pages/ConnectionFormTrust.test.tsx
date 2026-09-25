@@ -70,4 +70,80 @@ describe('server trust in the connection form', () => {
     await waitFor(() => expect(screen.getByText('Сервер не ответил вовремя.')).toBeTruthy())
     expect(screen.queryByText('SSH connection timed out')).toBeNull()
   })
+
+  describe('after the address changes', () => {
+    const state = () => document.querySelector('.trust-state')
+    const confirmedKey = () => screen.getByLabelText('Подтверждённый отпечаток сервера').textContent
+    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    const change = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } })
+
+    function expectNeedsVerification() {
+      expect(state()?.className).toContain('trust-changed')
+      expect(state()?.textContent).toContain('Адрес сервера изменён')
+      expect(state()?.textContent).toContain('example.test:22')
+      expect(confirmedKey()).toBe('Не подтверждён')
+      expect(document.body.textContent).not.toContain('Сервер подтверждён')
+    }
+
+    it('does not trust a changed host, and saving it is refused before any request', () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      renderForm()
+      expect(state()?.className).toContain('trust-trusted')
+
+      change('Адрес', 'other.test')
+      expectNeedsVerification()
+      expect((screen.getByRole('button', { name: 'Проверить подключение' }) as HTMLButtonElement).disabled).toBe(true)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Сохранить подключение' }))
+      expect(screen.getByText('Подтвердите отпечаток сервера перед сохранением.')).toBeTruthy()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('does not trust a changed port', () => {
+      vi.stubGlobal('fetch', vi.fn())
+      renderForm()
+
+      change('Порт', '2222')
+      expectNeedsVerification()
+    })
+
+    it('trusts the new address only after its key is read and explicitly confirmed', async () => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(json({ hostKeyFingerprint: 'SHA256:new-host-key' }))
+        .mockResolvedValueOnce(json({ ...existing(), ssh: { ...existing().ssh, host: 'other.test', hostKeyFingerprint: 'SHA256:new-host-key' } }))
+      vi.stubGlobal('fetch', fetchMock)
+      renderForm()
+      change('Адрес', 'other.test')
+
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Получить ключ сервера/ })) })
+      await waitFor(() => expect(screen.getByText('SHA256:new-host-key')).toBeTruthy())
+      // The key was read at the new address, without any credential, and is not trusted yet.
+      expect(JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)))
+        .toEqual({ host: 'other.test', port: 22, username: 'deploy' })
+      expectNeedsVerification()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Подтвердить сервер' }))
+      expect(state()?.className).toContain('trust-trusted')
+      expect(confirmedKey()).toBe('SHA256:new-host-key')
+
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Сохранить подключение' })) })
+      const saved = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body))
+      expect(saved.ssh).toMatchObject({ host: 'other.test', port: 22, hostKeyFingerprint: 'SHA256:new-host-key' })
+    })
+
+    it('restores the stored trust when the original address comes back', () => {
+      vi.stubGlobal('fetch', vi.fn())
+      renderForm()
+
+      change('Адрес', 'other.test')
+      change('Порт', '2222')
+      expectNeedsVerification()
+      change('Адрес', 'example.test')
+      change('Порт', '22')
+
+      expect(state()?.className).toContain('trust-trusted')
+      expect(confirmedKey()).toBe(trusted)
+    })
+  })
 })

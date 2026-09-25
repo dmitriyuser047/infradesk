@@ -20,7 +20,7 @@
 .trust-state { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid; border-radius: var(--radius-md); }
 .trust-state svg { flex: 0 0 auto; margin-top: 1px; }
 .trust-state p { margin-top: 2px; color: var(--text-secondary); }
-.trust-untrusted { border-color: var(--warning-border); background: var(--warning-soft); color: var(--warning); }
+.trust-untrusted, .trust-changed { border-color: var(--warning-border); background: var(--warning-soft); color: var(--warning); }
 .trust-trusted { border-color: var(--success-border); background: var(--success-soft); color: var(--success); }
 /* A changed key is the one state that must stop the user. */
 .trust-mismatch { border: 2px solid var(--danger); background: var(--danger-soft); color: var(--danger); }

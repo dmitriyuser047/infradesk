@@ -24,3 +24,15 @@ export interface IncidentResponse {
   createdAt: string
   updatedAt: string
 }
+
+/** The resource an incident is about: identity only, enough to name and link it in a list. */
+export interface IncidentResourceReference {
+  id: string
+  name: string
+  resourceTypeCode: string
+}
+
+/** An incident as the list returns it: complete for its row, with no further request per row. */
+export interface IncidentListItemResponse extends IncidentResponse {
+  resource: IncidentResourceReference
+}

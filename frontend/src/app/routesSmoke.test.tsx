@@ -48,7 +48,7 @@ function queryClient(): QueryClient {
   const incident = { id: 'incident', monitorRuleId: 'rule', resourceId: 'resource', status: 'OPEN', reason: 'THRESHOLD',
     startedAt: '2026-09-23T10:00:00Z', openedAt: '2026-09-23T10:00:00Z', resolvedAt: null,
     createdAt: '', updatedAt: '' }
-  client.setQueryData(['incidents', 'org', 'OPEN'], [incident])
+  client.setQueryData(['incidents', 'org', 'OPEN'], [{ ...incident, resource: { id: 'resource', name: 'Node', resourceTypeCode: 'NODE' } }])
   client.setQueryData(['incident', 'org', 'incident'], incident)
   return client
 }

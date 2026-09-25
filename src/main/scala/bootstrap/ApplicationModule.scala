@@ -220,7 +220,7 @@ object ApplicationModule {
       getResourceMetricHistory =
         GetResourceMetricHistory[ConnectionIO](resourceRepository, metricObservationRepository),
       getIncident = GetIncident[ConnectionIO](incidentRepository),
-      listIncidents = ListIncidents[ConnectionIO](incidentRepository),
+      listIncidents = ListIncidents[ConnectionIO](incidentListQuery),
       listMonitorRules = ListMonitorRules[ConnectionIO](
         resourceRepository,
         monitorRuleRepository,

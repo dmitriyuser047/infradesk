@@ -12,6 +12,7 @@ import { canOrganization } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { InlineAlert, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { contextSearch } from '../components/layout/workspaceNavigation'
+import { confirm, endpointId, hostTrust, initialConfirmations, type EndpointKey } from '../components/connections/hostTrust'
 import type { ConnectionResponse, SshAuthenticationType } from '../types/connection'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
@@ -53,9 +54,11 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
   const [password, setPassword] = useState('')
   const [privateKey, setPrivateKey] = useState('')
   const [passphrase, setPassphrase] = useState('')
-  // The identity of the host, as confirmed by whoever is editing this connection.
-  const [hostKeyFingerprint, setHostKeyFingerprint] = useState(existing?.ssh?.hostKeyFingerprint ?? '')
-  const [probedFingerprint, setProbedFingerprint] = useState<string | null>(null)
+  // The endpoint the server trusts now, and the confirmations made in this draft, per endpoint.
+  const storedEndpoint: EndpointKey | null = existing?.ssh?.hostKeyFingerprint
+    ? { host: existing.ssh.host, port: existing.ssh.port, fingerprint: existing.ssh.hostKeyFingerprint } : null
+  const [confirmations, setConfirmations] = useState(() => initialConfirmations(storedEndpoint))
+  const [probed, setProbed] = useState<EndpointKey | null>(null)
   const [intervalSeconds, setIntervalSeconds] = useState(String(existing?.schedule?.intervalSeconds ?? 600))
   const [validationError, setValidationError] = useState<string | null>(null)
   const [scheduleEnabled, setScheduleEnabled] = useState(existing?.schedule?.enabled ?? true)
@@ -77,10 +80,13 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
     existing.ssh !== null && existing.ssh.authenticationType !== authenticationType
   const credentialEntered = authenticationType === 'PRIVATE_KEY' ? privateKey.trim() !== '' : password !== ''
   const credentialRequired = existing === undefined || methodChanged
-  const storedFingerprint = existing?.ssh?.hostKeyFingerprint ?? null
-  const hostKeyChanged = probedFingerprint !== null && storedFingerprint !== null &&
-    probedFingerprint !== storedFingerprint
-  const hostConfirmed = hostKeyFingerprint.trim() !== ''
+  const currentEndpoint = { host: host.trim(), port: Number(port) }
+  const hostKey = hostTrust({ current: currentEndpoint, stored: storedEndpoint, confirmations, probed })
+  // Only a key confirmed for this very host and port counts; it is also the one sent on save.
+  const hostKeyFingerprint = hostKey.confirmed ?? ''
+  const hostConfirmed = hostKey.confirmed !== null
+  const hostKeyChanged = hostKey.state === 'mismatch'
+  const probedFingerprint = hostKey.presented
   const save = existing ? update : create
   const back = existing ? `/organizations/${organizationId}/connections/${existing.id}${context}` : `/organizations/${organizationId}/connections${context}`
 
@@ -112,7 +118,7 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
     }
   }
 
-  const trust = hostKeyChanged ? 'mismatch' : hostConfirmed ? 'trusted' : 'untrusted'
+  const trust = hostKey.state
   const storedCredential = existing?.ssh?.credentialConfigured === true && !methodChanged
 
   return <AppShell><div className="workspace-page form-page">
@@ -185,8 +191,11 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
           {trust === 'mismatch' ? <ShieldAlert aria-hidden size={20} /> : trust === 'trusted'
             ? <ShieldCheck aria-hidden size={20} /> : <ShieldQuestion aria-hidden size={20} />}
           <div>
-            <strong>{trust === 'mismatch' ? t.statusMismatch : trust === 'trusted' ? t.statusTrusted : t.statusUntrusted}</strong>
-            <p>{trust === 'mismatch' ? t.statusMismatchDetail : trust === 'trusted' ? t.statusTrustedDetail : t.statusUntrustedDetail}</p>
+            <strong>{trust === 'mismatch' ? t.statusMismatch : trust === 'trusted' ? t.statusTrusted
+              : trust === 'changed' ? t.statusEndpointChanged : t.statusUntrusted}</strong>
+            <p>{trust === 'mismatch' ? t.statusMismatchDetail : trust === 'trusted' ? t.statusTrustedDetail
+              : trust === 'changed' && storedEndpoint ? t.statusEndpointChangedDetail(endpointId(storedEndpoint))
+                : t.statusUntrustedDetail}</p>
           </div>
         </div>
         <div className="fingerprint-field">
@@ -201,15 +210,17 @@ function ConnectionForm({ organizationId, existing }: { organizationId: string; 
           <button className="secondary-button" type="button"
             disabled={!host || probe.isPending || save.isPending}
             onClick={() => {
-              setProbedFingerprint(null)
+              const endpoint = currentEndpoint
+              setProbed(null)
               probe.submit(
-                { host: host.trim(), port: Number(port), username: username.trim() },
-                result => setProbedFingerprint(result.hostKeyFingerprint),
+                { ...endpoint, username: username.trim() },
+                // The key is bound to the address it was read from, not to whatever the form shows later.
+                result => setProbed({ ...endpoint, fingerprint: result.hostKeyFingerprint }),
               )
             }}><ScanSearch aria-hidden size={16} />{probe.isPending ? t.reading : t.readHostKey}</button>
           {probedFingerprint !== null && probedFingerprint !== hostKeyFingerprint ? (
             <button className={hostKeyChanged ? 'danger-button' : 'primary-button'} type="button"
-              onClick={() => setHostKeyFingerprint(probedFingerprint)}>
+              onClick={() => setConfirmations(previous => confirm(previous, { ...currentEndpoint, fingerprint: probedFingerprint }))}>
               {hostKeyChanged ? t.replaceWith : t.trustThis}
             </button>
           ) : null}

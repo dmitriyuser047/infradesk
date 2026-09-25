@@ -1,19 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { requestJson } from './httpClient'
-import type { IncidentResponse, KnownIncidentStatus } from '../types/incident'
+import type { IncidentListItemResponse, IncidentResponse, KnownIncidentStatus } from '../types/incident'
 
 export function getIncidents(
   organizationId: string,
   status?: KnownIncidentStatus,
-): Promise<IncidentResponse[]> {
+): Promise<IncidentListItemResponse[]> {
   const query = new URLSearchParams()
   if (status !== undefined) {
     query.set('status', status)
   }
 
   const suffix = query.toString() === '' ? '' : `?${query.toString()}`
-  return requestJson<IncidentResponse[]>(
+  return requestJson<IncidentListItemResponse[]>(
     `/api/v1/organizations/${encodeURIComponent(organizationId)}/incidents${suffix}`,
   )
 }

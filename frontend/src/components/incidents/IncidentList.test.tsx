@@ -3,24 +3,21 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 
-import type { IncidentResponse } from '../../types/incident'
+import type { IncidentListItemResponse } from '../../types/incident'
 import { IncidentList } from './IncidentList'
 
-function incident(overrides: Partial<IncidentResponse>): IncidentResponse {
+function incident(overrides: Partial<IncidentListItemResponse>): IncidentListItemResponse {
   return {
     id: 'incident', monitorRuleId: 'rule', resourceId: 'node', status: 'OPEN', reason: 'THRESHOLD',
     startedAt: '2026-09-25T10:00:00Z', openedAt: '2026-09-25T10:00:00Z', resolvedAt: null,
-    createdAt: '', updatedAt: '', ...overrides,
+    createdAt: '', updatedAt: '', resource: { id: 'node', name: 'finland-node-01', resourceTypeCode: 'NODE' },
+    ...overrides,
   }
 }
 
-function render(incidents: IncidentResponse[]): string {
+function render(incidents: IncidentListItemResponse[]): string {
+  // An empty cache: everything a row shows comes from the list response itself.
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  client.setQueryData(['resource', 'org', 'node'], {
-    id: 'node', organizationId: 'org', environmentId: 'env', resourceTypeId: 't', parentResourceId: null,
-    code: 'node', name: 'finland-node-01', resourceTypeCode: 'NODE', active: true, createdAt: '', updatedAt: '',
-    data: { kind: 'NODE', spec: null, status: null },
-  })
   return renderToStaticMarkup(<QueryClientProvider client={client}><MemoryRouter>
     <IncidentList organizationId="org" incidents={incidents} />
   </MemoryRouter></QueryClientProvider>)
@@ -30,7 +27,8 @@ describe('incident list', () => {
   it('tells NO_DATA and THRESHOLD apart by wording and icon, and names the resource', () => {
     const html = render([
       incident({ id: 'threshold', reason: 'THRESHOLD' }),
-      incident({ id: 'no-data', reason: 'NO_DATA', openedAt: '2026-09-25T09:00:00Z' }),
+      incident({ id: 'no-data', reason: 'NO_DATA', openedAt: '2026-09-25T09:00:00Z',
+        resourceId: 'web', resource: { id: 'web', name: 'nginx-web', resourceTypeCode: 'CONTAINER' } }),
     ])
 
     expect(html).toContain('Превышен порог')
@@ -39,8 +37,8 @@ describe('incident list', () => {
     expect(html).toContain('lucide-eye-off')
     expect(html).toContain('finland-node-01')
     expect(html).toContain('Сервер')
-    // A resource name is shown, not its identifier.
-    expect(html).not.toContain('Ресурс · node')
+    expect(html).toContain('nginx-web')
+    expect(html).toContain('Контейнер')
   })
 
   it('lists open incidents first and shows resolved ones quieter', () => {
