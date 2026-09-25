@@ -9,6 +9,7 @@ import application.port.{
 import cats.syntax.all._
 import domain.incident.IncidentReason
 import domain.notification.{
+  EmailSecurity,
   NotificationChannel,
   NotificationChannelSettings,
   NotificationChannelType,
@@ -30,6 +31,7 @@ final class PostgresNotificationChannelRepository extends NotificationChannelRep
     fr"""
       id, organization_id, name, channel_type, enabled,
       subscribed_event_types, subscribed_reasons, telegram_chat_id,
+      smtp_host, smtp_port, smtp_security, smtp_username, smtp_from_address, smtp_recipients,
       secret_id, created_at, updated_at
     """
 
@@ -54,17 +56,31 @@ final class PostgresNotificationChannelRepository extends NotificationChannelRep
     val reasons = channel.subscriptions.orderedReasons.map(_.code)
     val chatId = channel.settings match {
       case NotificationChannelSettings.Telegram(value) => Some(value)
-      case NotificationChannelSettings.Webhook => None
+      case _ => None
     }
+    // Every column of a configuration is written on every save, so switching a channel to
+    // another type clears what the previous one held instead of leaving it behind.
+    val email = channel.settings match {
+      case value: NotificationChannelSettings.Email => Some(value)
+      case _ => None
+    }
+    val host = email.map(_.host)
+    val port = email.map(_.port)
+    val security = email.map(_.security.code)
+    val username = email.map(_.username)
+    val fromAddress = email.map(_.fromAddress)
+    val recipients = email.map(_.recipients)
 
     sql"""
       insert into notification_channel (
         id, organization_id, name, channel_type, enabled,
         subscribed_event_types, subscribed_reasons, telegram_chat_id,
+        smtp_host, smtp_port, smtp_security, smtp_username, smtp_from_address, smtp_recipients,
         secret_id, created_at, updated_at
       ) values (
         ${channel.id}, ${channel.organizationId}, ${channel.name}, ${channel.channelType.code},
         ${channel.enabled}, $eventTypes, $reasons, $chatId,
+        $host, $port, $security, $username, $fromAddress, $recipients,
         ${channel.secretId}, ${channel.createdAt}, ${channel.updatedAt}
       )
       on conflict (id) do update set
@@ -74,6 +90,12 @@ final class PostgresNotificationChannelRepository extends NotificationChannelRep
         subscribed_event_types = excluded.subscribed_event_types,
         subscribed_reasons = excluded.subscribed_reasons,
         telegram_chat_id = excluded.telegram_chat_id,
+        smtp_host = excluded.smtp_host,
+        smtp_port = excluded.smtp_port,
+        smtp_security = excluded.smtp_security,
+        smtp_username = excluded.smtp_username,
+        smtp_from_address = excluded.smtp_from_address,
+        smtp_recipients = excluded.smtp_recipients,
         secret_id = excluded.secret_id,
         updated_at = excluded.updated_at
       where notification_channel.organization_id = ${channel.organizationId}
@@ -107,6 +129,12 @@ object PostgresNotificationChannelRepository {
     subscribedEventTypes: List[String],
     subscribedReasons: List[String],
     telegramChatId: Option[String],
+    smtpHost: Option[String],
+    smtpPort: Option[Int],
+    smtpSecurity: Option[String],
+    smtpUsername: Option[String],
+    smtpFromAddress: Option[String],
+    smtpRecipients: Option[List[String]],
     secretId: UUID,
     createdAt: Instant,
     updatedAt: Instant
@@ -133,6 +161,18 @@ object PostgresNotificationChannelRepository {
       case NotificationChannelType.Telegram => telegramChatId
         .map(NotificationChannelSettings.Telegram)
         .toRight(new IllegalArgumentException("Telegram notification channel has no chat"))
+      case NotificationChannelType.Email =>
+        val incomplete = new IllegalArgumentException(
+          "Email notification channel has an incomplete SMTP configuration")
+        for {
+          host <- smtpHost.toRight(incomplete)
+          port <- smtpPort.toRight(incomplete)
+          security <- smtpSecurity.toRight(incomplete).flatMap(EmailSecurity.fromCode)
+          username <- smtpUsername.toRight(incomplete)
+          fromAddress <- smtpFromAddress.toRight(incomplete)
+          recipients <- smtpRecipients.filter(_.nonEmpty).toRight(incomplete)
+        } yield NotificationChannelSettings.Email(host, port, security, username, fromAddress,
+          recipients)
     }
   }
 }

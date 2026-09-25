@@ -39,6 +39,7 @@ final class NotificationChannelRoutesSpec extends FunSuite {
   private val orgB = UUID.fromString("10000000-0000-0000-0000-000000000002")
   private val BotToken = "123456:AA-very-secret-bot-token"
   private val WebhookUrl = "https://hooks.example.test/t/secret-path"
+  private val SmtpPassword = "s3cret-smtp-password"
 
   /** A request body for either operation. Only a create carries `enabled`; an update has no
     * lifecycle field at all, so the tests spell out which one they are sending.
@@ -317,12 +318,20 @@ final class NotificationChannelRoutesSpec extends FunSuite {
 
   test("a request carries the configuration of one channel type only") {
     val fixture = new ChannelFixture
-    val telegramWithWebhook = telegramBody().deepMerge(Json.obj(
-      "webhook" -> Json.obj("url" -> Json.fromString(WebhookUrl))))
-    val webhookWithTelegram = webhookBody().deepMerge(Json.obj(
-      "telegram" -> Json.obj("chatId" -> Json.fromString("-100777"))))
+    val telegramSection = Json.obj("telegram" -> Json.obj("chatId" -> Json.fromString("-100777")))
+    val webhookSection = Json.obj("webhook" -> Json.obj("url" -> Json.fromString(WebhookUrl)))
+    val emailSection = Json.obj("email" -> Json.obj(
+      "smtpHost" -> Json.fromString("smtp.example.test")))
+    val telegramWithWebhook = telegramBody().deepMerge(webhookSection)
 
-    for (body <- List(telegramWithWebhook, webhookWithTelegram)) {
+    for (body <- List(
+      telegramWithWebhook,
+      telegramBody().deepMerge(emailSection),
+      webhookBody().deepMerge(telegramSection),
+      webhookBody().deepMerge(emailSection),
+      emailBody().deepMerge(telegramSection),
+      emailBody().deepMerge(webhookSection)
+    )) {
       val result = fixture.post(fixture.path(orgA), body)
       assertEquals(result._1, Status.BadRequest, clues(body.noSpaces))
       assertEquals(result._2.hcursor.get[String]("code"), Right("INVALID_REQUEST"))
@@ -335,6 +344,158 @@ final class NotificationChannelRoutesSpec extends FunSuite {
     val id = fixture.createdId(telegramBody())
     assertEquals(fixture.put(fixture.path(orgA, id), telegramWithWebhook)._1, Status.BadRequest)
     assertEquals(fixture.audit.recorded.map(_.action.code), List("NOTIFICATION_CHANNEL_CREATED"))
+  }
+
+  private def emailBody(
+    name: String = "Mail",
+    host: Option[String] = Some("smtp.example.test"),
+    port: Option[Int] = Some(587),
+    security: Option[String] = Some("STARTTLS"),
+    username: Option[String] = Some("alerts@example.test"),
+    password: Option[String] = Some(SmtpPassword),
+    fromAddress: Option[String] = Some("alerts@example.test"),
+    recipients: Option[List[String]] = Some(List("admin@example.test")),
+    events: List[String] = List("INCIDENT_OPENED"),
+    reasons: List[String] = List("THRESHOLD"),
+    enabled: Option[Boolean] = None
+  ): Json = Json.obj(
+    "name" -> Json.fromString(name),
+    "type" -> Json.fromString("EMAIL"),
+    "events" -> Json.arr(events.map(Json.fromString): _*),
+    "reasons" -> Json.arr(reasons.map(Json.fromString): _*),
+    "email" -> Json.obj(
+      "smtpHost" -> host.fold(Json.Null)(Json.fromString),
+      "smtpPort" -> port.fold(Json.Null)(Json.fromInt),
+      "security" -> security.fold(Json.Null)(Json.fromString),
+      "username" -> username.fold(Json.Null)(Json.fromString),
+      "password" -> password.fold(Json.Null)(Json.fromString),
+      "fromAddress" -> fromAddress.fold(Json.Null)(Json.fromString),
+      "recipients" -> recipients.fold(Json.Null)(values => Json.arr(values.map(Json.fromString): _*))
+    )
+  ).mapObject(fields =>
+    enabled.fold(fields)(value => fields.add("enabled", Json.fromBoolean(value))))
+
+  test("creates a mail channel and answers with its SMTP configuration but never its password") {
+    val fixture = new ChannelFixture
+    val (status, body) = fixture.post(fixture.path(orgA), emailBody())
+
+    assertEquals(status, Status.Created)
+    assertEquals(body.hcursor.get[String]("type"), Right("EMAIL"))
+    val config = body.hcursor.downField("config")
+    assertEquals(config.get[Boolean]("credentialConfigured"), Right(true))
+    assertEquals(config.get[String]("smtpHost"), Right("smtp.example.test"))
+    assertEquals(config.get[Int]("smtpPort"), Right(587))
+    assertEquals(config.get[String]("security"), Right("STARTTLS"))
+    // The user name is addressing and comes back; the password is a credential and does not.
+    assertEquals(config.get[String]("username"), Right("alerts@example.test"))
+    assertEquals(config.get[String]("fromAddress"), Right("alerts@example.test"))
+    assertEquals(config.get[List[String]]("recipients"), Right(List("admin@example.test")))
+    val rendered = body.noSpaces
+    assert(!rendered.contains(SmtpPassword), "the response carried the SMTP password")
+    assert(!rendered.contains("password"), "the response carried a password field")
+    assert(!rendered.contains("*"), "the response carried a fake masked secret")
+  }
+
+  test("the SMTP password is stored encrypted and appears nowhere else") {
+    val fixture = new ChannelFixture
+    val id = fixture.createdId(emailBody())
+
+    val stored = fixture.secrets.head
+    assert(!new String(stored.ciphertext, "UTF-8").contains(SmtpPassword))
+    assertEquals(fixture.cipher.decrypt(stored),
+      domain.notification.NotificationChannelCredential.EmailPassword(SmtpPassword))
+    // Neither the channel row nor a listing of it holds the plaintext.
+    assert(!fixture.channelsAsJson.contains(SmtpPassword))
+    assert(!fixture.get(fixture.path(orgA))._2.noSpaces.contains(SmtpPassword))
+    assert(!fixture.get(fixture.path(orgA, id))._2.noSpaces.contains(SmtpPassword))
+    assert(!fixture.audit.recorded.mkString(" ").contains(SmtpPassword))
+  }
+
+  test("a mail channel keeps its password across an edit and rotates it when a new one is sent") {
+    val fixture = new ChannelFixture
+    val id = fixture.createdId(emailBody())
+    val original = fixture.secrets.head.id
+
+    val renamed = fixture.put(fixture.path(orgA, id), emailBody(name = "Renamed", password = None))
+    assertEquals(renamed._1, Status.Ok)
+    assertEquals(fixture.secrets.map(_.id), List(original))
+    assertEquals(fixture.channel(id).secretId, original)
+
+    fixture.put(fixture.path(orgA, id), emailBody(password = Some("rotated-password")))
+    val rotated = fixture.channel(id).secretId
+    assertNotEquals(rotated, original)
+    assertEquals(fixture.secrets.map(_.id), List(rotated))
+    assertEquals(fixture.cipher.decrypt(fixture.secrets.head),
+      domain.notification.NotificationChannelCredential.EmailPassword("rotated-password"))
+  }
+
+  test("switching a channel to or from mail requires a credential of the new type") {
+    val fixture = new ChannelFixture
+    val telegram = fixture.createdId(telegramBody())
+
+    assertEquals(fixture.put(fixture.path(orgA, telegram), emailBody(password = None))._2
+      .hcursor.get[String]("code"), Right("NOTIFICATION_CREDENTIAL_REQUIRED"))
+    assertEquals(fixture.channel(telegram).channelType.code, "TELEGRAM")
+
+    assertEquals(fixture.put(fixture.path(orgA, telegram), emailBody())._1, Status.Ok)
+    assertEquals(fixture.channel(telegram).channelType.code, "EMAIL")
+    // And back again: the SMTP password cannot stand in for a bot token either.
+    assertEquals(fixture.put(fixture.path(orgA, telegram), telegramBody(botToken = None))._2
+      .hcursor.get[String]("code"), Right("NOTIFICATION_CREDENTIAL_REQUIRED"))
+    assertEquals(fixture.put(fixture.path(orgA, telegram), telegramBody())._1, Status.Ok)
+    assertEquals(fixture.channel(telegram).channelType.code, "TELEGRAM")
+  }
+
+  test("a mail channel cannot be created without a password") {
+    val fixture = new ChannelFixture
+
+    val result = fixture.post(fixture.path(orgA), emailBody(password = None))
+    assertEquals(result._1, Status.BadRequest)
+    assertEquals(result._2.hcursor.get[String]("code"), Right("NOTIFICATION_CREDENTIAL_REQUIRED"))
+    assertEquals(fixture.channels, List.empty[NotificationChannel])
+  }
+
+  test("rejects an SMTP configuration that is incomplete or not one") {
+    val fixture = new ChannelFixture
+    val rejected = List(
+      emailBody(security = Some("SSL")),
+      emailBody(security = None),
+      emailBody(host = None),
+      emailBody(host = Some("  ")),
+      emailBody(host = Some("smtp example test")),
+      emailBody(port = None),
+      emailBody(port = Some(0)),
+      emailBody(port = Some(70000)),
+      emailBody(username = None),
+      emailBody(fromAddress = None),
+      emailBody(fromAddress = Some("not-an-address")),
+      emailBody(fromAddress = Some("two@@example.test")),
+      emailBody(recipients = None),
+      emailBody(recipients = Some(Nil)),
+      emailBody(recipients = Some(List("admin@example.test", "broken"))),
+      emailBody(recipients = Some(List.fill(51)("a@example.test").zipWithIndex
+        .map { case (address, index) => s"$index$address" }))
+    )
+
+    for (body <- rejected) {
+      val result = fixture.post(fixture.path(orgA), body)
+      assertEquals(result._1, Status.BadRequest, clues(body.noSpaces))
+      assertEquals(result._2.hcursor.get[String]("code"), Right("INVALID_REQUEST"))
+    }
+    assertEquals(fixture.channels, List.empty[NotificationChannel])
+    assertEquals(fixture.audit.recorded, List.empty[domain.audit.AuditEvent])
+  }
+
+  test("a mail channel is reached only by an owner of its own organization") {
+    val fixture = new ChannelFixture
+    val foreign = fixture.createdId(emailBody(), organizationId = orgB)
+
+    assertEquals(fixture.get(fixture.path(orgA, foreign))._1, Status.NotFound)
+    assertEquals(fixture.put(fixture.path(orgA, foreign), emailBody())._1, Status.NotFound)
+
+    val member = new ChannelFixture(role = OrganizationRole.Member)
+    assertEquals(member.post(member.path(orgA), emailBody())._1, Status.Forbidden)
+    assertEquals(member.transactions, 0)
   }
 
   test("a channel is created switched on unless the request says otherwise") {

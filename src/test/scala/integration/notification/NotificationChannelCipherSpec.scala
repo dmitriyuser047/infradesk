@@ -43,15 +43,37 @@ final class NotificationChannelCipherSpec extends FunSuite {
     assertEquals(cipher.decrypt(cipher.encrypt(id, org, url)), url)
   }
 
+  test("an SMTP password survives the round trip and is bound to its row, tenant and kind") {
+    val password = NotificationChannelCredential.EmailPassword("  s3cret with spaces  ")
+    val first = cipher.encrypt(id, org, password)
+    val second = cipher.encrypt(id, org, password)
+
+    // Not trimmed on the way through: a password is stored as it was typed.
+    assertEquals(cipher.decrypt(first), password)
+    assertEquals(first.kind, NotificationChannelCipher.CredentialKind)
+    assert(!first.nonce.sameElements(second.nonce), "a nonce was reused")
+    assert(!new String(first.ciphertext, "UTF-8").contains("s3cret"))
+    intercept[AEADBadTagException](cipher.decrypt(first.copy(organizationId = UUID.randomUUID())))
+    intercept[AEADBadTagException](cipher.decrypt(first.copy(id = UUID.randomUUID())))
+    // A secret of another kind is refused before it is decrypted at all.
+    intercept[IllegalArgumentException](cipher.decrypt(first.copy(kind = "SSH_CREDENTIAL")))
+    val corrupted = first.ciphertext.clone()
+    corrupted(0) = (corrupted(0) ^ 1).toByte
+    intercept[AEADBadTagException](cipher.decrypt(first.copy(ciphertext = corrupted)))
+  }
+
   test("the stored payload knows which kind of credential it is") {
     val webhook = cipher.encrypt(id, org,
       NotificationChannelCredential.WebhookUrl("https://hooks.example.test/x"))
     val telegram = cipher.encrypt(id, org,
       NotificationChannelCredential.TelegramBotToken("123:abc"))
+    val email = cipher.encrypt(id, org, NotificationChannelCredential.EmailPassword("pw"))
 
-    // A webhook URL can never come back as a Telegram token, whatever the channel now claims.
+    // A webhook URL can never come back as a Telegram token or an SMTP password, whatever the
+    // channel now claims: the type is part of the authenticated payload.
     assert(cipher.decrypt(webhook).isInstanceOf[NotificationChannelCredential.WebhookUrl])
     assert(cipher.decrypt(telegram).isInstanceOf[NotificationChannelCredential.TelegramBotToken])
+    assert(cipher.decrypt(email).isInstanceOf[NotificationChannelCredential.EmailPassword])
   }
 
   test("a secret of another kind is refused rather than guessed at") {

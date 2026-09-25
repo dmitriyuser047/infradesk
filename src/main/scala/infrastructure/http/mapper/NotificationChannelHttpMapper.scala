@@ -4,6 +4,7 @@ package infrastructure.http.mapper
 import application.notification.{CreateNotificationChannelCommand, UpdateNotificationChannelCommand}
 import domain.incident.IncidentReason
 import domain.notification.{
+  EmailSecurity,
   NotificationChannel,
   NotificationChannelCredential,
   NotificationChannelSettings,
@@ -35,14 +36,23 @@ object NotificationChannelHttpMapper {
       enabled = channel.enabled,
       events = channel.subscriptions.orderedEventTypes.map(_.code),
       reasons = channel.subscriptions.orderedReasons.map(_.code),
-      config = NotificationChannelConfigResponse(
-        // A stored channel always has a credential: it cannot be created without one.
-        credentialConfigured = true,
-        chatId = channel.settings match {
-          case NotificationChannelSettings.Telegram(chatId) => Some(chatId)
-          case NotificationChannelSettings.Webhook => None
-        }
-      ),
+      // A stored channel always has a credential: it cannot be created without one.
+      config = channel.settings match {
+        case NotificationChannelSettings.Webhook =>
+          NotificationChannelConfigResponse.Webhook(credentialConfigured = true)
+        case NotificationChannelSettings.Telegram(chatId) =>
+          NotificationChannelConfigResponse.Telegram(credentialConfigured = true, chatId = chatId)
+        case email: NotificationChannelSettings.Email =>
+          NotificationChannelConfigResponse.Email(
+            credentialConfigured = true,
+            smtpHost = email.host,
+            smtpPort = email.port,
+            security = email.security.code,
+            username = email.username,
+            fromAddress = email.fromAddress,
+            recipients = email.recipients
+          )
+      },
       createdAt = channel.createdAt,
       updatedAt = channel.updatedAt
     )
@@ -97,8 +107,9 @@ object NotificationChannelHttpMapper {
     request: SaveNotificationChannelRequest
   ): Either[IllegalArgumentException, Unit] = {
     val foreign = channelType match {
-      case NotificationChannelType.Webhook => request.telegram.isDefined
-      case NotificationChannelType.Telegram => request.webhook.isDefined
+      case NotificationChannelType.Webhook => request.telegram.isDefined || request.email.isDefined
+      case NotificationChannelType.Telegram => request.webhook.isDefined || request.email.isDefined
+      case NotificationChannelType.Email => request.webhook.isDefined || request.telegram.isDefined
     }
     Either.cond(!foreign, (), new IllegalArgumentException(
       s"A ${channelType.code} channel carries no configuration of another channel type"))
@@ -120,6 +131,21 @@ object NotificationChannelHttpMapper {
       request.telegram.flatMap(_.chatId).map(_.trim).filter(_.nonEmpty)
         .map(NotificationChannelSettings.Telegram)
         .toRight(new IllegalArgumentException("Telegram channel requires a chat"))
+    case NotificationChannelType.Email =>
+      val incomplete = new IllegalArgumentException("Mail channel requires an SMTP configuration")
+      for {
+        section <- request.email.toRight(incomplete)
+        host <- section.smtpHost.map(_.trim).filter(_.nonEmpty).toRight(incomplete)
+        port <- section.smtpPort.toRight(incomplete)
+        // An unknown value is a bad request rather than a silent default: the three modes mean
+        // three different connections.
+        security <- section.security.toRight(incomplete).flatMap(EmailSecurity.fromCode)
+        username <- section.username.map(_.trim).filter(_.nonEmpty).toRight(incomplete)
+        fromAddress <- section.fromAddress.map(_.trim).filter(_.nonEmpty).toRight(incomplete)
+        recipients <- section.recipients.map(_.map(_.trim).filter(_.nonEmpty))
+          .filter(_.nonEmpty).toRight(incomplete)
+      } yield NotificationChannelSettings.Email(host, port, security, username, fromAddress,
+        recipients)
   }
 
   /** An absent secret is a valid request on update; the use case decides whether it is allowed. */
@@ -133,6 +159,10 @@ object NotificationChannelHttpMapper {
     case NotificationChannelType.Telegram =>
       request.telegram.flatMap(_.botToken).map(_.trim).filter(_.nonEmpty)
         .map(NotificationChannelCredential.TelegramBotToken)
+    case NotificationChannelType.Email =>
+      // Not trimmed: a password is taken as it was typed.
+      request.email.flatMap(_.password).filter(_.nonEmpty)
+        .map(NotificationChannelCredential.EmailPassword)
   }
 
   private def traverse[A, B](

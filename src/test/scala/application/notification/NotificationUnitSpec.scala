@@ -25,11 +25,11 @@ final class NotificationUnitSpec extends FunSuite {
     )
 
     assertEquals(NotificationEventType.All.map(_.code), List("INCIDENT_OPENED", "INCIDENT_RESOLVED"))
-    assertEquals(NotificationChannelType.All.map(_.code), List("WEBHOOK", "TELEGRAM"))
+    assertEquals(NotificationChannelType.All.map(_.code), List("WEBHOOK", "TELEGRAM", "EMAIL"))
     assertEquals(NotificationDeliveryStatus.All.map(_.code), List("PENDING", "SENT", "DEAD"))
 
     assert(NotificationEventType.fromCode("INCIDENT_FLAPPED").isLeft)
-    assert(NotificationChannelType.fromCode("EMAIL").isLeft)
+    assert(NotificationChannelType.fromCode("SMS").isLeft)
     assert(NotificationDeliveryStatus.fromCode("QUEUED").isLeft)
   }
 

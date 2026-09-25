@@ -135,33 +135,41 @@ jobs:
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
-          # Build a representative production V22 dump: the version production runs before this
+          # Build a representative production V23 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V23 to the restored database before the backend reports itself ready.
+          # V24 to the restored database before the backend reports itself ready. Only V24 is
+          # undone here; everything V23 created stays, exactly as it does in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
-          drop table notification_channel;
-          drop table notification_channel_secret;
+          alter table notification_channel drop constraint ck_notification_channel_settings;
+          alter table notification_channel drop constraint ck_notification_channel_smtp_port;
+          alter table notification_channel drop constraint ck_notification_channel_smtp_security;
+          alter table notification_channel drop column smtp_host;
+          alter table notification_channel drop column smtp_port;
+          alter table notification_channel drop column smtp_security;
+          alter table notification_channel drop column smtp_username;
+          alter table notification_channel drop column smtp_from_address;
+          alter table notification_channel drop column smtp_recipients;
+          alter table notification_channel add constraint ck_notification_channel_settings check (
+            (channel_type = 'TELEGRAM'
+              and telegram_chat_id is not null
+              and length(btrim(telegram_chat_id)) >= 1)
+            or (channel_type = 'WEBHOOK' and telegram_chat_id is null));
+          alter table notification_channel drop constraint ck_notification_channel_type;
+          alter table notification_channel add constraint ck_notification_channel_type
+            check (channel_type in ('WEBHOOK', 'TELEGRAM'));
           alter table notification_delivery drop constraint ck_notification_delivery_channel;
           alter table notification_delivery add constraint ck_notification_delivery_channel
-            check (channel in ('WEBHOOK'));
-          alter table audit_event drop constraint ck_audit_event_action;
-          alter table audit_event add constraint ck_audit_event_action check (action in (
-            'PROJECT_CREATED','ENVIRONMENT_CREATED','CONNECTION_CREATED','CONNECTION_UPDATED',
-            'CONNECTION_DELETED','MONITOR_RULE_CREATED','MONITOR_RULE_UPDATED','MANUAL_SYNC_REQUESTED',
-            'CONTAINER_START_REQUESTED','CONTAINER_STOP_REQUESTED','CONTAINER_RESTART_REQUESTED'));
-          alter table audit_event drop constraint ck_audit_event_target_type;
-          alter table audit_event add constraint ck_audit_event_target_type check (target_type in (
-            'PROJECT','ENVIRONMENT','CONNECTION','MONITOR_RULE','RESOURCE'));
-          delete from flyway_schema_history where version = '23';
+            check (channel in ('WEBHOOK', 'TELEGRAM'));
+          delete from flyway_schema_history where version = '24';
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V23 to it.
+          # recover the marker and let Flyway apply V24 to it.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -182,7 +190,7 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "23"
+          test "${migrated}" = "24"
           credential_kind="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where conname = 'ck_connection_secret_kind' and pg_get_constraintdef(oid) like '%SSH_CREDENTIAL%'")"
@@ -191,11 +199,24 @@ jobs:
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('notification_channel', 'notification_channel_secret')")"
           test "${channel_tables}" = "2"
-          # V23 also widened two existing constraints; a restored database carries them too.
+          # What V23 built is still there after the upgrade, constraints included.
           channel_constraints="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where (conname = 'ck_notification_delivery_channel' and pg_get_constraintdef(oid) like '%TELEGRAM%') or (conname = 'ck_audit_event_target_type' and pg_get_constraintdef(oid) like '%NOTIFICATION_CHANNEL%') or (conname = 'ck_notification_channel_settings')")"
           test "${channel_constraints}" = "3"
+          # And what V24 adds is there too: the mail type, its columns and its own constraints.
+          email_type="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from pg_constraint where conname = 'ck_notification_channel_type' and pg_get_constraintdef(oid) like '%EMAIL%'")"
+          test "${email_type}" = "1"
+          email_columns="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from information_schema.columns where table_schema = current_schema() and table_name = 'notification_channel' and column_name in ('smtp_host', 'smtp_port', 'smtp_security', 'smtp_username', 'smtp_from_address', 'smtp_recipients')")"
+          test "${email_columns}" = "6"
+          email_constraints="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from pg_constraint where conname in ('ck_notification_channel_smtp_port', 'ck_notification_channel_smtp_security')")"
+          test "${email_constraints}" = "2"
           ./scripts/check-production.sh http://127.0.0.1:8081
       - name: Separate liveness from readiness while the database is down
         run: |

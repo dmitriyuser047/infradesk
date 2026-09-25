@@ -12,9 +12,15 @@ import java.util.UUID
 /** Encrypts a channel credential, whichever kind it is.
   *
   * The encoded payload carries its own type, so a webhook URL cannot be read back as a Telegram
-  * token: a channel whose type was changed without a new credential is rejected before it is
-  * stored, and a stored credential of the wrong type fails loudly rather than being sent
-  * somewhere it does not belong.
+  * token or an SMTP password: a channel whose type was changed without a new credential is
+  * rejected before it is stored, and a stored credential of the wrong type fails loudly rather
+  * than being sent somewhere it does not belong.
+  *
+  * The kind on the row separates a channel credential from every other kind of secret the
+  * product keeps, an SSH credential among them; the discriminator inside the authenticated
+  * payload separates the channel credentials from each other. Because the kind is part of the
+  * additional authenticated data, giving each channel type its own kind would mean re-encrypting
+  * the rows that already exist, which buys nothing: the payload is authenticated too.
   */
 final class NotificationChannelCipher private (envelope: AesGcmSecretEnvelope)
   extends NotificationChannelCryptography {
@@ -47,6 +53,11 @@ final class NotificationChannelCipher private (envelope: AesGcmSecretEnvelope)
         "type" -> Json.fromString(NotificationChannelType.Telegram.code),
         "botToken" -> Json.fromString(token)
       ).noSpaces
+    case NotificationChannelCredential.EmailPassword(password) =>
+      Json.obj(
+        "type" -> Json.fromString(NotificationChannelType.Email.code),
+        "smtpPassword" -> Json.fromString(password)
+      ).noSpaces
   }
 
   private def decode(payload: String): NotificationChannelCredential = {
@@ -59,6 +70,8 @@ final class NotificationChannelCipher private (envelope: AesGcmSecretEnvelope)
         NotificationChannelCredential.WebhookUrl(required(cursor.get[String]("url").toOption))
       case Some(NotificationChannelType.Telegram) =>
         NotificationChannelCredential.TelegramBotToken(required(cursor.get[String]("botToken").toOption))
+      case Some(NotificationChannelType.Email) =>
+        NotificationChannelCredential.EmailPassword(required(cursor.get[String]("smtpPassword").toOption))
       case None => throw unreadable
     }
   }

@@ -39,20 +39,43 @@ object HttpJsonCodecs {
     Decoder.forProduct2("chatId", "botToken")(TelegramChannelRequest.apply)
   implicit val webhookChannelRequestDecoder: Decoder[WebhookChannelRequest] =
     Decoder.forProduct1("url")(WebhookChannelRequest.apply)
+  implicit val emailChannelRequestDecoder: Decoder[EmailChannelRequest] =
+    Decoder.forProduct7("smtpHost", "smtpPort", "security", "username", "password", "fromAddress",
+      "recipients")(EmailChannelRequest.apply)
   implicit val createNotificationChannelRequestDecoder: Decoder[CreateNotificationChannelRequest] =
-    Decoder.forProduct7("name", "type", "enabled", "events", "reasons", "telegram", "webhook")(
-      CreateNotificationChannelRequest.apply)
+    Decoder.forProduct8("name", "type", "enabled", "events", "reasons", "telegram", "webhook",
+      "email")(CreateNotificationChannelRequest.apply)
   // An update has no lifecycle field, and a body that carries one is asking for something this
   // operation does not do: enable and disable are separate, journalled operations.
   implicit val updateNotificationChannelRequestDecoder: Decoder[UpdateNotificationChannelRequest] =
-    Decoder.forProduct6("name", "type", "events", "reasons", "telegram", "webhook")(
+    Decoder.forProduct7("name", "type", "events", "reasons", "telegram", "webhook", "email")(
       UpdateNotificationChannelRequest.apply).validate(
       cursor => cursor.downField("enabled").succeeded != true,
       "enabled is not part of an update; use the enable or disable operation")
   // Only what is safe to show: whether a credential exists, and the chat a Telegram channel
   // posts to. The credential itself has no field here.
+  // One shape per channel type: a webhook answer carries no field a mail channel would need,
+  // and neither carries a credential.
   implicit val notificationChannelConfigResponseEncoder: Encoder[NotificationChannelConfigResponse] =
-    Encoder.forProduct2("credentialConfigured", "chatId")(v => (v.credentialConfigured, v.chatId))
+    Encoder.instance {
+      case v: NotificationChannelConfigResponse.Webhook =>
+        Json.obj("credentialConfigured" -> Json.fromBoolean(v.credentialConfigured))
+      case v: NotificationChannelConfigResponse.Telegram =>
+        Json.obj(
+          "credentialConfigured" -> Json.fromBoolean(v.credentialConfigured),
+          "chatId" -> Json.fromString(v.chatId)
+        )
+      case v: NotificationChannelConfigResponse.Email =>
+        Json.obj(
+          "credentialConfigured" -> Json.fromBoolean(v.credentialConfigured),
+          "smtpHost" -> Json.fromString(v.smtpHost),
+          "smtpPort" -> Json.fromInt(v.smtpPort),
+          "security" -> Json.fromString(v.security),
+          "username" -> Json.fromString(v.username),
+          "fromAddress" -> Json.fromString(v.fromAddress),
+          "recipients" -> Json.arr(v.recipients.map(Json.fromString): _*)
+        )
+    }
   implicit val notificationChannelResponseEncoder: Encoder[NotificationChannelResponse] =
     Encoder.forProduct9("id", "name", "type", "enabled", "events", "reasons", "config",
       "createdAt", "updatedAt")(v => (v.id, v.name, v.channelType, v.enabled, v.events, v.reasons,

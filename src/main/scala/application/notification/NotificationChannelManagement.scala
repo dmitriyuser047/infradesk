@@ -160,6 +160,10 @@ final class NotificationChannelManagement[Tx[_]: MonadThrow](
     settings match {
       case NotificationChannelSettings.Telegram(chatId) =>
         NotificationChannelSettings.Telegram(chatId.trim)
+      case value: NotificationChannelSettings.Email =>
+        // Recipients are compared after trimming, so the stored list is the normalized one.
+        value.copy(host = value.host.trim, username = value.username.trim,
+          fromAddress = value.fromAddress.trim, recipients = value.recipients.map(_.trim).distinct)
       case NotificationChannelSettings.Webhook => NotificationChannelSettings.Webhook
     }
 
@@ -180,6 +184,31 @@ final class NotificationChannelManagement[Tx[_]: MonadThrow](
     case NotificationChannelSettings.Webhook => Right(())
     case NotificationChannelSettings.Telegram(chatId) =>
       check(chatId.trim.nonEmpty && chatId.trim.length <= 64, "Invalid Telegram chat")
+    case email: NotificationChannelSettings.Email => validateEmail(email)
+  }
+
+  /** What can be checked about a mail configuration without touching the network.
+    *
+    * No address is resolved and no relay is contacted: whether the host exists and whether it
+    * accepts these credentials is something only a delivery attempt can answer.
+    */
+  private def validateEmail(
+    settings: NotificationChannelSettings.Email
+  ): Either[NotificationChannelError, Unit] = {
+    val recipients = settings.recipients.map(_.trim).filter(_.nonEmpty).distinct
+    for {
+      _ <- check(NotificationChannelManagement.isHost(settings.host), "Invalid SMTP host")
+      _ <- check(settings.port > 0 && settings.port <= 65535, "Invalid SMTP port")
+      _ <- check(settings.username.trim.nonEmpty && settings.username.trim.length <= 255,
+        "Invalid SMTP user name")
+      _ <- check(NotificationChannelManagement.isEmailAddress(settings.fromAddress),
+        "Invalid sender address")
+      _ <- check(recipients.nonEmpty, "A mail channel needs at least one recipient")
+      _ <- check(recipients.sizeIs <= NotificationChannelManagement.MaxRecipients,
+        s"A mail channel takes at most ${NotificationChannelManagement.MaxRecipients} recipients")
+      _ <- check(recipients.forall(NotificationChannelManagement.isEmailAddress),
+        "Invalid recipient address")
+    } yield ()
   }
 
   private def validateCredential(
@@ -190,6 +219,9 @@ final class NotificationChannelManagement[Tx[_]: MonadThrow](
         "Webhook URL must be an absolute http or https address")
     case NotificationChannelCredential.TelegramBotToken(token) =>
       check(token.trim.nonEmpty && token.trim.length <= 256, "Invalid Telegram bot token")
+    case NotificationChannelCredential.EmailPassword(password) =>
+      // Not trimmed: leading and trailing spaces may be part of the password.
+      check(password.nonEmpty && password.length <= 256, "Invalid SMTP password")
   }
 
   private def requireMatchingCredential(
@@ -215,6 +247,29 @@ final class NotificationChannelManagement[Tx[_]: MonadThrow](
 }
 
 object NotificationChannelManagement {
+
+  /** Enough addresses for a team, few enough that one channel cannot become a mailing list. */
+  val MaxRecipients: Int = 50
+
+  /** Conservative rather than complete: this is not an RFC 5322 parser, and it does not need to
+    * be. It rejects what is plainly not an address and leaves the rest to the relay.
+    */
+  def isEmailAddress(value: String): Boolean = {
+    val trimmed = value.trim
+    val parts = trimmed.split('@')
+    trimmed.length <= 320 && parts.length == 2 && parts.forall(_.nonEmpty) &&
+      parts(1).contains('.') && !parts(1).startsWith(".") && !parts(1).endsWith(".") &&
+      !trimmed.exists(character => character.isWhitespace || character.isControl)
+  }
+
+  /** A host as it is written in a configuration: a name, an address, or an IPv6 literal. It is
+    * never resolved here.
+    */
+  def isHost(value: String): Boolean = {
+    val trimmed = value.trim
+    trimmed.nonEmpty && trimmed.length <= 255 &&
+      !trimmed.exists(character => character.isWhitespace || character.isControl)
+  }
 
   /** The URL is never echoed back, so it is validated rather than displayed. */
   def isDeliverableUrl(value: String): Boolean = {

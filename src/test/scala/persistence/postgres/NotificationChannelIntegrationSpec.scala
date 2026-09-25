@@ -14,6 +14,7 @@ import cats.syntax.all._
 import domain.audit.{AuditCursor, AuditEvent}
 import domain.incident.IncidentReason
 import domain.notification.{
+  EmailSecurity,
   NotificationChannel,
   NotificationChannelCredential,
   NotificationChannelSettings,
@@ -36,9 +37,12 @@ import java.util.{Base64, UUID}
   */
 final class NotificationChannelIntegrationSpec extends FunSuite {
 
-  private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000001")
+  // Two organizations of this spec's own. The shared fixture organization is not used here:
+  // other suites clear its journal, and this spec asserts on what its journal holds.
+  private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-0000000000b0")
   private val OtherOrganizationId = UUID.fromString("20000000-0000-0000-0000-0000000000b1")
   private val BotToken = "7654321:AA-integration-secret"
+  private val SmtpPassword = "integration-smtp-secret"
 
   test("a channel and its credential commit together, and the credential is bytes on disk") {
     withFixture { fixture =>
@@ -194,6 +198,132 @@ final class NotificationChannelIntegrationSpec extends FunSuite {
     }
   }
 
+  test("a mail channel stores its SMTP configuration and keeps its password out of the row") {
+    withFixture { fixture =>
+      for {
+        channel <- fixture.run(fixture.management.create(fixture.actor, email()))
+        stored <- fixture.run(fixture.channels.findById(OrganizationId, channel.id))
+        secret <- fixture.run(fixture.secrets.find(OrganizationId, channel.secretId))
+        plaintextRows <- fixture.run(sql"""
+          select count(*) from notification_channel_secret
+           where id = ${channel.secretId}
+             and position(${SmtpPassword.getBytes("UTF-8")}::bytea in ciphertext) > 0
+        """.query[Long].unique)
+        columns <- fixture.run(sql"""
+          select smtp_host, smtp_port, smtp_security, smtp_username, smtp_from_address,
+                 smtp_recipients, telegram_chat_id
+            from notification_channel where id = ${channel.id}
+        """.query[(String, Int, String, String, String, List[String], Option[String])].unique)
+      } yield IO {
+        assertEquals(stored.map(_.channelType.code), Some("EMAIL"))
+        assertEquals(stored.map(_.settings), Some(NotificationChannelSettings.Email(
+          "smtp.example.test", 587, EmailSecurity.StartTls, "alerts@example.test",
+          "alerts@example.test", List("admin@example.test", "ops@example.test"))))
+        // Typed columns, and none belonging to another channel type.
+        assertEquals(columns,
+          ("smtp.example.test", 587, "STARTTLS", "alerts@example.test", "alerts@example.test",
+            List("admin@example.test", "ops@example.test"), Option.empty[String]))
+        assertEquals(plaintextRows, 0L)
+        assertEquals(secret.map(fixture.cipher.decrypt),
+          Some(NotificationChannelCredential.EmailPassword(SmtpPassword)))
+      }
+    }
+  }
+
+  test("switching a channel to mail clears what the previous type held") {
+    withFixture { fixture =>
+      for {
+        channel <- fixture.run(fixture.management.create(fixture.actor, telegram()))
+        switched <- fixture.run(fixture.management.update(fixture.actor, channel.id,
+          UpdateNotificationChannelCommand("Mail", everything, emailSettings,
+            Some(NotificationChannelCredential.EmailPassword(SmtpPassword)))))
+        chatId <- fixture.run(
+          sql"select telegram_chat_id from notification_channel where id = ${channel.id}"
+            .query[Option[String]].unique)
+        secrets <- fixture.run(
+          sql"select count(*) from notification_channel_secret where organization_id = $OrganizationId"
+            .query[Long].unique)
+        secret <- fixture.run(fixture.secrets.find(OrganizationId, switched.secretId))
+      } yield IO {
+        assertEquals(switched.channelType.code, "EMAIL")
+        // The chat of the Telegram channel it used to be does not linger in the row.
+        assertEquals(chatId, Option.empty[String])
+        // Nor does the bot token: one credential per channel, of the type the channel now is.
+        assertEquals(secrets, 1L)
+        assertEquals(secret.map(fixture.cipher.decrypt),
+          Some(NotificationChannelCredential.EmailPassword(SmtpPassword)))
+      }
+    }
+  }
+
+  test("a mail channel keeps its password across an edit and rotates it on request") {
+    withFixture { fixture =>
+      for {
+        channel <- fixture.run(fixture.management.create(fixture.actor, email()))
+        renamed <- fixture.run(fixture.management.update(fixture.actor, channel.id,
+          UpdateNotificationChannelCommand("Renamed", everything, emailSettings, None)))
+        kept <- fixture.run(fixture.secrets.find(OrganizationId, renamed.secretId))
+        rotated <- fixture.run(fixture.management.update(fixture.actor, channel.id,
+          UpdateNotificationChannelCommand("Renamed", everything, emailSettings,
+            Some(NotificationChannelCredential.EmailPassword("rotated")))))
+        remaining <- fixture.run(
+          sql"select count(*) from notification_channel_secret where organization_id = $OrganizationId"
+            .query[Long].unique)
+        rotatedSecret <- fixture.run(fixture.secrets.find(OrganizationId, rotated.secretId))
+      } yield IO {
+        assertEquals(renamed.secretId, channel.secretId)
+        assertEquals(kept.map(fixture.cipher.decrypt),
+          Some(NotificationChannelCredential.EmailPassword(SmtpPassword)))
+        assertNotEquals(rotated.secretId, channel.secretId)
+        assertEquals(remaining, 1L)
+        assertEquals(rotatedSecret.map(fixture.cipher.decrypt),
+          Some(NotificationChannelCredential.EmailPassword("rotated")))
+      }
+    }
+  }
+
+  test("a mail channel and its password commit together or not at all") {
+    withFixture { fixture =>
+      val management = fixture.managementWith(new FailingAuditRecorderRepository)
+      for {
+        result <- fixture.run(management.create(fixture.actor, email())).attempt
+        channels <- fixture.run(fixture.channels.listByOrganization(OrganizationId))
+        secrets <- fixture.run(
+          sql"select count(*) from notification_channel_secret where organization_id = $OrganizationId"
+            .query[Long].unique)
+      } yield IO {
+        assert(result.isLeft, "the journal failed but the mail channel was stored")
+        assertEquals(channels, List.empty[NotificationChannel])
+        assertEquals(secrets, 0L)
+      }
+    }
+  }
+
+  test("a listing of many channels of every type is one query and decrypts nothing") {
+    withFixture { fixture =>
+      val many = (1 to 30).toList
+      for {
+        _ <- many.traverse_(index => fixture.run(index % 3 match {
+          case 0 => fixture.management.create(fixture.actor, email(name = f"mail-$index%03d"))
+          case 1 => fixture.management.create(fixture.actor, telegram(name = f"chat-$index%03d"))
+          case _ => fixture.management.create(fixture.actor, webhook(name = f"hook-$index%03d"))
+        }))
+        listed <- fixture.run(fixture.channels.listByOrganization(OrganizationId))
+        rendered = listed.map(channel =>
+          infrastructure.http.mapper.NotificationChannelHttpMapper.toResponse(channel))
+      } yield IO {
+        assertEquals(listed.size, 30)
+        assertEquals(listed.map(_.channelType.code).distinct.sorted,
+          List("EMAIL", "TELEGRAM", "WEBHOOK"))
+        // Every representation is built from the row alone: no secret is read, let alone decrypted.
+        assertEquals(rendered.count(_.config.credentialConfigured), 30)
+        assert(!rendered.mkString(" ").contains(SmtpPassword))
+        assert(!rendered.mkString(" ").contains(BotToken))
+        assertEquals(listed.map(_.name), listed.map(_.name).sorted)
+      }
+    }
+  }
+
   test("the schema refuses a configuration that belongs to another channel type") {
     withFixture { fixture =>
       val secretId = UUID.randomUUID()
@@ -210,8 +340,27 @@ final class NotificationChannelIntegrationSpec extends FunSuite {
           List("INCIDENT_FLAPPED"), List("THRESHOLD"))).attempt
         noEvents <- fixture.run(insertRaw(secretId, "WEBHOOK", None, Nil, List("THRESHOLD"))).attempt
         noReasons <- fixture.run(insertRaw(secretId, "WEBHOOK", None, List("INCIDENT_OPENED"), Nil)).attempt
-        unknownType <- fixture.run(insertRaw(secretId, "EMAIL", None,
+        unknownType <- fixture.run(insertRaw(secretId, "SMS", None,
           List("INCIDENT_OPENED"), List("THRESHOLD"))).attempt
+        // A mail channel needs its whole SMTP configuration, and only a mail channel may hold one.
+        emailWithChat <- fixture.run(insertRaw(secretId, "EMAIL", Some("-100777"),
+          List("INCIDENT_OPENED"), List("THRESHOLD"), RawSmtp())).attempt
+        emailWithoutSmtp <- fixture.run(insertRaw(secretId, "EMAIL", None,
+          List("INCIDENT_OPENED"), List("THRESHOLD"), noSmtp)).attempt
+        emailWithoutRecipients <- fixture.run(insertRaw(secretId, "EMAIL", None,
+          List("INCIDENT_OPENED"), List("THRESHOLD"), RawSmtp(recipients = Some(Nil)))).attempt
+        emailWithoutUsername <- fixture.run(insertRaw(secretId, "EMAIL", None,
+          List("INCIDENT_OPENED"), List("THRESHOLD"), RawSmtp(username = None))).attempt
+        emailUnknownSecurity <- fixture.run(insertRaw(secretId, "EMAIL", None,
+          List("INCIDENT_OPENED"), List("THRESHOLD"), RawSmtp(security = Some("SSL")))).attempt
+        emailPortTooHigh <- fixture.run(insertRaw(secretId, "EMAIL", None,
+          List("INCIDENT_OPENED"), List("THRESHOLD"), RawSmtp(port = Some(70000)))).attempt
+        emailPortZero <- fixture.run(insertRaw(secretId, "EMAIL", None,
+          List("INCIDENT_OPENED"), List("THRESHOLD"), RawSmtp(port = Some(0)))).attempt
+        webhookWithSmtp <- fixture.run(insertRaw(secretId, "WEBHOOK", None,
+          List("INCIDENT_OPENED"), List("THRESHOLD"), RawSmtp())).attempt
+        telegramWithSmtp <- fixture.run(insertRaw(secretId, "TELEGRAM", Some("-100777"),
+          List("INCIDENT_OPENED"), List("THRESHOLD"), RawSmtp())).attempt
       } yield IO {
         for ((label, result) <- List(
           "webhook with a chat" -> webhookWithChat,
@@ -219,7 +368,16 @@ final class NotificationChannelIntegrationSpec extends FunSuite {
           "unknown event type" -> unknownEvent,
           "no event types" -> noEvents,
           "no reasons" -> noReasons,
-          "unknown channel type" -> unknownType
+          "unknown channel type" -> unknownType,
+          "mail with a chat" -> emailWithChat,
+          "mail without an SMTP configuration" -> emailWithoutSmtp,
+          "mail without recipients" -> emailWithoutRecipients,
+          "mail without a user name" -> emailWithoutUsername,
+          "mail with an unknown security mode" -> emailUnknownSecurity,
+          "mail on port 70000" -> emailPortTooHigh,
+          "mail on port 0" -> emailPortZero,
+          "a webhook with an SMTP configuration" -> webhookWithSmtp,
+          "a telegram channel with an SMTP configuration" -> telegramWithSmtp
         )) assert(result.isLeft, s"the database accepted a channel with $label")
       }
     }
@@ -239,21 +397,40 @@ final class NotificationChannelIntegrationSpec extends FunSuite {
     }
   }
 
+  /** An SMTP configuration as the columns hold it, so a test can write one the domain would
+    * never produce and see what the schema makes of it.
+    */
+  private final case class RawSmtp(
+    host: Option[String] = Some("smtp.example.test"),
+    port: Option[Int] = Some(587),
+    security: Option[String] = Some("STARTTLS"),
+    username: Option[String] = Some("alerts@example.test"),
+    fromAddress: Option[String] = Some("alerts@example.test"),
+    recipients: Option[List[String]] = Some(List("admin@example.test"))
+  )
+
+  private val noSmtp = RawSmtp(None, None, None, None, None, None)
+
   private def insertRaw(
     secretId: UUID,
     channelType: String,
     chatId: Option[String],
     events: List[String],
-    reasons: List[String]
+    reasons: List[String],
+    smtp: RawSmtp = RawSmtp(None, None, None, None, None, None)
   ): ConnectionIO[Int] =
     sql"""
       insert into notification_channel (
         id, organization_id, name, channel_type, enabled,
         subscribed_event_types, subscribed_reasons, telegram_chat_id,
+        smtp_host, smtp_port, smtp_security, smtp_username, smtp_from_address, smtp_recipients,
         secret_id, created_at, updated_at
       ) values (
         ${UUID.randomUUID()}, $OrganizationId, 'Raw', $channelType, true,
-        $events, $reasons, $chatId, $secretId, current_timestamp, current_timestamp
+        $events, $reasons, $chatId,
+        ${smtp.host}, ${smtp.port}, ${smtp.security}, ${smtp.username}, ${smtp.fromAddress},
+        ${smtp.recipients},
+        $secretId, current_timestamp, current_timestamp
       )
     """.update.run
 
@@ -272,6 +449,33 @@ final class NotificationChannelIntegrationSpec extends FunSuite {
       subscriptions = everything,
       settings = NotificationChannelSettings.Telegram("-100777"),
       credential = Some(NotificationChannelCredential.TelegramBotToken(BotToken))
+    )
+
+  private val emailSettings = NotificationChannelSettings.Email(
+    host = "smtp.example.test",
+    port = 587,
+    security = EmailSecurity.StartTls,
+    username = "alerts@example.test",
+    fromAddress = "alerts@example.test",
+    recipients = List("admin@example.test", "ops@example.test")
+  )
+
+  private def email(name: String = "Mail"): CreateNotificationChannelCommand =
+    CreateNotificationChannelCommand(
+      name = name,
+      enabled = true,
+      subscriptions = everything,
+      settings = emailSettings,
+      credential = Some(NotificationChannelCredential.EmailPassword(SmtpPassword))
+    )
+
+  private def webhook(name: String = "Automation"): CreateNotificationChannelCommand =
+    CreateNotificationChannelCommand(
+      name = name,
+      enabled = true,
+      subscriptions = everything,
+      settings = NotificationChannelSettings.Webhook,
+      credential = Some(NotificationChannelCredential.WebhookUrl("https://hooks.example.test/x"))
     )
 
   private def edit(
@@ -325,19 +529,31 @@ final class NotificationChannelIntegrationSpec extends FunSuite {
     /** The fixture owns both organizations of this spec and starts from an empty settings page. */
     def reset: IO[Unit] = run(for {
       _ <- sql"""
-        insert into organization (id, code, name)
-        values ($OtherOrganizationId, 'notification-channel-other', 'Other organization')
+        insert into organization (id, code, name) values
+          ($OrganizationId, 'notification-channel', 'Notification channels'),
+          ($OtherOrganizationId, 'notification-channel-other', 'Other organization')
         on conflict do nothing
       """.update.run
       _ <- sql"""
         insert into organization_membership (user_id, organization_id, role, created_at, updated_at)
-        values (${AuthorizationFixtures.ActorUserId}, $OtherOrganizationId, 'OWNER',
-                current_timestamp, current_timestamp)
+        values
+          (${AuthorizationFixtures.ActorUserId}, $OrganizationId, 'OWNER',
+           current_timestamp, current_timestamp),
+          (${AuthorizationFixtures.ActorUserId}, $OtherOrganizationId, 'OWNER',
+           current_timestamp, current_timestamp)
         on conflict do nothing
       """.update.run
-      _ <- sql"delete from notification_channel".update.run
-      _ <- sql"delete from notification_channel_secret".update.run
-      _ <- sql"""delete from audit_event where target_type = 'NOTIFICATION_CHANNEL'""".update.run
+      _ <- sql"""
+        delete from notification_channel
+         where organization_id in ($OrganizationId, $OtherOrganizationId)
+      """.update.run
+      _ <- sql"""
+        delete from notification_channel_secret
+         where organization_id in ($OrganizationId, $OtherOrganizationId)
+      """.update.run
+      _ <- sql"""
+        delete from audit_event where organization_id in ($OrganizationId, $OtherOrganizationId)
+      """.update.run
     } yield ())
   }
 

@@ -4,16 +4,37 @@ package infrastructure.http.dto
 import java.time.Instant
 import java.util.UUID
 
-/** The configuration a response may carry.
+/** The configuration a response may carry, which differs per channel type exactly as the
+  * settings do.
   *
-  * `credentialConfigured` states that a credential exists; it is not a masked copy of one. The
-  * webhook URL is a credential in this product, so it has no representation here at all, and the
-  * Telegram chat is addressing rather than a secret, so it does.
+  * `credentialConfigured` states that a credential exists; it is never a masked copy of one. A
+  * webhook URL and an SMTP password are credentials in this product, so neither has a
+  * representation here at all; a Telegram chat, an SMTP host and an SMTP user name are
+  * addressing rather than secrets, so they do.
   */
-final case class NotificationChannelConfigResponse(
-  credentialConfigured: Boolean,
-  chatId: Option[String]
-)
+sealed trait NotificationChannelConfigResponse {
+  def credentialConfigured: Boolean
+}
+
+object NotificationChannelConfigResponse {
+
+  final case class Webhook(credentialConfigured: Boolean) extends NotificationChannelConfigResponse
+
+  final case class Telegram(
+    credentialConfigured: Boolean,
+    chatId: String
+  ) extends NotificationChannelConfigResponse
+
+  final case class Email(
+    credentialConfigured: Boolean,
+    smtpHost: String,
+    smtpPort: Int,
+    security: String,
+    username: String,
+    fromAddress: String,
+    recipients: List[String]
+  ) extends NotificationChannelConfigResponse
+}
 
 final case class NotificationChannelResponse(
   id: UUID,
@@ -31,6 +52,19 @@ final case class TelegramChannelRequest(chatId: Option[String], botToken: Option
 
 final case class WebhookChannelRequest(url: Option[String])
 
+/** The SMTP section of a request. An absent password on an update means "keep the stored one";
+  * on a create it means the request is incomplete, which the use case says so.
+  */
+final case class EmailChannelRequest(
+  smtpHost: Option[String],
+  smtpPort: Option[Int],
+  security: Option[String],
+  username: Option[String],
+  password: Option[String],
+  fromAddress: Option[String],
+  recipients: Option[List[String]]
+)
+
 /** What both write requests have in common.
   *
   * A request carries the configuration of the type it declares and of no other: sending a
@@ -43,6 +77,7 @@ sealed trait SaveNotificationChannelRequest {
   def reasons: List[String]
   def telegram: Option[TelegramChannelRequest]
   def webhook: Option[WebhookChannelRequest]
+  def email: Option[EmailChannelRequest]
 }
 
 final case class CreateNotificationChannelRequest(
@@ -52,7 +87,8 @@ final case class CreateNotificationChannelRequest(
   events: List[String],
   reasons: List[String],
   telegram: Option[TelegramChannelRequest],
-  webhook: Option[WebhookChannelRequest]
+  webhook: Option[WebhookChannelRequest],
+  email: Option[EmailChannelRequest]
 ) extends SaveNotificationChannelRequest
 
 /** An update carries no `enabled`: a channel is switched on and off through its own operations,
@@ -68,5 +104,6 @@ final case class UpdateNotificationChannelRequest(
   events: List[String],
   reasons: List[String],
   telegram: Option[TelegramChannelRequest],
-  webhook: Option[WebhookChannelRequest]
+  webhook: Option[WebhookChannelRequest],
+  email: Option[EmailChannelRequest]
 ) extends SaveNotificationChannelRequest

@@ -8,8 +8,8 @@ import java.util.UUID
 
 /** Which external system a notification is delivered to.
   *
-  * Two typed kinds, not a plugin registry: adding a third one is a deliberate change to this
-  * enumeration and to the sender that serves it.
+  * Typed kinds, not a plugin registry: adding one is a deliberate change to this enumeration,
+  * to the settings and credential it brings with it, and to the sender that serves it.
   */
 sealed trait NotificationChannelType {
   def code: String
@@ -25,7 +25,11 @@ object NotificationChannelType {
     override val code: String = "TELEGRAM"
   }
 
-  val All: List[NotificationChannelType] = List(Webhook, Telegram)
+  case object Email extends NotificationChannelType {
+    override val code: String = "EMAIL"
+  }
+
+  val All: List[NotificationChannelType] = List(Webhook, Telegram, Email)
 
   def fromCode(code: String): Either[IllegalArgumentException, NotificationChannelType] =
     All.find(_.code == code)
@@ -53,6 +57,55 @@ object NotificationChannelSettings {
   final case class Telegram(chatId: String) extends NotificationChannelSettings {
     override val channelType: NotificationChannelType = NotificationChannelType.Telegram
   }
+
+  /** Where mail is sent from and to, and how the connection to the relay is protected.
+    *
+    * The user name is addressing rather than a secret and is part of the settings; the password
+    * that goes with it is a credential and is not.
+    */
+  final case class Email(
+    host: String,
+    port: Int,
+    security: EmailSecurity,
+    username: String,
+    fromAddress: String,
+    recipients: List[String]
+  ) extends NotificationChannelSettings {
+    override val channelType: NotificationChannelType = NotificationChannelType.Email
+  }
+}
+
+/** How the connection to an SMTP relay is protected.
+  *
+  * One value rather than a pair of flags: "plain and also implicit TLS" is a contradiction that
+  * a pair of booleans can express and this cannot.
+  */
+sealed trait EmailSecurity {
+  def code: String
+}
+
+object EmailSecurity {
+
+  /** A plain connection, with no transport security at all. */
+  case object None extends EmailSecurity {
+    override val code: String = "NONE"
+  }
+
+  /** A plain connection that is upgraded before anything is sent. */
+  case object StartTls extends EmailSecurity {
+    override val code: String = "STARTTLS"
+  }
+
+  /** TLS from the first byte. */
+  case object Tls extends EmailSecurity {
+    override val code: String = "TLS"
+  }
+
+  val All: List[EmailSecurity] = List(None, StartTls, Tls)
+
+  def fromCode(code: String): Either[IllegalArgumentException, EmailSecurity] =
+    All.find(_.code == code)
+      .toRight(new IllegalArgumentException(s"Unsupported email security '$code'"))
 }
 
 /** What a channel needs in order to speak to its external system, and nothing else.
@@ -73,6 +126,13 @@ object NotificationChannelCredential {
 
   final case class TelegramBotToken(token: String) extends NotificationChannelCredential {
     override val channelType: NotificationChannelType = NotificationChannelType.Telegram
+  }
+
+  /** The password of the SMTP account a channel sends through. This version of the product
+    * authenticates every mail channel, so a channel of this type always has one.
+    */
+  final case class EmailPassword(password: String) extends NotificationChannelCredential {
+    override val channelType: NotificationChannelType = NotificationChannelType.Email
   }
 }
 
