@@ -80,9 +80,9 @@ function render(path: string, role: 'OWNER' | 'MEMBER', data?: { key: unknown[];
   </QueryClientProvider></I18nProvider>)
 }
 
-function body(state: Partial<OverviewState>): string {
+function body(state: Partial<OverviewState>, locale: Locale = 'en'): string {
   const full: OverviewState = { isPending: false, isError: false, error: null, data: undefined, refetch: () => undefined, ...state }
-  return renderToStaticMarkup(<I18nProvider initialLocale="en"><MemoryRouter>
+  return renderToStaticMarkup(<I18nProvider initialLocale={locale}><MemoryRouter>
     <OverviewBody organizationId="org" projectId={null} environmentId={null} state={full} />
   </MemoryRouter></I18nProvider>)
 }
@@ -157,6 +157,15 @@ describe('operations overview page', () => {
     expect(html).toContain('aria-label="Loading overview"')
   })
 
+  it('loads inside the same frame the overview fills, so nothing jumps when data arrives', () => {
+    const html = body({ isPending: true })
+
+    expect(html).toContain('aria-busy="true"')
+    expect(html.match(/summary-card summary-card-skeleton/g)).toHaveLength(5)
+    expect(html).toMatch(/class="overview-columns".*Needs attention.*Recent activity/s)
+    expect(html).not.toContain('role="alert"')
+  })
+
   it('guides a new organization through setup instead of showing zeros', () => {
     const html = render('/organizations/org/overview', 'OWNER', { key: ['overview', 'org', null, null], value: empty }, 'ru')
 
@@ -181,7 +190,7 @@ describe('operations overview page', () => {
       { key: ['overview', 'org', 'project', null], value: empty })
 
     expect(html).toContain('No infrastructure discovered yet')
-    expect(html).toContain('Everything is working')
+    expect(html).toContain('All clear')
     expect(html).toContain('No recent activity')
     expect(html).not.toContain('Welcome to InfraDesk')
     expect(html).not.toContain('role="alert"')
@@ -208,5 +217,88 @@ describe('operations overview page', () => {
     const html = body({ data: { ...loaded, attention: { ...loaded.attention, total: 27 } } })
 
     expect(html).toContain('Showing 3 of 27')
+  })
+
+  describe('Stage 17.6A presentation', () => {
+    const healthy: OperationsOverviewResponse = { ...loaded, attention: { items: [], total: 0 } }
+
+    it('shows no problems as one compact healthy line, in English and Russian', () => {
+      const en = body({ data: healthy })
+      const ru = body({ data: healthy }, 'ru')
+
+      expect(en).toMatch(/class="empty-workspace empty-success empty-compact" role="status"/)
+      expect(en).toContain('All clear')
+      expect(en).toContain('Nothing in the infrastructure needs attention')
+      expect(ru).toContain('Всё в порядке')
+      expect(ru).toContain('Инфраструктура не требует внимания')
+      // A healthy state is not an alert and not a missing list.
+      expect(en).not.toContain('attention-list')
+      expect(en).not.toContain('role="alert"')
+    })
+
+    it('separates the problem and its status from the object and the detail', () => {
+      const html = body({ data: loaded })
+      const item = html.slice(html.indexOf('data-kind="INCIDENT"'))
+
+      expect(item).toMatch(/class="attention-heading"><span class="attention-title">No metrics received<\/span><span class="status-indicator status-warning">/)
+      expect(item).toMatch(/class="attention-secondary"><span class="attention-subject">s260540\.love-is\.nexus<\/span><span class="attention-detail">/)
+      expect(item).toMatch(/<time class="attention-time" dateTime="2026-09-25T09:05:00Z"/)
+    })
+
+    it('reads an activity entry as event and time first, then object, detail and actor', () => {
+      const html = body({ data: loaded })
+      const entry = html.slice(html.indexOf('class="activity-entry'))
+
+      expect(entry).toMatch(/class="activity-heading"><span class="activity-title">Synchronization failed<\/span><time class="activity-time"/)
+      expect(entry).toMatch(/class="activity-secondary"><a class="activity-subject" title="finland_node" href="\/organizations\/org\/connections\/connection"[^>]*>finland_node<\/a><span class="activity-detail">[^<]+<\/span><span class="activity-actor">System<\/span>/)
+      // The scrolling list stays reachable from the keyboard.
+      expect(html).toContain('class="activity-scroll" tabindex="0" role="region" aria-label="Recent activity"')
+    })
+
+    it('explains an empty history in one compact line, in English and Russian', () => {
+      const data = { ...loaded, recentActivity: [] }
+
+      expect(body({ data })).toMatch(/empty-compact.*No recent activity/s)
+      expect(body({ data }, 'ru')).toContain('Событий пока нет')
+      expect(body({ data })).not.toContain('activity-timeline')
+    })
+
+    it('keeps the last overview on screen when a refresh fails, and says how old it is', () => {
+      const updatedAt = Date.parse('2026-09-25T09:30:00Z')
+      const failed = new ApiError(500, 'INTERNAL_ERROR', 'database password leaked')
+      const en = body({ data: loaded, isError: true, error: failed, dataUpdatedAt: updatedAt })
+      const ru = body({ data: loaded, isError: true, error: failed, dataUpdatedAt: updatedAt }, 'ru')
+
+      expect(en).toContain('Unable to refresh overview')
+      expect(en).toContain('Showing data as of')
+      expect(en).toContain('2 online · 1 offline')
+      expect(en).toContain('No metrics received')
+      expect(en).not.toContain('database password')
+      expect(ru).toContain('Не удалось обновить обзор')
+      expect(ru).toContain('Показаны данные на')
+    })
+
+    it('replaces the last overview when its scope no longer exists', () => {
+      const html = body({ data: loaded, isError: true, error: new ApiError(404, 'PROJECT_NOT_FOUND', 'Project was not found') })
+
+      expect(html).toContain('Project not found')
+      expect(html).not.toContain('summary-grid')
+    })
+
+    it('renders the same layout whatever the number of attention items', () => {
+      const item = loaded.attention.items[1]
+      const many = Array.from({ length: 20 }, (_, index) => ({ ...item, id: `incident-${index}` }))
+      const structure = (data: OperationsOverviewResponse) => {
+        const html = body({ data })
+        const columns = html.slice(html.indexOf('<div class="overview-columns">'))
+        return [html.match(/<div class="overview-columns">/g)?.length,
+          columns.match(/<section class="workspace-section [a-z-]+"/g)]
+      }
+      const expected = [1, ['<section class="workspace-section attention-section"', '<section class="workspace-section activity-section"']]
+
+      expect(structure(healthy)).toEqual(expected)
+      expect(structure(loaded)).toEqual(expected)
+      expect(structure({ ...loaded, attention: { items: many, total: 20 } })).toEqual(expected)
+    })
   })
 })

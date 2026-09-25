@@ -1,6 +1,6 @@
 import { useQueries } from '@tanstack/react-query'
 import {
-  Box, Cable, CheckCircle2, Circle, CircleAlert, CircleHelp, Server, TriangleAlert, WifiOff, Wrench,
+  Box, Cable, CheckCircle2, Circle, CircleAlert, CircleHelp, History, Server, TriangleAlert, WifiOff, Wrench,
   type LucideIcon,
 } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
@@ -73,6 +73,8 @@ export interface OverviewState {
   isError: boolean
   error: unknown
   data: OperationsOverviewResponse | undefined
+  /** When the shown data arrived; a failed refresh keeps it on screen and says how old it is. */
+  dataUpdatedAt?: number
   refetch: () => unknown
 }
 
@@ -91,20 +93,37 @@ export function OverviewBody({ organizationId, projectId, environmentId, state }
   const t = i18n.t.overview
 
   if (state.isPending) {
-    return <div className="overview-loading" aria-label={t.loading}>
-      <div className="card-skeleton" aria-hidden><span /><span /><span /><span /><span /></div>
-      <div className="workspace-section"><div className="row-skeleton" aria-hidden><span /><span /><span /></div></div>
+    // The same frame the loaded overview fills, so nothing moves when the data arrives.
+    return <div className="overview-loading" aria-label={t.loading} aria-busy="true">
+      <div className="summary-grid" aria-hidden>
+        {Object.keys(cardIcons).map(id => <div key={id} className="summary-card summary-card-skeleton"><span /><span /><span /></div>)}
+      </div>
+      <div className="overview-columns">
+        <WorkspaceSection title={t.attention} className="attention-section">
+          <div className="row-skeleton" aria-hidden><span /><span /><span /></div>
+        </WorkspaceSection>
+        <WorkspaceSection title={t.activity} className="activity-section">
+          <div className="row-skeleton" aria-hidden><span /><span /><span /><span /></div>
+        </WorkspaceSection>
+      </div>
     </div>
   }
 
-  if (state.isError || state.data === undefined) {
-    const code = state.error instanceof ApiError ? state.error.code : null
+  const code = state.isError && state.error instanceof ApiError ? state.error.code : null
+  // A scope that no longer exists makes the last data wrong, not merely old.
+  const scopeGone = code === 'PROJECT_NOT_FOUND' || code === 'ENVIRONMENT_NOT_FOUND'
+  if (state.data === undefined || scopeGone) {
     return <InlineAlert tone="danger"
       title={code === 'PROJECT_NOT_FOUND' ? t.projectNotFound : code === 'ENVIRONMENT_NOT_FOUND' ? t.environmentNotFound : t.loadError}
       action={<button className="secondary-button" type="button" onClick={() => state.refetch()}>{i18n.t.common.retry}</button>} />
   }
 
   const overview = state.data
+  // A failed poll after a successful load: keep what is known on screen and say how old it is.
+  const stale = state.isError ? <InlineAlert tone="warning" title={t.refreshError}
+    action={<button className="secondary-button" type="button" onClick={() => state.refetch()}>{i18n.t.common.retry}</button>}>
+    {state.dataUpdatedAt ? t.staleSince(i18n.format.time(new Date(state.dataUpdatedAt).toISOString())) : null}
+  </InlineAlert> : null
   const base = `/organizations/${encodeURIComponent(organizationId)}`
   const context = projectId ? `?project=${encodeURIComponent(projectId)}` +
     (environmentId ? `&environment=${encodeURIComponent(environmentId)}` : '') : ''
@@ -113,6 +132,7 @@ export function OverviewBody({ organizationId, projectId, environmentId, state }
 
   if (onboarding) {
     return <>
+      {stale}
       <OnboardingGuide organizationId={organizationId} overview={overview} />
       {overview.attention.items.length > 0 ? <AttentionSection organizationId={organizationId} overview={overview} /> : null}
     </>
@@ -125,6 +145,7 @@ export function OverviewBody({ organizationId, projectId, environmentId, state }
   }, overview.operationsHorizonHours, i18n)
 
   return <>
+    {stale}
     <section aria-label={t.summary} className="summary-grid">
       {cards.map(card => <SummaryCardView key={card.id} card={card} />)}
     </section>
@@ -134,8 +155,11 @@ export function OverviewBody({ organizationId, projectId, environmentId, state }
       <AttentionSection organizationId={organizationId} overview={overview} />
       <WorkspaceSection title={t.activity} className="activity-section">
         {overview.recentActivity.length === 0
-          ? <EmptyWorkspaceState title={t.noActivity} detail={t.noActivityDetail} />
-          : <ActivityTimeline events={overview.recentActivity} organizationId={organizationId} />}
+          ? <EmptyWorkspaceState compact icon={History} title={t.noActivity} detail={t.noActivityDetail} />
+          // Beside a long attention list this area scrolls, so it must be reachable from the keyboard.
+          : <div className="activity-scroll" tabIndex={0} role="region" aria-label={t.activity}>
+            <ActivityTimeline events={overview.recentActivity} organizationId={organizationId} />
+          </div>}
       </WorkspaceSection>
     </div>
   </>
@@ -145,8 +169,8 @@ function SummaryCardView({ card }: { card: SummaryCard }) {
   const Icon = cardIcons[card.id]
   const content = <>
     <span className="summary-card-top">
+      <span className={`summary-card-icon tone-${card.tone}`} aria-hidden><Icon size={15} /></span>
       <span className="summary-card-label">{card.label}</span>
-      <span className={`summary-card-icon tone-${card.tone}`} aria-hidden><Icon size={18} /></span>
     </span>
     <strong className="summary-card-value">{card.value}</strong>
     <span className={`summary-card-detail ${card.tone === 'neutral' ? '' : `text-${card.tone}`}`}>{card.detail}</span>
@@ -172,7 +196,7 @@ function AttentionSection({ organizationId, overview }: { organizationId: string
   return <WorkspaceSection title={t.attention} className="attention-section"
     actions={total > items.length ? <span className="section-meta">{t.showing(items.length, total)}</span> : null}>
     {items.length === 0
-      ? <EmptyWorkspaceState tone="success" icon={CheckCircle2} title={t.noAttention} detail={t.noAttentionDetail} />
+      ? <EmptyWorkspaceState compact tone="success" icon={CheckCircle2} title={t.noAttention} detail={t.noAttentionDetail} />
       : <ol className="attention-list" aria-label={t.attention}>
         {items.map(item => <AttentionRow key={`${item.kind}-${item.id}`} organizationId={organizationId} item={item} />)}
       </ol>}
@@ -184,16 +208,19 @@ function AttentionRow({ organizationId, item }: { organizationId: string; item: 
   const presentation = getAttentionPresentation(organizationId, item, i18n)
   const Icon = attentionIcons[item.kind] ?? CircleAlert
   return <li className={`attention-item tone-${presentation.tone}`} data-kind={item.kind}>
-    <span className="attention-icon" aria-hidden><Icon size={18} /></span>
+    <span className="attention-icon" aria-hidden><Icon size={16} /></span>
     <div className="attention-body">
-      <span className="attention-title">{presentation.title}</span>
-      <span className="attention-subject">{presentation.subject}</span>
-      {presentation.detail !== null ? <span className="attention-detail">{presentation.detail}</span> : null}
+      <div className="attention-heading">
+        <span className="attention-title">{presentation.title}</span>
+        <StatusIndicator label={presentation.status} tone={presentation.tone} />
+      </div>
+      <div className="attention-secondary">
+        <span className="attention-subject">{presentation.subject}</span>
+        {presentation.detail !== null ? <span className="attention-detail">{presentation.detail}</span> : null}
+      </div>
     </div>
-    <div className="attention-meta">
-      <StatusIndicator label={presentation.status} tone={presentation.tone} />
-      <time dateTime={item.occurredAt} title={i18n.format.dateTime(item.occurredAt)}>{i18n.format.relative(item.occurredAt)}</time>
-    </div>
+    <time className="attention-time" dateTime={item.occurredAt} title={i18n.format.dateTime(item.occurredAt)}>
+      {i18n.format.relative(item.occurredAt)}</time>
     {presentation.to !== null ? <Link className="secondary-button attention-open" to={presentation.to}
       aria-label={i18n.t.overview.openItem(presentation.subject)}>{i18n.t.overview.open}</Link> : null}
   </li>

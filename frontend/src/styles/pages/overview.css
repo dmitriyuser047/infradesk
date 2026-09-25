@@ -1,73 +1,110 @@
 /* Overview: summary cards, what needs attention, recent activity, first-run guide. */
 
 .overview-loading { display: grid; gap: var(--space-5); }
-.overview-loading .workspace-section { padding: var(--space-5); }
-.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-4); }
+
+/* Fleet summary: a label, the number, one quiet line of detail. Cards in a row share a height. */
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(176px, 1fr)); gap: var(--space-3); }
 .summary-card {
-  display: grid; gap: var(--space-2); padding: var(--space-4) var(--space-5); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-sm); color: var(--text-primary);
-  text-decoration: none;
+  display: grid; grid-template-rows: auto auto 1fr; align-content: start; gap: 2px; padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm);
+  color: var(--text-primary); text-decoration: none; min-width: 0;
 }
 .summary-card-link { transition: border-color .12s, box-shadow .12s; }
 .summary-card-link:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
 .summary-card-danger { border-color: var(--danger-border); }
 .summary-card-warning { border-color: var(--warning-border); }
-.summary-card-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.summary-card-label { color: var(--text-secondary); font-weight: 500; }
+.summary-card-top { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.summary-card-label { overflow: hidden; color: var(--text-secondary); font-size: var(--font-size-small); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .summary-card-icon {
-  display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md);
+  display: grid; flex: 0 0 auto; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm);
   background: var(--neutral-soft); color: var(--text-secondary);
 }
 .summary-card-icon.tone-success { background: var(--success-soft); color: var(--success); }
 .summary-card-icon.tone-danger { background: var(--danger-soft); color: var(--danger); }
 .summary-card-icon.tone-warning { background: var(--warning-soft); color: var(--warning); }
-.summary-card-value { font-size: 28px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
-.summary-card-detail { color: var(--text-tertiary); font-size: var(--font-size-small); }
+.summary-card-value { margin-top: 4px; font-size: 26px; font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.summary-card-detail { color: var(--text-tertiary); font-size: var(--font-size-caption); line-height: 1.4; }
+.summary-card-skeleton span {
+  display: block; height: 12px; border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--surface-sunken), var(--surface-hover), var(--surface-sunken));
+  background-size: 200% 100%; animation: skeleton 1.4s ease-in-out infinite;
+}
+.summary-card-skeleton span:nth-child(1) { width: 60%; margin: 6px 0; }
+.summary-card-skeleton span:nth-child(2) { width: 36%; height: 26px; margin: 4px 0 2px; }
+.summary-card-skeleton span:nth-child(3) { width: 80%; }
 .text-success { color: var(--success); }
 .text-danger { color: var(--danger); }
 .text-warning { color: var(--warning); }
 
-.overview-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--space-5); align-items: start; }
+/*
+ * Attention beside activity. The attention list sets the height of the row (never less than a
+ * readable floor); activity fills the same height and scrolls inside its card, so both columns end
+ * on one line and no empty area opens under either of them.
+ * With fewer than three items — or none — attention spans the page and activity follows at its
+ * natural height. The markup is the same in every case; only this stylesheet reads the count.
+ */
+.overview-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--space-4); align-items: stretch; }
+.overview-columns .activity-section { display: flex; flex-direction: column; min-height: 22rem; contain: size; }
+.overview-columns .activity-section > .section-content { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+.activity-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; border-radius: var(--radius-sm); }
+/* Beside attention the list scrolls; its lower edge fades to say there is more below. */
+.overview-columns:has(.attention-item:nth-child(3)) .activity-scroll {
+  padding-bottom: var(--space-4); mask-image: linear-gradient(to bottom, black calc(100% - 28px), transparent);
+}
+.activity-scroll:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.overview-columns:not(:has(.attention-item:nth-child(3))) { grid-template-columns: minmax(0, 1fr); }
+.overview-columns:not(:has(.attention-item:nth-child(3))) .activity-section { min-height: 0; contain: none; }
 
 /* Needs attention: the main working list */
 .attention-list { display: grid; margin: 0; padding: 0; list-style: none; gap: var(--space-2); }
 .attention-item {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-3);
-  padding: var(--space-3); border: 1px solid var(--border); border-left: 3px solid var(--border-strong);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; column-gap: var(--space-3);
+  padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-left: 3px solid var(--border-strong);
   border-radius: var(--radius-md); background: var(--surface);
 }
 .attention-item.tone-danger { border-left-color: var(--danger); }
 .attention-item.tone-warning { border-left-color: var(--warning); }
-.attention-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--radius-md); }
+.attention-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); }
 .tone-danger .attention-icon { background: var(--danger-soft); color: var(--danger); }
 .tone-warning .attention-icon { background: var(--warning-soft); color: var(--warning); }
 .tone-neutral .attention-icon { background: var(--neutral-soft); color: var(--neutral); }
 /* An unknown result is not a failure: it asks for a check, and looks like it. */
 .attention-item[data-kind="OPERATION_UNKNOWN"] { background: var(--warning-soft); border-color: var(--warning-border); border-left-color: var(--warning); }
 .attention-body { display: grid; gap: 2px; min-width: 0; }
-.attention-title { font-weight: 600; }
-.attention-subject { color: var(--text-primary); font-family: var(--font-mono); font-size: var(--font-size-small); overflow-wrap: anywhere; }
-.attention-detail { color: var(--text-secondary); font-size: var(--font-size-small); }
-.attention-meta { display: grid; justify-items: end; gap: 4px; color: var(--text-tertiary); font-size: var(--font-size-small); white-space: nowrap; }
-.attention-open { min-height: 32px; padding: 0 12px; }
+.attention-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-2); min-width: 0; }
+.attention-title { font-weight: 600; line-height: 1.35; }
+.attention-heading .status-indicator { min-height: 20px; padding: 0 8px; }
+.attention-secondary { min-width: 0; color: var(--text-secondary); font-size: var(--font-size-small); }
+.attention-subject { color: var(--text-primary); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.attention-detail { overflow-wrap: anywhere; }
+/* Inline text, so a separator always sits in front of what it separates, even after a wrap. */
+.attention-subject + .attention-detail::before { content: "·"; margin: 0 var(--space-2); color: var(--text-disabled); }
+.attention-time { color: var(--text-tertiary); font-size: var(--font-size-caption); white-space: nowrap; }
+.attention-open { min-height: 30px; padding: 0 12px; }
 
-/* Timeline */
+/* Timeline: what happened and when, then the object, the detail and who did it. */
 .activity-timeline { position: relative; display: grid; margin: 0; padding: 0; list-style: none; }
-.activity-entry { position: relative; display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: var(--space-3); padding: 10px 0; }
+.activity-entry { position: relative; display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: var(--space-3); padding: 6px 0; }
 .activity-entry:not(:last-child)::before {
-  content: ""; position: absolute; left: 5px; top: 26px; bottom: -10px; width: 2px; background: var(--border);
+  content: ""; position: absolute; left: 4px; top: 20px; bottom: -8px; width: 2px; background: var(--border);
 }
-.activity-marker { width: 12px; height: 12px; margin-top: 4px; border: 2px solid var(--surface); border-radius: 50%; background: var(--text-disabled); box-shadow: 0 0 0 1px var(--border-strong); }
+.activity-marker { width: 10px; height: 10px; margin-top: 5px; border: 2px solid var(--surface); border-radius: 50%; background: var(--text-disabled); box-shadow: 0 0 0 1px var(--border-strong); }
 .activity-positive .activity-marker { background: var(--success); box-shadow: 0 0 0 1px var(--success-border); }
 .activity-warning .activity-marker { background: var(--warning); box-shadow: 0 0 0 1px var(--warning-border); }
 .activity-critical .activity-marker { background: var(--danger); box-shadow: 0 0 0 1px var(--danger-border); }
-.activity-body { display: grid; gap: 2px; min-width: 0; }
-.activity-title { font-weight: 600; }
-.activity-subject { width: fit-content; color: var(--text-primary); font-family: var(--font-mono); font-size: var(--font-size-small); text-decoration: none; overflow-wrap: anywhere; }
+.activity-body { display: grid; gap: 1px; min-width: 0; }
+.activity-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); min-width: 0; }
+.activity-title { min-width: 0; font-weight: 600; line-height: 1.4; }
+.activity-time { flex: 0 0 auto; color: var(--text-tertiary); font-size: var(--font-size-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.activity-secondary { min-width: 0; color: var(--text-secondary); font-size: var(--font-size-small); }
+.activity-secondary > * + *::before { content: "·"; margin: 0 var(--space-2); color: var(--text-disabled); }
+.activity-subject {
+  display: inline-block; max-width: 100%; overflow: hidden; vertical-align: bottom; color: var(--text-primary); font-family: var(--font-mono); text-decoration: none;
+  text-overflow: ellipsis; white-space: nowrap;
+}
 a.activity-subject:hover { color: var(--primary); text-decoration: underline; }
-.activity-detail { color: var(--text-secondary); font-size: var(--font-size-small); }
-.activity-meta { display: grid; justify-items: end; align-content: start; gap: 2px; color: var(--text-tertiary); font-size: var(--font-size-small); white-space: nowrap; }
-.activity-actor { font-size: var(--font-size-caption); }
+.activity-detail { overflow-wrap: anywhere; }
+.activity-actor { color: var(--text-tertiary); font-size: var(--font-size-caption); white-space: nowrap; }
 
 /* First run */
 .onboarding {
@@ -93,17 +130,17 @@ a.activity-subject:hover { color: var(--primary); text-decoration: underline; }
 
 @media (max-width: 1180px) {
   .overview-columns { grid-template-columns: minmax(0, 1fr); }
+  .overview-columns .activity-section { min-height: 0; contain: none; }
+  .overview-columns:has(.attention-item:nth-child(3)) .activity-scroll { padding-bottom: 0; mask-image: none; }
 }
 @media (max-width: 640px) {
-  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
-  .summary-card { padding: var(--space-3) var(--space-4); }
-  .summary-card-value { font-size: 24px; }
-  .attention-item { grid-template-columns: auto minmax(0, 1fr); }
-  .attention-meta { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); white-space: normal; }
-  .attention-meta .status-indicator { white-space: normal; }
-  .attention-open { grid-column: 2; justify-self: start; }
-  .activity-entry { grid-template-columns: 12px minmax(0, 1fr); }
-  .activity-meta { grid-column: 2; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .summary-card { padding: 10px var(--space-3); }
+  .summary-card-value { font-size: 22px; }
+  .attention-item { grid-template-columns: auto minmax(0, 1fr); row-gap: var(--space-2); }
+  .attention-time { grid-column: 2; grid-row: 2; align-self: center; }
+  .attention-open { grid-column: 2; grid-row: 2; justify-self: end; }
+  .attention-heading .status-indicator { white-space: normal; }
   .onboarding { padding: var(--space-4); }
   .onboarding-step { grid-template-columns: auto minmax(0, 1fr); }
   .onboarding-step .primary-button { grid-column: 2; justify-self: start; }

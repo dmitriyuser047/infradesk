@@ -83,17 +83,25 @@ export function PropertyGrid({ items }: { items: readonly { label: string; value
     <div className="property-row" key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
 }
 
-/** What an empty list means and what to do next; a healthy "nothing wrong" state uses the success tone. */
-export function EmptyWorkspaceState({ title, detail, action, icon: Icon, tone = 'neutral' }: {
+/**
+ * What an empty list means and what to do next; a healthy "nothing wrong" state uses the success tone.
+ * The compact form is one line inside a section that has more to show around it.
+ */
+export function EmptyWorkspaceState({ title, detail, action, icon: Icon, tone = 'neutral', compact = false }: {
   title: string
   detail?: string
   action?: ReactNode
   icon?: LucideIcon
   tone?: 'neutral' | 'success'
+  compact?: boolean
 }) {
-  return <div className={`empty-workspace ${tone === 'success' ? 'empty-success' : ''}`}>
-    {Icon ? <Icon className="empty-workspace-icon" aria-hidden size={22} /> : null}
-    <strong>{title}</strong>{detail ? <p>{detail}</p> : null}{action}
+  const className = ['empty-workspace', tone === 'success' ? 'empty-success' : '', compact ? 'empty-compact' : '']
+    .filter(Boolean).join(' ')
+  return <div className={className} role={tone === 'success' ? 'status' : undefined}>
+    {Icon ? <Icon className="empty-workspace-icon" aria-hidden size={compact ? 18 : 22} /> : null}
+    {compact ? <span className="empty-compact-text"><strong>{title}</strong>{detail ? <span>{detail}</span> : null}</span>
+      : <><strong>{title}</strong>{detail ? <p>{detail}</p> : null}</>}
+    {action}
   </div>
 }
 

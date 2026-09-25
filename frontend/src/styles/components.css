@@ -159,6 +159,13 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 .empty-workspace-icon { color: var(--text-tertiary); }
 .empty-success { border-style: solid; border-color: var(--success-border); background: var(--success-soft); }
 .empty-success .empty-workspace-icon { color: var(--success); }
+.empty-compact {
+  display: flex; align-items: center; gap: 10px; padding: 10px var(--space-4); border-style: solid; border-color: var(--border);
+}
+.empty-compact.empty-success { border-color: var(--success-border); }
+.empty-compact .empty-workspace-icon { flex: 0 0 auto; }
+.empty-compact-text { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--space-2); min-width: 0; }
+.empty-compact-text > span { color: var(--text-secondary); font-size: var(--font-size-small); }
 .inline-alert, .inline-error, .inline-feedback {
   display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) var(--space-4);
   border: 1px solid; border-radius: var(--radius-md); overflow-wrap: anywhere;
@@ -177,16 +184,14 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 .compact-state, .auth-loading { padding: var(--space-6); color: var(--text-secondary); }
 
 .row-skeleton, .connection-skeleton, .incident-skeleton, .context-skeleton, .organization-skeleton,
-.tree-skeleton, .rules-skeleton, .card-skeleton { display: grid; gap: 10px; }
+.tree-skeleton, .rules-skeleton { display: grid; gap: 10px; }
 .row-skeleton span, .connection-skeleton span, .incident-skeleton span, .context-skeleton span,
-.organization-skeleton span, .tree-skeleton span, .rules-skeleton span, .card-skeleton span {
+.organization-skeleton span, .tree-skeleton span, .rules-skeleton span {
   display: block; height: 18px; border-radius: var(--radius-sm);
   background: linear-gradient(90deg, var(--surface-sunken) 0%, var(--surface-muted) 50%, var(--surface-sunken) 100%);
   background-size: 200% 100%; animation: skeleton 1.4s ease-in-out infinite;
 }
 .row-skeleton span:nth-child(2n), .tree-skeleton span:nth-child(2n) { width: 72%; }
-.card-skeleton { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); padding: 0; }
-.card-skeleton span { height: 112px; border-radius: var(--radius-lg); }
 @keyframes skeleton { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
 /* Filters and forms */
