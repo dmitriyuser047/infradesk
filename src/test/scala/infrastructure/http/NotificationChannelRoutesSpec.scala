@@ -4,13 +4,17 @@ package infrastructure.http
 import application.notification.{
   GetNotificationChannel,
   ListNotificationChannels,
-  NotificationChannelManagement
+  NotificationChannelManagement,
+  TestNotificationChannel
 }
 import application.port.{
   IdGenerator,
   NotificationChannelRepository,
   NotificationChannelSecret,
   NotificationChannelSecretRepository,
+  NotificationSendRequest,
+  NotificationSendResult,
+  NotificationSender,
   TimeProvider,
   TransactionRunner
 }
@@ -610,11 +614,15 @@ final class NotificationChannelRoutesSpec extends FunSuite {
       new NotificationChannelManagement[IO](repository, secretRepository, ids, time, cipher,
         auditRecorder)
 
+    val sender = new RecordingSender(NotificationSendResult.Sent)
+    private val testChannel = new TestNotificationChannel(sender)
+
     private val routes = support.AuthorizationFixtures.authorized(
       new NotificationChannelRoutes[IO](
         new ListNotificationChannels[IO](repository),
         new GetNotificationChannel[IO](repository),
         management,
+        testChannel,
         runner,
         support.AuthorizationFixtures.authorization
       ).routes.orNotFound,
@@ -638,5 +646,84 @@ final class NotificationChannelRoutesSpec extends FunSuite {
       val response = routes.run(request).unsafeRunSync()
       response.status -> response.as[Json].attempt.unsafeRunSync().getOrElse(Json.obj())
     }
+  }
+
+  /** Stands in for the managed sender: what a test-send route asks it to do is what these tests
+    * check, not whether a real transport can reach anything.
+    */
+  private final class RecordingSender(@volatile var result: NotificationSendResult)
+    extends NotificationSender[IO] {
+    @volatile var requests: List[NotificationSendRequest] = Nil
+    override def send(request: NotificationSendRequest): IO[NotificationSendResult] =
+      IO { requests = requests :+ request } *> IO.pure(result)
+  }
+
+  test("testing a channel requires the same permission as everything else about it") {
+    val fixture = new ChannelFixture(role = OrganizationRole.Member)
+    val id = UUID.randomUUID()
+
+    assertEquals(fixture.post(s"${fixture.path(orgA, id)}/test", Json.obj())._1, Status.Forbidden)
+    assertEquals(fixture.sender.requests, Nil)
+  }
+
+  test("a channel of another organization cannot be test-sent, only not found") {
+    val fixture = new ChannelFixture
+    val foreign = fixture.createdId(telegramBody(), organizationId = orgB)
+
+    val result = fixture.post(s"${fixture.path(orgA, foreign)}/test", Json.obj())
+    assertEquals(result._1, Status.NotFound)
+    assertEquals(result._2.hcursor.get[String]("code"), Right("NOTIFICATION_CHANNEL_NOT_FOUND"))
+    assertEquals(fixture.sender.requests, Nil)
+  }
+
+  test("an unknown channel id is not found rather than attempted") {
+    val fixture = new ChannelFixture
+    assertEquals(fixture.post(s"${fixture.path(orgA, UUID.randomUUID())}/test", Json.obj())._1,
+      Status.NotFound)
+    assertEquals(fixture.sender.requests, Nil)
+  }
+
+  test("a disabled channel is tested exactly like an enabled one") {
+    val fixture = new ChannelFixture
+    val id = fixture.createdId(telegramBody(enabled = Some(false)))
+    assertEquals(fixture.channel(id).enabled, false)
+
+    val result = fixture.post(s"${fixture.path(orgA, id)}/test", Json.obj())
+
+    assertEquals(result._1, Status.Ok)
+    assertEquals(result._2.hcursor.get[String]("status"), Right("SENT"))
+    assertEquals(fixture.sender.requests.size, 1)
+  }
+
+  test("the test-send answer carries a status and a code, and nothing the channel or a receiver said") {
+    val fixture = new ChannelFixture
+    val id = fixture.createdId(telegramBody())
+
+    val sent = fixture.post(s"${fixture.path(orgA, id)}/test", Json.obj())
+    assertEquals(sent._1, Status.Ok)
+    assertEquals(sent._2.hcursor.get[String]("status"), Right("SENT"))
+    assertEquals(sent._2.hcursor.get[Option[String]]("code"), Right(None))
+    assert(!sent._2.noSpaces.contains(BotToken))
+
+    val failing = new ChannelFixture
+    failing.sender.result = NotificationSendResult.RetryableFailure("TELEGRAM_RATE_LIMITED")
+    val failingId = failing.createdId(telegramBody())
+    val retried = failing.post(s"${failing.path(orgA, failingId)}/test", Json.obj())
+    assertEquals(retried._1, Status.Ok)
+    assertEquals(retried._2.hcursor.get[String]("status"), Right("RETRYABLE_FAILURE"))
+    assertEquals(retried._2.hcursor.get[String]("code"), Right("TELEGRAM_RATE_LIMITED"))
+  }
+
+  test("a test send is addressed to the channel's own id and its current type") {
+    val fixture = new ChannelFixture
+    val id = fixture.createdId(emailBody())
+
+    fixture.post(s"${fixture.path(orgA, id)}/test", Json.obj())
+
+    assertEquals(fixture.sender.requests.size, 1)
+    val target = fixture.sender.requests.head.target
+    assertEquals(target.channelId, Some(id))
+    assertEquals(target.channelType.code, "EMAIL")
+    assertEquals(fixture.sender.requests.head.event.organizationId, orgA)
   }
 }

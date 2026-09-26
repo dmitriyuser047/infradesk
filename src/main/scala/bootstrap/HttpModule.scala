@@ -95,6 +95,7 @@ object HttpModule {
           application.listNotificationChannels,
           application.getNotificationChannel,
           application.notificationChannelManagement,
+          application.testNotificationChannel,
           transactionRunner,
           authorization
         ).routes <+>

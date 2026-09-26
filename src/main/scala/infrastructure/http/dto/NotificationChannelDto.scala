@@ -107,3 +107,9 @@ final case class UpdateNotificationChannelRequest(
   webhook: Option[WebhookChannelRequest],
   email: Option[EmailChannelRequest]
 ) extends SaveNotificationChannelRequest
+
+/** What a test send answers with: whether it went out, and a bounded technical code when it did
+  * not. Never anything the channel's own configuration or the receiver's own answer said: no
+  * webhook URL, no bot token, no SMTP password, no raw provider response.
+  */
+final case class TestNotificationChannelResponse(status: String, code: Option[String])

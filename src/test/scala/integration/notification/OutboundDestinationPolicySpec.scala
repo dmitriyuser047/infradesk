@@ -4,12 +4,14 @@ package integration.notification
 import cats.effect.unsafe.implicits.global
 import munit.FunSuite
 
-
 /** What the product is allowed to connect to on behalf of a configured channel. */
 final class OutboundDestinationPolicySpec extends FunSuite {
 
   private val strict = OutboundDestinationPolicy.resolving(allowPrivateNetworks = false)
   private val permissive = OutboundDestinationPolicy.resolving(allowPrivateNetworks = true)
+
+  private def codeOf(host: String, policy: OutboundDestinationPolicy): Option[String] =
+    policy.pin(host).unsafeRunSync().left.toOption.map(_.code)
 
   test("the deployment's own interfaces are out of reach, however they are written") {
     val refused = List(
@@ -21,12 +23,10 @@ final class OutboundDestinationPolicySpec extends FunSuite {
     )
 
     for (host <- refused) {
-      assertEquals(strict.check(host).unsafeRunSync(), Left(OutboundDestinationPolicy.Forbidden),
-        clues(host))
+      assertEquals(codeOf(host, strict), Some(OutboundDestinationPolicy.Forbidden), clues(host))
       // No deployment gets to allow these: the flag is about private networks, not about the
       // loopback interface, the link-local range or a multicast group.
-      assertEquals(permissive.check(host).unsafeRunSync(),
-        Left(OutboundDestinationPolicy.Forbidden), clues(host))
+      assertEquals(codeOf(host, permissive), Some(OutboundDestinationPolicy.Forbidden), clues(host))
     }
   }
 
@@ -34,17 +34,35 @@ final class OutboundDestinationPolicySpec extends FunSuite {
     val privateHosts = List("10.0.0.1", "192.168.1.10", "172.16.0.1", "fd00::1")
 
     for (host <- privateHosts) {
-      assertEquals(strict.check(host).unsafeRunSync(), Left(OutboundDestinationPolicy.Forbidden),
-        clues(host))
-      assertEquals(permissive.check(host).unsafeRunSync(), Right(()), clues(host))
+      assertEquals(codeOf(host, strict), Some(OutboundDestinationPolicy.Forbidden), clues(host))
+      assertEquals(codeOf(host, permissive), None, clues(host))
     }
   }
 
   test("a public address is reachable, and a name that does not resolve says so") {
-    assertEquals(strict.check("93.184.216.34").unsafeRunSync(), Right(()))
+    assertEquals(codeOf("93.184.216.34", strict), None)
+    assertEquals(codeOf("no-such-host.invalid", strict),
+      Some(OutboundDestinationPolicy.ResolutionFailed))
+    // An empty host resolves as the loopback interface.
+    assertEquals(codeOf("", strict), Some(OutboundDestinationPolicy.Forbidden))
+  }
+
+  test("the address pinned is the exact address a caller must connect to") {
+    val pinned = strict.pin("93.184.216.34").unsafeRunSync()
+    assertEquals(pinned.map(_.getHostAddress), Right("93.184.216.34"))
+  }
+
+  test("a forbidden or unresolvable destination classifies the exceptions transports throw") {
     assertEquals(
-      strict.check("no-such-host.invalid").unsafeRunSync(),
-      Left(OutboundDestinationPolicy.Unresolvable))
-    assertEquals(strict.check("").unsafeRunSync(), Left(OutboundDestinationPolicy.Forbidden))
+      OutboundDestinationPolicy.classify(new OutboundDestinationRejected("X")),
+      Some(application.port.NotificationSendResult.PermanentFailure("X")))
+    assertEquals(
+      OutboundDestinationPolicy.classify(new OutboundDestinationUnresolvable("Y")),
+      Some(application.port.NotificationSendResult.RetryableFailure("Y")))
+    // Wrapped one level deep, as Jakarta Mail wraps a socket failure in a MessagingException.
+    val wrapped = new jakarta.mail.MessagingException("failed", new OutboundDestinationRejected("Z"))
+    assertEquals(OutboundDestinationPolicy.classify(wrapped),
+      Some(application.port.NotificationSendResult.PermanentFailure("Z")))
+    assertEquals(OutboundDestinationPolicy.classify(new RuntimeException("unrelated")), None)
   }
 }

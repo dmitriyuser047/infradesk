@@ -80,6 +80,8 @@ object HttpJsonCodecs {
     Encoder.forProduct9("id", "name", "type", "enabled", "events", "reasons", "config",
       "createdAt", "updatedAt")(v => (v.id, v.name, v.channelType, v.enabled, v.events, v.reasons,
       v.config, v.createdAt, v.updatedAt))
+  implicit val testNotificationChannelResponseEncoder: Encoder[TestNotificationChannelResponse] =
+    Encoder.forProduct2("status", "code")(v => (v.status, v.code))
 
   implicit val apiErrorResponseEncoder: Encoder[ApiErrorResponse] =
     Encoder.forProduct2("code", "message")(value => (value.code, value.message))

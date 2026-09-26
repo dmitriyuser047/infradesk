@@ -15,6 +15,7 @@ import application.port.{
 }
 import domain.operation.ResourceOperationCode
 import cats.effect.{IO, Resource}
+import cats.syntax.all._
 import infrastructure.config.{AppConfig, NotificationConfig}
 import integration.notification.{
   ManagedWebhookTransport,
@@ -22,8 +23,10 @@ import integration.notification.{
   OutboundDestinationPolicy,
   SmtpTransport,
   TelegramTransport,
+  ValidatingSocketGroup,
   WebhookNotificationSender
 }
+import fs2.io.net.Network
 import org.http4s.client.Client
 import org.http4s.ember.client.EmberClientBuilder
 import integration.docker.{DockerConnector, DockerJavaEngineClient}
@@ -98,29 +101,35 @@ object IntegrationModule {
 
   /** Everything the notification workers need in order to reach the outside world.
     *
-    * One HTTP client for the lifetime of the application, shared by the webhook and the Telegram
-    * transports; mail opens its own connection per message, because SMTP is a session. The
-    * client is opened whether or not the deployment configures a webhook of its own: channels
-    * live in the database, so whether anything will be sent is not known at startup.
+    * Two HTTP clients, both opened once, whether or not anything ends up using them: channels
+    * live in the database, so what will be sent is not known at startup. The Telegram endpoint
+    * is fixed and the deployment's own webhook is operator configuration, so both share an
+    * ordinary client; a channel's webhook is a destination a tenant chose, so it gets its own
+    * client, built on a `SocketGroup` that resolves and validates that destination itself, at
+    * the moment it connects, rather than trusting a check made earlier against a name that could
+    * since answer differently. Mail opens its own connection per message, because SMTP is a
+    * session, and validates its own destination the same way, inside the SMTP handshake itself.
     *
     * The legacy sender is still the one thing that depends on the environment: without its URL
     * there is no deployment webhook, and the worker that serves it does not start.
     */
   def notificationTransports(config: NotificationConfig): Resource[IO, NotificationTransports] = {
     val policy = OutboundDestinationPolicy.resolving(config.allowPrivateDestinations)
-    EmberClientBuilder
-      .default[IO]
-      .withTimeout(config.requestTimeout)
-      .build
-      .map { client: Client[IO] =>
-        NotificationTransports(
-          legacyWebhookSender = config.webhookUrl.map(url =>
-            new WebhookNotificationSender(client, url, config.requestTimeout)),
-          webhook = new ManagedWebhookTransport(client, policy, config.requestTimeout),
-          telegram = new TelegramTransport(client, config.requestTimeout),
-          email = new SmtpTransport(policy, config.requestTimeout)
-        )
-      }
+    (
+      EmberClientBuilder.default[IO].withTimeout(config.requestTimeout).build,
+      EmberClientBuilder.default[IO]
+        .withTimeout(config.requestTimeout)
+        .withSocketGroup(new ValidatingSocketGroup(Network[IO], policy))
+        .build
+    ).mapN { case (client: Client[IO], validatedClient: Client[IO]) =>
+      NotificationTransports(
+        legacyWebhookSender = config.webhookUrl.map(url =>
+          new WebhookNotificationSender(client, url, config.requestTimeout)),
+        webhook = new ManagedWebhookTransport(validatedClient, config.requestTimeout),
+        telegram = new TelegramTransport(client, config.requestTimeout),
+        email = new SmtpTransport(policy, config.requestTimeout)
+      )
+    }
   }
 }
 

@@ -7,6 +7,7 @@ import application.notification.{
   ListNotificationChannels,
   NotificationChannelError,
   NotificationChannelManagement,
+  TestNotificationChannel,
   UpdateNotificationChannelCommand
 }
 import application.port.TransactionRunner
@@ -39,6 +40,7 @@ final class NotificationChannelRoutes[Tx[_]](
   listChannels: ListNotificationChannels[Tx],
   getChannel: GetNotificationChannel[Tx],
   management: NotificationChannelManagement[Tx],
+  testChannel: TestNotificationChannel,
   runner: TransactionRunner[IO, Tx],
   authorization: OrganizationAuthorization
 ) {
@@ -104,6 +106,22 @@ final class NotificationChannelRoutes[Tx[_]](
         withChannel(org, context.organizationId, id) { (_, channelId) =>
           respond(runner.run(management.setEnabled(context.actor, channelId, enabled = false))
             .flatMap(ok))
+        }
+      }
+
+    // A disabled channel is still tested: `enabled` decides which real deliveries are recorded,
+    // not what this button is allowed to send. Looking the channel up first, the same way the
+    // single-channel read does, is what turns another tenant's channel id into "not found" here
+    // too, before the send itself repeats the same tenant-safe read on its own.
+    case request @ POST -> Root / "api" / "v1" / "organizations" / org / "notification-channels" / id / "test" =>
+      authorization.require(request, OrganizationPermission.ManageNotifications) { context =>
+        withChannel(org, context.organizationId, id) { (organizationId, channelId) =>
+          respond(runner.run(getChannel.execute(organizationId, channelId)).flatMap {
+            case None => NotFound(notFound)
+            case Some(channel) =>
+              testChannel.execute(organizationId, channelId, channel.channelType)
+                .flatMap(result => Ok(NotificationChannelHttpMapper.toTestResponse(result)))
+          })
         }
       }
   }

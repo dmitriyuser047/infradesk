@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package infrastructure.http.mapper
 
 import application.notification.{CreateNotificationChannelCommand, UpdateNotificationChannelCommand}
+import application.port.NotificationSendResult
 import domain.incident.IncidentReason
 import domain.notification.{
   EmailSecurity,
@@ -17,6 +18,7 @@ import infrastructure.http.dto.{
   NotificationChannelConfigResponse,
   NotificationChannelResponse,
   SaveNotificationChannelRequest,
+  TestNotificationChannelResponse,
   UpdateNotificationChannelRequest
 }
 
@@ -56,6 +58,17 @@ object NotificationChannelHttpMapper {
       createdAt = channel.createdAt,
       updatedAt = channel.updatedAt
     )
+
+  /** What a test send answers with, never what the relay, the bot API or the receiver said: both
+    * failure cases already carry a bounded code and nothing else, so this is a direct mapping.
+    */
+  def toTestResponse(result: NotificationSendResult): TestNotificationChannelResponse = result match {
+    case NotificationSendResult.Sent => TestNotificationChannelResponse("SENT", None)
+    case NotificationSendResult.RetryableFailure(code) =>
+      TestNotificationChannelResponse("RETRYABLE_FAILURE", Some(code))
+    case NotificationSendResult.PermanentFailure(code) =>
+      TestNotificationChannelResponse("PERMANENT_FAILURE", Some(code))
+  }
 
   /** Rejects anything the domain does not recognise before it reaches a use case: unknown codes,
     * and a configuration that belongs to another channel type.

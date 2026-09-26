@@ -18,6 +18,7 @@ import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.{HttpRoutes, Response, Status, Uri}
 
+import java.net.InetAddress
 import java.time.Instant
 import java.util.UUID
 import scala.concurrent.duration._
@@ -25,7 +26,11 @@ import scala.concurrent.duration._
 /** The two HTTP transports, against a server this spec runs itself.
   *
   * A real server rather than a mocked client: what is being checked is the request that leaves
-  * the process and how an answer is classified, which a stubbed client would not show.
+  * the process and how an answer is classified, which a stubbed client would not show. The
+  * webhook client is built exactly as production builds it, on a `ValidatingSocketGroup`, so
+  * these tests exercise the same destination pinning production requests go through — with a
+  * lenient test policy standing in for the real one where a test needs to reach its own local
+  * server on the loopback interface, which the real policy can never allow.
   */
 final class ManagedTransportSpec extends FunSuite {
 
@@ -54,7 +59,7 @@ final class ManagedTransportSpec extends FunSuite {
           (request.headers.get(WebhookNotificationSender.EventIdHeader)
             .map(_.head.value).getOrElse("") -> body))) *> Ok()
     }) { (client, base) =>
-      val transport = new ManagedWebhookTransport(client, Permissive, 5.seconds)
+      val transport = new ManagedWebhookTransport(client, 5.seconds)
       for {
         result <- transport.post((base / "hook" / "token").renderString, event)
         recorded <- seen.get
@@ -79,7 +84,7 @@ final class ManagedTransportSpec extends FunSuite {
     for ((status, expected) <- answers)
       withServer(HttpRoutes.of[IO] { case POST -> Root / "hook" => IO.pure(Response[IO](status)) }) {
         (client, base) =>
-          new ManagedWebhookTransport(client, Permissive, 5.seconds)
+          new ManagedWebhookTransport(client, 5.seconds)
             .post((base / "hook").renderString, event)
             .map(result => IO(assertEquals(result, expected, clues(status.code))))
       }
@@ -88,7 +93,7 @@ final class ManagedTransportSpec extends FunSuite {
   test("a webhook that does not answer in time is worth repeating, and says only that") {
     withServer(HttpRoutes.of[IO] { case POST -> Root / "hook" => IO.sleep(2.seconds) *> Ok() }) {
       (client, base) =>
-        new ManagedWebhookTransport(client, Permissive, 200.millis)
+        new ManagedWebhookTransport(client, 200.millis)
           .post((base / "hook").withQueryParam("t", "secret-token").renderString, event)
           .map(result => IO {
             assertEquals(result, NotificationSendResult.RetryableFailure("TIMEOUT"))
@@ -101,24 +106,27 @@ final class ManagedTransportSpec extends FunSuite {
   test("a webhook pointing at the deployment itself is refused before any request is made") {
     val reached = Ref.unsafe[IO, Int](0)
     withServer(HttpRoutes.of[IO] { case POST -> Root / "hook" => reached.update(_ + 1) *> Ok() }) {
-      (client, base) =>
-        // The real policy, and a server that really is on the loopback interface.
-        val transport = new ManagedWebhookTransport(client,
-          OutboundDestinationPolicy.resolving(allowPrivateNetworks = true), 5.seconds)
-        for {
-          result <- transport.post((base / "hook").renderString, event)
-          calls <- reached.get
-        } yield IO {
-          assertEquals(result,
-            NotificationSendResult.PermanentFailure(OutboundDestinationPolicy.Forbidden))
-          assertEquals(calls, 0)
+      (_, base) =>
+        // The lenient test policy the fixture's own client is built on would let this reach the
+        // server; this test is about the real one, against a server that really is on the
+        // loopback interface, which no deployment may ever reach.
+        strictClient.use { realClient =>
+          val transport = new ManagedWebhookTransport(realClient, 5.seconds)
+          for {
+            result <- transport.post((base / "hook").renderString, event)
+            calls <- reached.get
+          } yield IO {
+            assertEquals(result,
+              NotificationSendResult.PermanentFailure(OutboundDestinationPolicy.Forbidden))
+            assertEquals(calls, 0)
+          }
         }
     }
   }
 
   test("a webhook URL that is not one is refused rather than attempted") {
     withServer(HttpRoutes.of[IO] { case POST -> Root / "hook" => Ok() }) { (client, _) =>
-      val transport = new ManagedWebhookTransport(client, Permissive, 5.seconds)
+      val transport = new ManagedWebhookTransport(client, 5.seconds)
       transport.post("not-a-url", event).map(result =>
         IO(assertEquals(result,
           NotificationSendResult.PermanentFailure(ManagedWebhookTransport.InvalidUrl))))
@@ -187,10 +195,22 @@ final class ManagedTransportSpec extends FunSuite {
     }
   }
 
-  /** The destination check is exercised on its own; here the point is the request. */
-  private object Permissive extends OutboundDestinationPolicy {
-    override def check(host: String): IO[Either[String, Unit]] = IO.pure(Right(()))
+  /** Resolves normally and forbids nothing: what a webhook client is built on in production
+    * minus the SSRF refusal, so a test can reach its own local server. The refusal itself has
+    * its own tests, against the real policy.
+    */
+  private object Lenient extends OutboundDestinationPolicy {
+    override def pinBlocking(host: String): Either[OutboundDestinationFailure, InetAddress] =
+      InetAddress.getAllByName(host).headOption
+        .toRight(OutboundDestinationFailure.ResolutionFailed(OutboundDestinationPolicy.ResolutionFailed))
   }
+
+  /** The real policy, the one every deployment actually runs with. */
+  private def strictClient: Resource[IO, Client[IO]] =
+    EmberClientBuilder.default[IO]
+      .withSocketGroup(new ValidatingSocketGroup(fs2.io.net.Network[IO],
+        OutboundDestinationPolicy.resolving(allowPrivateNetworks = true)))
+      .build
 
   private def withServer(routes: HttpRoutes[IO])(body: (Client[IO], Uri) => IO[IO[Unit]]): Unit =
     server(routes).use { case (client, base) => body(client, base).flatten }.unsafeRunSync()
@@ -204,7 +224,12 @@ final class ManagedTransportSpec extends FunSuite {
         .withPort(Port.fromInt(0).get)
         .withHttpApp(routes.orNotFound)
         .build
-      client <- EmberClientBuilder.default[IO].build
+      // Built the same way production builds the webhook client: on a ValidatingSocketGroup,
+      // wrapping fs2's default socket group, so these tests go through the real pinning
+      // mechanism and not around it.
+      client <- EmberClientBuilder.default[IO]
+        .withSocketGroup(new ValidatingSocketGroup(fs2.io.net.Network[IO], Lenient))
+        .build
     } yield (client, Uri.unsafeFromString(
       s"http://${running.address.getHostString}:${running.address.getPort}"))
 }

@@ -28,7 +28,8 @@ import application.notification.{
   NotificationChannelManagement,
   NotificationDispatcher,
   NotificationRecordingMonitorRuleEvaluator,
-  RecordNotificationDeliveries
+  RecordNotificationDeliveries,
+  TestNotificationChannel
 }
 import application.port.NotificationSender
 import application.navigation.{GetEnvironmentContext, GetOrganization, ListEnvironments, ListProjects}
@@ -85,6 +86,7 @@ final case class ApplicationComponents(
   listNotificationChannels: ListNotificationChannels[ConnectionIO],
   getNotificationChannel: GetNotificationChannel[ConnectionIO],
   notificationChannelManagement: NotificationChannelManagement[ConnectionIO],
+  testNotificationChannel: TestNotificationChannel,
   listHistoryEvents: ListHistoryEvents[ConnectionIO],
   getOperationsOverview: GetOperationsOverview[ConnectionIO],
   resourceOperationPreparation: ResourceOperationPreparation[ConnectionIO],
@@ -228,6 +230,18 @@ object ApplicationModule {
       notificationDispatcherInstanceId.getMostSignificantBits,
       notificationDispatcherInstanceId.getLeastSignificantBits ^ 1L)
 
+    // Shared with the test-send endpoint below: the same tenant-safe read, the same decryption,
+    // the same transports a real delivery goes through, so a test send is not a second
+    // implementation of any of them.
+    val managedNotificationSender = new ManagedNotificationSender[IO, ConnectionIO](
+      notificationChannelDispatchQuery,
+      integrations.notificationChannelCipher,
+      transactionRunner,
+      transports.webhook,
+      transports.telegram,
+      transports.email
+    )
+
     val passwordHasher = new BCryptPasswordHasher
     val sessionTokens = new SessionTokens
     val resourceOperationPreparation = new ResourceOperationPreparation[ConnectionIO](
@@ -348,6 +362,7 @@ object ApplicationModule {
         integrations.notificationChannelCipher,
         auditRecorder
       ),
+      testNotificationChannel = new TestNotificationChannel(managedNotificationSender),
       listHistoryEvents = new ListHistoryEvents[ConnectionIO](historyEventQuery),
       getOperationsOverview = new GetOperationsOverview[ConnectionIO](
         operationsOverviewQuery,
@@ -393,14 +408,7 @@ object ApplicationModule {
       // the moment of sending, so it needs no transport decided in advance.
       managedNotificationDispatcher = new NotificationDispatcher[IO, ConnectionIO](
         notificationDeliveryRepository,
-        new ManagedNotificationSender[IO, ConnectionIO](
-          notificationChannelDispatchQuery,
-          integrations.notificationChannelCipher,
-          transactionRunner,
-          transports.webhook,
-          transports.telegram,
-          transports.email
-        ),
+        managedNotificationSender,
         transactionRunner,
         timeProvider,
         loggers.notification,
