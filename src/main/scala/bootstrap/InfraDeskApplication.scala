@@ -44,7 +44,7 @@ object InfraDeskApplication {
       resourceTypes <- IO.fromEither(PersistenceModule.resourceDefinitionRegistry)
       runtime = (
         Database.transactor(config.database),
-        IntegrationModule.notificationTransports(config.notification)
+        IntegrationModule.notificationTransports(config.notification, loggers.notification)
       ).tupled
       _ <- runtime.use { case (xa, transports) =>
         val persistence = PersistenceModule.build(xa, resourceTypes)

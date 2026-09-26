@@ -10,11 +10,13 @@ import domain.incident.IncidentReason
 import domain.notification.{EmailSecurity, NotificationChannelSettings, NotificationEventType}
 import munit.FunSuite
 
-import java.io.{BufferedReader, InputStreamReader, OutputStreamWriter, PrintWriter}
+import java.io.{BufferedReader, ByteArrayInputStream, IOException, InputStreamReader, OutputStreamWriter, PrintWriter}
 import java.net.{InetAddress, ServerSocket, Socket}
+import java.security.KeyStore
 import java.time.Instant
-import java.util.UUID
+import java.util.{Base64, UUID}
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.ssl.{KeyManagerFactory, SSLContext, SSLException, SSLSocket, SSLSocketFactory, TrustManagerFactory}
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
 
@@ -63,12 +65,13 @@ final class SmtpTransportSpec extends FunSuite {
     // The test server presents a certificate no trust store knows, which is what makes this
     // worth asserting: the send fails, and in particular it does not quietly fall back to a
     // plain connection carrying the account password.
-    withServer(ServerSetup.PROTOCOL_SMTP) { server =>
-      val result = send(settings(server.getSmtp.getPort, EmailSecurity.StartTls))
-
-      assertNotEquals(result, NotificationSendResult.Sent: NotificationSendResult)
-      assertEquals(server.getReceivedMessages.length, 0)
-    }
+    val startTls = new StartTlsSmtpServer(localTlsContexts().server)
+    val startTlsPort = startTls.start()
+    try {
+      val result = send(settings(startTlsPort, EmailSecurity.StartTls))
+      assertEquals(result, NotificationSendResult.RetryableFailure(SmtpTransport.TlsFailure))
+      assert(!startTls.messageReceived)
+    } finally startTls.stop()
 
     withServer(ServerSetup.PROTOCOL_SMTPS) { server =>
       val result = send(settings(server.getSmtps.getPort, EmailSecurity.Tls))
@@ -128,8 +131,14 @@ final class SmtpTransportSpec extends FunSuite {
     assertEquals(plain.getProperty("mail.smtp.starttls.enable"), null)
     // Required, not enabled: a relay that does not offer the upgrade fails instead of sending
     // the password in the clear.
+    assertEquals(startTls.getProperty("mail.smtp.starttls.enable"), "true")
     assertEquals(startTls.getProperty("mail.smtp.starttls.required"), "true")
-    assertEquals(startTls.getProperty("mail.smtp.ssl.checkserveridentity"), "true")
+    // STARTTLS remains `smtp`, never implicit TLS / `smtps`.
+    assertEquals(startTls.getProperty("mail.smtps.ssl.socketFactory"), null)
+    // Angus receives the numeric pinned connection host. Its JDK endpoint check must therefore
+    // stay off; SmtpHostnameVerifier checks the configured hostname after normal TLS validation.
+    assertEquals(startTls.getProperty("mail.smtp.ssl.checkserveridentity"), "false")
+    assert(startTls.get("mail.smtp.ssl.hostnameverifier").isInstanceOf[SmtpHostnameVerifier])
     assertEquals(implicitTls.getProperty("mail.smtps.auth"), "true")
     assertEquals(implicitTls.getProperty("mail.smtps.ssl.checkserveridentity"), "false")
     assert(implicitTls.get("mail.smtps.ssl.hostnameverifier").isInstanceOf[SmtpHostnameVerifier])
@@ -174,6 +183,34 @@ final class SmtpTransportSpec extends FunSuite {
       assertEquals(result, NotificationSendResult.Sent)
       assertEquals(server.getReceivedMessages.length, 1)
     }
+  }
+
+  test("STARTTLS sends through the pinned address and verifies the configured certificate name") {
+    val tls = localTlsContexts()
+    val server = new StartTlsSmtpServer(tls.server)
+    val pinnedToLoopback: OutboundDestinationPolicy = (_: String) =>
+      IO.pure(Right(InetAddress.getByName("127.0.0.1")))
+    val port = server.start()
+    try {
+      // This is the DNS name of the local test certificate. It deliberately differs from the
+      // dialed loopback IP, proving the TLS layer keeps the configured name separate.
+      val result = new SmtpTransport(pinnedToLoopback, 5.seconds, tlsSocketFactory = tls.client)
+        .send(settings(port, EmailSecurity.StartTls).copy(host = "smtp.example.test"), Password, message)
+        .unsafeRunSync()
+
+      assertEquals(result, NotificationSendResult.Sent)
+      assert(server.messageReceived, "the local STARTTLS relay did not receive DATA")
+    } finally server.stop()
+  }
+
+  test("a nested STARTTLS TLS failure is classified as TLS, not unexpected") {
+    val messaging = new jakarta.mail.MessagingException("STARTTLS failed")
+    val io = new IOException("TLS upgrade failed")
+    io.initCause(new SSLException("certificate hostname mismatch"))
+    messaging.setNextException(io)
+
+    assertEquals(SmtpTransport.classifyError(messaging),
+      NotificationSendResult.RetryableFailure(SmtpTransport.TlsFailure))
   }
 
   test("DNS resolution is cancelled and joined inside the whole-attempt deadline") {
@@ -425,6 +462,30 @@ final class SmtpTransportSpec extends FunSuite {
       IO.pure(Right(InetAddress.getByName(host)))
   }
 
+  private final class TestTlsContexts(val server: SSLSocketFactory, val client: SSLSocketFactory)
+
+  /** Test-only PKCS#12 with CN and SAN localhost. The client trusts this one certificate through
+    * a normal TrustManager; production continues to use the JVM trust store.
+    */
+  private val StartTlsTestKeyStore = "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"
+
+  private def localTlsContexts(): TestTlsContexts = {
+    val store = KeyStore.getInstance("PKCS12")
+    store.load(new ByteArrayInputStream(Base64.getDecoder.decode(StartTlsTestKeyStore)),
+      "changeit".toCharArray)
+
+    val keys = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm)
+    keys.init(store, "changeit".toCharArray)
+    val trusts = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm)
+    trusts.init(store)
+
+    val server = SSLContext.getInstance("TLS")
+    server.init(keys.getKeyManagers, null, null)
+    val client = SSLContext.getInstance("TLS")
+    client.init(null, trusts.getTrustManagers, null)
+    new TestTlsContexts(server.getSocketFactory, client.getSocketFactory)
+  }
+
   /** One server per test, on a port the operating system picks. */
   private def withServer(protocol: String)(body: GreenMail => Unit): Unit = {
     val setup = new ServerSetup(0, "127.0.0.1", protocol)
@@ -526,6 +587,79 @@ final class SmtpTransportSpec extends FunSuite {
     }
 
     def stop(): Unit = serverSocket.close()
+  }
+
+  /** A small protocol server for the one thing GreenMail's SMTP listener does not model: a plain
+    * SMTP session upgraded in-place with STARTTLS. It authenticates the test account and records
+    * DATA only after the real TLS handshake, so a successful client result means the STARTTLS
+    * transport, not SMTPS, was used.
+    */
+  private final class StartTlsSmtpServer(tlsFactory: SSLSocketFactory) {
+    private val serverSocket = new ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
+    @volatile var messageReceived = false
+    @volatile private var clientSocket: Socket = _
+
+    private val thread = new Thread(() => {
+      try {
+        val plain = serverSocket.accept()
+        clientSocket = plain
+        val plainReader = new BufferedReader(new InputStreamReader(plain.getInputStream, "US-ASCII"))
+        val plainWriter = new PrintWriter(new OutputStreamWriter(plain.getOutputStream, "US-ASCII"), true)
+        plainWriter.print("220 local STARTTLS relay ready\r\n")
+        plainWriter.flush()
+        plainReader.readLine() // EHLO
+        plainWriter.print("250-local\r\n250-STARTTLS\r\n250 AUTH LOGIN\r\n")
+        plainWriter.flush()
+        if (plainReader.readLine().equalsIgnoreCase("STARTTLS")) {
+          plainWriter.print("220 Ready to start TLS\r\n")
+          plainWriter.flush()
+          val secure = tlsFactory.createSocket(plain, "127.0.0.1", plain.getPort, true)
+            .asInstanceOf[SSLSocket]
+          secure.setUseClientMode(false)
+          secure.startHandshake()
+          clientSocket = secure
+          val reader = new BufferedReader(new InputStreamReader(secure.getInputStream, "US-ASCII"))
+          val writer = new PrintWriter(new OutputStreamWriter(secure.getOutputStream, "US-ASCII"), true)
+          reader.readLine() // EHLO after TLS
+          writer.print("250-local\r\n250 AUTH LOGIN\r\n")
+          writer.flush()
+          reader.readLine() // AUTH LOGIN
+          writer.print("334 VXNlcm5hbWU6\r\n")
+          writer.flush()
+          reader.readLine() // username
+          writer.print("334 UGFzc3dvcmQ6\r\n")
+          writer.flush()
+          reader.readLine() // password
+          writer.print("235 authenticated\r\n")
+          writer.flush()
+          reader.readLine() // MAIL FROM
+          writer.print("250 sender ok\r\n")
+          writer.flush()
+          reader.readLine() // RCPT TO
+          writer.print("250 recipient ok\r\n")
+          writer.flush()
+          reader.readLine() // DATA
+          writer.print("354 end with .\r\n")
+          writer.flush()
+          var line = reader.readLine()
+          while (line != null && line != ".") line = reader.readLine()
+          messageReceived = line == "."
+          if (messageReceived) {
+            writer.print("250 queued\r\n")
+            writer.flush()
+          }
+        }
+      } catch { case _: Throwable => () }
+      finally Option(clientSocket).foreach(socket => try socket.close() catch { case _: Throwable => () })
+    }, "starttls-smtp-server")
+    thread.setDaemon(true)
+
+    def start(): Int = { thread.start(); serverSocket.getLocalPort }
+
+    def stop(): Unit = {
+      Option(clientSocket).foreach(socket => try socket.close() catch { case _: Throwable => () })
+      try serverSocket.close() catch { case _: Throwable => () }
+    }
   }
 
   /** Accepts TCP and consumes the TLS ClientHello without ever answering it. */

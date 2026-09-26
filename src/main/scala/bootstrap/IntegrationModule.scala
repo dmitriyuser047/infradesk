@@ -40,6 +40,7 @@ import integration.ssh.{
 }
 import integration.ssh.docker.SshContainerOperationExecutor
 import org.typelevel.doobie.ConnectionIO
+import org.typelevel.log4cats.Logger
 
 /** External-system clients and the connector registry built on top of them.
   *
@@ -113,7 +114,10 @@ object IntegrationModule {
     * The legacy sender is still the one thing that depends on the environment: without its URL
     * there is no deployment webhook, and the worker that serves it does not start.
     */
-  def notificationTransports(config: NotificationConfig): Resource[IO, NotificationTransports] = {
+  def notificationTransports(
+    config: NotificationConfig,
+    logger: Logger[IO]
+  ): Resource[IO, NotificationTransports] = {
     val policy = OutboundDestinationPolicy.resolving(
       config.allowPrivateDestinations,
       config.requestTimeout
@@ -130,7 +134,7 @@ object IntegrationModule {
           new WebhookNotificationSender(client, url, config.requestTimeout)),
         webhook = new ManagedWebhookTransport(validatedClient, config.requestTimeout),
         telegram = new TelegramTransport(client, config.requestTimeout),
-        email = new SmtpTransport(policy, config.requestTimeout)
+        email = new SmtpTransport(policy, config.requestTimeout, Some(logger))
       )
     }
   }

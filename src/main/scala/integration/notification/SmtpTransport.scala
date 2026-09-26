@@ -6,6 +6,7 @@ import application.port.{EmailNotificationTransport, NotificationSendResult}
 import cats.effect.{IO, Resource}
 import cats.syntax.all._
 import domain.notification.{EmailSecurity, NotificationChannelSettings}
+import org.typelevel.log4cats.Logger
 import jakarta.mail.internet.{InternetAddress, MimeMessage}
 import jakarta.mail.{
   AuthenticationFailedException,
@@ -19,6 +20,7 @@ import jakarta.mail.{
 import java.net.InetAddress
 import java.util.Properties
 import java.util.concurrent.TimeoutException
+import javax.net.ssl.SSLSocketFactory
 import scala.concurrent.duration.FiniteDuration
 
 /** Sends a message through the SMTP relay a mail channel is configured with.
@@ -43,7 +45,9 @@ import scala.concurrent.duration.FiniteDuration
   */
 final class SmtpTransport(
   policy: OutboundDestinationPolicy,
-  timeout: FiniteDuration
+  timeout: FiniteDuration,
+  logger: Option[Logger[IO]] = None,
+  tlsSocketFactory: SSLSocketFactory = SSLSocketFactory.getDefault.asInstanceOf[SSLSocketFactory]
 ) extends EmailNotificationTransport[IO] {
 
   import SmtpTransport._
@@ -55,9 +59,21 @@ final class SmtpTransport(
   ): IO[NotificationSendResult] =
     deliver(settings, password, message)
       .as(NotificationSendResult.Sent: NotificationSendResult)
-      .handleError {
-        case _: TimeoutException => NotificationSendResult.RetryableFailure(Timeout)
-        case error => OutboundDestinationPolicy.classify(error).getOrElse(classifyError(error))
+      .handleErrorWith {
+        case _: TimeoutException => IO.pure(NotificationSendResult.RetryableFailure(Timeout))
+        case error =>
+          val result = OutboundDestinationPolicy.classify(error).getOrElse(classifyError(error))
+          val observed = result match {
+            case NotificationSendResult.RetryableFailure(UnexpectedError) =>
+              // Keep the API outcome bounded, but retain the real cause chain in server logs.
+              // Deliberately only operational configuration is included here: never an account,
+              // recipient, sender, password or encrypted credential.
+              logger.fold(IO.unit)(_.error(error)(
+                s"smtp.send.failed security=${settings.security.code} port=${settings.port}"
+              )).handleErrorWith(_ => IO.unit)
+            case _ => IO.unit
+          }
+          observed.as(result)
       }
 
   /** DNS, connect, TLS, authentication, send and cleanup share one deadline. DNS runs through a
@@ -131,7 +147,7 @@ final class SmtpTransport(
     abort: SmtpAbort
   ): Resource[IO, (Transport, Session)] =
     Resource.make(IO.blocking {
-      val session = Session.getInstance(properties(settings, timeout, pinnedAddress, abort))
+      val session = Session.getInstance(properties(settings, timeout, pinnedAddress, abort, tlsSocketFactory))
       (session.getTransport(protocol(settings.security)), session)
     })({ case (transport, _) =>
       IO.blocking {
@@ -182,7 +198,8 @@ object SmtpTransport {
     settings: NotificationChannelSettings.Email,
     timeout: FiniteDuration,
     pinnedAddress: InetAddress,
-    abort: SmtpAbort
+    abort: SmtpAbort,
+    tlsSocketFactory: SSLSocketFactory = SSLSocketFactory.getDefault.asInstanceOf[SSLSocketFactory]
   ): Properties = {
     val protocolName = protocol(settings.security)
     val values = new Properties()
@@ -207,10 +224,13 @@ object SmtpTransport {
       case EmailSecurity.StartTls =>
         values.put("mail.smtp.starttls.enable", "true")
         values.put("mail.smtp.starttls.required", "true")
-        values.put("mail.smtp.ssl.socketFactory", new SmtpTlsSocketFactory(settings.host))
+        values.put("mail.smtp.ssl.socketFactory", new SmtpTlsSocketFactory(settings.host, tlsSocketFactory))
         values.put("mail.smtp.ssl.hostnameverifier", new SmtpHostnameVerifier(settings.host))
-        // The name the channel was configured with is the name the certificate has to match.
-        values.put("mail.smtp.ssl.checkserveridentity", "true")
+        // Angus 2.0.5 gives this numeric connection host to configureSSLSocket, which would make
+        // JDK endpoint identification verify the certificate against the pinned IP before it
+        // calls our verifier. The custom verifier below still checks the configured hostname
+        // after the normal TLS chain validation and SNI handshake have completed.
+        values.put("mail.smtp.ssl.checkserveridentity", "false")
       case EmailSecurity.Tls =>
         values.put("mail.smtps.ssl.socketFactory", new PinnedImplicitTlsSocketFactory(
           pinnedAddress, settings.host, timeout.toMillis.toInt, abort))
@@ -227,44 +247,57 @@ object SmtpTransport {
     *
     * Nothing of what it said is kept: a reply can quote the address, the message or the account.
     */
-  def classifyError(error: Throwable): NotificationSendResult = error match {
-    case _: AuthenticationFailedException => NotificationSendResult.PermanentFailure(AuthFailure)
-    case failure: SendFailedException =>
-      // Addresses the relay called invalid will be invalid next time too; ones it merely could
-      // not reach are worth another attempt.
-      if (Option(failure.getInvalidAddresses).exists(_.nonEmpty))
-        NotificationSendResult.PermanentFailure(PermanentFailure)
-      else NotificationSendResult.RetryableFailure(TemporaryFailure)
-    case _: TimeoutException => NotificationSendResult.RetryableFailure(Timeout)
-    case _: java.net.SocketTimeoutException => NotificationSendResult.RetryableFailure(Timeout)
-    // A relay whose certificate does not check out is not sent to, and not sent to in the
-    // clear either. Worth repeating: a trust store is fixed without touching the channel.
-    case _: javax.net.ssl.SSLException => NotificationSendResult.RetryableFailure(TlsFailure)
-    case _: java.net.ConnectException => NotificationSendResult.RetryableFailure(TemporaryFailure)
-    case _: java.net.UnknownHostException =>
-      NotificationSendResult.PermanentFailure(PermanentFailure)
-    case failure: MessagingException => messagingFailure(failure)
-    case _: IllegalArgumentException => NotificationSendResult.PermanentFailure(PermanentFailure)
-    case _: jakarta.mail.internet.AddressException =>
-      NotificationSendResult.PermanentFailure(PermanentFailure)
-    case _ => NotificationSendResult.RetryableFailure(UnexpectedError)
+  def classifyError(error: Throwable): NotificationSendResult = {
+    val seen = java.util.Collections.newSetFromMap(
+      new java.util.IdentityHashMap[Throwable, java.lang.Boolean]()
+    )
+    val pending = new java.util.ArrayDeque[Throwable]()
+    pending.add(error)
+    var messagingFailureSeen = false
+
+    while (!pending.isEmpty) {
+      val current = pending.removeFirst()
+      if (seen.add(current)) {
+        current match {
+          case _: AuthenticationFailedException => return NotificationSendResult.PermanentFailure(AuthFailure)
+          case failure: SendFailedException =>
+            return if (Option(failure.getInvalidAddresses).exists(_.nonEmpty))
+              NotificationSendResult.PermanentFailure(PermanentFailure)
+            else NotificationSendResult.RetryableFailure(TemporaryFailure)
+          case _: TimeoutException | _: java.net.SocketTimeoutException =>
+            return NotificationSendResult.RetryableFailure(Timeout)
+          // A relay whose certificate does not check out is not sent to, and not sent to in the
+          // clear either. Worth repeating: a trust store is fixed without touching the channel.
+          case _: javax.net.ssl.SSLException => return NotificationSendResult.RetryableFailure(TlsFailure)
+          case _: java.net.ConnectException => return NotificationSendResult.RetryableFailure(TemporaryFailure)
+          case _: java.net.UnknownHostException => return NotificationSendResult.PermanentFailure(PermanentFailure)
+          case failure: MessagingException =>
+            replyCode(failure) match {
+              case Some(code) if code >= 400 && code < 500 =>
+                return NotificationSendResult.RetryableFailure(TemporaryFailure)
+              case Some(_) => return NotificationSendResult.PermanentFailure(PermanentFailure)
+              case None => messagingFailureSeen = true
+            }
+          case _: IllegalArgumentException => return NotificationSendResult.PermanentFailure(PermanentFailure)
+          case _: jakarta.mail.internet.AddressException =>
+            return NotificationSendResult.PermanentFailure(PermanentFailure)
+          case _ => ()
+        }
+        Option(current.getCause).filter(_ ne current).foreach(pending.addLast)
+        current match {
+          case messaging: MessagingException =>
+            Option(messaging.getNextException).filter(_ ne messaging).foreach(pending.addLast)
+          case _ => ()
+        }
+      }
+    }
+    if (messagingFailureSeen) NotificationSendResult.RetryableFailure(TemporaryFailure)
+    else NotificationSendResult.RetryableFailure(UnexpectedError)
   }
 
   /** The reply code decides, when there is one: 4xx is the relay asking to be tried later, 5xx
     * is it declining. A failure that carries no reply is a connection that went wrong.
     */
-  private def messagingFailure(failure: MessagingException): NotificationSendResult =
-    replyCode(failure) match {
-      case Some(code) if code >= 400 && code < 500 =>
-        NotificationSendResult.RetryableFailure(TemporaryFailure)
-      case Some(_) => NotificationSendResult.PermanentFailure(PermanentFailure)
-      case None => Option(failure.getNextException) match {
-        case Some(cause) if cause ne failure =>
-          OutboundDestinationPolicy.classify(cause).getOrElse(classifyError(cause))
-        case _ => NotificationSendResult.RetryableFailure(TemporaryFailure)
-      }
-    }
-
   /** Jakarta Mail puts the reply at the start of the message; the rest of it is not read. */
   private def replyCode(failure: MessagingException): Option[Int] =
     Option(failure.getMessage).map(_.trim).flatMap { message =>

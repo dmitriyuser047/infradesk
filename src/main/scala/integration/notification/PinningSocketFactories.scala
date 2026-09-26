@@ -6,7 +6,10 @@ import java.net.{InetAddress, InetSocketAddress, Socket, SocketAddress}
 import java.util.Collections
 import java.util.concurrent.ConcurrentLinkedQueue
 import javax.net.SocketFactory
-import javax.net.ssl.{HttpsURLConnection, SNIHostName, SSLSession, SSLSocket, SSLSocketFactory}
+import javax.net.ssl.{SNIHostName, SSLSession, SSLSocket, SSLSocketFactory}
+import javax.naming.ldap.LdapName
+import java.security.cert.X509Certificate
+import scala.jdk.CollectionConverters._
 
 /** The sockets a send opens, held so its deadline can close them below Jakarta Mail's locks. */
 private[notification] final class SmtpAbort {
@@ -181,11 +184,33 @@ private[notification] final class SmtpTlsSocketFactory(
 }
 
 /** Checks the certificate against the configured relay name even though Angus connected using the
-  * pinned numeric address. STARTTLS also has the JDK endpoint check during its handshake; implicit
-  * TLS relies on this verifier after its handshake because its socket was connected by address.
+  * pinned numeric address. Both encrypted modes disable Angus's endpoint check because it would
+  * be given that numeric connection address; Angus then invokes this verifier after the handshake.
   */
 private[notification] final class SmtpHostnameVerifier(configuredHost: String)
   extends javax.net.ssl.HostnameVerifier {
   override def verify(ignoredConnectionHost: String, session: SSLSession): Boolean =
-    HttpsURLConnection.getDefaultHostnameVerifier.verify(configuredHost, session)
+    try {
+      val certificate = session.getPeerCertificates.head.asInstanceOf[X509Certificate]
+      val dnsNames = Option(certificate.getSubjectAlternativeNames).toList.flatMap(_.asScala).flatMap {
+        entry => Option(entry.get(0)).collect { case kind: Integer if kind == 2 => entry.get(1).toString }
+      }
+      val names = if (dnsNames.nonEmpty) dnsNames else commonNames(certificate)
+      names.exists(matches(configuredHost, _))
+    } catch { case _: Throwable => false }
+
+  private def commonNames(certificate: X509Certificate): List[String] =
+    new LdapName(certificate.getSubjectX500Principal.getName).getRdns.asScala.collect {
+      case rdn if rdn.getType.equalsIgnoreCase("CN") => rdn.getValue.toString
+    }.toList
+
+  /** RFC 6125-style DNS matching: a wildcard replaces exactly the whole left-most label. */
+  private def matches(host: String, pattern: String): Boolean = {
+    val expected = java.net.IDN.toASCII(host).toLowerCase(java.util.Locale.ROOT)
+    val actual = java.net.IDN.toASCII(pattern).toLowerCase(java.util.Locale.ROOT)
+    if (actual.startsWith("*.")) {
+      val suffix = actual.drop(2)
+      expected.endsWith("." + suffix) && expected.count(_ == '.') == suffix.count(_ == '.') + 1
+    } else expected == actual
+  }
 }
