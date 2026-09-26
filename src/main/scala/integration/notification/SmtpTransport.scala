@@ -31,12 +31,15 @@ import scala.concurrent.duration.FiniteDuration
   * never by a check made earlier against a name that could since answer differently.
   *
   * Jakarta Mail is blocking and connection-oriented, so the whole exchange runs on the blocking
-  * pool. The attempt carries one overall deadline, because DNS, the connection, the TLS
-  * handshake, authentication and the send itself are each bounded on their own but their sum is
-  * not: without an outer bound the whole attempt could run past the lease that a claimed delivery
-  * holds it under, and a second worker could pick the same delivery up while this one was still
-  * running. The transport is closed by its own scope whether the send succeeded, failed, timed
-  * out or was cancelled.
+  * pool. Each socket operation is bounded on its own by connect/read/write timeouts, but their
+  * sum is not, so the attempt also carries one overall deadline: without it the whole attempt
+  * could run past the lease that a claimed delivery holds it under, and a second worker could
+  * pick the same delivery up while this one was still running. That deadline is real rather than
+  * nominal — a blocking send on the blocking pool cannot be interrupted by cancelling it, so on
+  * the deadline the transport is closed to unblock the operation, and the attempt is joined
+  * before a timeout is reported, so the send is provably finished before the delivery is released.
+  * The transport is closed by its own scope whether the send succeeded, failed, timed out or was
+  * cancelled.
   */
 final class SmtpTransport(
   policy: OutboundDestinationPolicy,
@@ -52,19 +55,27 @@ final class SmtpTransport(
   ): IO[NotificationSendResult] =
     deliver(settings, password, message)
       .as(NotificationSendResult.Sent: NotificationSendResult)
-      .timeout(timeout)
       .handleError {
         case _: TimeoutException => NotificationSendResult.RetryableFailure(Timeout)
         case error => OutboundDestinationPolicy.classify(error).getOrElse(classifyError(error))
       }
 
+  /** The whole attempt — connect, the TLS handshake, authentication and the send itself — runs as
+    * one blocking step under one deadline, held to it not by cancelling that step (Jakarta Mail's
+    * socket I/O runs on the blocking pool, where `.timeout` cannot interrupt it) but by closing
+    * the transport out from under it: the socket closing is what unblocks the read or write the
+    * attempt is stuck on. The deadline only returns once the attempt has actually stopped, so a
+    * `SMTP_TIMEOUT` never leaves a send still running in the background past the lease it was
+    * claimed under.
+    */
   private def deliver(
     settings: NotificationChannelSettings.Email,
     password: String,
     message: NotificationMessage
   ): IO[Unit] =
-    transport(settings, password).use { case (transport, session) =>
-      IO.blocking {
+    transport(settings).use { case (transport, session) =>
+      val attempt = IO.blocking {
+        transport.connect(settings.host, settings.port, settings.username, password)
         val mail = new MimeMessage(session)
         mail.setFrom(new InternetAddress(settings.fromAddress))
         mail.setRecipients(Message.RecipientType.TO,
@@ -73,32 +84,49 @@ final class SmtpTransport(
         mail.setText(message.text, "UTF-8")
         transport.sendMessage(mail, mail.getAllRecipients)
       }
+      withinDeadline(attempt, transport)
     }
 
-  /** One connection per send, closed by its own scope whatever ends it.
+  /** Runs the blocking attempt on its own fiber and holds it to `timeout`.
     *
-    * The `Transport` is constructed first and its finalizer registered before anything that can
-    * fail is attempted: `connect` runs inside the resource's scope, via `evalTap`, precisely so
-    * that a `Transport` object that never finished connecting is still the one `close` is called
-    * on. Creating the object and connecting it as a single step in the acquire would leave a
-    * half-opened connection unmanaged whenever the connect itself is what failed.
+    * On the deadline (or on the caller cancelling the send) the transport is closed first, which
+    * unblocks whatever socket operation the attempt is parked on, and only then is the attempt
+    * joined: control does not return until the fiber has finished, so the network attempt is
+    * provably over before the delivery is released for retry or marked timed out. Closing here is
+    * idempotent with the resource's own finalizer, which closes it again on the way out.
+    */
+  private def withinDeadline(attempt: IO[Unit], transport: Transport): IO[Unit] = {
+    val closeQuietly = IO.blocking(transport.close()).attempt.void
+    attempt.start.flatMap { fiber =>
+      IO.race(IO.sleep(timeout), fiber.join)
+        .flatMap {
+          case Right(outcome) => outcome.embedNever
+          case Left(_) =>
+            closeQuietly *> fiber.join.void *> IO.raiseError(new TimeoutException(TimeoutMessage))
+        }
+        .onCancel(closeQuietly *> fiber.join.void)
+    }
+  }
+
+  /** One connection per send, closed by its own scope whatever ends it: success, connect failure,
+    * auth failure, send failure, the deadline, or the caller's own cancellation. The `Transport`
+    * is created and its finalizer registered before it is connected — `connect` runs later, inside
+    * the attempt above — so a transport that never finished connecting is still the one `close` is
+    * called on, and a half-opened connection is never left unmanaged.
     */
   private def transport(
-    settings: NotificationChannelSettings.Email,
-    password: String
+    settings: NotificationChannelSettings.Email
   ): Resource[IO, (Transport, Session)] =
     Resource.make(IO.blocking {
       val session = Session.getInstance(properties(settings, timeout, policy))
       (session.getTransport(protocol(settings.security)), session)
     })({ case (transport, _) => IO.blocking(transport.close()).handleError(_ => ()) })
-      .evalTap { case (transport, _) =>
-        IO.blocking(transport.connect(settings.host, settings.port, settings.username, password))
-      }
 }
 
 object SmtpTransport {
 
   val Timeout: String = "SMTP_TIMEOUT"
+  private val TimeoutMessage: String = "SMTP attempt exceeded its whole-attempt deadline"
   val TlsFailure: String = "SMTP_TLS_FAILURE"
   val TemporaryFailure: String = "SMTP_TEMPORARY_FAILURE"
   val AuthFailure: String = "SMTP_AUTH_FAILURE"

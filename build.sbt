@@ -62,7 +62,7 @@ lazy val root = rootProject
       "org.http4s" %% "http4s-dsl" % http4sVersion,
       "org.http4s" %% "http4s-circe" % http4sVersion,
       // Mail notifications speak SMTP; Angus is the reference implementation of Jakarta Mail.
-      "org.eclipse.angus" % "angus-mail" % "2.0.3",
+      "org.eclipse.angus" % "angus-mail" % "2.0.5",
       "org.apache.sshd" % "sshd-core" % "2.19.0" % Test,
       // A real SMTP server for the tests, so mail is exercised against a protocol rather than
       // against a mock of one.

@@ -177,6 +177,59 @@ final class SmtpTransportSpec extends FunSuite {
     } finally server.stop()
   }
 
+  test("the whole attempt is bounded even when no single operation is slow enough to time out") {
+    // Every reply comes back well within the socket read timeout, so a per-operation timeout
+    // never fires: a relay answering each step in 120ms is not slow. What is slow is the
+    // sequence — greeting, EHLO, then the AUTH exchange — whose sum passes the whole-attempt
+    // deadline before authentication even finishes. An implementation that relied on socket
+    // timeouts alone would sail through every step and only stop seconds later, at QUIT.
+    val perResponse = 400.millis
+    val deadline = 600.millis
+    // Each reply comes back in 400ms, comfortably under the 600ms socket read timeout, so no
+    // single operation ever times out on its own. A full, successful exchange is nine such
+    // steps — greeting, EHLO, the four AUTH lines, MAIL FROM, RCPT TO, DATA, the body — well
+    // over three seconds; the deadline is passed during the AUTH exchange, long before that.
+    val fullSequence = 3.seconds
+    val server = new ScriptedSmtpServer(
+      List(
+        List("250-fake", "250 AUTH LOGIN"),
+        List("334 VXNlcm5hbWU6"),
+        List("334 UGFzc3dvcmQ6"),
+        List("235 authentication successful"),
+        List("250 OK"),
+        List("250 OK"),
+        List("354 end with ."),
+        List("250 queued")
+      ),
+      perResponseDelay = perResponse
+    )
+    val port = server.start()
+    try {
+      val started = System.nanoTime()
+      val result = new SmtpTransport(Permissive, deadline)
+        .send(settings(port, EmailSecurity.None), Password, message)
+        .unsafeRunSync()
+      val elapsed = (System.nanoTime() - started).nanos
+      val commandsAtReturn = server.commandsReceived
+
+      assertEquals(result, NotificationSendResult.RetryableFailure(SmtpTransport.Timeout))
+      // Cut off mid-handshake: the message body was never offered, let alone sent. Had the
+      // implementation relied on socket timeouts alone, no step being slow enough to trip one,
+      // it would have run the whole exchange to completion and reached DATA — this is the assertion
+      // that tells a whole-attempt deadline apart from a per-operation one.
+      assert(!server.sawData, "the send reached the DATA phase before the deadline")
+      // Stopped near the deadline, not after the full exchange would have finished.
+      assert(elapsed < fullSequence, clues(elapsed))
+      // The deadline actually stopped the attempt: the socket is closed and no further command
+      // arrives afterwards, so nothing is still talking to the relay once SMTP_TIMEOUT is returned.
+      assert(server.awaitClientClose(5.seconds),
+        "the connection was left open past the whole-attempt deadline")
+      Thread.sleep(perResponse.toMillis)
+      assertEquals(server.commandsReceived, commandsAtReturn,
+        "a command reached the relay after the attempt had supposedly timed out")
+    } finally server.stop()
+  }
+
   test("the connection is closed even when authentication is refused") {
     val server = new ScriptedSmtpServer(List(
       List("250-fake", "250 AUTH LOGIN"),
@@ -255,10 +308,21 @@ final class SmtpTransportSpec extends FunSuite {
     * observed the client side of the socket go away — the one thing a resource leak would fail to
     * produce.
     */
-  private final class ScriptedSmtpServer(script: List[List[String]], greetDelay: FiniteDuration = Duration.Zero) {
+  private final class ScriptedSmtpServer(
+    script: List[List[String]],
+    greetDelay: FiniteDuration = Duration.Zero,
+    perResponseDelay: FiniteDuration = Duration.Zero
+  ) {
     private val serverSocket = new ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
     @volatile var quitReceived: Boolean = false
+    @volatile var commandsReceived: Int = 0
+    @volatile var sawData: Boolean = false
     @volatile private var closedByClient: Boolean = false
+
+    // The greeting waits for whichever delay is set: an explicit greeting-only silence, or the
+    // per-response delay shared by every reply.
+    private val greetWait: FiniteDuration =
+      if (greetDelay > Duration.Zero) greetDelay else perResponseDelay
 
     private val thread = new Thread(() => {
       try {
@@ -266,17 +330,22 @@ final class SmtpTransportSpec extends FunSuite {
         try {
           val out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream, "US-ASCII"), true)
           val in = new BufferedReader(new InputStreamReader(socket.getInputStream, "US-ASCII"))
-          if (greetDelay > Duration.Zero) Thread.sleep(greetDelay.toMillis)
+          if (greetWait > Duration.Zero) Thread.sleep(greetWait.toMillis)
           out.print("220 fake smtp ready\r\n")
           out.flush()
           var remaining = script
           var line = in.readLine()
           while (line != null && !line.toUpperCase.startsWith("QUIT")) {
+            commandsReceived += 1
+            if (line.toUpperCase.startsWith("DATA")) sawData = true
             val (reply, rest) = remaining match {
               case head :: tail => (head, tail)
               case Nil => (List("250 OK"), Nil)
             }
             remaining = rest
+            // The reply is delayed, not the read: each individual operation stays under the
+            // socket read timeout, but their sum is what the whole-attempt deadline bounds.
+            if (perResponseDelay > Duration.Zero) Thread.sleep(perResponseDelay.toMillis)
             reply.foreach { text => out.print(text + "\r\n"); out.flush() }
             line = in.readLine()
           }
