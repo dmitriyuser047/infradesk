@@ -16,6 +16,7 @@ import jakarta.mail.{
   Transport
 }
 
+import java.net.InetAddress
 import java.util.Properties
 import java.util.concurrent.TimeoutException
 import scala.concurrent.duration.FiniteDuration
@@ -27,8 +28,8 @@ import scala.concurrent.duration.FiniteDuration
   * The upgrade is required rather than attempted, so a relay that does not offer STARTTLS fails
   * instead of quietly sending the password in the clear. Certificate and host name verification
   * stay on in both encrypted modes, and the destination — the relay a person configured — is
-  * resolved and validated by `PinningSocketFactory` at the moment the connection is opened,
-  * never by a check made earlier against a name that could since answer differently.
+  * resolved asynchronously before Jakarta Mail starts. The approved address is then passed to a
+  * socket factory that can dial only that value, so there is no second DNS answer to rebind it.
   *
   * Jakarta Mail is blocking and connection-oriented, so the whole exchange runs on the blocking
   * pool. Each socket operation is bounded on its own by connect/read/write timeouts, but their
@@ -36,10 +37,9 @@ import scala.concurrent.duration.FiniteDuration
   * could run past the lease that a claimed delivery holds it under, and a second worker could
   * pick the same delivery up while this one was still running. That deadline is real rather than
   * nominal — a blocking send on the blocking pool cannot be interrupted by cancelling it, so on
-  * the deadline the transport is closed to unblock the operation, and the attempt is joined
-  * before a timeout is reported, so the send is provably finished before the delivery is released.
-  * The transport is closed by its own scope whether the send succeeded, failed, timed out or was
-  * cancelled.
+  * the deadline the raw socket is closed to unblock the operation, the fiber is cancelled, and
+  * the attempt is joined before a timeout is reported. Its scope includes cleanup, so the send is
+  * finished and the connection is closed before the delivery is released.
   */
 final class SmtpTransport(
   policy: OutboundDestinationPolicy,
@@ -60,43 +60,52 @@ final class SmtpTransport(
         case error => OutboundDestinationPolicy.classify(error).getOrElse(classifyError(error))
       }
 
-  /** The whole attempt — connect, the TLS handshake, authentication and the send itself — runs as
-    * one blocking step under one deadline. It is held to it not by cancelling that step (Jakarta
-    * Mail's socket I/O runs on the blocking pool, where `.timeout` cannot interrupt it) and not by
-    * `Transport.close` (which takes the same lock the running `connect`/`sendMessage` already
-    * holds, so it would only close once the operation had already returned), but by closing the
-    * underlying socket directly: the socket is not behind that lock, and closing it makes the
-    * blocked read or write throw at once. The deadline only returns once the attempt has actually
-    * stopped, so a `SMTP_TIMEOUT` never leaves a send still running in the background past the
-    * lease it was claimed under.
+  /** DNS, connect, TLS, authentication, send and cleanup share one deadline. DNS runs through a
+    * cancelable effect. Jakarta Mail's socket I/O runs on the blocking pool, where cancellation
+    * alone cannot interrupt it, and `Transport.close` takes the same lock the active operation
+    * holds. The deadline therefore closes the raw socket first, cancels the attempt and joins it.
+    * A returned `SMTP_TIMEOUT` cannot leave DNS or an SMTP send running past the delivery lease.
+    *
+    * The pinned numeric address is passed to Jakarta Mail because it constructs an
+    * `InetSocketAddress` itself. This removes its otherwise synchronous second DNS lookup. TLS
+    * receives the configured host separately for SNI and certificate verification.
     */
   private def deliver(
     settings: NotificationChannelSettings.Email,
     password: String,
     message: NotificationMessage
-  ): IO[Unit] =
-    transport(settings).use { case (transport, session, abort) =>
-      val attempt = IO.blocking {
-        transport.connect(settings.host, settings.port, settings.username, password)
-        val mail = new MimeMessage(session)
-        mail.setFrom(new InternetAddress(settings.fromAddress))
-        mail.setRecipients(Message.RecipientType.TO,
-          settings.recipients.map(new InternetAddress(_): jakarta.mail.Address).toArray)
-        mail.setSubject(message.subject, "UTF-8")
-        mail.setText(message.text, "UTF-8")
-        transport.sendMessage(mail, mail.getAllRecipients)
-      }
-      withinDeadline(attempt, abort)
+  ): IO[Unit] = {
+    val abort = new SmtpAbort
+    val attempt = policy.pin(settings.host).flatMap {
+      case Left(OutboundDestinationFailure.Forbidden(code)) =>
+        IO.raiseError(new OutboundDestinationRejected(code))
+      case Left(OutboundDestinationFailure.ResolutionFailed(code)) =>
+        IO.raiseError(new OutboundDestinationUnresolvable(code))
+      case Right(pinnedAddress) =>
+        transport(settings, pinnedAddress, abort).use { case (transport, session) =>
+          IO.blocking {
+            // A numeric connection host prevents Jakarta Mail from starting its own synchronous
+            // DNS lookup. TLS still uses the configured host through the SSL factory below.
+            transport.connect(pinnedAddress.getHostAddress, settings.port, settings.username, password)
+            val mail = new MimeMessage(session)
+            mail.setFrom(new InternetAddress(settings.fromAddress))
+            mail.setRecipients(Message.RecipientType.TO,
+              settings.recipients.map(new InternetAddress(_): jakarta.mail.Address).toArray)
+            mail.setSubject(message.subject, "UTF-8")
+            mail.setText(message.text, "UTF-8")
+            transport.sendMessage(mail, mail.getAllRecipients)
+          }
+        }
     }
+    withinDeadline(attempt, abort)
+  }
 
-  /** Runs the blocking attempt on its own fiber and holds it to `timeout`.
+  /** Runs the complete attempt on its own fiber and holds it to `timeout`.
     *
     * On the deadline (or on the caller cancelling the send) the send's socket is closed first,
-    * which unblocks whatever operation the attempt is parked on — closing the raw socket, not the
-    * `Transport`, precisely because the `Transport`'s own `close` cannot run while a `connect` or
-    * `sendMessage` still holds its lock. Only then is the attempt joined: control does not return
-    * until the fiber has finished, so the network attempt is provably over before the delivery is
-    * released for retry or marked timed out.
+    * which unblocks socket I/O. Cancelling the fiber also cancels an in-flight asynchronous DNS
+    * lookup. Only then is the attempt joined, so control cannot return while any attempt phase or
+    * its resource finalizer is still active.
     */
   private def withinDeadline(attempt: IO[Unit], abort: SmtpAbort): IO[Unit] = {
     val abortNow = IO.blocking(abort.abort())
@@ -105,29 +114,31 @@ final class SmtpTransport(
         .flatMap {
           case Right(outcome) => outcome.embedNever
           case Left(_) =>
-            abortNow *> fiber.join.void *> IO.raiseError(new TimeoutException(TimeoutMessage))
+            abortNow *> fiber.cancel *> fiber.join.void *>
+              IO.raiseError(new TimeoutException(TimeoutMessage))
         }
-        .onCancel(abortNow *> fiber.join.void)
+        .onCancel(abortNow *> fiber.cancel *> fiber.join.void)
     }
   }
 
-  /** One connection per send, closed by its own scope whatever ends it: success, connect failure,
-    * auth failure, send failure, the deadline, or the caller's own cancellation. The `Transport`
-    * is created and its finalizer registered before it is connected — `connect` runs later, inside
-    * the attempt above — so a transport that never finished connecting is still the one `close` is
-    * called on, and a half-opened connection is never left unmanaged. The `SmtpAbort` carried
-    * alongside holds the socket the send opens, so the deadline can reach it directly; `quitwait`
-    * is off (see `properties`) so this finalizer's own `close` cannot add a wait for a QUIT
-    * response outside the deadline.
+  /** The scope is inside the deadline. Its finalizer first closes the raw socket and only then
+    * calls `Transport.close()` to release Jakarta Mail's local state. Angus therefore cannot write
+    * or flush QUIT during cleanup, even after a successful send.
     */
   private def transport(
-    settings: NotificationChannelSettings.Email
-  ): Resource[IO, (Transport, Session, SmtpAbort)] =
+    settings: NotificationChannelSettings.Email,
+    pinnedAddress: InetAddress,
+    abort: SmtpAbort
+  ): Resource[IO, (Transport, Session)] =
     Resource.make(IO.blocking {
-      val abort = new SmtpAbort
-      val session = Session.getInstance(properties(settings, timeout, policy, abort))
-      (session.getTransport(protocol(settings.security)), session, abort)
-    })({ case (transport, _, _) => IO.blocking(transport.close()).handleError(_ => ()) })
+      val session = Session.getInstance(properties(settings, timeout, pinnedAddress, abort))
+      (session.getTransport(protocol(settings.security)), session)
+    })({ case (transport, _) =>
+      IO.blocking {
+        abort.abort()
+        transport.close()
+      }.handleError(_ => ())
+    })
 }
 
 object SmtpTransport {
@@ -151,14 +162,9 @@ object SmtpTransport {
     * connection when the relay offers it and carries on in the clear when it does not, which is
     * precisely the outcome a person choosing STARTTLS is trying to avoid.
     *
-    * The same plain factory is handed to every mode, implicit TLS included: Jakarta Mail's own
-    * `SocketFetcher` never asks an `SSLSocketFactory` to open the underlying connection, only to
-    * wrap one that is already open, so a factory that is itself an `SSLSocketFactory` never gets
-    * the chance to pin anything — the connection it would wrap is opened first, by the library's
-    * own unvalidated resolution of the host name. `checkserveridentity` is what verifies the
-    * certificate and host name in both encrypted modes, against the name the channel is
-    * configured with, using Jakarta Mail's own handshake handling; nothing here needs a custom
-    * `SSLSocketFactory` of its own to get that.
+    * The plain factory opens every connection, including implicit TLS, to the pinned address. The
+    * TLS factory can only wrap that connected socket and substitutes the configured host for SNI
+    * and certificate verification; all overloads that could open another connection are refused.
     *
     * The factory is handed in as an object value, not a `.class` name: Jakarta Mail accepts
     * either, and only the object form lets each send carry its own policy, timeout and abort
@@ -167,15 +173,14 @@ object SmtpTransport {
     * again with the plain JDK factory, which is exactly the unprotected connection the pinning
     * exists to prevent.
     *
-    * `quitwait` is turned off too: on by default, it makes `Transport.close` send QUIT and wait
-    * for the relay's reply, which would let cleanup after a successful send run on past the
-    * deadline the lease is sized against. With it off, closing sends QUIT and returns without
-    * waiting, so the whole send — attempt and cleanup — stays inside its bound.
+    * `quitwait` is off as defense in depth, but it only disables waiting for the relay's 221
+    * response. The finalizer's raw-socket close is what prevents the QUIT write itself, and the
+    * finalizer remains inside the same whole-attempt deadline.
     */
   private[notification] def properties(
     settings: NotificationChannelSettings.Email,
     timeout: FiniteDuration,
-    policy: OutboundDestinationPolicy,
+    pinnedAddress: InetAddress,
     abort: SmtpAbort
   ): Properties = {
     val protocolName = protocol(settings.security)
@@ -190,16 +195,20 @@ object SmtpTransport {
     values.put(s"mail.$protocolName.socketFactory.fallback", "false")
     values.put(s"mail.$protocolName.quitwait", "false")
     values.put(s"mail.$protocolName.socketFactory",
-      new PinningSocketFactory(policy, timeout.toMillis.toInt, abort))
+      new PinningSocketFactory(pinnedAddress, timeout.toMillis.toInt, abort))
 
     settings.security match {
       case EmailSecurity.None => ()
       case EmailSecurity.StartTls =>
         values.put("mail.smtp.starttls.enable", "true")
         values.put("mail.smtp.starttls.required", "true")
+        values.put("mail.smtp.ssl.socketFactory", new SmtpTlsSocketFactory(settings.host))
+        values.put("mail.smtp.ssl.hostnameverifier", new SmtpHostnameVerifier(settings.host))
         // The name the channel was configured with is the name the certificate has to match.
         values.put("mail.smtp.ssl.checkserveridentity", "true")
       case EmailSecurity.Tls =>
+        values.put("mail.smtps.ssl.socketFactory", new SmtpTlsSocketFactory(settings.host))
+        values.put("mail.smtps.ssl.hostnameverifier", new SmtpHostnameVerifier(settings.host))
         values.put("mail.smtps.ssl.checkserveridentity", "true")
     }
     values

@@ -75,7 +75,7 @@ final class ValidatingSocketGroupSpec extends FunSuite {
     group.client(SocketAddress(Host.fromString(host).get, port), Nil).use_.attempt.unsafeRunSync()
 
   private def fixed(outcome: Either[OutboundDestinationFailure, InetAddress]): OutboundDestinationPolicy =
-    (_: String) => outcome
+    (_: String) => IO.pure(outcome)
 
   /** Records the one address it was asked to connect to, and never actually opens a socket: the
     * point of this double is what it was asked for, not a working connection.

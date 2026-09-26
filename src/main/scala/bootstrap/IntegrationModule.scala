@@ -114,7 +114,10 @@ object IntegrationModule {
     * there is no deployment webhook, and the worker that serves it does not start.
     */
   def notificationTransports(config: NotificationConfig): Resource[IO, NotificationTransports] = {
-    val policy = OutboundDestinationPolicy.resolving(config.allowPrivateDestinations)
+    val policy = OutboundDestinationPolicy.resolving(
+      config.allowPrivateDestinations,
+      config.requestTimeout
+    )
     (
       EmberClientBuilder.default[IO].withTimeout(config.requestTimeout).build,
       EmberClientBuilder.default[IO]

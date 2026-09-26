@@ -1,27 +1,17 @@
 package ru.bitec.app.ops
 package integration.notification
 
+import java.io.IOException
 import java.net.{InetAddress, InetSocketAddress, Socket, SocketAddress}
 import java.util.concurrent.ConcurrentLinkedQueue
 import javax.net.SocketFactory
+import javax.net.ssl.{HttpsURLConnection, SSLSession, SSLSocketFactory}
 
-/** The one socket a send opens, held so the deadline can close it out from under a blocked call.
-  *
-  * Jakarta Mail guards `connect`, `sendMessage` and `close` with the same lock on the `Transport`,
-  * so a `Transport.close()` from another fiber cannot interrupt an in-flight `connect` or
-  * `sendMessage` — it would only take the lock once that operation had already returned. What is
-  * not behind that lock is the socket underneath: closing it directly makes the blocked read or
-  * write throw at once, which is the only thing that actually stops the attempt at the deadline.
-  * This is where the send records the socket it opened, so the deadline can reach past the
-  * `Transport` and close it.
-  */
+/** The sockets a send opens, held so its deadline can close them below Jakarta Mail's locks. */
 private[notification] final class SmtpAbort {
   private val sockets = new ConcurrentLinkedQueue[Socket]()
   @volatile private var aborted = false
 
-  /** Registers a socket to be closed on abort, closing it straight away if the deadline already
-    * passed while it was being created (so a socket opened after the abort is not left running).
-    */
   def register(socket: Socket): Unit = {
     sockets.add(socket)
     if (aborted) closeQuietly(socket)
@@ -37,54 +27,32 @@ private[notification] final class SmtpAbort {
     catch { case _: Throwable => () }
 }
 
-/** SMTP's destination pinning.
+/** A socket factory that can dial only the address already resolved and approved by the policy.
   *
-  * Handed to Jakarta Mail as an object property (`mail.smtp.socketFactory` /
-  * `mail.smtps.socketFactory`), which the library calls in place of the JDK default whenever it
-  * opens a connection — for every security mode, including implicit TLS: Jakarta Mail's own
-  * `SocketFetcher` never asks an `SSLSocketFactory` to open the underlying TCP connection itself,
-  * only to wrap one that is already open, so pinning has to happen on the plain socket in every
-  * mode, and the library's own `mail.<protocol>.ssl.checkserveridentity` handles the TLS
-  * handshake and certificate/host name verification on top of it, against the host name the
-  * channel is configured with, exactly as it would for any other connection.
-  *
-  * The instance is the only thing in this product that resolves an SMTP relay's host name: it
-  * resolves and validates before anything is dialed, and connects to exactly the address that
-  * validation returned, never to the host name again. A relay that is not allowed never gets a
-  * socket, and nothing here falls back to an unprotected connection when that happens — Jakarta
-  * Mail's own `socketFactory.fallback` would otherwise open one with the JDK default factory,
-  * which is why the caller that builds these properties turns that off.
-  *
-  * Every socket it opens is registered with the send's `SmtpAbort` the moment it is created, before
-  * it is even connected, so the deadline can close it whatever phase the attempt is stuck in.
-  *
-  * `SocketFetcher` does not call any of the host-and-port `createSocket` overloads below: for a
-  * plain `SocketFactory` it calls the zero-argument one to obtain an unconnected socket, and
-  * connects that socket itself, building the target address from the host name a second time.
-  * The pinning therefore lives in the connect, not in `createSocket`: the socket handed back is a
-  * `PinningSocket`, whose own `connect` ignores whatever address the caller already resolved and
-  * resolves the host name itself, once, through this factory's policy. The host-and-port
-  * overloads are implemented the same way, for whatever else may call them directly.
+  * Jakarta Mail constructs its own `InetSocketAddress` before calling `Socket.connect`. The SMTP
+  * transport therefore gives Jakarta Mail the pinned numeric address as its connection host, and
+  * this socket independently ignores every endpoint address it receives. No DNS lookup is left in
+  * the blocking Jakarta Mail exchange and no later resolution can replace the approved address.
   */
 final class PinningSocketFactory(
-  policy: OutboundDestinationPolicy,
+  pinnedAddress: InetAddress,
   connectTimeoutMillis: Int,
   abort: SmtpAbort
 ) extends SocketFactory {
 
-  override def createSocket(): Socket = tracked(new PinningSocket(policy))
+  override def createSocket(): Socket = tracked(new PinningSocket(pinnedAddress))
 
   override def createSocket(host: String, port: Int): Socket =
-    connectTo(tracked(new PinningSocket(policy)), host, port)
+    connectTo(tracked(new PinningSocket(pinnedAddress)), port)
 
   override def createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket = {
-    val socket = tracked(new PinningSocket(policy))
+    val socket = tracked(new PinningSocket(pinnedAddress))
     socket.bind(new InetSocketAddress(localHost, localPort))
-    connectTo(socket, host, port)
+    connectTo(socket, port)
   }
 
   override def createSocket(host: InetAddress, port: Int): Socket =
-    connectTo(tracked(new PinningSocket(policy)), host.getHostAddress, port)
+    connectTo(tracked(new PinningSocket(pinnedAddress)), port)
 
   override def createSocket(
     address: InetAddress,
@@ -92,52 +60,75 @@ final class PinningSocketFactory(
     localAddress: InetAddress,
     localPort: Int
   ): Socket = {
-    val socket = tracked(new PinningSocket(policy))
+    val socket = tracked(new PinningSocket(pinnedAddress))
     socket.bind(new InetSocketAddress(localAddress, localPort))
-    connectTo(socket, address.getHostAddress, port)
+    connectTo(socket, port)
   }
 
   private def tracked(socket: Socket): Socket = { abort.register(socket); socket }
 
-  private def connectTo(socket: Socket, host: String, port: Int): Socket = {
-    socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis)
+  private def connectTo(socket: Socket, port: Int): Socket = {
+    socket.connect(new InetSocketAddress(pinnedAddress, port), connectTimeoutMillis)
     socket
   }
 }
 
-/** A socket whose own `connect` decides what is actually dialed.
-  *
-  * Jakarta Mail builds the `SocketAddress` it passes here itself, as `new
-  * InetSocketAddress(host, port)`, which resolves the host name there and then — a second,
-  * separate resolution from any check made against that same name earlier, and exactly the race
-  * this class exists to close. Trusting the address this way carries would mean trusting
-  * whichever answer that second lookup happened to get.
-  *
-  * `InetSocketAddress.getHostString()` returns the host name Jakarta Mail was given without
-  * triggering that resolution again — it is stored on the object, not looked up by the getter —
-  * so this class can recover the name and resolve it exactly once, itself, through the policy,
-  * and connect to only that address. An endpoint that is not an `InetSocketAddress` at all
-  * (nothing in this product produces one, but the method is public) is passed through unchanged
-  * rather than guessed at.
-  */
-private final class PinningSocket(policy: OutboundDestinationPolicy) extends Socket {
-
+private final class PinningSocket(pinnedAddress: InetAddress) extends Socket {
   override def connect(endpoint: SocketAddress): Unit = connect(endpoint, 0)
 
   override def connect(endpoint: SocketAddress, timeout: Int): Unit = endpoint match {
     case address: InetSocketAddress =>
-      super.connect(new InetSocketAddress(pin(address.getHostString), address.getPort), timeout)
+      super.connect(new InetSocketAddress(pinnedAddress, address.getPort), timeout)
     case other => super.connect(other, timeout)
   }
+}
 
-  /** Resolves and validates, or throws a bounded, credential-free exception the transport's own
-    * classifier recognises: `connect` can only succeed or throw, so the decision has to travel
-    * this way.
-    */
-  private def pin(host: String): InetAddress = policy.pinBlocking(host) match {
-    case Right(address) => address
-    case Left(OutboundDestinationFailure.Forbidden(code)) => throw new OutboundDestinationRejected(code)
-    case Left(OutboundDestinationFailure.ResolutionFailed(code)) =>
-      throw new OutboundDestinationUnresolvable(code)
-  }
+/** Preserves the configured relay name for SNI and certificate checks while the TCP connection is
+  * opened with its pinned numeric address. Jakarta Mail passes the numeric connection host into
+  * this factory; every overload deliberately substitutes the original configured name only for
+  * the TLS layer. The raw socket underneath is still the already-connected pinned socket.
+  */
+private[notification] final class SmtpTlsSocketFactory(
+  configuredHost: String,
+  delegate: SSLSocketFactory = SSLSocketFactory.getDefault.asInstanceOf[SSLSocketFactory]
+) extends SSLSocketFactory {
+
+  override def getDefaultCipherSuites: Array[String] = delegate.getDefaultCipherSuites
+  override def getSupportedCipherSuites: Array[String] = delegate.getSupportedCipherSuites
+
+  override def createSocket(socket: Socket, host: String, port: Int, autoClose: Boolean): Socket =
+    delegate.createSocket(socket, configuredHost, port, autoClose)
+
+  override def createSocket(): Socket = unsupported()
+
+  override def createSocket(host: String, port: Int): Socket = unsupported()
+
+  override def createSocket(
+    host: String,
+    port: Int,
+    localHost: InetAddress,
+    localPort: Int
+  ): Socket = unsupported()
+
+  override def createSocket(host: InetAddress, port: Int): Socket = unsupported()
+
+  override def createSocket(
+    address: InetAddress,
+    port: Int,
+    localAddress: InetAddress,
+    localPort: Int
+  ): Socket = unsupported()
+
+  private def unsupported(): Socket =
+    throw new IOException("SMTP TLS factory requires an already-connected pinned socket")
+}
+
+/** The TLS socket's peer host is already the configured name, so the JDK endpoint check verifies
+  * it during the handshake. Angus performs another verifier call with its numeric connection host;
+  * this verifier repeats that check against the configured name.
+  */
+private[notification] final class SmtpHostnameVerifier(configuredHost: String)
+  extends javax.net.ssl.HostnameVerifier {
+  override def verify(ignoredConnectionHost: String, session: SSLSession): Boolean =
+    HttpsURLConnection.getDefaultHostnameVerifier.verify(configuredHost, session)
 }

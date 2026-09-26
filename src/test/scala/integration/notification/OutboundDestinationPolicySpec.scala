@@ -3,6 +3,12 @@ package integration.notification
 
 import cats.effect.unsafe.implicits.global
 import munit.FunSuite
+import org.xbill.DNS.lookup.LookupSession
+import org.xbill.DNS.SimpleResolver
+
+import java.net.{DatagramSocket, InetAddress}
+import java.time.Duration
+import scala.concurrent.duration._
 
 /** What the product is allowed to connect to on behalf of a configured channel. */
 final class OutboundDestinationPolicySpec extends FunSuite {
@@ -50,6 +56,26 @@ final class OutboundDestinationPolicySpec extends FunSuite {
   test("the address pinned is the exact address a caller must connect to") {
     val pinned = strict.pin("93.184.216.34").unsafeRunSync()
     assertEquals(pinned.map(_.getHostAddress), Right("93.184.216.34"))
+  }
+
+  test("the asynchronous production resolver obeys its own DNS timeout") {
+    // A bound UDP socket that deliberately never reads or answers DNS packets.
+    val blackhole = new DatagramSocket(0, InetAddress.getLoopbackAddress)
+    try {
+      val resolver = new SimpleResolver("127.0.0.1")
+      resolver.setPort(blackhole.getLocalPort)
+      resolver.setTimeout(Duration.ofMillis(200))
+      val lookup = LookupSession.builder().resolver(resolver).clearSearchPath().build()
+      val policy = new ResolvingOutboundDestinationPolicy(allowPrivateNetworks = false, lookup)
+      val started = System.nanoTime()
+
+      val result = policy.pin("deadline.example.").unsafeRunSync()
+      val elapsed = (System.nanoTime() - started).nanos
+
+      assertEquals(result.left.toOption.map(_.code),
+        Some(OutboundDestinationPolicy.ResolutionFailed))
+      assert(elapsed < 1500.millis, clues(elapsed))
+    } finally blackhole.close()
   }
 
   test("a forbidden or unresolvable destination classifies the exceptions transports throw") {

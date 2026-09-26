@@ -200,9 +200,9 @@ final class ManagedTransportSpec extends FunSuite {
     * its own tests, against the real policy.
     */
   private object Lenient extends OutboundDestinationPolicy {
-    override def pinBlocking(host: String): Either[OutboundDestinationFailure, InetAddress] =
-      InetAddress.getAllByName(host).headOption
-        .toRight(OutboundDestinationFailure.ResolutionFailed(OutboundDestinationPolicy.ResolutionFailed))
+    override def pin(host: String): IO[Either[OutboundDestinationFailure, InetAddress]] =
+      IO.blocking(InetAddress.getAllByName(host).headOption
+        .toRight(OutboundDestinationFailure.ResolutionFailed(OutboundDestinationPolicy.ResolutionFailed)))
   }
 
   /** The real policy, the one every deployment actually runs with. */

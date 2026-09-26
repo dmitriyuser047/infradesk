@@ -3,6 +3,7 @@ package integration.notification
 
 import application.notification.{NotificationEvent, NotificationMessage}
 import application.port.NotificationSendResult
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.icegreen.greenmail.util.{GreenMail, ServerSetup}
 import domain.incident.IncidentReason
@@ -13,6 +14,7 @@ import java.io.{BufferedReader, InputStreamReader, OutputStreamWriter, PrintWrit
 import java.net.{InetAddress, ServerSocket}
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
 
@@ -114,12 +116,13 @@ final class SmtpTransportSpec extends FunSuite {
   }
 
   test("the three modes are three different connections, and two of them verify the relay") {
+    val pinned = InetAddress.getByName("127.0.0.1")
     val plain =
-      SmtpTransport.properties(settings(25, EmailSecurity.None), 5.seconds, Permissive, new SmtpAbort)
+      SmtpTransport.properties(settings(25, EmailSecurity.None), 5.seconds, pinned, new SmtpAbort)
     val startTls =
-      SmtpTransport.properties(settings(587, EmailSecurity.StartTls), 5.seconds, Permissive, new SmtpAbort)
+      SmtpTransport.properties(settings(587, EmailSecurity.StartTls), 5.seconds, pinned, new SmtpAbort)
     val implicitTls =
-      SmtpTransport.properties(settings(465, EmailSecurity.Tls), 5.seconds, Permissive, new SmtpAbort)
+      SmtpTransport.properties(settings(465, EmailSecurity.Tls), 5.seconds, pinned, new SmtpAbort)
 
     assertEquals(plain.getProperty("mail.smtp.auth"), "true")
     assertEquals(plain.getProperty("mail.smtp.starttls.enable"), null)
@@ -139,7 +142,8 @@ final class SmtpTransportSpec extends FunSuite {
     assertEquals(plain.getProperty("mail.smtp.socketFactory.fallback"), "false")
     assertEquals(startTls.getProperty("mail.smtp.socketFactory.fallback"), "false")
     assertEquals(implicitTls.getProperty("mail.smtps.socketFactory.fallback"), "false")
-    // The QUIT wait is off in every mode, so closing after a send cannot linger past the deadline.
+    // Waiting for a QUIT response is disabled as defense in depth. The resource finalizer also
+    // closes the raw socket first, which is what prevents the QUIT write itself.
     assertEquals(plain.getProperty("mail.smtp.quitwait"), "false")
     assertEquals(startTls.getProperty("mail.smtp.quitwait"), "false")
     assertEquals(implicitTls.getProperty("mail.smtps.quitwait"), "false")
@@ -148,7 +152,7 @@ final class SmtpTransportSpec extends FunSuite {
   test("the relay dialed is the address a policy pinned, never a fresh resolution of the host name") {
     withServer(ServerSetup.PROTOCOL_SMTP) { server =>
       val pinnedToLoopback: OutboundDestinationPolicy = (_: String) =>
-        Right(InetAddress.getByName("127.0.0.1"))
+        IO.pure(Right(InetAddress.getByName("127.0.0.1")))
 
       // A name from a TLD reserved by RFC 2606 to never resolve: if the socket factory dialed
       // this name itself, rather than the address the policy handed it, there would be nothing
@@ -162,6 +166,49 @@ final class SmtpTransportSpec extends FunSuite {
       assertEquals(result, NotificationSendResult.Sent)
       assertEquals(server.getReceivedMessages.length, 1)
     }
+  }
+
+  test("DNS resolution is cancelled and joined inside the whole-attempt deadline") {
+    val cancelled = new AtomicBoolean(false)
+    val stuckResolver = new OutboundDestinationPolicy {
+      override def pin(host: String): IO[Either[OutboundDestinationFailure, InetAddress]] =
+        IO.never[Either[OutboundDestinationFailure, InetAddress]]
+          .onCancel(IO(cancelled.set(true)))
+    }
+    val deadline = 250.millis
+    val started = System.nanoTime()
+
+    val result = new SmtpTransport(stuckResolver, deadline)
+      .send(settings(25, EmailSecurity.None).copy(host = "stuck.example"), Password, message)
+      .unsafeRunSync()
+    val elapsed = (System.nanoTime() - started).nanos
+
+    assertEquals(result, NotificationSendResult.RetryableFailure(SmtpTransport.Timeout))
+    assert(cancelled.get(), "the resolver fiber was left running after SMTP_TIMEOUT")
+    assert(elapsed < 1500.millis, clues(elapsed))
+  }
+
+  test("successful cleanup closes the raw socket without sending QUIT") {
+    val server = new ScriptedSmtpServer(List(
+      List("250-fake", "250 AUTH LOGIN"),
+      List("334 VXNlcm5hbWU6"),
+      List("334 UGFzc3dvcmQ6"),
+      List("235 authentication successful"),
+      List("250 sender ok"),
+      List("250 recipient ok"),
+      List("354 end with ."),
+      List("250 queued")
+    ))
+    val port = server.start()
+    try {
+      val result = new SmtpTransport(Permissive, 5.seconds)
+        .send(settings(port, EmailSecurity.None), Password, message)
+        .unsafeRunSync()
+
+      assertEquals(result, NotificationSendResult.Sent)
+      assert(server.awaitClientClose(5.seconds), "the successful connection was left open")
+      assert(!server.quitReceived, "cleanup wrote QUIT before closing the raw socket")
+    } finally server.stop()
   }
 
   test("a relay that never answers stays bounded by the attempt's own deadline, and its socket is not left open") {
@@ -335,8 +382,8 @@ final class SmtpTransportSpec extends FunSuite {
 
   /** Where the relay may be is checked on its own; here the point is the protocol. */
   private object Permissive extends OutboundDestinationPolicy {
-    override def pinBlocking(host: String): Either[OutboundDestinationFailure, InetAddress] =
-      Right(InetAddress.getByName(host))
+    override def pin(host: String): IO[Either[OutboundDestinationFailure, InetAddress]] =
+      IO.pure(Right(InetAddress.getByName(host)))
   }
 
   /** One server per test, on a port the operating system picks. */
