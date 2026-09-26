@@ -61,19 +61,21 @@ final class SmtpTransport(
       }
 
   /** The whole attempt — connect, the TLS handshake, authentication and the send itself — runs as
-    * one blocking step under one deadline, held to it not by cancelling that step (Jakarta Mail's
-    * socket I/O runs on the blocking pool, where `.timeout` cannot interrupt it) but by closing
-    * the transport out from under it: the socket closing is what unblocks the read or write the
-    * attempt is stuck on. The deadline only returns once the attempt has actually stopped, so a
-    * `SMTP_TIMEOUT` never leaves a send still running in the background past the lease it was
-    * claimed under.
+    * one blocking step under one deadline. It is held to it not by cancelling that step (Jakarta
+    * Mail's socket I/O runs on the blocking pool, where `.timeout` cannot interrupt it) and not by
+    * `Transport.close` (which takes the same lock the running `connect`/`sendMessage` already
+    * holds, so it would only close once the operation had already returned), but by closing the
+    * underlying socket directly: the socket is not behind that lock, and closing it makes the
+    * blocked read or write throw at once. The deadline only returns once the attempt has actually
+    * stopped, so a `SMTP_TIMEOUT` never leaves a send still running in the background past the
+    * lease it was claimed under.
     */
   private def deliver(
     settings: NotificationChannelSettings.Email,
     password: String,
     message: NotificationMessage
   ): IO[Unit] =
-    transport(settings).use { case (transport, session) =>
+    transport(settings).use { case (transport, session, abort) =>
       val attempt = IO.blocking {
         transport.connect(settings.host, settings.port, settings.username, password)
         val mail = new MimeMessage(session)
@@ -84,27 +86,28 @@ final class SmtpTransport(
         mail.setText(message.text, "UTF-8")
         transport.sendMessage(mail, mail.getAllRecipients)
       }
-      withinDeadline(attempt, transport)
+      withinDeadline(attempt, abort)
     }
 
   /** Runs the blocking attempt on its own fiber and holds it to `timeout`.
     *
-    * On the deadline (or on the caller cancelling the send) the transport is closed first, which
-    * unblocks whatever socket operation the attempt is parked on, and only then is the attempt
-    * joined: control does not return until the fiber has finished, so the network attempt is
-    * provably over before the delivery is released for retry or marked timed out. Closing here is
-    * idempotent with the resource's own finalizer, which closes it again on the way out.
+    * On the deadline (or on the caller cancelling the send) the send's socket is closed first,
+    * which unblocks whatever operation the attempt is parked on — closing the raw socket, not the
+    * `Transport`, precisely because the `Transport`'s own `close` cannot run while a `connect` or
+    * `sendMessage` still holds its lock. Only then is the attempt joined: control does not return
+    * until the fiber has finished, so the network attempt is provably over before the delivery is
+    * released for retry or marked timed out.
     */
-  private def withinDeadline(attempt: IO[Unit], transport: Transport): IO[Unit] = {
-    val closeQuietly = IO.blocking(transport.close()).attempt.void
+  private def withinDeadline(attempt: IO[Unit], abort: SmtpAbort): IO[Unit] = {
+    val abortNow = IO.blocking(abort.abort())
     attempt.start.flatMap { fiber =>
       IO.race(IO.sleep(timeout), fiber.join)
         .flatMap {
           case Right(outcome) => outcome.embedNever
           case Left(_) =>
-            closeQuietly *> fiber.join.void *> IO.raiseError(new TimeoutException(TimeoutMessage))
+            abortNow *> fiber.join.void *> IO.raiseError(new TimeoutException(TimeoutMessage))
         }
-        .onCancel(closeQuietly *> fiber.join.void)
+        .onCancel(abortNow *> fiber.join.void)
     }
   }
 
@@ -112,15 +115,19 @@ final class SmtpTransport(
     * auth failure, send failure, the deadline, or the caller's own cancellation. The `Transport`
     * is created and its finalizer registered before it is connected — `connect` runs later, inside
     * the attempt above — so a transport that never finished connecting is still the one `close` is
-    * called on, and a half-opened connection is never left unmanaged.
+    * called on, and a half-opened connection is never left unmanaged. The `SmtpAbort` carried
+    * alongside holds the socket the send opens, so the deadline can reach it directly; `quitwait`
+    * is off (see `properties`) so this finalizer's own `close` cannot add a wait for a QUIT
+    * response outside the deadline.
     */
   private def transport(
     settings: NotificationChannelSettings.Email
-  ): Resource[IO, (Transport, Session)] =
+  ): Resource[IO, (Transport, Session, SmtpAbort)] =
     Resource.make(IO.blocking {
-      val session = Session.getInstance(properties(settings, timeout, policy))
-      (session.getTransport(protocol(settings.security)), session)
-    })({ case (transport, _) => IO.blocking(transport.close()).handleError(_ => ()) })
+      val abort = new SmtpAbort
+      val session = Session.getInstance(properties(settings, timeout, policy, abort))
+      (session.getTransport(protocol(settings.security)), session, abort)
+    })({ case (transport, _, _) => IO.blocking(transport.close()).handleError(_ => ()) })
 }
 
 object SmtpTransport {
@@ -154,16 +161,22 @@ object SmtpTransport {
     * `SSLSocketFactory` of its own to get that.
     *
     * The factory is handed in as an object value, not a `.class` name: Jakarta Mail accepts
-    * either, and only the object form lets each send carry its own policy and timeout rather
-    * than a class loaded once with none. `socketFactory.fallback` is turned off on purpose — it
-    * defaults to on, meaning a relay this factory refused would otherwise be dialed again with
-    * the plain JDK factory, which is exactly the unprotected connection the pinning exists to
-    * prevent.
+    * either, and only the object form lets each send carry its own policy, timeout and abort
+    * handle rather than a class loaded once with none. `socketFactory.fallback` is turned off on
+    * purpose — it defaults to on, meaning a relay this factory refused would otherwise be dialed
+    * again with the plain JDK factory, which is exactly the unprotected connection the pinning
+    * exists to prevent.
+    *
+    * `quitwait` is turned off too: on by default, it makes `Transport.close` send QUIT and wait
+    * for the relay's reply, which would let cleanup after a successful send run on past the
+    * deadline the lease is sized against. With it off, closing sends QUIT and returns without
+    * waiting, so the whole send — attempt and cleanup — stays inside its bound.
     */
   private[notification] def properties(
     settings: NotificationChannelSettings.Email,
     timeout: FiniteDuration,
-    policy: OutboundDestinationPolicy
+    policy: OutboundDestinationPolicy,
+    abort: SmtpAbort
   ): Properties = {
     val protocolName = protocol(settings.security)
     val values = new Properties()
@@ -175,7 +188,9 @@ object SmtpTransport {
     values.put(s"mail.$protocolName.host", settings.host)
     values.put(s"mail.$protocolName.port", settings.port.toString)
     values.put(s"mail.$protocolName.socketFactory.fallback", "false")
-    values.put(s"mail.$protocolName.socketFactory", new PinningSocketFactory(policy, timeout.toMillis.toInt))
+    values.put(s"mail.$protocolName.quitwait", "false")
+    values.put(s"mail.$protocolName.socketFactory",
+      new PinningSocketFactory(policy, timeout.toMillis.toInt, abort))
 
     settings.security match {
       case EmailSecurity.None => ()

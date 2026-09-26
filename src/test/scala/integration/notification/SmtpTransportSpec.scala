@@ -114,11 +114,12 @@ final class SmtpTransportSpec extends FunSuite {
   }
 
   test("the three modes are three different connections, and two of them verify the relay") {
-    val plain = SmtpTransport.properties(settings(25, EmailSecurity.None), 5.seconds, Permissive)
+    val plain =
+      SmtpTransport.properties(settings(25, EmailSecurity.None), 5.seconds, Permissive, new SmtpAbort)
     val startTls =
-      SmtpTransport.properties(settings(587, EmailSecurity.StartTls), 5.seconds, Permissive)
+      SmtpTransport.properties(settings(587, EmailSecurity.StartTls), 5.seconds, Permissive, new SmtpAbort)
     val implicitTls =
-      SmtpTransport.properties(settings(465, EmailSecurity.Tls), 5.seconds, Permissive)
+      SmtpTransport.properties(settings(465, EmailSecurity.Tls), 5.seconds, Permissive, new SmtpAbort)
 
     assertEquals(plain.getProperty("mail.smtp.auth"), "true")
     assertEquals(plain.getProperty("mail.smtp.starttls.enable"), null)
@@ -138,6 +139,10 @@ final class SmtpTransportSpec extends FunSuite {
     assertEquals(plain.getProperty("mail.smtp.socketFactory.fallback"), "false")
     assertEquals(startTls.getProperty("mail.smtp.socketFactory.fallback"), "false")
     assertEquals(implicitTls.getProperty("mail.smtps.socketFactory.fallback"), "false")
+    // The QUIT wait is off in every mode, so closing after a send cannot linger past the deadline.
+    assertEquals(plain.getProperty("mail.smtp.quitwait"), "false")
+    assertEquals(startTls.getProperty("mail.smtp.quitwait"), "false")
+    assertEquals(implicitTls.getProperty("mail.smtps.quitwait"), "false")
   }
 
   test("the relay dialed is the address a policy pinned, never a fresh resolution of the host name") {
@@ -177,29 +182,25 @@ final class SmtpTransportSpec extends FunSuite {
     } finally server.stop()
   }
 
-  test("the whole attempt is bounded even when no single operation is slow enough to time out") {
-    // Every reply comes back well within the socket read timeout, so a per-operation timeout
-    // never fires: a relay answering each step in 120ms is not slow. What is slow is the
-    // sequence — greeting, EHLO, then the AUTH exchange — whose sum passes the whole-attempt
-    // deadline before authentication even finishes. An implementation that relied on socket
-    // timeouts alone would sail through every step and only stop seconds later, at QUIT.
-    val perResponse = 400.millis
-    val deadline = 600.millis
-    // Each reply comes back in 400ms, comfortably under the 600ms socket read timeout, so no
-    // single operation ever times out on its own. A full, successful exchange is nine such
-    // steps — greeting, EHLO, the four AUTH lines, MAIL FROM, RCPT TO, DATA, the body — well
-    // over three seconds; the deadline is passed during the AUTH exchange, long before that.
-    val fullSequence = 3.seconds
+  test("the whole attempt is bounded during a connect that no single operation would time out") {
+    // Every reply comes back in 350ms, comfortably under the 550ms socket read timeout, so no
+    // single operation ever times out on its own. What is slow is the sequence: the greeting, the
+    // EHLO and the AUTH exchange together pass the 550ms whole-attempt deadline before
+    // authentication finishes. All of that happens inside one synchronized `Transport.connect`,
+    // which holds the connection's lock for its whole duration — so a `Transport.close()` from
+    // another fiber could not have stopped it here (it would only take the lock once connect had
+    // already returned, seconds later). Only closing the socket underneath connect stops it at the
+    // deadline, which is what this asserts: the attempt ends near 550ms, not near the ~1.75s a full
+    // greeting+EHLO+AUTH exchange at 350ms a step would take.
+    val perResponse = 350.millis
+    val deadline = 550.millis
     val server = new ScriptedSmtpServer(
       List(
         List("250-fake", "250 AUTH LOGIN"),
         List("334 VXNlcm5hbWU6"),
         List("334 UGFzc3dvcmQ6"),
         List("235 authentication successful"),
-        List("250 OK"),
-        List("250 OK"),
-        List("354 end with ."),
-        List("250 queued")
+        List("250 OK")
       ),
       perResponseDelay = perResponse
     )
@@ -213,18 +214,67 @@ final class SmtpTransportSpec extends FunSuite {
       val commandsAtReturn = server.commandsReceived
 
       assertEquals(result, NotificationSendResult.RetryableFailure(SmtpTransport.Timeout))
-      // Cut off mid-handshake: the message body was never offered, let alone sent. Had the
-      // implementation relied on socket timeouts alone, no step being slow enough to trip one,
-      // it would have run the whole exchange to completion and reached DATA — this is the assertion
-      // that tells a whole-attempt deadline apart from a per-operation one.
+      // Stopped near the deadline, not after the whole connect exchange would have finished: this
+      // bound is below the ~1.75s the full handshake would take, so it fails outright for any
+      // approach that lets the synchronized connect run to completion.
+      assert(elapsed < 1400.millis, clues(elapsed))
+      // Cut off mid-handshake, structurally: the server never got through the AUTH exchange, so it
+      // never reached the send phase. A completed connect would have taken all four AUTH lines.
+      assert(commandsAtReturn < 4, clues(commandsAtReturn))
       assert(!server.sawData, "the send reached the DATA phase before the deadline")
-      // Stopped near the deadline, not after the full exchange would have finished.
-      assert(elapsed < fullSequence, clues(elapsed))
       // The deadline actually stopped the attempt: the socket is closed and no further command
       // arrives afterwards, so nothing is still talking to the relay once SMTP_TIMEOUT is returned.
       assert(server.awaitClientClose(5.seconds),
         "the connection was left open past the whole-attempt deadline")
       Thread.sleep(perResponse.toMillis)
+      assertEquals(server.commandsReceived, commandsAtReturn,
+        "a command reached the relay after the attempt had supposedly timed out")
+    } finally server.stop()
+  }
+
+  test("a timeout inside sendMessage is enforced by closing the socket, not the synchronized transport") {
+    // Connect and authentication are instant here, so the attempt gets cleanly past them and into
+    // `sendMessage` — the send phase. From MAIL FROM on, each reply takes 350ms, again under the
+    // 550ms socket read timeout, so no single step times out; but MAIL FROM plus RCPT TO pass the
+    // 550ms deadline. `sendMessage` is synchronized on the same lock as `close`, and holds it for
+    // the whole MAIL/RCPT/DATA exchange, so a `Transport.close()` could not interrupt it — only
+    // closing the socket underneath does. This proves the deadline reaches inside a running
+    // `sendMessage`, not just a running `connect`.
+    val perResponseWhileSending = 350.millis
+    val deadline = 550.millis
+    val server = new ScriptedSmtpServer(
+      List(
+        List("250-fake", "250 AUTH LOGIN"), // EHLO
+        List("334 VXNlcm5hbWU6"),           // AUTH LOGIN
+        List("334 UGFzc3dvcmQ6"),           // username
+        List("235 authentication successful"), // password
+        List("250 sender ok"),              // MAIL FROM  (slow from here)
+        List("250 recipient ok"),           // RCPT TO
+        List("354 end with ."),             // DATA
+        List("250 queued")                  // end of body
+      ),
+      // Replies 1–4 (connect + auth) are instant; replies 5+ (the send phase) are the slow ones.
+      slowFrom = Some(5),
+      slowDelay = perResponseWhileSending
+    )
+    val port = server.start()
+    try {
+      val started = System.nanoTime()
+      val result = new SmtpTransport(Permissive, deadline)
+        .send(settings(port, EmailSecurity.None), Password, message)
+        .unsafeRunSync()
+      val elapsed = (System.nanoTime() - started).nanos
+      val commandsAtReturn = server.commandsReceived
+
+      assertEquals(result, NotificationSendResult.RetryableFailure(SmtpTransport.Timeout))
+      // The attempt got past connect and auth into the send itself: MAIL FROM is only sent from
+      // inside sendMessage, so five or more commands mean the timeout landed there, not in connect.
+      assert(commandsAtReturn >= 5, clues(commandsAtReturn))
+      // And it was stopped near the deadline, not after the send exchange would have finished.
+      assert(elapsed < 1400.millis, clues(elapsed))
+      assert(server.awaitClientClose(5.seconds),
+        "the socket was left open after a timeout inside sendMessage")
+      Thread.sleep(perResponseWhileSending.toMillis)
       assertEquals(server.commandsReceived, commandsAtReturn,
         "a command reached the relay after the attempt had supposedly timed out")
     } finally server.stop()
@@ -311,7 +361,9 @@ final class SmtpTransportSpec extends FunSuite {
   private final class ScriptedSmtpServer(
     script: List[List[String]],
     greetDelay: FiniteDuration = Duration.Zero,
-    perResponseDelay: FiniteDuration = Duration.Zero
+    perResponseDelay: FiniteDuration = Duration.Zero,
+    slowFrom: Option[Int] = None,
+    slowDelay: FiniteDuration = Duration.Zero
   ) {
     private val serverSocket = new ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
     @volatile var quitReceived: Boolean = false
@@ -334,25 +386,42 @@ final class SmtpTransportSpec extends FunSuite {
           out.print("220 fake smtp ready\r\n")
           out.flush()
           var remaining = script
-          var line = in.readLine()
-          while (line != null && !line.toUpperCase.startsWith("QUIT")) {
-            commandsReceived += 1
-            if (line.toUpperCase.startsWith("DATA")) sawData = true
+          var repliesSent = 0
+          // Sends the next scripted reply and returns whether it opened the DATA phase (a 354).
+          // Its delay is the shared per-response one, or, from `slowFrom` on, the slow one — so a
+          // test can keep connect and auth quick and make only the send phase (MAIL/RCPT/DATA)
+          // slow, timing the attempt out inside a synchronized `sendMessage` rather than `connect`.
+          def sendNextReply(): Boolean = {
             val (reply, rest) = remaining match {
               case head :: tail => (head, tail)
               case Nil => (List("250 OK"), Nil)
             }
             remaining = rest
-            // The reply is delayed, not the read: each individual operation stays under the
-            // socket read timeout, but their sum is what the whole-attempt deadline bounds.
-            if (perResponseDelay > Duration.Zero) Thread.sleep(perResponseDelay.toMillis)
+            repliesSent += 1
+            val delay = if (slowFrom.exists(repliesSent >= _)) slowDelay else perResponseDelay
+            if (delay > Duration.Zero) Thread.sleep(delay.toMillis)
             reply.foreach { text => out.print(text + "\r\n"); out.flush() }
-            line = in.readLine()
+            reply.headOption.exists(_.startsWith("354"))
           }
-          if (line != null && line.toUpperCase.startsWith("QUIT")) {
-            quitReceived = true
-            out.print("221 bye\r\n")
-            out.flush()
+          var readingBody = false
+          var running = true
+          var line = in.readLine()
+          while (running && line != null) {
+            if (readingBody) {
+              // During DATA the client sends the message and a lone ".": consume the body silently
+              // and only answer the terminating dot.
+              if (line == ".") readingBody = sendNextReply()
+            } else if (line.toUpperCase.startsWith("QUIT")) {
+              quitReceived = true
+              out.print("221 bye\r\n")
+              out.flush()
+              running = false
+            } else {
+              commandsReceived += 1
+              if (line.toUpperCase.startsWith("DATA")) sawData = true
+              readingBody = sendNextReply()
+            }
+            if (running) line = in.readLine()
           }
         } finally socket.close()
       } catch { case _: Throwable => () } finally closedByClient = true

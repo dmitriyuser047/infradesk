@@ -2,7 +2,40 @@ package ru.bitec.app.ops
 package integration.notification
 
 import java.net.{InetAddress, InetSocketAddress, Socket, SocketAddress}
+import java.util.concurrent.ConcurrentLinkedQueue
 import javax.net.SocketFactory
+
+/** The one socket a send opens, held so the deadline can close it out from under a blocked call.
+  *
+  * Jakarta Mail guards `connect`, `sendMessage` and `close` with the same lock on the `Transport`,
+  * so a `Transport.close()` from another fiber cannot interrupt an in-flight `connect` or
+  * `sendMessage` — it would only take the lock once that operation had already returned. What is
+  * not behind that lock is the socket underneath: closing it directly makes the blocked read or
+  * write throw at once, which is the only thing that actually stops the attempt at the deadline.
+  * This is where the send records the socket it opened, so the deadline can reach past the
+  * `Transport` and close it.
+  */
+private[notification] final class SmtpAbort {
+  private val sockets = new ConcurrentLinkedQueue[Socket]()
+  @volatile private var aborted = false
+
+  /** Registers a socket to be closed on abort, closing it straight away if the deadline already
+    * passed while it was being created (so a socket opened after the abort is not left running).
+    */
+  def register(socket: Socket): Unit = {
+    sockets.add(socket)
+    if (aborted) closeQuietly(socket)
+  }
+
+  def abort(): Unit = {
+    aborted = true
+    sockets.forEach(closeQuietly(_))
+  }
+
+  private def closeQuietly(socket: Socket): Unit =
+    try socket.close()
+    catch { case _: Throwable => () }
+}
 
 /** SMTP's destination pinning.
   *
@@ -22,6 +55,9 @@ import javax.net.SocketFactory
   * Mail's own `socketFactory.fallback` would otherwise open one with the JDK default factory,
   * which is why the caller that builds these properties turns that off.
   *
+  * Every socket it opens is registered with the send's `SmtpAbort` the moment it is created, before
+  * it is even connected, so the deadline can close it whatever phase the attempt is stuck in.
+  *
   * `SocketFetcher` does not call any of the host-and-port `createSocket` overloads below: for a
   * plain `SocketFactory` it calls the zero-argument one to obtain an unconnected socket, and
   * connects that socket itself, building the target address from the host name a second time.
@@ -32,21 +68,23 @@ import javax.net.SocketFactory
   */
 final class PinningSocketFactory(
   policy: OutboundDestinationPolicy,
-  connectTimeoutMillis: Int
+  connectTimeoutMillis: Int,
+  abort: SmtpAbort
 ) extends SocketFactory {
 
-  override def createSocket(): Socket = new PinningSocket(policy)
+  override def createSocket(): Socket = tracked(new PinningSocket(policy))
 
-  override def createSocket(host: String, port: Int): Socket = connectTo(new PinningSocket(policy), host, port)
+  override def createSocket(host: String, port: Int): Socket =
+    connectTo(tracked(new PinningSocket(policy)), host, port)
 
   override def createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket = {
-    val socket = new PinningSocket(policy)
+    val socket = tracked(new PinningSocket(policy))
     socket.bind(new InetSocketAddress(localHost, localPort))
     connectTo(socket, host, port)
   }
 
   override def createSocket(host: InetAddress, port: Int): Socket =
-    connectTo(new PinningSocket(policy), host.getHostAddress, port)
+    connectTo(tracked(new PinningSocket(policy)), host.getHostAddress, port)
 
   override def createSocket(
     address: InetAddress,
@@ -54,10 +92,12 @@ final class PinningSocketFactory(
     localAddress: InetAddress,
     localPort: Int
   ): Socket = {
-    val socket = new PinningSocket(policy)
+    val socket = tracked(new PinningSocket(policy))
     socket.bind(new InetSocketAddress(localAddress, localPort))
     connectTo(socket, address.getHostAddress, port)
   }
+
+  private def tracked(socket: Socket): Socket = { abort.register(socket); socket }
 
   private def connectTo(socket: Socket, host: String, port: Int): Socket = {
     socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis)
