@@ -11,7 +11,7 @@ import domain.notification.{EmailSecurity, NotificationChannelSettings, Notifica
 import munit.FunSuite
 
 import java.io.{BufferedReader, InputStreamReader, OutputStreamWriter, PrintWriter}
-import java.net.{InetAddress, ServerSocket}
+import java.net.{InetAddress, ServerSocket, Socket}
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -131,8 +131,16 @@ final class SmtpTransportSpec extends FunSuite {
     assertEquals(startTls.getProperty("mail.smtp.starttls.required"), "true")
     assertEquals(startTls.getProperty("mail.smtp.ssl.checkserveridentity"), "true")
     assertEquals(implicitTls.getProperty("mail.smtps.auth"), "true")
-    assertEquals(implicitTls.getProperty("mail.smtps.ssl.checkserveridentity"), "true")
-    // Nothing turns verification off, in any mode.
+    assertEquals(implicitTls.getProperty("mail.smtps.ssl.checkserveridentity"), "false")
+    assert(implicitTls.get("mail.smtps.ssl.hostnameverifier").isInstanceOf[SmtpHostnameVerifier])
+    // Angus calls createSocket on an ssl.socketFactory only when it is not an SSLSocketFactory.
+    // This exact shape guarantees that the implicit-TLS socket is registered before connect.
+    assert(implicitTls.get("mail.smtps.ssl.socketFactory")
+      .isInstanceOf[PinnedImplicitTlsSocketFactory])
+    assert(!implicitTls.get("mail.smtps.ssl.socketFactory")
+      .isInstanceOf[javax.net.ssl.SSLSocketFactory])
+    assertEquals(implicitTls.getProperty("mail.smtps.writetimeout"), null)
+    // No mode bypasses certificate trust.
     for (properties <- List(plain, startTls, implicitTls)) {
       val names = properties.stringPropertyNames().asScala.toSet
       assert(!names.exists(_.contains("ssl.trust")), clues(names))
@@ -186,6 +194,37 @@ final class SmtpTransportSpec extends FunSuite {
     assertEquals(result, NotificationSendResult.RetryableFailure(SmtpTransport.Timeout))
     assert(cancelled.get(), "the resolver fiber was left running after SMTP_TIMEOUT")
     assert(elapsed < 1500.millis, clues(elapsed))
+  }
+
+  test("implicit TLS stays inside the whole-attempt deadline after DNS used part of it") {
+    val server = new SilentTcpServer
+    val port = server.start()
+    val dnsDelay = 600.millis
+    val deadline = 900.millis
+    val delayedPin = new OutboundDestinationPolicy {
+      override def pin(host: String): IO[Either[OutboundDestinationFailure, InetAddress]] =
+        IO.sleep(dnsDelay).flatMap(_ => IO.pure(Right(InetAddress.getByName("127.0.0.1"))))
+    }
+    try {
+      val started = System.nanoTime()
+      val result = new SmtpTransport(delayedPin, deadline)
+        .send(settings(port, EmailSecurity.Tls).copy(host = "smtp.example.test"), Password, message)
+        .unsafeRunSync()
+      val elapsed = (System.nanoTime() - started).nanos
+
+      assertEquals(result, NotificationSendResult.RetryableFailure(SmtpTransport.Timeout))
+      // A per-socket 900ms timeout beginning after 600ms DNS would take about 1.5s. Returning
+      // below this bound proves that the shared 900ms deadline closed the implicit-TLS socket.
+      assert(elapsed < 1300.millis, clues(elapsed))
+      assert(server.awaitBytes(1, 1.second),
+        "the attempt never reached an implicit TLS ClientHello")
+      assert(server.awaitClientClose(2.seconds),
+        "the implicit-TLS socket was left open after SMTP_TIMEOUT")
+      val bytesAtReturn = server.bytesReceived
+      Thread.sleep(250)
+      assertEquals(server.bytesReceived, bytesAtReturn,
+        "network activity continued after the implicit-TLS timeout returned")
+    } finally server.stop()
   }
 
   test("successful cleanup closes the raw socket without sending QUIT") {
@@ -487,5 +526,47 @@ final class SmtpTransportSpec extends FunSuite {
     }
 
     def stop(): Unit = serverSocket.close()
+  }
+
+  /** Accepts TCP and consumes the TLS ClientHello without ever answering it. */
+  private final class SilentTcpServer {
+    private val serverSocket = new ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
+    @volatile private var clientSocket: Socket = _
+    @volatile private var closedByClient = false
+    @volatile var bytesReceived = 0
+
+    private val thread = new Thread(() => {
+      try {
+        clientSocket = serverSocket.accept()
+        val input = clientSocket.getInputStream
+        val buffer = new Array[Byte](1024)
+        var read = input.read(buffer)
+        while (read >= 0) {
+          bytesReceived += read
+          read = input.read(buffer)
+        }
+      } catch { case _: Throwable => () }
+      finally closedByClient = true
+    }, "silent-smtps-server")
+    thread.setDaemon(true)
+
+    def start(): Int = { thread.start(); serverSocket.getLocalPort }
+
+    def awaitClientClose(timeout: FiniteDuration): Boolean = {
+      val deadline = System.nanoTime() + timeout.toNanos
+      while (!closedByClient && System.nanoTime() < deadline) Thread.sleep(10)
+      closedByClient
+    }
+
+    def awaitBytes(minimum: Int, timeout: FiniteDuration): Boolean = {
+      val deadline = System.nanoTime() + timeout.toNanos
+      while (bytesReceived < minimum && System.nanoTime() < deadline) Thread.sleep(10)
+      bytesReceived >= minimum
+    }
+
+    def stop(): Unit = {
+      Option(clientSocket).foreach(socket => try socket.close() catch { case _: Throwable => () })
+      try serverSocket.close() catch { case _: Throwable => () }
+    }
   }
 }

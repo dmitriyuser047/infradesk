@@ -162,9 +162,10 @@ object SmtpTransport {
     * connection when the relay offers it and carries on in the clear when it does not, which is
     * precisely the outcome a person choosing STARTTLS is trying to avoid.
     *
-    * The plain factory opens every connection, including implicit TLS, to the pinned address. The
-    * TLS factory can only wrap that connected socket and substitutes the configured host for SNI
-    * and certificate verification; all overloads that could open another connection are refused.
+    * Plain SMTP and STARTTLS use the pinned plain factory. Implicit TLS uses a plain
+    * `SocketFactory` that returns an already registered `SSLSocket`; this shape matters because
+    * Angus otherwise creates its own untracked raw socket whenever `ssl.socketFactory` is itself
+    * an `SSLSocketFactory`. STARTTLS's TLS factory only wraps the registered plain socket.
     *
     * The factory is handed in as an object value, not a `.class` name: Jakarta Mail accepts
     * either, and only the object form lets each send carry its own policy, timeout and abort
@@ -188,7 +189,11 @@ object SmtpTransport {
     val millis = timeout.toMillis.toString
     values.put(s"mail.$protocolName.connectiontimeout", millis)
     values.put(s"mail.$protocolName.timeout", millis)
-    values.put(s"mail.$protocolName.writetimeout", millis)
+    // Angus's write-timeout wrapper is a plain Socket. For implicit TLS it would hide the
+    // registered SSLSocket from the useSSL check and make Angus wrap it in a second TLS layer.
+    // The whole-attempt deadline already bounds writes and closes the registered socket directly.
+    if (settings.security != EmailSecurity.Tls)
+      values.put(s"mail.$protocolName.writetimeout", millis)
     values.put(s"mail.$protocolName.auth", "true")
     values.put(s"mail.$protocolName.host", settings.host)
     values.put(s"mail.$protocolName.port", settings.port.toString)
@@ -207,9 +212,13 @@ object SmtpTransport {
         // The name the channel was configured with is the name the certificate has to match.
         values.put("mail.smtp.ssl.checkserveridentity", "true")
       case EmailSecurity.Tls =>
-        values.put("mail.smtps.ssl.socketFactory", new SmtpTlsSocketFactory(settings.host))
+        values.put("mail.smtps.ssl.socketFactory", new PinnedImplicitTlsSocketFactory(
+          pinnedAddress, settings.host, timeout.toMillis.toInt, abort))
         values.put("mail.smtps.ssl.hostnameverifier", new SmtpHostnameVerifier(settings.host))
-        values.put("mail.smtps.ssl.checkserveridentity", "true")
+        // The SSL socket connects to the numeric pinned address, so Angus's endpoint algorithm
+        // would verify that IP. The custom verifier below instead checks the configured relay name
+        // after the handshake; the socket factory sets the same name as SNI before connect.
+        values.put("mail.smtps.ssl.checkserveridentity", "false")
     }
     values
   }

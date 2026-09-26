@@ -3,9 +3,10 @@ package integration.notification
 
 import java.io.IOException
 import java.net.{InetAddress, InetSocketAddress, Socket, SocketAddress}
+import java.util.Collections
 import java.util.concurrent.ConcurrentLinkedQueue
 import javax.net.SocketFactory
-import javax.net.ssl.{HttpsURLConnection, SSLSession, SSLSocketFactory}
+import javax.net.ssl.{HttpsURLConnection, SNIHostName, SSLSession, SSLSocket, SSLSocketFactory}
 
 /** The sockets a send opens, held so its deadline can close them below Jakarta Mail's locks. */
 private[notification] final class SmtpAbort {
@@ -83,6 +84,62 @@ private final class PinningSocket(pinnedAddress: InetAddress) extends Socket {
   }
 }
 
+/** Socket creation for implicit TLS.
+  *
+  * Angus gives `ssl.socketFactory` precedence for SMTPS. When that value is an
+  * `SSLSocketFactory`, Angus creates an untracked raw `Socket` itself and only asks the factory to
+  * wrap it afterwards. This factory deliberately extends plain `SocketFactory` while returning an
+  * unconnected `SSLSocket`: Angus therefore obtains the socket from us, we register it before
+  * connect, and its `useSSL` path sees that it is already an SSL socket and does not wrap it again.
+  */
+private[notification] final class PinnedImplicitTlsSocketFactory(
+  pinnedAddress: InetAddress,
+  configuredHost: String,
+  connectTimeoutMillis: Int,
+  abort: SmtpAbort,
+  delegate: SSLSocketFactory = SSLSocketFactory.getDefault.asInstanceOf[SSLSocketFactory]
+) extends SocketFactory {
+
+  override def createSocket(): Socket = trackedSocket()
+
+  override def createSocket(host: String, port: Int): Socket = connectTo(trackedSocket(), port)
+
+  override def createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket = {
+    val socket = trackedSocket()
+    socket.bind(new InetSocketAddress(localHost, localPort))
+    connectTo(socket, port)
+  }
+
+  override def createSocket(host: InetAddress, port: Int): Socket =
+    connectTo(trackedSocket(), port)
+
+  override def createSocket(
+    address: InetAddress,
+    port: Int,
+    localAddress: InetAddress,
+    localPort: Int
+  ): Socket = {
+    val socket = trackedSocket()
+    socket.bind(new InetSocketAddress(localAddress, localPort))
+    connectTo(socket, port)
+  }
+
+  private def trackedSocket(): SSLSocket = {
+    val socket = delegate.createSocket().asInstanceOf[SSLSocket]
+    val parameters = socket.getSSLParameters
+    try parameters.setServerNames(Collections.singletonList(new SNIHostName(configuredHost)))
+    catch { case _: IllegalArgumentException => () } // Address literals do not carry SNI.
+    socket.setSSLParameters(parameters)
+    abort.register(socket)
+    socket
+  }
+
+  private def connectTo(socket: Socket, port: Int): Socket = {
+    socket.connect(new InetSocketAddress(pinnedAddress, port), connectTimeoutMillis)
+    socket
+  }
+}
+
 /** Preserves the configured relay name for SNI and certificate checks while the TCP connection is
   * opened with its pinned numeric address. Jakarta Mail passes the numeric connection host into
   * this factory; every overload deliberately substitutes the original configured name only for
@@ -123,9 +180,9 @@ private[notification] final class SmtpTlsSocketFactory(
     throw new IOException("SMTP TLS factory requires an already-connected pinned socket")
 }
 
-/** The TLS socket's peer host is already the configured name, so the JDK endpoint check verifies
-  * it during the handshake. Angus performs another verifier call with its numeric connection host;
-  * this verifier repeats that check against the configured name.
+/** Checks the certificate against the configured relay name even though Angus connected using the
+  * pinned numeric address. STARTTLS also has the JDK endpoint check during its handshake; implicit
+  * TLS relies on this verifier after its handshake because its socket was connected by address.
   */
 private[notification] final class SmtpHostnameVerifier(configuredHost: String)
   extends javax.net.ssl.HostnameVerifier {

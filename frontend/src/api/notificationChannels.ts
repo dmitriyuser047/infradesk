@@ -9,11 +9,6 @@ export const notificationChannelStaleTime = 30_000
 const path = (org: string) => `/api/v1/organizations/${encodeURIComponent(org)}/notification-channels`
 export const getNotificationChannels = (org: string) => requestJson<NotificationChannelResponse[]>(path(org))
 export const getNotificationChannel = (org: string, id: string) => requestJson<NotificationChannelResponse>(`${path(org)}/${encodeURIComponent(id)}`)
-type SaveCommand = {
-  input: SaveNotificationChannelRequest
-  onSuccess?: (value: NotificationChannelResponse) => void
-  onError?: (error: Error) => void
-}
 export function useNotificationChannels(org?: string, enabled = true) {
   return useQuery({ queryKey: ['notification-channels', org], queryFn: () => getNotificationChannels(requireId(org)),
     enabled: Boolean(org && enabled), staleTime: notificationChannelStaleTime })
@@ -30,21 +25,15 @@ function setChannel(client: ReturnType<typeof useQueryClient>, org: string, valu
 export function useSaveNotificationChannel(org: string, id?: string) {
   const client = useQueryClient()
   const inFlight = useRef(false)
-  const mutation = useMutation<NotificationChannelResponse, Error, SaveCommand>({
+  const mutation = useMutation<NotificationChannelResponse, Error, SaveNotificationChannelRequest>({
     gcTime: 0,
-    mutationFn: command => requestJson<NotificationChannelResponse>(
+    mutationFn: body => requestJson<NotificationChannelResponse>(
       id ? `${path(org)}/${encodeURIComponent(id)}` : path(org),
-      { method: id ? 'PUT' : 'POST', body: JSON.stringify(command.input) },
+      { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) },
     ),
-    onSuccess: (value, command) => {
-      setChannel(client, org, value)
-      command.onSuccess?.(value)
-    },
-    onError: (error, command) => command.onError?.(error),
+    onSuccess: value => setChannel(client, org, value),
     onSettled: () => {
       inFlight.current = false
-      // Detach the completed mutation immediately so request credentials do not remain in cache.
-      queueMicrotask(() => mutation.reset())
     },
   })
   return { ...mutation, submit: (input: SaveNotificationChannelRequest, options?: {
@@ -52,7 +41,14 @@ export function useSaveNotificationChannel(org: string, id?: string) {
   }) => {
     if (inFlight.current) return
     inFlight.current = true
-    mutation.mutate({ input, ...options })
+    mutation.mutate(input, {
+      ...options,
+      onSettled: () => {
+        // Per-call success/error callbacks run before this callback. Detach the completed
+        // mutation afterwards so request credentials do not remain in cache.
+        queueMicrotask(() => mutation.reset())
+      },
+    })
   } }
 }
 export function useSetNotificationChannelEnabled(org: string) {
