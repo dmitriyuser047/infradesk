@@ -44,7 +44,8 @@ final class CompositionSpec extends FunSuite {
     val persistence = PersistenceModule.build(unusableTransactor, resourceTypes)
     val integrations = IntegrationModule.build(config, persistence)
     val application =
-      ApplicationModule.build(config, persistence, integrations, AppLoggers.slf4j, UUID.randomUUID())
+      ApplicationModule.build(config, persistence, integrations, AppLoggers.slf4j, UUID.randomUUID(),
+        new support.RecordingTransports().transports)
     HttpModule.build(persistence, application, config.auth, AppLoggers.slf4j)
   }
 

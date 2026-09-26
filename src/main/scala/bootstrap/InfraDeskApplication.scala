@@ -32,7 +32,7 @@ object InfraDeskApplication {
           s"dbMaxPoolSize=${config.database.maxPoolSize} " +
           s"scheduler=${if (config.scheduler.enabled) "enabled" else "disabled"} " +
           s"schedulerMaxConcurrency=${config.scheduler.maxConcurrency} " +
-          s"notifications=${if (config.notification.enabled) "enabled" else "disabled"}"
+          s"legacyNotificationWebhook=${if (config.notification.enabled) "configured" else "absent"}"
       )
       // Nothing that serves traffic starts before the schema is at the version this build needs.
       _ <- DatabaseMigrator.migrate(config.database, loggers.migration)
@@ -44,13 +44,13 @@ object InfraDeskApplication {
       resourceTypes <- IO.fromEither(PersistenceModule.resourceDefinitionRegistry)
       runtime = (
         Database.transactor(config.database),
-        IntegrationModule.notificationSender(config.notification)
+        IntegrationModule.notificationTransports(config.notification)
       ).tupled
-      _ <- runtime.use { case (xa, notificationSender) =>
+      _ <- runtime.use { case (xa, transports) =>
         val persistence = PersistenceModule.build(xa, resourceTypes)
         val integrations = IntegrationModule.build(config, persistence)
         val application = ApplicationModule.build(config, persistence, integrations, loggers,
-          schedulerInstanceId, notificationSender, dispatcherInstanceId)
+          schedulerInstanceId, transports, dispatcherInstanceId)
         val httpApp = HttpModule.build(persistence, application, config.auth, loggers)
 
         val schedulerWorkers =
@@ -58,9 +58,13 @@ object InfraDeskApplication {
             List(application.scheduler.run(config.scheduler.pollInterval,
               limit = config.scheduler.batchSize))
           else Nil
-        val workers = schedulerWorkers ++ application.notificationDispatcher.map(
-          _.run(config.notification.pollInterval, limit = config.notification.batchSize)
-        ).toList
+        // Two notification workers: the deployment's own webhook, when it has one, and the
+        // channels its organizations configured. They claim disjoint scopes, so neither can take
+        // a delivery the other is responsible for.
+        val notificationWorkers =
+          (application.notificationDispatcher.toList :+ application.managedNotificationDispatcher)
+            .map(_.run(config.notification.pollInterval, limit = config.notification.batchSize))
+        val workers = schedulerWorkers ++ notificationWorkers
 
         application.bootstrapAdmin.run(config.bootstrap) *>
           loggers.lifecycle.info(

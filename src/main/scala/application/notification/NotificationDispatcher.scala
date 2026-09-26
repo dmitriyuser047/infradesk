@@ -4,6 +4,7 @@ package application.notification
 import application.port.{
   NotificationDeliveryRepository,
   NotificationDeliveryScope,
+  NotificationSendRequest,
   NotificationSendResult,
   NotificationSender,
   TimeProvider,
@@ -91,7 +92,7 @@ final class NotificationDispatcher[F[_]: Async, Tx[_]: MonadThrow](
     }
 
   private def deliver(delivery: NotificationDelivery): F[Unit] =
-    sender.send(NotificationEvent.from(delivery)).flatMap {
+    sender.send(NotificationSendRequest(NotificationEvent.from(delivery), delivery.target)).flatMap {
       case NotificationSendResult.Sent =>
         complete(delivery, "notification.sent", attempt(delivery)) { now =>
           deliveries.markSent(delivery.organizationId, delivery.id, dispatcherInstanceId, now)

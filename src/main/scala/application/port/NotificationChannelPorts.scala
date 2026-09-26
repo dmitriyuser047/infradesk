@@ -37,6 +37,28 @@ trait NotificationChannelCryptography {
   def decrypt(secret: NotificationChannelSecret): NotificationChannelCredential
 }
 
+/** A channel and its credential as one read, for the moment of sending.
+  *
+  * What the channel holds now, not what it held when the delivery was recorded: a credential
+  * rotated after an incident is the one that gets used.
+  */
+final case class NotificationChannelDispatchTarget(
+  channel: NotificationChannel,
+  /** Absent only if the credential row went missing under the channel that points at it, which
+    * the foreign key does not allow; it is still told apart from a missing channel.
+    */
+  secret: Option[NotificationChannelSecret]
+)
+
+/** The send-time read model: one statement, scoped to the tenant of the delivery.
+  *
+  * Separate from the lifecycle repository because it answers a different question and is the
+  * only place a credential is read outside of writing one.
+  */
+trait NotificationChannelDispatchQuery[F[_]] {
+  def find(organizationId: UUID, channelId: UUID): F[Option[NotificationChannelDispatchTarget]]
+}
+
 trait NotificationChannelRepository[F[_]] {
 
   /** Every channel of one organization, by name, for the settings page. */

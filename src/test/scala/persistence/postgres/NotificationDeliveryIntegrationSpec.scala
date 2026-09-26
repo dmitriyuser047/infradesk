@@ -8,7 +8,7 @@ import application.notification.{
   NotificationRecordingMonitorRuleEvaluator,
   RecordNotificationDeliveries
 }
-import application.port.{NotificationDeliveryRepository, NotificationDeliveryScope, NotificationSendResult, NotificationSender}
+import application.port.{NotificationDeliveryRepository, NotificationDeliveryScope, NotificationSendRequest, NotificationSendResult, NotificationSender}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
@@ -361,7 +361,7 @@ final class NotificationDeliveryIntegrationSpec extends FunSuite {
   private final class SlowSender(delay: FiniteDuration) extends NotificationSender[IO] {
     private val sent = new java.util.concurrent.atomic.AtomicInteger(0)
     def count: Int = sent.get()
-    override def send(event: NotificationEvent): IO[NotificationSendResult] =
+    override def send(request: NotificationSendRequest): IO[NotificationSendResult] =
       IO.sleep(delay) *> IO(sent.incrementAndGet()) *> IO.pure(NotificationSendResult.Sent)
   }
 

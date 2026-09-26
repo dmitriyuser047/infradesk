@@ -4,16 +4,26 @@ package bootstrap
 import application.connector.ResourceConnectorRegistry
 import application.port.{
   ConnectionSyncBudget,
+  EmailNotificationTransport,
   NotificationSender,
   ResourceOperationBudget,
   ResourceOperationExecutor,
   SshConnectionProbe,
-  SshCredentialResolver
+  SshCredentialResolver,
+  TelegramNotificationTransport,
+  WebhookNotificationTransport
 }
 import domain.operation.ResourceOperationCode
 import cats.effect.{IO, Resource}
 import infrastructure.config.{AppConfig, NotificationConfig}
-import integration.notification.{NotificationChannelCipher, WebhookNotificationSender}
+import integration.notification.{
+  ManagedWebhookTransport,
+  NotificationChannelCipher,
+  OutboundDestinationPolicy,
+  SmtpTransport,
+  TelegramTransport,
+  WebhookNotificationSender
+}
 import org.http4s.client.Client
 import org.http4s.ember.client.EmberClientBuilder
 import integration.docker.{DockerConnector, DockerJavaEngineClient}
@@ -86,19 +96,39 @@ object IntegrationModule {
     )
   }
 
-  /** One HTTP client for the lifetime of the application, or none at all when no webhook is
-    * configured: a deployment without notifications opens no client and starts no dispatcher.
+  /** Everything the notification workers need in order to reach the outside world.
+    *
+    * One HTTP client for the lifetime of the application, shared by the webhook and the Telegram
+    * transports; mail opens its own connection per message, because SMTP is a session. The
+    * client is opened whether or not the deployment configures a webhook of its own: channels
+    * live in the database, so whether anything will be sent is not known at startup.
+    *
+    * The legacy sender is still the one thing that depends on the environment: without its URL
+    * there is no deployment webhook, and the worker that serves it does not start.
     */
-  def notificationSender(config: NotificationConfig): Resource[IO, Option[NotificationSender[IO]]] =
-    config.webhookUrl match {
-      case None => Resource.pure[IO, Option[NotificationSender[IO]]](None)
-      case Some(url) =>
-        EmberClientBuilder
-          .default[IO]
-          .withTimeout(config.requestTimeout)
-          .build
-          .map { client: Client[IO] =>
-            Some(new WebhookNotificationSender(client, url, config.requestTimeout))
-          }
-    }
+  def notificationTransports(config: NotificationConfig): Resource[IO, NotificationTransports] = {
+    val policy = OutboundDestinationPolicy.resolving(config.allowPrivateDestinations)
+    EmberClientBuilder
+      .default[IO]
+      .withTimeout(config.requestTimeout)
+      .build
+      .map { client: Client[IO] =>
+        NotificationTransports(
+          legacyWebhookSender = config.webhookUrl.map(url =>
+            new WebhookNotificationSender(client, url, config.requestTimeout)),
+          webhook = new ManagedWebhookTransport(client, policy, config.requestTimeout),
+          telegram = new TelegramTransport(client, config.requestTimeout),
+          email = new SmtpTransport(policy, config.requestTimeout)
+        )
+      }
+  }
 }
+
+/** The outbound side of notifications, assembled once per runtime. */
+final case class NotificationTransports(
+  /** Absent when the deployment configures no webhook of its own. */
+  legacyWebhookSender: Option[NotificationSender[IO]],
+  webhook: WebhookNotificationTransport[IO],
+  telegram: TelegramNotificationTransport[IO],
+  email: EmailNotificationTransport[IO]
+)

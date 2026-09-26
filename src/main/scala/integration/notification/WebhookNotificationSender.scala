@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package integration.notification
 
 import application.notification.NotificationEvent
-import application.port.{NotificationSendResult, NotificationSender}
+import application.port.{NotificationSendRequest, NotificationSendResult, NotificationSender}
 import cats.effect.IO
 import cats.syntax.all._
 import domain.notification.NotificationEventType
@@ -15,7 +15,11 @@ import org.typelevel.ci.CIString
 import java.util.concurrent.TimeoutException
 import scala.concurrent.duration.FiniteDuration
 
-/** Posts one incident event to the configured webhook.
+/** Posts one incident event to the webhook the deployment configures through its environment.
+  *
+  * This is the destination that predates configured channels: one URL for the whole deployment,
+  * known at startup, so the attempt carries no destination of its own and its target is not
+  * consulted.
   *
   * The request carries the stable event id both in the body and in a header, so a receiver can
   * deduplicate the repeats that at-least-once delivery implies. Only the status code is read: the
@@ -29,14 +33,14 @@ final class WebhookNotificationSender(
 
   import WebhookNotificationSender._
 
-  override def send(event: NotificationEvent): IO[NotificationSendResult] =
+  override def send(request: NotificationSendRequest): IO[NotificationSendResult] =
     client
-      .status(request(event))
+      .status(httpRequest(request.event))
       .timeout(requestTimeout)
       .map(classify)
       .handleError(classifyError)
 
-  private def request(event: NotificationEvent): Request[IO] =
+  private def httpRequest(event: NotificationEvent): Request[IO] =
     Request[IO](Method.POST, url)
       .withEntity(payload(event))
       .putHeaders(Header.Raw(EventIdHeader, event.eventId.toString))

@@ -31,15 +31,27 @@ final case class NotificationConfig(
   maxConcurrency: Int,
   claimLease: FiniteDuration,
   requestTimeout: FiniteDuration,
-  maxAttempts: Long
+  maxAttempts: Long,
+  /** Whether a configured channel may point at a private network.
+    *
+    * An internal SMTP relay or a webhook receiver inside the perimeter is an ordinary
+    * arrangement, and letting any user of the product reach one is an ordinary mistake, so the
+    * deployment decides rather than the channel. The loopback interface, link-local addresses
+    * and the cloud metadata endpoint stay out of reach either way.
+    */
+  allowPrivateDestinations: Boolean
 ) {
+  /** Whether the webhook the deployment configures itself exists. Channels are configured in
+    * the database and are not what this answers.
+    */
   def enabled: Boolean = webhookUrl.isDefined
 
   // The URL may carry a token, so it never reaches a log line.
   override def toString: String =
     s"NotificationConfig(webhook=${if (enabled) "configured" else "disabled"}, " +
       s"pollInterval=$pollInterval, batchSize=$batchSize, maxConcurrency=$maxConcurrency, " +
-      s"claimLease=$claimLease, requestTimeout=$requestTimeout, maxAttempts=$maxAttempts)"
+      s"claimLease=$claimLease, requestTimeout=$requestTimeout, maxAttempts=$maxAttempts, " +
+      s"allowPrivateDestinations=$allowPrivateDestinations)"
 }
 
 final case class AppConfig(
@@ -103,6 +115,7 @@ object AppConfig {
       claimLeaseSeconds <- positiveInt(values, "INFRADESK_NOTIFICATION_CLAIM_LEASE_SECONDS", 60)
       requestTimeoutSeconds <- positiveInt(values, "INFRADESK_NOTIFICATION_REQUEST_TIMEOUT_SECONDS", 10)
       maxAttempts <- positiveInt(values, "INFRADESK_NOTIFICATION_MAX_ATTEMPTS", 10)
+      allowPrivate <- parseBoolean(values, "INFRADESK_NOTIFICATION_ALLOW_PRIVATE_DESTINATIONS")
       // A lease shorter than a request would let a second dispatcher start the same delivery
       // while the first one is still waiting for the receiver. The dispatcher claims in waves of
       // at most maxConcurrency, so the lease only has to cover one request plus database overhead,
@@ -115,7 +128,21 @@ object AppConfig {
         )
       )
     } yield NotificationConfig(webhookUrl, pollIntervalSeconds.seconds, batchSize, maxConcurrency,
-      claimLeaseSeconds.seconds, requestTimeoutSeconds.seconds, maxAttempts.toLong)
+      claimLeaseSeconds.seconds, requestTimeoutSeconds.seconds, maxAttempts.toLong, allowPrivate)
+
+  /** Absent means no, and anything that is not plainly yes or no is a configuration error
+    * rather than a default: this one decides what the product is allowed to connect to.
+    */
+  private def parseBoolean(
+    values: Map[String, String],
+    key: String
+  ): Either[IllegalArgumentException, Boolean] =
+    values.get(key).map(_.trim.toLowerCase(java.util.Locale.ROOT)).filter(_.nonEmpty) match {
+      case None => Right(false)
+      case Some("true") => Right(true)
+      case Some("false") => Right(false)
+      case Some(_) => Left(new IllegalArgumentException(s"Invalid $key: expected true or false"))
+    }
 
   private def parseWebhookUrl(values: Map[String, String]): Either[IllegalArgumentException, Option[Uri]] =
     values.get("INFRADESK_NOTIFICATION_WEBHOOK_URL").map(_.trim).filter(_.nonEmpty) match {

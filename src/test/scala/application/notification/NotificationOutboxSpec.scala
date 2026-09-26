@@ -6,7 +6,7 @@ import application.port.{IdGenerator, NotificationDeliveryRepository, Notificati
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.incident.IncidentReason
-import application.port.NotificationDeliveryScope
+import application.port.{NotificationDeliveryScope, NotificationSendRequest}
 import domain.notification.{
   NotificationChannelType,
   NotificationDelivery,
@@ -227,8 +227,8 @@ final class NotificationOutboxSpec extends FunSuite {
     private var recorded: List[NotificationEvent] = List.empty
     def events: List[NotificationEvent] = synchronized(recorded)
     def calls: Int = events.size
-    override def send(event: NotificationEvent): IO[NotificationSendResult] =
-      IO(synchronized { recorded = recorded :+ event }) *> IO.pure(result)
+    override def send(request: NotificationSendRequest): IO[NotificationSendResult] =
+      IO(synchronized { recorded = recorded :+ request.event }) *> IO.pure(result)
   }
 
   private class RecordingRepository extends NotificationDeliveryRepository[IO] {

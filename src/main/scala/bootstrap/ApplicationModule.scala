@@ -23,6 +23,7 @@ import application.overview.GetOperationsOverview
 import application.monitor.{CreateMonitorRule, EvaluateMonitorRules, ListMonitorRules, UpdateMonitorRule}
 import application.notification.{
   GetNotificationChannel,
+  ManagedNotificationSender,
   ListNotificationChannels,
   NotificationChannelManagement,
   NotificationDispatcher,
@@ -90,8 +91,11 @@ final case class ApplicationComponents(
   executeResourceOperation: ExecuteResourceOperation[ConnectionIO],
   listResourceOperationExecutions: ListResourceOperationExecutions[ConnectionIO],
   scheduler: SyncScheduler[IO, ConnectionIO],
-  /** Absent when no notification channel is configured, so no worker is started for it. */
-  notificationDispatcher: Option[NotificationDispatcher[IO, ConnectionIO]]
+  /** Absent when the deployment configures no webhook of its own, so no worker is started for
+    * one. Channels are configured in the database, so the managed worker always runs.
+    */
+  notificationDispatcher: Option[NotificationDispatcher[IO, ConnectionIO]],
+  managedNotificationDispatcher: NotificationDispatcher[IO, ConnectionIO]
 )
 
 object ApplicationModule {
@@ -102,7 +106,7 @@ object ApplicationModule {
     integrations: IntegrationComponents,
     loggers: AppLoggers,
     schedulerInstanceId: UUID,
-    notificationSender: Option[NotificationSender[IO]] = None,
+    transports: NotificationTransports,
     notificationDispatcherInstanceId: UUID = UUID.randomUUID()
   ): ApplicationComponents = {
     import persistence._
@@ -163,7 +167,8 @@ object ApplicationModule {
     // channels and is recorded for every transition regardless of subscriptions. Channels of the
     // organization are found by routing; this is the one target that is not one of them.
     val legacyNotificationTargets: List[NotificationDeliveryTarget] =
-      if (notificationSender.isDefined) List(NotificationDeliveryTarget.LegacyWebhook) else Nil
+      if (transports.legacyWebhookSender.isDefined) List(NotificationDeliveryTarget.LegacyWebhook)
+      else Nil
 
     val recordNotificationDeliveries =
       new RecordNotificationDeliveries[ConnectionIO](
@@ -216,6 +221,12 @@ object ApplicationModule {
         timeProvider,
         loggers.monitor
       )
+
+    // Derived rather than random so that the identity is stable for a given process, and
+    // distinct from the legacy worker's in the same process.
+    val managedDispatcherInstanceId = new UUID(
+      notificationDispatcherInstanceId.getMostSignificantBits,
+      notificationDispatcherInstanceId.getLeastSignificantBits ^ 1L)
 
     val passwordHasher = new BCryptPasswordHasher
     val sessionTokens = new SessionTokens
@@ -362,7 +373,7 @@ object ApplicationModule {
         schedulerInstanceId,
         config.scheduler.claimLease
       ),
-      notificationDispatcher = notificationSender.map(sender =>
+      notificationDispatcher = transports.legacyWebhookSender.map(sender =>
         new NotificationDispatcher[IO, ConnectionIO](
           notificationDeliveryRepository,
           sender,
@@ -377,6 +388,28 @@ object ApplicationModule {
           config.notification.claimLease,
           config.notification.maxAttempts
         )
+      ),
+      // The worker that serves configured channels. It resolves the channel of each delivery at
+      // the moment of sending, so it needs no transport decided in advance.
+      managedNotificationDispatcher = new NotificationDispatcher[IO, ConnectionIO](
+        notificationDeliveryRepository,
+        new ManagedNotificationSender[IO, ConnectionIO](
+          notificationChannelDispatchQuery,
+          integrations.notificationChannelCipher,
+          transactionRunner,
+          transports.webhook,
+          transports.telegram,
+          transports.email
+        ),
+        transactionRunner,
+        timeProvider,
+        loggers.notification,
+        NotificationDeliveryScope.Managed,
+        config.notification.maxConcurrency,
+        // Its own identity: two workers of one process must not fence each other's claims.
+        managedDispatcherInstanceId,
+        config.notification.claimLease,
+        config.notification.maxAttempts
       )
     )
   }

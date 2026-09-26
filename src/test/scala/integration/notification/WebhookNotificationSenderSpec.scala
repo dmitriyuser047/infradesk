@@ -28,7 +28,7 @@ final class WebhookNotificationSenderSpec extends FunSuite {
     val captured = Ref.unsafe[IO, List[(Json, Option[String])]](List.empty)
 
     val result = withSender(respondWith(Status.Ok, captured), requestTimeout = 5.seconds) { sender =>
-      sender.send(event)
+      sender.send(attempt)
     }
     val requests = captured.get.unsafeRunSync()
     val (payload, eventIdHeader) = requests.head
@@ -43,16 +43,16 @@ final class WebhookNotificationSenderSpec extends FunSuite {
   }
 
   test("an overloaded or failing receiver is retryable") {
-    val tooManyRequests = withSender(respondWith(Status.TooManyRequests), 5.seconds)(_.send(event))
-    val serverError = withSender(respondWith(Status.InternalServerError), 5.seconds)(_.send(event))
+    val tooManyRequests = withSender(respondWith(Status.TooManyRequests), 5.seconds)(_.send(attempt))
+    val serverError = withSender(respondWith(Status.InternalServerError), 5.seconds)(_.send(attempt))
 
     assertEquals(tooManyRequests, NotificationSendResult.RetryableFailure("HTTP_429"))
     assertEquals(serverError, NotificationSendResult.RetryableFailure("HTTP_500"))
   }
 
   test("a receiver that rejects the request permanently is not retried") {
-    val unauthorized = withSender(respondWith(Status.Unauthorized), 5.seconds)(_.send(event))
-    val notFound = withSender(respondWith(Status.NotFound), 5.seconds)(_.send(event))
+    val unauthorized = withSender(respondWith(Status.Unauthorized), 5.seconds)(_.send(attempt))
+    val notFound = withSender(respondWith(Status.NotFound), 5.seconds)(_.send(attempt))
 
     assertEquals(unauthorized, NotificationSendResult.PermanentFailure("HTTP_401"))
     assertEquals(notFound, NotificationSendResult.PermanentFailure("HTTP_404"))
@@ -63,7 +63,7 @@ final class WebhookNotificationSenderSpec extends FunSuite {
       case POST -> Root / "hook" => IO.sleep(5.seconds) *> Ok()
     }.orNotFound
 
-    val result = withSender(slow, requestTimeout = 300.millis)(_.send(event))
+    val result = withSender(slow, requestTimeout = 300.millis)(_.send(attempt))
 
     assertEquals(result, NotificationSendResult.RetryableFailure("TIMEOUT"))
   }
@@ -72,7 +72,7 @@ final class WebhookNotificationSenderSpec extends FunSuite {
     val result = EmberClientBuilder.default[IO].build.use { client =>
       // Nothing is bound on this port: the connection is refused rather than answered.
       new WebhookNotificationSender(client, Uri.unsafeFromString("http://127.0.0.1:1/hook"), 2.seconds)
-        .send(event)
+        .send(attempt)
     }.unsafeRunSync()
 
     assertEquals(result, NotificationSendResult.RetryableFailure("CONNECTION_FAILED"))
@@ -122,4 +122,8 @@ final class WebhookNotificationSenderSpec extends FunSuite {
     IncidentId,
     IncidentReason.ThresholdViolation
   )
+
+  /** The legacy webhook has one destination, so every attempt is aimed at the same place. */
+  private val attempt = application.port.NotificationSendRequest(event,
+    domain.notification.NotificationDeliveryTarget.LegacyWebhook)
 }
