@@ -20,6 +20,7 @@ import scala.util.Try
   */
 final class AuthBoundary[Tx[_]](
   authRoutes: AuthRoutes[Tx],
+  accountRoutes: AccountRoutes[Tx],
   authentication: Authentication[Tx],
   organizationRoutes: HttpApp[IO]
 ) {
@@ -39,6 +40,12 @@ final class AuthBoundary[Tx[_]](
         authenticated(request)(authRoutes.me)
       case List("api", "v1", "me", "organizations") if request.method == GET =>
         authenticated(request)(authRoutes.organizations)
+      // Self-service account operations: the account is the session's, so these need only
+      // authentication and never an organization in the path.
+      case List("api", "v1", "account", "change-password") if request.method == POST =>
+        authenticated(request)(user => accountRoutes.change(user, request))
+      case List("api", "v1", "account") if request.method == PATCH =>
+        authenticated(request)(user => accountRoutes.updateDisplayName(user, request))
       case "api" :: "v1" :: "organizations" :: organizationIdValue :: _ =>
         authenticated(request) { user =>
           Try(UUID.fromString(organizationIdValue)).toOption match {

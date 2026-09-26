@@ -89,6 +89,12 @@ object HttpJsonCodecs {
   implicit val loginRequestDecoder: Decoder[LoginRequest] =
     Decoder.forProduct2("email", "password")(LoginRequest.apply)
 
+  implicit val changePasswordRequestDecoder: Decoder[ChangePasswordRequest] =
+    Decoder.forProduct2("currentPassword", "newPassword")(ChangePasswordRequest.apply)
+
+  implicit val updateAccountProfileRequestDecoder: Decoder[UpdateAccountProfileRequest] =
+    Decoder.forProduct1("displayName")(UpdateAccountProfileRequest.apply)
+
   implicit val meResponseEncoder: Encoder[MeResponse] =
     Encoder.forProduct3("id", "email", "displayName")(value => (value.id, value.email, value.displayName))
 

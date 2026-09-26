@@ -83,6 +83,10 @@ final class AuthServicesSpec extends FunSuite {
     override def createIfMissing(user: UserAccount): IO[Unit] = IO {
       if (!values.exists(_.email == user.email)) values = user :: values
     }
+    override def updatePasswordHash(id: UUID, passwordHash: String, updatedAt: java.time.Instant): IO[Boolean] =
+      IO(values.exists(user => user.id == id && user.isActive))
+    override def updateDisplayName(id: UUID, displayName: String, updatedAt: java.time.Instant): IO[Boolean] =
+      IO(values.exists(user => user.id == id && user.isActive))
   }
 
   private final class MemorySessions(users: MemoryUsers) extends AuthSessionRepository[IO] {

@@ -1,0 +1,139 @@
+import { useState, type FormEvent } from 'react'
+
+import { useChangePassword, useUpdateDisplayName } from '../api/account'
+import { useMe, useMyOrganizations } from '../api/auth'
+import { describeError } from '../i18n/errors'
+import { useI18n } from '../i18n'
+import type { MyOrganizationResponse } from '../types/auth'
+
+/** The signed-in user's account: their profile, their organizations, and changing their password.
+ *
+ * The identity comes from the caches the shell already loaded (`me`, `my-organizations`), so the
+ * page adds no duplicate request. The email is shown read-only — it is the login identity and has
+ * no change flow yet. Passwords live only in this component's local state while the form is open. */
+export function AccountPage() {
+  const i18n = useI18n()
+  const t = i18n.t.account
+  const me = useMe()
+  const organizations = useMyOrganizations()
+
+  return (
+    <main className="account-page">
+      <header>
+        <h1>{t.title}</h1>
+        <p className="muted">{t.subtitle}</p>
+      </header>
+
+      <ProfileSection displayName={me.data?.displayName ?? ''} email={me.data?.email ?? ''}
+        organizations={organizations.data ?? []} />
+      <PasswordSection />
+    </main>
+  )
+}
+
+function ProfileSection(props: {
+  displayName: string
+  email: string
+  organizations: MyOrganizationResponse[]
+}) {
+  const i18n = useI18n()
+  const t = i18n.t.account
+  const roles = i18n.t.auth.roles as Record<string, string>
+  const update = useUpdateDisplayName()
+  // Null until the field is edited, so it shows the loaded name and still tracks changes.
+  const [edited, setEdited] = useState<string | null>(null)
+  const name = edited ?? props.displayName
+  const trimmed = name.trim()
+  const unchanged = trimmed === props.displayName.trim()
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (update.isPending || trimmed === '' || unchanged) return
+    update.mutate(trimmed, { onSuccess: () => setEdited(null) })
+  }
+
+  return (
+    <section className="account-panel" aria-labelledby="account-profile-heading">
+      <h2 id="account-profile-heading">{t.profileHeading}</h2>
+      <form onSubmit={submit}>
+        <label>{t.name}
+          <input type="text" value={name} maxLength={255} autoComplete="name"
+            onChange={(event) => setEdited(event.target.value)} />
+        </label>
+        <div className="account-field">
+          <span className="account-field-label">{t.email}</span>
+          <span className="account-field-value">{props.email}</span>
+          <small className="muted">{t.emailHint}</small>
+        </div>
+        <div className="account-field">
+          <span className="account-field-label">{t.organization}</span>
+          {props.organizations.length === 0
+            ? <span className="account-field-value">{t.noOrganizations}</span>
+            : <ul className="account-orgs">
+                {props.organizations.map((org) => <li key={org.id}>
+                  {org.name} — {roles[org.role] ?? org.role}
+                </li>)}
+              </ul>}
+        </div>
+        {update.isError ? <p className="form-error" role="alert">{t.nameSaveFailed}</p> : null}
+        {update.isSuccess && edited === null ? <p className="form-success" role="status">{t.nameUpdated}</p> : null}
+        <button className="primary-button" type="submit" disabled={update.isPending || trimmed === '' || unchanged}>
+          {t.saveName}
+        </button>
+      </form>
+    </section>
+  )
+}
+
+function PasswordSection() {
+  const i18n = useI18n()
+  const t = i18n.t.account
+  const change = useChangePassword()
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [mismatch, setMismatch] = useState(false)
+
+  function clear() {
+    setCurrentPassword('')
+    setNewPassword('')
+    setConfirmPassword('')
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    // Double-submit guard: while a request is in flight nothing new is sent.
+    if (change.isPending) return
+    if (newPassword !== confirmPassword) {
+      setMismatch(true)
+      return
+    }
+    setMismatch(false)
+    change.mutate({ currentPassword, newPassword }, { onSuccess: clear })
+  }
+
+  return (
+    <section className="account-panel" aria-labelledby="account-password-heading">
+      <h2 id="account-password-heading">{t.changePassword}</h2>
+      <form onSubmit={submit}>
+        <label>{t.currentPassword}
+          <input type="password" autoComplete="current-password" value={currentPassword} required
+            onChange={(event) => setCurrentPassword(event.target.value)} />
+        </label>
+        <label>{t.newPassword}
+          <input type="password" autoComplete="new-password" value={newPassword} required minLength={12}
+            onChange={(event) => setNewPassword(event.target.value)} />
+        </label>
+        <label>{t.confirmPassword}
+          <input type="password" autoComplete="new-password" value={confirmPassword} required
+            onChange={(event) => setConfirmPassword(event.target.value)} />
+        </label>
+        <small className="muted">{t.passwordHint}</small>
+        {mismatch ? <p className="form-error" role="alert">{t.passwordMismatch}</p> : null}
+        {change.isError ? <p className="form-error" role="alert">{describeError(change.error, i18n)}</p> : null}
+        {change.isSuccess ? <p className="form-success" role="status">{t.passwordUpdated}</p> : null}
+        <button className="primary-button" type="submit" disabled={change.isPending}>{t.submit}</button>
+      </form>
+    </section>
+  )
+}

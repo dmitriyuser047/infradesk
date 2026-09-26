@@ -5,6 +5,7 @@ import cats.data.Kleisli
 import cats.effect.IO
 import cats.syntax.semigroupk._
 import infrastructure.http.{
+  AccountRoutes,
   AuditRoutes,
   AuthBoundary,
   AuthRoutes,
@@ -108,7 +109,10 @@ object HttpModule {
     ).orNotFound
 
     val authRoutes = new AuthRoutes(application.login, application.authentication, authSettings)
-    val protectedApp = new AuthBoundary(authRoutes, application.authentication, businessApp).app
+    val accountRoutes = new AccountRoutes(
+      application.changePassword, application.updateAccountProfile, loggers.account)
+    val protectedApp =
+      new AuthBoundary(authRoutes, accountRoutes, application.authentication, businessApp).app
     val platformApp = new HealthRoutes(persistence.readinessCheck, loggers.health).routes.orNotFound
 
     val routed: HttpApp[IO] = Kleisli { request: Request[IO] =>

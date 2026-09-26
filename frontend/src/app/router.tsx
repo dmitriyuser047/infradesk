@@ -18,6 +18,7 @@ import { OrganizationsPage } from '../pages/OrganizationsPage'
 import { OverviewPage } from '../pages/OverviewPage'
 import { ResourcesIndexPage } from '../pages/ResourcesIndexPage'
 import { LoginPage } from '../pages/LoginPage'
+import { AccountPage } from '../pages/AccountPage'
 import { NotificationChannelsPage } from '../pages/NotificationChannelsPage'
 import { NotificationChannelFormPage } from '../pages/NotificationChannelFormPage'
 
@@ -29,6 +30,7 @@ export const router = createBrowserRouter([
   {
     element: <RequireAuth />,
     children: [{ element: <ShellLayout />, children: [
+      { path: '/settings/account', element: <AccountPage /> },
       { path: '/organizations', element: <OrganizationsPage /> },
       { path: '/organizations/:organizationId', element: <OrganizationPage /> },
       { path: '/organizations/:organizationId/overview', element: <OverviewPage /> },

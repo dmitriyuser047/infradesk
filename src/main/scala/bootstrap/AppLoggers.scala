@@ -20,7 +20,8 @@ final case class AppLoggers(
   monitor: Logger[IO],
   notification: Logger[IO],
   operation: Logger[IO],
-  authorization: Logger[IO]
+  authorization: Logger[IO],
+  account: Logger[IO]
 )
 
 object AppLoggers {
@@ -35,7 +36,8 @@ object AppLoggers {
     monitor = named("application.monitor.EvaluateMonitorRules"),
     notification = named("application.notification.NotificationDispatcher"),
     operation = named("application.operation.ExecuteResourceOperation"),
-    authorization = named("infrastructure.http.OrganizationAuthorization")
+    authorization = named("infrastructure.http.OrganizationAuthorization"),
+    account = named("infrastructure.http.AccountRoutes")
   )
 
   private def named(name: String): Logger[IO] = Slf4jLogger.getLoggerFromName[IO](name)

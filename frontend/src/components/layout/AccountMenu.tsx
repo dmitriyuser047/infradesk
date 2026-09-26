@@ -1,4 +1,4 @@
-import { Check, LogOut } from 'lucide-react'
+import { Check, LogOut, Settings } from 'lucide-react'
 import type { KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 
@@ -41,6 +41,11 @@ export function AccountMenu() {
         <strong>{name}</strong>
         {me.data?.email ? <small>{me.data.email}</small> : null}
       </div>
+      <div className="menu-separator" role="separator" />
+      <button type="button" role="menuitem" className="menu-item"
+        onClick={() => { popover.close(); navigate('/settings/account') }}>
+        <span className="menu-check" aria-hidden><Settings size={16} /></span>{t.accountSettings}
+      </button>
       <div className="menu-separator" role="separator" />
       <div className="menu-group-label" role="presentation">{t.language}</div>
       {Locales.map((locale, index) => <button key={locale} type="button" role="menuitemradio"

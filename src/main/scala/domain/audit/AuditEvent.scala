@@ -30,6 +30,11 @@ object AuditAction {
   case object NotificationChannelEnabled extends AuditAction { override val code: String = "NOTIFICATION_CHANNEL_ENABLED" }
   case object NotificationChannelDisabled extends AuditAction { override val code: String = "NOTIFICATION_CHANNEL_DISABLED" }
 
+  /** A user changed their own password. The journal records that it happened, never the secret. */
+  case object AccountPasswordChanged extends AuditAction { override val code: String = "ACCOUNT_PASSWORD_CHANGED" }
+  /** A user changed their own profile, currently the display name only. */
+  case object AccountProfileUpdated extends AuditAction { override val code: String = "ACCOUNT_PROFILE_UPDATED" }
+
   val All: List[AuditAction] = List(
     ProjectCreated,
     EnvironmentCreated,
@@ -45,7 +50,9 @@ object AuditAction {
     NotificationChannelCreated,
     NotificationChannelUpdated,
     NotificationChannelEnabled,
-    NotificationChannelDisabled
+    NotificationChannelDisabled,
+    AccountPasswordChanged,
+    AccountProfileUpdated
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =
@@ -66,9 +73,11 @@ object AuditTargetType {
   case object MonitorRule extends AuditTargetType { override val code: String = "MONITOR_RULE" }
   case object Resource extends AuditTargetType { override val code: String = "RESOURCE" }
   case object NotificationChannel extends AuditTargetType { override val code: String = "NOTIFICATION_CHANNEL" }
+  /** The actor's own user account: the target of a self-service account change. */
+  case object Account extends AuditTargetType { override val code: String = "ACCOUNT" }
 
   val All: List[AuditTargetType] =
-    List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel)
+    List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Account)
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditTargetType] =
     All.find(_.code == code)

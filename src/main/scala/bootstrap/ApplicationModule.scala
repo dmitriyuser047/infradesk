@@ -1,6 +1,7 @@
 package ru.bitec.app.ops
 package bootstrap
 
+import application.account.{ChangePassword, UpdateAccountProfile}
 import application.audit.{AuditRecorder, ListAuditEvents}
 import application.history.{
   HistoryRecorder,
@@ -81,6 +82,8 @@ final case class ApplicationComponents(
   createEnvironment: CreateEnvironment[ConnectionIO],
   login: Login[ConnectionIO],
   authentication: Authentication[ConnectionIO],
+  changePassword: ChangePassword[ConnectionIO],
+  updateAccountProfile: UpdateAccountProfile[ConnectionIO],
   bootstrapAdmin: BootstrapAdmin[ConnectionIO],
   listAuditEvents: ListAuditEvents[ConnectionIO],
   listNotificationChannels: ListNotificationChannels[ConnectionIO],
@@ -341,6 +344,21 @@ object ApplicationModule {
         membershipRepository,
         transactionRunner,
         sessionTokens
+      ),
+      changePassword = new ChangePassword[ConnectionIO](
+        userAccountRepository,
+        membershipRepository,
+        auditRecorder,
+        transactionRunner,
+        passwordHasher,
+        timeProvider
+      ),
+      updateAccountProfile = new UpdateAccountProfile[ConnectionIO](
+        userAccountRepository,
+        membershipRepository,
+        auditRecorder,
+        transactionRunner,
+        timeProvider
       ),
       bootstrapAdmin = new BootstrapAdmin[ConnectionIO](
         userAccountRepository,

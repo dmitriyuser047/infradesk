@@ -41,4 +41,22 @@ final class PostgresUserAccountRepository extends UserAccountRepository[Connecti
             values (${user.id}, ${user.email}, ${user.passwordHash}, ${user.displayName},
                     ${user.isActive}, ${user.createdAt}, ${user.updatedAt})
             on conflict do nothing""".update.run.void
+
+  override def updatePasswordHash(
+    id: UUID,
+    passwordHash: String,
+    updatedAt: Instant
+  ): ConnectionIO[Boolean] =
+    sql"""update user_account
+            set password_hash = $passwordHash, updated_at = $updatedAt
+            where id = $id and is_active = true""".update.run.map(_ == 1)
+
+  override def updateDisplayName(
+    id: UUID,
+    displayName: String,
+    updatedAt: Instant
+  ): ConnectionIO[Boolean] =
+    sql"""update user_account
+            set display_name = $displayName, updated_at = $updatedAt
+            where id = $id and is_active = true""".update.run.map(_ == 1)
 }

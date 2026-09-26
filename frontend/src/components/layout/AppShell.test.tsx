@@ -205,11 +205,15 @@ describe('application shell', () => {
     setup('/organizations/org/overview', 'MEMBER', 'en')
     fireEvent.click(screen.getByRole('button', { name: 'Account menu for Dmitriy' }))
     const menu = screen.getByRole('menu')
-    const items = [...within(menu).getAllByRole('menuitemradio'), within(menu).getByRole('menuitem')]
+    // Every focusable menu entry in DOM order, whichever kind of menuitem it is.
+    const items = Array.from(menu.querySelectorAll<HTMLElement>('[role^="menuitem"]'))
+    const firstRadio = within(menu).getAllByRole('menuitemradio')[0]
 
-    expect(document.activeElement).toBe(items[0])
+    // The first language option is focused when the menu opens.
+    expect(document.activeElement).toBe(firstRadio)
+    const start = items.indexOf(firstRadio)
     fireEvent.keyDown(menu, { key: 'ArrowDown' })
-    expect(document.activeElement).toBe(items[1])
+    expect(document.activeElement).toBe(items[(start + 1) % items.length])
     fireEvent.keyDown(menu, { key: 'End' })
     expect(document.activeElement).toBe(within(menu).getByRole('menuitem', { name: 'Sign out' }))
   })

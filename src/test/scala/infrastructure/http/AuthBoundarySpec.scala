@@ -1,8 +1,11 @@
 package ru.bitec.app.ops
 package infrastructure.http
 
+import application.account.{ChangePassword, UpdateAccountProfile}
+import application.audit.AuditRecorder
 import application.auth.{Authentication, BCryptPasswordHasher, Login, SessionTokens}
-import application.port.{AuthSessionRepository, MyOrganization, OrganizationMembershipRepository, TransactionRunner, UserAccountRepository}
+import application.port.{AuditEventRepository, AuthSessionRepository, IdGenerator, MyOrganization, OrganizationMembershipRepository, TimeProvider, TransactionRunner, UserAccountRepository}
+import domain.audit.{AuditCursor, AuditEvent}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.auth.{
@@ -287,6 +290,22 @@ final class AuthBoundarySpec extends FunSuite {
     val authentication = new Authentication[IO](sessions, memberships, runner, tokens)
     val loginService = new Login[IO](users, sessions, runner, passwordHasher, tokens, 3600)
     val authRoutes = new AuthRoutes(loginService, authentication, AuthSettings(3600, secure))
+    // Present so the boundary is wired as in production; this spec exercises routing and access,
+    // not the account handlers themselves (those have their own spec).
+    val accountRoutes = {
+      val time = new TimeProvider[IO] { override def now: IO[Instant] = IO.pure(Instant.EPOCH) }
+      val ids = new IdGenerator[IO] { override def nextId: IO[UUID] = IO.pure(UUID.randomUUID()) }
+      val noAudit = new AuditEventRepository[IO] {
+        override def save(event: AuditEvent): IO[Unit] = IO.unit
+        override def saveAll(values: List[AuditEvent]): IO[Unit] = IO.unit
+        override def listByOrganization(organizationId: UUID, before: Option[AuditCursor], limit: Int): IO[List[AuditEvent]] = IO.pure(Nil)
+      }
+      val recorder = new AuditRecorder[IO](noAudit, ids, time)
+      new AccountRoutes[IO](
+        new ChangePassword[IO](users, memberships, recorder, runner, passwordHasher, time),
+        new UpdateAccountProfile[IO](users, memberships, recorder, runner, time),
+        org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.account"))
+    }
     // The routes declare what they need, exactly as the real ones do; the boundary only supplies
     // the access context.
     val authorization = new OrganizationAuthorization(
@@ -326,7 +345,7 @@ final class AuthBoundarySpec extends FunSuite {
       case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "resources" / _ / "operation-executions" =>
         reached(request, OrganizationPermission.ReadOrganization)
     }.orNotFound
-    val app = new AuthBoundary(authRoutes, authentication, business).app
+    val app = new AuthBoundary(authRoutes, accountRoutes, authentication, business).app
 
     def login(email: String, password: String): (Status, Json) = {
       val body = Json.obj("email" -> Json.fromString(email), "password" -> Json.fromString(password))
@@ -340,6 +359,10 @@ final class AuthBoundarySpec extends FunSuite {
     override def findByEmail(email: String): IO[Option[UserAccount]] = IO(values.find(_.email == email))
     override def findActiveById(id: UUID): IO[Option[UserAccount]] = IO(values.find(value => value.id == id && value.isActive))
     override def createIfMissing(value: UserAccount): IO[Unit] = IO { values = value :: values }
+    override def updatePasswordHash(id: UUID, passwordHash: String, updatedAt: java.time.Instant): IO[Boolean] =
+      IO(values.exists(value => value.id == id && value.isActive))
+    override def updateDisplayName(id: UUID, displayName: String, updatedAt: java.time.Instant): IO[Boolean] =
+      IO(values.exists(value => value.id == id && value.isActive))
   }
 
   private final class Sessions(users: Users) extends AuthSessionRepository[IO] {
