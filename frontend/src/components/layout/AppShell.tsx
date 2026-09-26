@@ -3,6 +3,7 @@ import { Bell, Cable, LayoutDashboard, Layers, Menu, Server, TriangleAlert, X, t
 import { Link, Outlet, useLocation } from 'react-router-dom'
 
 import { useI18n, type Messages } from '../../i18n'
+import { useOrganizationPermissions, type OrganizationPermission } from '../auth/authorization'
 import { AccountMenu } from './AccountMenu'
 import { ContextSwitcher } from './ContextSwitcher'
 import { useWorkspaceRouteContext } from './useWorkspaceRouteContext'
@@ -12,6 +13,7 @@ interface NavigationItem {
   module: WorkspaceModule
   icon: LucideIcon
   label: (t: Messages) => string
+  permission?: OrganizationPermission
 }
 
 interface NavigationGroup {
@@ -20,8 +22,8 @@ interface NavigationGroup {
 }
 
 /**
- * The sections, grouped by what the user is looking for rather than by subsystem. Every section is
- * read-only accessible to any member; actions inside them follow the existing permissions.
+ * The sections, grouped by what the user is looking for rather than by subsystem. Restricted
+ * modules carry the same capability their page and backend route require.
  */
 const navigation: NavigationGroup[] = [
   { label: null, items: [{ module: 'overview', icon: LayoutDashboard, label: t => t.shell.nav.overview }] },
@@ -34,7 +36,7 @@ const navigation: NavigationGroup[] = [
   },
   { label: t => t.shell.groups.monitoring, items: [{ module: 'incidents', icon: TriangleAlert, label: t => t.shell.nav.incidents }] },
   { label: t => t.shell.groups.management, items: [
-    { module: 'notifications', icon: Bell, label: t => t.shell.nav.notifications },
+    { module: 'notifications', icon: Bell, label: t => t.shell.nav.notifications, permission: 'manageNotifications' },
     { module: 'workspace', icon: Layers, label: t => t.shell.nav.workspace },
   ] },
 ]
@@ -63,6 +65,7 @@ function ShellFrame({ children }: { children: ReactNode }) {
   const { t } = useI18n()
   const location = useLocation()
   const scope = useWorkspaceRouteContext()
+  const permissions = useOrganizationPermissions(scope.organizationId)
   const active = activeWorkspaceModule(location.pathname)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const toggleRef = useRef<HTMLButtonElement>(null)
@@ -98,7 +101,7 @@ function ShellFrame({ children }: { children: ReactNode }) {
         {navigation.map((group, index) => <div className="nav-group" key={index}>
           {group.label ? <div className="nav-group-label">{group.label(t)}</div> : null}
           <ul>
-            {group.items.map(item => {
+            {group.items.filter(item => !item.permission || permissions.can(item.permission)).map(item => {
               const path = modulePath(item.module, scope)
               const Icon = item.icon
               const current = active === item.module

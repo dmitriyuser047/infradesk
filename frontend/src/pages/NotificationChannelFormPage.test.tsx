@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { notificationChannelsKey } from '../api/notificationChannels'
@@ -40,7 +40,7 @@ function responseFor(body: SaveNotificationChannelRequest, id: string): Notifica
     events: body.events, reasons: body.reasons, config, createdAt: '', updatedAt: '' }
 }
 
-function setup(existing?: NotificationChannelResponse) {
+function setup(existing?: NotificationChannelResponse, saveGate?: Promise<void>) {
   const client = createAppQueryClient()
   const initialList = existing ? [existing] : []
   client.setQueryData(notificationChannelsKey('org'), initialList, { updatedAt: Date.now() - 60_000 })
@@ -53,6 +53,7 @@ function setup(existing?: NotificationChannelResponse) {
     if (method === 'GET' && /notification-channels\/[^/]+$/.test(url)) return json(existing)
     if ((method === 'POST' || method === 'PUT') && url.includes('/notification-channels')) {
       const body = JSON.parse(String(init?.body)) as SaveNotificationChannelRequest
+      if (saveGate) await saveGate
       return json(responseFor(body, existing?.id ?? 'created'))
     }
     if (method === 'GET' && url.endsWith('/notification-channels')) return json(initialList)
@@ -115,8 +116,8 @@ describe('notification channel create', () => {
     fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: 'very-secret-token' } })
     expect(await submitAndBody(requests)).toEqual({ name: 'Ops bot', type: 'TELEGRAM', enabled: true,
       events: ['INCIDENT_OPENED'], reasons: ['THRESHOLD'], telegram: { chatId: '-100123', botToken: 'very-secret-token' } })
-    expect(client.getMutationCache().getAll().every(mutation => mutation.state.variables === undefined)).toBe(true)
-    expect(JSON.stringify(client.getMutationCache().getAll())).not.toContain('very-secret-token')
+    expect(await screen.findByText('Ops bot')).toBeTruthy()
+    await waitFor(() => expect(JSON.stringify(client.getMutationCache().getAll())).not.toContain('very-secret-token'))
   })
 
   it('creates email with normalized recipients and only email configuration', async () => {
@@ -127,6 +128,25 @@ describe('notification channel create', () => {
       events: ['INCIDENT_OPENED'], reasons: ['THRESHOLD'], email: { smtpHost: 'smtp.example.test', smtpPort: 465,
         security: 'TLS', username: 'alerts', password: 'smtp-secret', fromAddress: 'alerts@example.test',
         recipients: ['ops@example.test', 'admin@example.test'] } })
+  })
+
+  it('allows only one create when two submits happen before React rerenders', async () => {
+    let releaseSave!: () => void
+    const saveGate = new Promise<void>(resolve => { releaseSave = resolve })
+    const { requests } = setup(undefined, saveGate)
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Automation' } })
+    fireEvent.change(screen.getByLabelText('Webhook URL'), { target: { value: 'https://hooks.example.test/private' } })
+    const form = screen.getByRole('button', { name: 'Save channel' }).closest('form')!
+
+    act(() => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+
+    await waitFor(() => expect(notificationWrites(requests)).toHaveLength(1))
+    releaseSave()
+    expect(await screen.findByText('Automation')).toBeTruthy()
+    expect(notificationWrites(requests)).toHaveLength(1)
   })
 })
 

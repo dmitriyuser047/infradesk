@@ -9,6 +9,11 @@ export const notificationChannelStaleTime = 30_000
 const path = (org: string) => `/api/v1/organizations/${encodeURIComponent(org)}/notification-channels`
 export const getNotificationChannels = (org: string) => requestJson<NotificationChannelResponse[]>(path(org))
 export const getNotificationChannel = (org: string, id: string) => requestJson<NotificationChannelResponse>(`${path(org)}/${encodeURIComponent(id)}`)
+type SaveCommand = {
+  input: SaveNotificationChannelRequest
+  onSuccess?: (value: NotificationChannelResponse) => void
+  onError?: (error: Error) => void
+}
 export function useNotificationChannels(org?: string, enabled = true) {
   return useQuery({ queryKey: ['notification-channels', org], queryFn: () => getNotificationChannels(requireId(org)),
     enabled: Boolean(org && enabled), staleTime: notificationChannelStaleTime })
@@ -24,18 +29,31 @@ function setChannel(client: ReturnType<typeof useQueryClient>, org: string, valu
 }
 export function useSaveNotificationChannel(org: string, id?: string) {
   const client = useQueryClient()
-  const pending = useRef<SaveNotificationChannelRequest | null>(null)
-  const mutation = useMutation({ mutationFn: async () => {
-    const body = pending.current
-    if (!body) throw new Error('Missing notification channel request')
-    try {
-      return await requestJson<NotificationChannelResponse>(id ? `${path(org)}/${encodeURIComponent(id)}` : path(org),
-        { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) })
-    } finally { pending.current = null }
-  }, onSuccess: value => setChannel(client, org, value) })
-  return { ...mutation, submit: (body: SaveNotificationChannelRequest, options?: {
+  const inFlight = useRef(false)
+  const mutation = useMutation<NotificationChannelResponse, Error, SaveCommand>({
+    gcTime: 0,
+    mutationFn: command => requestJson<NotificationChannelResponse>(
+      id ? `${path(org)}/${encodeURIComponent(id)}` : path(org),
+      { method: id ? 'PUT' : 'POST', body: JSON.stringify(command.input) },
+    ),
+    onSuccess: (value, command) => {
+      setChannel(client, org, value)
+      command.onSuccess?.(value)
+    },
+    onError: (error, command) => command.onError?.(error),
+    onSettled: () => {
+      inFlight.current = false
+      // Detach the completed mutation immediately so request credentials do not remain in cache.
+      queueMicrotask(() => mutation.reset())
+    },
+  })
+  return { ...mutation, submit: (input: SaveNotificationChannelRequest, options?: {
     onSuccess?: (value: NotificationChannelResponse) => void; onError?: (error: Error) => void
-  }) => { pending.current = body; mutation.mutate(undefined, options) } }
+  }) => {
+    if (inFlight.current) return
+    inFlight.current = true
+    mutation.mutate({ input, ...options })
+  } }
 }
 export function useSetNotificationChannelEnabled(org: string) {
   const client = useQueryClient()
