@@ -120,6 +120,7 @@ export const en = {
       connections: 'Connections',
       incidents: 'Incidents',
       workspace: 'Projects and environments',
+      notifications: 'Notifications',
     },
   },
 
@@ -192,6 +193,27 @@ export const en = {
     },
     openOverview: 'Overview',
     addEnvironmentTo: (project: string) => `Add environment to ${project}`,
+  },
+
+  notifications: {
+    title: 'Notification channels', subtitle: 'Send incident notifications to webhooks, Telegram chats or email.', add: 'Create channel',
+    empty: 'No notification channels', emptyDetail: 'Notifications can be sent to webhooks, Telegram chats or email.',
+    loading: 'Loading notification channels', loadError: 'Unable to load notification channels', section: 'Channels',
+    enabled: 'Enabled', disabled: 'Disabled', enable: 'Enable', disable: 'Disable', edit: 'Edit', sendTest: 'Send test', sending: 'Sending…',
+    credentialConfigured: 'Credential configured', credentialMissing: 'Credential not configured', events: 'Events', reasons: 'Reasons',
+    incidentOpened: 'Incident opened', incidentResolved: 'Incident resolved', threshold: 'Threshold violation', noData: 'No data',
+    webhook: 'Webhook', telegram: 'Telegram', email: 'Email', endpointSecure: 'Endpoint configured securely', chat: 'Chat', smtp: 'SMTP',
+    from: 'From', recipients: 'Recipients', start: 'Create channel', createTitle: 'New notification channel', editTitle: 'Edit notification channel', back: 'Notification channels',
+    name: 'Name', type: 'Channel type', url: 'Webhook URL', urlHelper: 'The URL is stored securely and will not be shown again.',
+    secretKeep: 'Leave empty to keep the current credential. Enter a new value to replace it.', secretRequired: 'A credential is required for this channel.',
+    chatId: 'Chat ID', botToken: 'Bot token', smtpHost: 'SMTP host', smtpPort: 'SMTP port', security: 'Security', username: 'Username', password: 'Password', fromAddress: 'From address',
+    enabledAtCreate: 'Enable channel after creating', save: 'Save channel', saving: 'Saving…', eventsRequired: 'Select at least one event.', reasonsRequired: 'Select at least one reason.', nameRequired: 'Enter a name.',
+    configRequired: 'Complete the channel configuration.', invalidUrl: 'Enter an absolute HTTP or HTTPS URL.', invalidEmail: 'Enter valid email addresses.',
+    accessDenied: 'You do not have permission to manage notification channels.', notFound: 'Notification channel not found.', testSent: 'Test notification sent.',
+    testRetry: 'The destination is temporarily unavailable. Try again later.', testPermanent: 'The channel configuration needs attention.', testError: 'Unable to send test notification.',
+    testCodes: { CHANNEL_NOT_FOUND: 'Notification channel not found.', CHANNEL_SECRET_NOT_FOUND: 'Channel credential is missing.', CHANNEL_CREDENTIAL_INVALID: 'Channel credential is invalid.', DESTINATION_NOT_ALLOWED: 'The destination is not allowed.', DESTINATION_RESOLUTION_FAILED: 'Could not resolve the destination.', WEBHOOK_URL_INVALID: 'The webhook URL is invalid.', WEBHOOK_TIMEOUT: 'The webhook did not respond in time.', WEBHOOK_NETWORK_ERROR: 'Could not reach the webhook.', TELEGRAM_RATE_LIMITED: 'Telegram rate limit reached.', TELEGRAM_TIMEOUT: 'Telegram did not respond in time.', TELEGRAM_AUTH_ERROR: 'Telegram rejected the bot credential.', TELEGRAM_API_ERROR: 'Telegram could not deliver the message.', TELEGRAM_SERVER_ERROR: 'Telegram is temporarily unavailable.', TELEGRAM_CONNECTION_FAILED: 'Could not connect to Telegram.', TELEGRAM_UNEXPECTED_ERROR: 'Telegram could not deliver the message.', SMTP_TIMEOUT: 'The mail server did not respond in time.', SMTP_TLS_FAILURE: 'A secure connection to the mail server could not be established.', SMTP_TEMPORARY_FAILURE: 'The mail server is temporarily unavailable.', SMTP_AUTH_FAILURE: 'The mail server rejected the credentials.', SMTP_PERMANENT_FAILURE: 'The mail server could not deliver the message.', SMTP_UNEXPECTED_ERROR: 'The mail server could not deliver the message.' } as Record<string, string>,
+    securityModes: { NONE: 'None', STARTTLS: 'STARTTLS', TLS: 'TLS' },
+    showSecret: 'Show', hideSecret: 'Hide', recipientsHelp: 'Enter one address per line.',
   },
 
   projectForm: {

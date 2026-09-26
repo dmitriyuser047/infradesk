@@ -14,6 +14,7 @@ describe('workspace navigation', () => {
     expect(activeWorkspaceModule('/organizations/o/environments/e/resources/r')).toBe('resources')
     expect(activeWorkspaceModule('/organizations/o/incidents/i')).toBe('incidents')
     expect(activeWorkspaceModule('/organizations/o/connections/c/sync-sessions/s')).toBe('connections')
+    expect(activeWorkspaceModule('/organizations/o/notifications/c/edit')).toBe('notifications')
   })
 
   it('builds each section path inside the current context', () => {
@@ -23,6 +24,7 @@ describe('workspace navigation', () => {
     expect(modulePath('workspace', scope)).toBe('/organizations/org?project=p&environment=e')
     expect(modulePath('incidents', scope)).toBe('/organizations/org/incidents?project=p&environment=e')
     expect(modulePath('connections', scope)).toBe('/organizations/org/connections?project=p&environment=e')
+    expect(modulePath('notifications', scope)).toBe('/organizations/org/notifications?project=p&environment=e')
     expect(modulePath('resources', scope)).toBe('/organizations/org/environments/e?project=p')
   })
 

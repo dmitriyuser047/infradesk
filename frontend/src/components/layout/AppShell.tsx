@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Cable, LayoutDashboard, Layers, Menu, Server, TriangleAlert, X, type LucideIcon } from 'lucide-react'
+import { Bell, Cable, LayoutDashboard, Layers, Menu, Server, TriangleAlert, X, type LucideIcon } from 'lucide-react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 
 import { useI18n, type Messages } from '../../i18n'
@@ -33,7 +33,10 @@ const navigation: NavigationGroup[] = [
     ],
   },
   { label: t => t.shell.groups.monitoring, items: [{ module: 'incidents', icon: TriangleAlert, label: t => t.shell.nav.incidents }] },
-  { label: t => t.shell.groups.management, items: [{ module: 'workspace', icon: Layers, label: t => t.shell.nav.workspace }] },
+  { label: t => t.shell.groups.management, items: [
+    { module: 'notifications', icon: Bell, label: t => t.shell.nav.notifications },
+    { module: 'workspace', icon: Layers, label: t => t.shell.nav.workspace },
+  ] },
 ]
 
 // Set by the layout route: a page rendered inside it must not draw a second shell.

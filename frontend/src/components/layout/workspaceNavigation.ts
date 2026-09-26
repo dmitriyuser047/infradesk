@@ -4,7 +4,7 @@
  * The URL stays the only source of truth for the context: organization in the path, project and
  * environment in `?project=&environment=`. Nothing here keeps state.
  */
-export type WorkspaceModule = 'overview' | 'resources' | 'connections' | 'incidents' | 'workspace'
+export type WorkspaceModule = 'overview' | 'resources' | 'connections' | 'incidents' | 'notifications' | 'workspace'
 
 export interface WorkspaceScope {
   organizationId?: string
@@ -18,6 +18,7 @@ export function activeWorkspaceModule(pathname: string): WorkspaceModule | null 
   if (/^\/organizations\/[^/]+\/overview\/?$/.test(pathname)) return 'overview'
   if (pathname.includes('/incidents')) return 'incidents'
   if (pathname.includes('/connections')) return 'connections'
+  if (pathname.includes('/notifications')) return 'notifications'
   if (/^\/organizations\/[^/]+\/resources\/?$/.test(pathname)) return 'resources'
   if (pathname.includes('/environments/') && !pathname.endsWith('/environments/new')) return 'resources'
   return 'workspace'
@@ -34,6 +35,7 @@ export function modulePath(module: WorkspaceModule, scope: WorkspaceScope): stri
     case 'workspace': return `${base}${query}`
     case 'incidents': return `${base}/incidents${query}`
     case 'connections': return `${base}/connections${query}`
+    case 'notifications': return `${base}/notifications${query}`
     case 'resources':
       // Resources are listed per environment; without one the page asks which to open.
       return scope.environmentId && scope.projectId
