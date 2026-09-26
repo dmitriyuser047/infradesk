@@ -37,6 +37,7 @@ export function canOrganization(
 
 export interface OrganizationPermissions {
   role: string | undefined
+  isPending: boolean
   can: (permission: OrganizationPermission) => boolean
 }
 
@@ -45,5 +46,5 @@ export function useOrganizationPermissions(organizationId: string | undefined): 
   const memberships = useMyOrganizations()
   const role = memberships.data?.find(value => value.id === organizationId)?.role
 
-  return { role, can: permission => canOrganization(role, permission) }
+  return { role, isPending: memberships.isPending, can: permission => canOrganization(role, permission) }
 }

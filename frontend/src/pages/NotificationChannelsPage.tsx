@@ -27,8 +27,9 @@ function NotificationChannelsContent({ organizationId }: { organizationId: strin
   const label = (type: string) => type === 'WEBHOOK' ? t.webhook : type === 'TELEGRAM' ? t.telegram : t.email
   return <AppShell><div className="workspace-page">
     <WorkspaceHeader title={t.title} subtitle={t.subtitle} actions={canManage ? <Link className="primary-button" to={createPath}><Plus aria-hidden size={16} />{t.add}</Link> : null} />
-    {!canManage ? <InlineAlert tone="danger" title={t.accessDenied} /> : null}
-    {query.isPending ? <div className="notification-loading" role="status">{t.loading}</div> : null}
+    {permissions.isPending ? <div className="notification-loading" role="status">{t.loadingPermissions}</div> : null}
+    {!permissions.isPending && !canManage ? <InlineAlert tone="danger" title={t.accessDenied} /> : null}
+    {canManage && query.isPending ? <div className="notification-loading" role="status">{t.loading}</div> : null}
     {query.isError ? <InlineAlert tone="danger" title={t.loadError} action={<button className="secondary-button" onClick={() => query.refetch()}>{i18n.t.common.retry}</button>}>{describeError(query.error, i18n)}</InlineAlert> : null}
     {query.data?.length === 0 ? <EmptyWorkspaceState icon={Bell} title={t.empty} detail={t.emptyDetail} action={canManage ? <Link className="primary-button" to={createPath}><Plus aria-hidden size={16} />{t.add}</Link> : undefined} /> : null}
     {query.data?.length ? <WorkspaceSection title={t.section} actions={<span className="resource-count">{query.data.length}</span>}>
@@ -50,7 +51,7 @@ function ChannelCard({ channel, org, canManage, label, lifecycle, test }: {
   const testResult = test.variables === channel.id && test.isSuccess ? test.data : undefined
   const testError = test.variables === channel.id && test.isError
   const testText = testResult?.status === 'SENT' ? t.testSent : testResult?.status === 'RETRYABLE_FAILURE' ? t.testRetry : testResult?.status === 'PERMANENT_FAILURE' ? t.testPermanent : undefined
-  const safeCode = testResult?.code ? t.testCodes[testResult.code] : undefined
+  const safeCode = testResult?.code ? describeTestCode(testResult.code, t.testCodes) : undefined
   return <article className="notification-card">
     <div className="notification-card-heading"><div><h3>{channel.name}</h3><span className="notification-type">{label}</span></div>
       <span className={`status-indicator ${channel.enabled ? 'status-success' : 'status-muted'}`}>{channel.enabled ? t.enabled : t.disabled}</span></div>
@@ -65,11 +66,18 @@ function ChannelCard({ channel, org, canManage, label, lifecycle, test }: {
     {canManage ? <div className="notification-actions">
       <Link className="secondary-button" to={formPath}>{t.edit}</Link>
       <button className="secondary-button" disabled={lifecycle.isPending} onClick={() => lifecycle.mutate({ id: channel.id, enabled: !channel.enabled })}>{channel.enabled ? t.disable : t.enable}</button>
-      <button className="secondary-button" disabled={test.isPending} onClick={() => test.mutate(channel.id)}>{test.isPending && test.variables === channel.id ? t.sending : t.sendTest}</button>
+      <button className="secondary-button" disabled={test.isPending} onClick={() => test.submit(channel.id)}>{test.isPending && test.variables === channel.id ? t.sending : t.sendTest}</button>
     </div> : null}
     {testText || testError ? <p className={`notification-test-result ${testError || testResult?.status !== 'SENT' ? 'notification-test-error' : ''}`} role="status">
       {testText ?? t.testError}{safeCode ? ` ${safeCode}` : ''}
     </p> : null}
     {lifecycle.isError && lifecycle.variables?.id === channel.id ? <p className="notification-test-error" role="alert">{describeError(lifecycle.error, i18n)}</p> : null}
   </article>
+}
+
+function describeTestCode(code: string, messages: Record<string, string>): string | undefined {
+  if (messages[code]) return messages[code]
+  if (/^HTTP_4\d\d$/.test(code)) return messages.HTTP_4XX
+  if (/^HTTP_5\d\d$/.test(code)) return messages.HTTP_5XX
+  return undefined
 }

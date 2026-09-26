@@ -52,6 +52,11 @@ function queryClient(): QueryClient {
     createdAt: '', updatedAt: '' }
   client.setQueryData(['incidents', 'org', 'OPEN'], [{ ...incident, resource: { id: 'resource', name: 'Node', resourceTypeCode: 'NODE' } }])
   client.setQueryData(['incident', 'org', 'incident'], incident)
+  client.setQueryData(['notification-channel', 'org', 'channel'], {
+    id: 'channel', name: 'Ops Telegram', type: 'TELEGRAM', enabled: true,
+    events: ['INCIDENT_OPENED'], reasons: ['THRESHOLD'],
+    config: { credentialConfigured: true, chatId: '-100123' }, createdAt: '', updatedAt: '',
+  })
   return client
 }
 
@@ -67,6 +72,7 @@ const pages = [
   { path: '/organizations/org/connections', route: '/organizations/:organizationId/connections', element: <ConnectionsPage />, title: 'Подключения', titleEn: 'Connections' },
   { path: '/organizations/org/notifications', route: '/organizations/:organizationId/notifications', element: <NotificationChannelsPage />, title: 'Каналы уведомлений', titleEn: 'Notification channels' },
   { path: '/organizations/org/notifications/new', route: '/organizations/:organizationId/notifications/new', element: <NotificationChannelFormPage />, title: 'Новый канал уведомлений', titleEn: 'New notification channel' },
+  { path: '/organizations/org/notifications/channel/edit', route: '/organizations/:organizationId/notifications/:channelId/edit', element: <NotificationChannelFormPage />, title: 'Изменить канал уведомлений', titleEn: 'Edit notification channel' },
   { path: '/organizations/org/connections/new', route: '/organizations/:organizationId/connections/new', element: <ConnectionFormPage />, title: 'Подключение к серверу', titleEn: 'Connect a server' },
   { path: '/organizations/org/connections/connection/edit', route: '/organizations/:organizationId/connections/:connectionId/edit', element: <ConnectionFormPage />, title: 'Изменение подключения', titleEn: 'Edit connection' },
   { path: '/organizations/org/connections/connection', route: '/organizations/:organizationId/connections/:connectionId', element: <ConnectionPage />, title: 'SSH host', titleEn: 'SSH host' },

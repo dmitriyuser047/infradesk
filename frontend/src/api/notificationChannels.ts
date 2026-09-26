@@ -5,14 +5,17 @@ import type { NotificationChannelResponse, SaveNotificationChannelRequest, TestN
 
 export const notificationChannelsKey = (organizationId: string) => ['notification-channels', organizationId] as const
 export const notificationChannelKey = (organizationId: string, channelId: string) => ['notification-channel', organizationId, channelId] as const
+export const notificationChannelStaleTime = 30_000
 const path = (org: string) => `/api/v1/organizations/${encodeURIComponent(org)}/notification-channels`
 export const getNotificationChannels = (org: string) => requestJson<NotificationChannelResponse[]>(path(org))
 export const getNotificationChannel = (org: string, id: string) => requestJson<NotificationChannelResponse>(`${path(org)}/${encodeURIComponent(id)}`)
 export function useNotificationChannels(org?: string, enabled = true) {
-  return useQuery({ queryKey: ['notification-channels', org], queryFn: () => getNotificationChannels(requireId(org)), enabled: Boolean(org && enabled) })
+  return useQuery({ queryKey: ['notification-channels', org], queryFn: () => getNotificationChannels(requireId(org)),
+    enabled: Boolean(org && enabled), staleTime: notificationChannelStaleTime })
 }
 export function useNotificationChannel(org?: string, id?: string, enabled = true) {
-  return useQuery({ queryKey: ['notification-channel', org, id], queryFn: () => getNotificationChannel(requireId(org), requireId(id)), enabled: Boolean(org && id && enabled) })
+  return useQuery({ queryKey: ['notification-channel', org, id], queryFn: () => getNotificationChannel(requireId(org), requireId(id)),
+    enabled: Boolean(org && id && enabled), staleTime: notificationChannelStaleTime })
 }
 function setChannel(client: ReturnType<typeof useQueryClient>, org: string, value: NotificationChannelResponse) {
   client.setQueryData(notificationChannelKey(org, value.id), value)
@@ -41,7 +44,13 @@ export function useSetNotificationChannelEnabled(org: string) {
     onSuccess: value => setChannel(client, org, value) })
 }
 export function useTestNotificationChannel(org: string) {
-  return useMutation({ mutationFn: (id: string) => requestJson<TestNotificationResponse>(
+  const pending = useRef(false)
+  const mutation = useMutation({ mutationFn: (id: string) => requestJson<TestNotificationResponse>(
     `${path(org)}/${encodeURIComponent(id)}/test`, { method: 'POST' }) })
+  return { ...mutation, submit: (id: string) => {
+    if (pending.current) return
+    pending.current = true
+    mutation.mutate(id, { onSettled: () => { pending.current = false } })
+  } }
 }
 function requireId(value?: string): string { if (!value) throw new Error('Missing route identifier'); return value }

@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useId, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ApiError } from '../api/httpClient'
 import { useNotificationChannel, useSaveNotificationChannel } from '../api/notificationChannels'
@@ -21,6 +21,7 @@ function ChannelFormLoader({ organizationId, channelId }: { organizationId: stri
   const permissions = useOrganizationPermissions(organizationId)
   const query = useNotificationChannel(organizationId, channelId, permissions.can('manageNotifications'))
   const back = `/organizations/${encodeURIComponent(organizationId)}/notifications${location.search}`
+  if (permissions.isPending) return <AppShell><PageLoading title={channelId ? t.editTitle : t.createTitle} label={t.loadingPermissions} back={{ label: t.back, to: back }} /></AppShell>
   if (!permissions.can('manageNotifications')) return <AppShell><InlineAlert tone="danger" title={t.accessDenied} /></AppShell>
   if (channelId && query.isPending) return <AppShell><PageLoading title={t.editTitle} label={t.loading} back={{ label: t.back, to: back }} /></AppShell>
   if (channelId && (query.isError || !query.data)) return <AppShell><PageUnavailable back={{ label: t.back, to: back }} onRetry={() => query.refetch()} error={query.error}
@@ -58,11 +59,12 @@ function ChannelForm({ org, existing }: { org: string; existing?: NotificationCh
       if (url.trim()) { try { const parsed = new URL(url); if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error() } catch { return setError(t.invalidUrl) } }
     }
     if (type === 'TELEGRAM' && (!chatId.trim() || ((typeChanged || !existing) && !botToken))) return setError(t.configRequired)
-    const emailList = recipients.split(/[\n,;]+/).map(item => item.trim()).filter(Boolean)
+    const emailList = [...new Set(recipients.split(/[\n,;]+/).map(item => item.trim()).filter(Boolean))]
     if (type === 'EMAIL') {
       if (!smtpHost.trim() || !Number.isInteger(Number(smtpPort)) || Number(smtpPort) < 1 || Number(smtpPort) > 65535 || !username.trim() || !fromAddress.trim() || !emailList.length ||
         ((typeChanged || !existing) && !password)) return setError(t.configRequired)
       if (![fromAddress, ...emailList].every(value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))) return setError(t.invalidEmail)
+      if (emailList.length > 50) return setError(t.tooManyRecipients)
     }
     const body: SaveNotificationChannelRequest = { name: name.trim(), type, events, reasons }
     if (!existing) body.enabled = enabled
@@ -104,6 +106,7 @@ function ChannelForm({ org, existing }: { org: string; existing?: NotificationCh
 function SecretInput({ label, value, onChange, helper }: { label: string; value: string; onChange: (value: string) => void; helper: string }) {
   const [visible, setVisible] = useState(false)
   const i18n = useI18n()
-  return <div className="notification-secret"><label>{label}<input type={visible ? 'text' : 'password'} autoComplete="new-password" value={value} onChange={event => onChange(event.target.value)} aria-describedby={`${label}-help`} /></label>
-    <button type="button" className="text-button" onClick={() => setVisible(show => !show)}>{visible ? i18n.t.notifications.hideSecret : i18n.t.notifications.showSecret} {label}</button><p id={`${label}-help`} className="field-hint">{helper}</p></div>
+  const helperId = useId()
+  return <div className="notification-secret"><label>{label}<input type={visible ? 'text' : 'password'} autoComplete="new-password" value={value} onChange={event => onChange(event.target.value)} aria-describedby={helperId} /></label>
+    <button type="button" className="text-button" onClick={() => setVisible(show => !show)}>{visible ? i18n.t.notifications.hideSecret : i18n.t.notifications.showSecret} {label}</button><p id={helperId} className="field-hint">{helper}</p></div>
 }
