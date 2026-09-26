@@ -6,6 +6,7 @@ import cats.syntax.all._
 import domain.incident.IncidentReason
 import domain.notification.{
   NotificationChannelType,
+  NotificationContext,
   NotificationDelivery,
   NotificationDeliveryStatus,
   NotificationDeliveryTarget,
@@ -14,6 +15,7 @@ import domain.notification.{
 import org.typelevel.doobie.{ConnectionIO, Fragment, Query0, Update}
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
+import serialization.notification.NotificationContextJson
 
 import java.time.Instant
 import java.util.UUID
@@ -26,7 +28,8 @@ final class PostgresNotificationDeliveryRepository extends NotificationDeliveryR
     fr"""
       id, organization_id, incident_id, resource_id, monitor_rule_id,
       event_type, reason, channel, notification_channel_id, occurred_at, status, attempt_count,
-      next_attempt_at, claimed_by, claimed_until, sent_at, last_error_code, created_at, updated_at
+      next_attempt_at, claimed_by, claimed_until, sent_at, last_error_code, created_at, updated_at,
+      context::text
     """
 
   private def rows(query: Query0[DeliveryRow]): ConnectionIO[List[NotificationDelivery]] =
@@ -62,13 +65,14 @@ final class PostgresNotificationDeliveryRepository extends NotificationDeliveryR
       }
       Update[(UUID, UUID, UUID, UUID, UUID, String, String, String, Option[UUID], Instant, String,
         Long, Instant, Option[UUID], Option[Instant], Option[Instant], Option[String], Instant,
-        Instant)](s"""
+        Instant, Option[String])](s"""
         insert into notification_delivery (
           id, organization_id, incident_id, resource_id, monitor_rule_id,
           event_type, reason, channel, notification_channel_id, occurred_at, status, attempt_count,
-          next_attempt_at, claimed_by, claimed_until, sent_at, last_error_code, created_at, updated_at
+          next_attempt_at, claimed_by, claimed_until, sent_at, last_error_code, created_at, updated_at,
+          context
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, cast(? as jsonb))
         on conflict ($conflictColumns) $predicate do nothing
       """).updateMany(deliveries.map(delivery =>
         (delivery.id, delivery.organizationId, delivery.incidentId, delivery.resourceId,
@@ -76,7 +80,7 @@ final class PostgresNotificationDeliveryRepository extends NotificationDeliveryR
           delivery.channelType.code, delivery.target.channelId,
           delivery.occurredAt, delivery.status.code, delivery.attemptCount, delivery.nextAttemptAt,
           delivery.claimedBy, delivery.claimedUntil, delivery.sentAt, delivery.lastErrorCode,
-          delivery.createdAt, delivery.updatedAt)
+          delivery.createdAt, delivery.updatedAt, delivery.context.map(NotificationContextJson.encode))
       )).void
     }
 
@@ -128,7 +132,7 @@ final class PostgresNotificationDeliveryRepository extends NotificationDeliveryR
         returning d.id, d.organization_id, d.incident_id, d.resource_id, d.monitor_rule_id,
                   d.event_type, d.reason, d.channel, d.notification_channel_id, d.occurred_at,
                   d.status, d.attempt_count, d.next_attempt_at, d.claimed_by, d.claimed_until,
-                  d.sent_at, d.last_error_code, d.created_at, d.updated_at
+                  d.sent_at, d.last_error_code, d.created_at, d.updated_at, d.context::text
       """).query[DeliveryRow]
     )
   }
@@ -218,7 +222,8 @@ object PostgresNotificationDeliveryRepository {
     sentAt: Option[Instant],
     lastErrorCode: Option[String],
     createdAt: Instant,
-    updatedAt: Instant
+    updatedAt: Instant,
+    context: Option[String]
   ) {
     def toDomain: Either[IllegalArgumentException, NotificationDelivery] =
       for {
@@ -231,7 +236,13 @@ object PostgresNotificationDeliveryRepository {
       } yield NotificationDelivery(
         id, organizationId, incidentId, resourceId, monitorRuleId,
         typedEventType, typedReason, target, occurredAt, typedStatus, attemptCount,
-        nextAttemptAt, claimedBy, claimedUntil, sentAt, lastErrorCode, createdAt, updatedAt
+        nextAttemptAt, claimedBy, claimedUntil, sentAt, lastErrorCode, createdAt, updatedAt,
+        // A snapshot that fails to decode — an older or corrupt one — must not stop a delivery;
+        // it falls back to the identifier-only message rather than failing the read.
+        typedContext
       )
+
+    private def typedContext: Option[NotificationContext] =
+      context.flatMap(value => NotificationContextJson.decode(value).toOption)
   }
 }

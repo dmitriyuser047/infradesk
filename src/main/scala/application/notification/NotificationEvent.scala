@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package application.notification
 
 import domain.incident.IncidentReason
-import domain.notification.{NotificationDelivery, NotificationEventType}
+import domain.notification.{NotificationContext, NotificationDelivery, NotificationEventType}
 
 import java.time.Instant
 import java.util.UUID
@@ -19,7 +19,11 @@ final case class NotificationEvent(
   resourceId: UUID,
   monitorRuleId: UUID,
   incidentId: UUID,
-  reason: IncidentReason
+  reason: IncidentReason,
+  /** The descriptive snapshot a human-facing channel renders from and a webhook enriches with,
+    * carried from the delivery so no transport reads the database to build a message.
+    */
+  context: Option[NotificationContext] = None
 )
 
 object NotificationEvent {
@@ -32,6 +36,7 @@ object NotificationEvent {
       delivery.resourceId,
       delivery.monitorRuleId,
       delivery.incidentId,
-      delivery.reason
+      delivery.reason,
+      delivery.context
     )
 }

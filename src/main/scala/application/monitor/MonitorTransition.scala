@@ -2,11 +2,17 @@ package ru.bitec.app.ops
 package application.monitor
 
 import domain.incident.IncidentReason
+import domain.notification.NotificationContext
 
 import java.time.Instant
 import java.util.UUID
 
-/** A committed incident change, reported to the caller for logging after the transaction. */
+/** A committed incident change, reported to the caller for logging after the transaction.
+  *
+  * `context` is the human-facing snapshot built from the same evaluation projection. It is
+  * optional so the identity of a transition — what happened, to which incident — never depends on
+  * whether a description could be built.
+  */
 sealed trait MonitorTransition {
   def eventName: String
   def organizationId: UUID
@@ -15,6 +21,7 @@ sealed trait MonitorTransition {
   def incidentId: UUID
   def reason: IncidentReason
   def evaluatedAt: Instant
+  def context: Option[NotificationContext]
 
   final def logMessage: String =
     s"$eventName organizationId=$organizationId resourceId=$resourceId monitorRuleId=$monitorRuleId " +
@@ -28,7 +35,8 @@ object MonitorTransition {
     monitorRuleId: UUID,
     incidentId: UUID,
     reason: IncidentReason,
-    evaluatedAt: Instant
+    evaluatedAt: Instant,
+    context: Option[NotificationContext] = None
   ) extends MonitorTransition {
     val eventName = "incident.opened"
   }
@@ -39,7 +47,8 @@ object MonitorTransition {
     monitorRuleId: UUID,
     incidentId: UUID,
     reason: IncidentReason,
-    evaluatedAt: Instant
+    evaluatedAt: Instant,
+    context: Option[NotificationContext] = None
   ) extends MonitorTransition {
     val eventName = "incident.resolved"
   }

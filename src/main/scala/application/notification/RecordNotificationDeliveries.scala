@@ -76,7 +76,8 @@ final class RecordNotificationDeliveries[Tx[_]: MonadThrow](
             sentAt = None,
             lastErrorCode = None,
             createdAt = now,
-            updatedAt = now
+            updatedAt = now,
+            context = transition.context
           ))
         }
         _ <- if (rows.isEmpty) ().pure[Tx] else deliveries.saveAll(rows)

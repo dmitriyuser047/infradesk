@@ -6,8 +6,9 @@ import cats.MonadThrow
 import cats.syntax.all._
 import domain.incident.{Incident, IncidentStatus}
 import domain.monitor.MonitorRuleState
+import domain.notification.NotificationContext
 
-import java.time.Instant
+import java.time.{Duration, Instant}
 import java.util.UUID
 
 /** Evaluates every enabled monitor rule of a connection in one projection read, decides the new
@@ -51,7 +52,8 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
     val rule = input.rule
     val resolved = plan.resolvedIncident
     val resolvedTransition = resolved.map(incident => MonitorTransition.Resolved(
-      rule.organizationId, rule.resourceId, rule.id, incident.id, incident.reason, evaluatedAt
+      rule.organizationId, rule.resourceId, rule.id, incident.id, incident.reason, evaluatedAt,
+      Some(contextOf(input, durationSeconds = Some(durationOf(incident, evaluatedAt))))
     ))
 
     plan.openedIncident match {
@@ -69,12 +71,33 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
             resolved,
             Some(incident),
             resolvedTransition.toList :+ MonitorTransition.Opened(
-              rule.organizationId, rule.resourceId, rule.id, incidentId, opened.reason, evaluatedAt
+              rule.organizationId, rule.resourceId, rule.id, incidentId, opened.reason, evaluatedAt,
+              Some(contextOf(input, durationSeconds = None))
             )
           )
         }
     }
   }
+
+  /** The descriptive snapshot every channel renders from, built from the projection this
+    * evaluation already read — no further query, and identical for the resolved and opened events
+    * of one evaluation apart from the duration a resolution carries.
+    */
+  private def contextOf(input: MonitorEvaluationInput, durationSeconds: Option[Long]): NotificationContext =
+    NotificationContext(
+      serverName = input.serverName,
+      resourceTypeName = input.resourceTypeName,
+      environmentName = input.environmentName,
+      projectName = input.projectName,
+      metricCode = input.rule.metricCode,
+      operator = input.rule.operator,
+      threshold = input.rule.threshold,
+      currentValue = input.observation.map(_.value),
+      durationSeconds = durationSeconds
+    )
+
+  private def durationOf(incident: Incident, evaluatedAt: Instant): Long =
+    Duration.between(incident.startedAt, evaluatedAt).getSeconds.max(0)
 
   private def saveStates(states: List[MonitorRuleState]): Tx[Unit] =
     if (states.isEmpty) ().pure[Tx] else monitorRuleStateRepository.saveAll(states)

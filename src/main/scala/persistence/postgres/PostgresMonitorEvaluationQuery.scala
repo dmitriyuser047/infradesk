@@ -49,7 +49,11 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
     incidentOpenedAt: Option[Instant],
     incidentResolvedAt: Option[Instant],
     incidentCreatedAt: Option[Instant],
-    incidentUpdatedAt: Option[Instant]
+    incidentUpdatedAt: Option[Instant],
+    resourceName: String,
+    resourceTypeName: String,
+    environmentName: Option[String],
+    projectName: Option[String]
   ) {
     def toDomain: Either[IllegalArgumentException, MonitorEvaluationInput] =
       for {
@@ -63,7 +67,12 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
           ruleThreshold, ruleForSeconds, ruleNoDataSeconds, ruleEnabled, ruleCreatedAt, ruleUpdatedAt),
         observation,
         state,
-        incident
+        incident,
+        // Monitoring targets nodes, so the monitored resource is itself the server.
+        serverName = resourceName,
+        resourceTypeName = resourceTypeName,
+        environmentName = environmentName,
+        projectName = projectName
       )
 
     private def optionalObservation: Either[IllegalArgumentException, Option[MetricObservation]] =
@@ -129,13 +138,20 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
               mo.id, mo.organization_id, mo.resource_id, mo.metric_code, mo.value, mo.observed_at,
               mrs.organization_id, mrs.monitor_rule_id, mrs.status, mrs.pending_since, mrs.updated_at,
               i.id, i.organization_id, i.monitor_rule_id, i.resource_id, i.status, i.reason,
-              i.started_at, i.opened_at, i.resolved_at, i.created_at, i.updated_at
+              i.started_at, i.opened_at, i.resolved_at, i.created_at, i.updated_at,
+              r.name, rt.name, e.name, p.name
             from monitor_rule mr
             join resource r
               on r.id = mr.resource_id
              and r.organization_id = mr.organization_id
             join resource_type rt
               on rt.id = r.resource_type_id
+            left join environment e
+              on e.id = r.environment_id
+             and e.organization_id = r.organization_id
+            left join project p
+              on p.id = e.project_id
+             and p.organization_id = e.organization_id
             left join lateral (
               select observation.id, observation.organization_id, observation.resource_id,
                      observation.metric_code, observation.value, observation.observed_at

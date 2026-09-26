@@ -57,8 +57,14 @@ object WebhookNotificationSender {
       case NotificationEventType.IncidentResolved => "incident.resolved"
     }
 
-  def payload(event: NotificationEvent): Json =
-    Json.obj(
+  /** The webhook stays a machine-readable API: every field a receiver already parses keeps its
+    * name, type and meaning. When the event carries a descriptive snapshot, its human-facing
+    * details are added as further top-level fields — additive, so an existing consumer ignores
+    * them — and never in place of an identifier. The values come from the snapshot, so the body a
+    * receiver deduplicates on is byte-for-byte identical across retries.
+    */
+  def payload(event: NotificationEvent): Json = {
+    val base = List(
       "eventId" -> Json.fromString(event.eventId.toString),
       "eventType" -> Json.fromString(eventTypeCode(event.eventType)),
       "occurredAt" -> Json.fromString(event.occurredAt.toString),
@@ -67,6 +73,22 @@ object WebhookNotificationSender {
       "monitorRuleId" -> Json.fromString(event.monitorRuleId.toString),
       "incidentId" -> Json.fromString(event.incidentId.toString),
       "reason" -> Json.fromString(event.reason.code)
+    )
+    Json.obj(base ++ event.context.toList.flatMap(enrichment): _*)
+  }
+
+  private def enrichment(context: domain.notification.NotificationContext): List[(String, Json)] =
+    List(
+      "resourceName" -> Json.fromString(context.serverName),
+      "serverName" -> Json.fromString(context.serverName),
+      "resourceType" -> Json.fromString(context.resourceTypeName),
+      "environment" -> context.environmentName.fold(Json.Null)(Json.fromString),
+      "project" -> context.projectName.fold(Json.Null)(Json.fromString),
+      "metric" -> Json.fromString(context.metricCode.code),
+      "operator" -> Json.fromString(context.operator.code),
+      "threshold" -> Json.fromBigDecimal(context.threshold),
+      "currentValue" -> context.currentValue.fold(Json.Null)(Json.fromBigDecimal),
+      "durationSeconds" -> context.durationSeconds.fold(Json.Null)(Json.fromLong)
     )
 
   /** 2xx accepts the event; overload and server-side problems are worth repeating; anything else

@@ -2,13 +2,16 @@ package ru.bitec.app.ops
 package application.notification
 
 import application.monitor.{MonitorRuleEvaluator, MonitorTransition}
-import application.port.{IdGenerator, NotificationDeliveryRepository, NotificationSendResult, NotificationSender, TimeProvider, TransactionRunner}
+import application.port.{IdGenerator, NotificationChannelRoutingQuery, NotificationDeliveryRepository, NotificationRoute, NotificationRoutingKey, NotificationSendResult, NotificationSender, TimeProvider, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.incident.IncidentReason
+import domain.metric.MetricCode
+import domain.monitor.MonitorOperator
 import application.port.{NotificationDeliveryScope, NotificationSendRequest}
 import domain.notification.{
   NotificationChannelType,
+  NotificationContext,
   NotificationDelivery,
   NotificationDeliveryStatus,
   NotificationDeliveryTarget,
@@ -65,6 +68,25 @@ final class NotificationOutboxSpec extends FunSuite {
       ("INCIDENT_RESOLVED", "NO_DATA"),
       ("INCIDENT_OPENED", "THRESHOLD")
     ))
+  }
+
+  test("the descriptive snapshot is taken once and copied to every destination in one routing query") {
+    val repository = new RecordingRepository
+    val routing = new RecordingRouting(List(
+      NotificationRoute(openedKey, ChannelA, NotificationChannelType.Telegram),
+      NotificationRoute(openedKey, ChannelB, NotificationChannelType.Email)
+    ))
+    new RecordNotificationDeliveries[IO](repository, routing, new SequenceIdGenerator,
+      new FixedTimeProvider, List(NotificationDeliveryTarget.LegacyWebhook))
+      .record(List(openedWithContext)).unsafeRunSync()
+
+    // Two configured channels and the legacy webhook: three deliveries from one event.
+    assertEquals(repository.saved.size, 3)
+    // Every destination carries the very same snapshot — built once, never re-read per channel.
+    assertEquals(repository.saved.flatMap(_.context).distinct, List(SampleContext))
+    assertEquals(repository.saved.count(_.context.contains(SampleContext)), 3)
+    // One routing question for the whole batch: no per-channel or per-transport lookup.
+    assertEquals(routing.questions.size, 1)
   }
 
   test("without a configured channel nothing is recorded at all") {
@@ -285,6 +307,14 @@ final class NotificationOutboxSpec extends FunSuite {
     override def run[A](program: IO[A]): IO[A] = program
   }
 
+  /** Routing that returns fixed routes and remembers how many times it was asked. */
+  private final class RecordingRouting(routes: List[NotificationRoute])
+    extends NotificationChannelRoutingQuery[IO] {
+    var questions: List[Set[NotificationRoutingKey]] = List.empty
+    override def matching(keys: Set[NotificationRoutingKey]): IO[List[NotificationRoute]] =
+      IO { questions = questions :+ keys } *> IO.pure(routes.filter(route => keys.contains(route.key)))
+  }
+
   private final class SequenceIdGenerator extends IdGenerator[IO] {
     private var index = 0
     override def nextId: IO[UUID] = IO {
@@ -312,4 +342,13 @@ final class NotificationOutboxSpec extends FunSuite {
     IncidentReason.ThresholdViolation, EvaluatedAt)
   private val resolved = MonitorTransition.Resolved(OrganizationId, ResourceId, RuleId, IncidentId,
     IncidentReason.NoData, EvaluatedAt)
+
+  private val ChannelA = UUID.fromString("30000000-0000-0000-0000-00000000000a")
+  private val ChannelB = UUID.fromString("30000000-0000-0000-0000-00000000000b")
+  private val SampleContext = NotificationContext("production-01", "Node", Some("production"),
+    Some("Payments"), MetricCode.CpuUsagePercent, MonitorOperator.GreaterThan, BigDecimal(80),
+    Some(BigDecimal(92)), None)
+  private val openedWithContext = opened.copy(context = Some(SampleContext))
+  private val openedKey = NotificationRoutingKey(OrganizationId,
+    NotificationEventType.IncidentOpened, IncidentReason.ThresholdViolation)
 }

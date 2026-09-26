@@ -153,6 +153,32 @@ final class ManagedTransportSpec extends FunSuite {
     }
   }
 
+  test("a name that looks like markup cannot break a Telegram message") {
+    val seen = Ref.unsafe[IO, List[Json]](Nil)
+    val risky = NotificationMessage("[InfraDesk]",
+      "Сервер: prod <01> & backend_test\nПроблема: Использование CPU выше допустимого")
+
+    withServer(HttpRoutes.of[IO] {
+      case request @ POST -> Root / _ / "sendMessage" =>
+        request.as[Json].flatMap(body => seen.update(_ :+ body)) *> Ok(Json.obj("ok" -> Json.True))
+    }) { (client, base) =>
+      val transport = new TelegramTransport(client, 5.seconds, base)
+      for {
+        result <- transport.send("123:abc", "-100777", risky)
+        recorded <- seen.get
+      } yield IO {
+        assertEquals(result, NotificationSendResult.Sent)
+        // The text arrives verbatim: JSON encoding carried the angle brackets and ampersand
+        // through unharmed.
+        assertEquals(recorded.map(_.hcursor.get[String]("text")), List(Right(risky.text)))
+        // No parse mode is requested, so there is no markup for a value to break in the first
+        // place.
+        assertEquals(recorded.flatMap(_.hcursor.keys.map(_.toList)).flatten.contains("parse_mode"),
+          false)
+      }
+    }
+  }
+
   test("Telegram saying it did not work is not the same as the network saying nothing") {
     val answers = List(
       (Status.Ok, Json.obj("ok" -> Json.False), NotificationSendResult.PermanentFailure(

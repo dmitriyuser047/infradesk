@@ -117,7 +117,12 @@ final case class NotificationDelivery(
   sentAt: Option[Instant],
   lastErrorCode: Option[String],
   createdAt: Instant,
-  updatedAt: Instant
+  updatedAt: Instant,
+  /** The human-facing snapshot taken when the event was recorded, so the message a person reads
+    * is stable across retries and no transport reads the database to build it. Absent for rows
+    * written before this column existed, and for the test-channel event that has no incident.
+    */
+  context: Option[NotificationContext] = None
 ) {
   /** Which transport this delivery needs, whoever it is addressed to. */
   def channelType: NotificationChannelType = target.channelType

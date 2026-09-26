@@ -7,7 +7,9 @@ import cats.effect.{IO, Ref}
 import cats.effect.unsafe.implicits.global
 import com.comcast.ip4s._
 import domain.incident.IncidentReason
-import domain.notification.NotificationEventType
+import domain.metric.MetricCode
+import domain.monitor.MonitorOperator
+import domain.notification.{NotificationContext, NotificationEventType}
 import io.circe.Json
 import munit.FunSuite
 import org.http4s.circe.CirceEntityDecoder._
@@ -40,6 +42,32 @@ final class WebhookNotificationSenderSpec extends FunSuite {
     assertEquals(payload.hcursor.get[String]("eventType"), Right("incident.opened"))
     assertEquals(payload.hcursor.get[String]("incidentId"), Right(IncidentId.toString))
     assertEquals(payload.hcursor.get[String]("reason"), Right("THRESHOLD"))
+  }
+
+  test("the payload keeps every existing field and only adds enrichment when a context is present") {
+    val bare = WebhookNotificationSender.payload(event)
+    val enriched = WebhookNotificationSender.payload(event.copy(
+      eventType = NotificationEventType.IncidentResolved, context = Some(context)))
+
+    // Backward compatibility: an event without a context is byte-for-byte the old contract.
+    assertEquals(bare.hcursor.keys.map(_.toList),
+      Some(List("eventId", "eventType", "occurredAt", "organizationId", "resourceId",
+        "monitorRuleId", "incidentId", "reason")))
+    assertEquals(bare.hcursor.get[String]("eventId"), Right(EventId.toString))
+
+    // The mandatory identifiers are untouched; enrichment is additive.
+    assertEquals(enriched.hcursor.get[String]("eventId"), Right(EventId.toString))
+    assertEquals(enriched.hcursor.get[String]("incidentId"), Right(IncidentId.toString))
+    assertEquals(enriched.hcursor.get[String]("eventType"), Right("incident.resolved"))
+    assertEquals(enriched.hcursor.get[String]("reason"), Right("THRESHOLD"))
+    assertEquals(enriched.hcursor.get[String]("resourceName"), Right("production-01"))
+    assertEquals(enriched.hcursor.get[String]("resourceType"), Right("Node"))
+    assertEquals(enriched.hcursor.get[String]("environment"), Right("production"))
+    assertEquals(enriched.hcursor.get[String]("metric"), Right("CPU_USAGE_PERCENT"))
+    assertEquals(enriched.hcursor.get[String]("operator"), Right("GREATER_THAN"))
+    assertEquals(enriched.hcursor.get[BigDecimal]("threshold"), Right(BigDecimal(80)))
+    assertEquals(enriched.hcursor.get[BigDecimal]("currentValue"), Right(BigDecimal(43)))
+    assertEquals(enriched.hcursor.get[Long]("durationSeconds"), Right(504L))
   }
 
   test("an overloaded or failing receiver is retryable") {
@@ -121,6 +149,18 @@ final class WebhookNotificationSenderSpec extends FunSuite {
     UUID.fromString("90000000-0000-0000-0000-000000000001"),
     IncidentId,
     IncidentReason.ThresholdViolation
+  )
+
+  private val context = NotificationContext(
+    serverName = "production-01",
+    resourceTypeName = "Node",
+    environmentName = Some("production"),
+    projectName = Some("Payments"),
+    metricCode = MetricCode.CpuUsagePercent,
+    operator = MonitorOperator.GreaterThan,
+    threshold = BigDecimal(80),
+    currentValue = Some(BigDecimal(43)),
+    durationSeconds = Some(504)
   )
 
   /** The legacy webhook has one destination, so every attempt is aimed at the same place. */

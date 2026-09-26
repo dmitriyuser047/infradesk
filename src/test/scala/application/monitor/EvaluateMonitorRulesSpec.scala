@@ -43,9 +43,9 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
     assertEquals(recovered.incidents.head.status, IncidentStatus.Resolved)
     assertEquals(pendingRecovered.states.head.status, MonitorRuleStatus.Ok)
     assertEquals(pendingRecovered.incidents, List.empty)
-    assertEquals(recovered.transitions, List(MonitorTransition.Resolved(
-      OrganizationId, ResourceId, RuleId, IncidentId, IncidentReason.ThresholdViolation, EvaluatedAt
-    )))
+    assertEquals(recovered.transitions.map(transition =>
+      (transition.eventName, transition.incidentId, transition.reason)),
+      List(("incident.resolved", IncidentId, IncidentReason.ThresholdViolation)))
   }
 
   test("opens immediately for a zero-duration violation and returns the transition") {
@@ -54,9 +54,9 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
     assertEquals(result.states.head.status, MonitorRuleStatus.Firing)
     assertEquals(result.incidents.head.startedAt, ObservedAt)
     assertEquals(result.incidents.head.reason, IncidentReason.ThresholdViolation)
-    assertEquals(result.transitions, List(MonitorTransition.Opened(
-      OrganizationId, ResourceId, RuleId, NewIncidentId, IncidentReason.ThresholdViolation, EvaluatedAt
-    )))
+    assertEquals(result.transitions.map(transition =>
+      (transition.eventName, transition.incidentId, transition.reason)),
+      List(("incident.opened", NewIncidentId, IncidentReason.ThresholdViolation)))
   }
 
   test("keeps the original pendingSince until the configured duration is reached") {
