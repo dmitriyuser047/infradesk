@@ -8,6 +8,7 @@ const permissions: readonly OrganizationPermission[] = [
   'manageConnections',
   'runConnectionSync',
   'manageMonitoring',
+  'manageNotifications',
   'viewAudit',
   'executeOperations',
 ]

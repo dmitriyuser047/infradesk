@@ -18,6 +18,8 @@ import { OrganizationsPage } from '../pages/OrganizationsPage'
 import { OverviewPage } from '../pages/OverviewPage'
 import { ResourcesIndexPage } from '../pages/ResourcesIndexPage'
 import { LoginPage } from '../pages/LoginPage'
+import { NotificationChannelsPage } from '../pages/NotificationChannelsPage'
+import { NotificationChannelFormPage } from '../pages/NotificationChannelFormPage'
 
 export const router = createBrowserRouter([
   {
@@ -37,6 +39,9 @@ export const router = createBrowserRouter([
       { path: '/organizations/:organizationId/connections/:connectionId/edit', element: <ConnectionFormPage /> },
       { path: '/organizations/:organizationId/connections/new', element: <ConnectionFormPage /> },
       { path: '/organizations/:organizationId/connections', element: <ConnectionsPage /> },
+      { path: '/organizations/:organizationId/notifications/:channelId/edit', element: <NotificationChannelFormPage /> },
+      { path: '/organizations/:organizationId/notifications/new', element: <NotificationChannelFormPage /> },
+      { path: '/organizations/:organizationId/notifications', element: <NotificationChannelsPage /> },
       { path: '/organizations/:organizationId/incidents/:incidentId', element: <IncidentPage /> },
       { path: '/organizations/:organizationId/incidents', element: <IncidentsPage /> },
       {

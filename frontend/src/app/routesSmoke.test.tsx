@@ -20,6 +20,8 @@ import { OverviewPage } from '../pages/OverviewPage'
 import { ProjectCreatePage } from '../pages/ProjectCreatePage'
 import { ResourcePage } from '../pages/ResourcePage'
 import { ResourcesIndexPage } from '../pages/ResourcesIndexPage'
+import { NotificationChannelsPage } from '../pages/NotificationChannelsPage'
+import { NotificationChannelFormPage } from '../pages/NotificationChannelFormPage'
 
 function queryClient(): QueryClient {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -63,6 +65,8 @@ const pages = [
   { path: '/organizations/org/environments/environment?project=project', route: '/organizations/:organizationId/environments/:environmentId', element: <EnvironmentPage />, title: 'Ресурсы', titleEn: 'Resources' },
   { path: '/organizations/org/environments/environment/resources/resource?project=project', route: '/organizations/:organizationId/environments/:environmentId/resources/:resourceId', element: <ResourcePage />, title: 'Node', titleEn: 'Node' },
   { path: '/organizations/org/connections', route: '/organizations/:organizationId/connections', element: <ConnectionsPage />, title: 'Подключения', titleEn: 'Connections' },
+  { path: '/organizations/org/notifications', route: '/organizations/:organizationId/notifications', element: <NotificationChannelsPage />, title: 'Каналы уведомлений', titleEn: 'Notification channels' },
+  { path: '/organizations/org/notifications/new', route: '/organizations/:organizationId/notifications/new', element: <NotificationChannelFormPage />, title: 'Новый канал уведомлений', titleEn: 'New notification channel' },
   { path: '/organizations/org/connections/new', route: '/organizations/:organizationId/connections/new', element: <ConnectionFormPage />, title: 'Подключение к серверу', titleEn: 'Connect a server' },
   { path: '/organizations/org/connections/connection/edit', route: '/organizations/:organizationId/connections/:connectionId/edit', element: <ConnectionFormPage />, title: 'Изменение подключения', titleEn: 'Edit connection' },
   { path: '/organizations/org/connections/connection', route: '/organizations/:organizationId/connections/:connectionId', element: <ConnectionPage />, title: 'SSH host', titleEn: 'SSH host' },

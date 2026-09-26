@@ -124,6 +124,7 @@ export const ru: Messages = {
       connections: 'Подключения',
       incidents: 'Инциденты',
       workspace: 'Проекты и окружения',
+      notifications: 'Уведомления',
     },
   },
 
@@ -196,6 +197,27 @@ export const ru: Messages = {
     },
     openOverview: 'Обзор',
     addEnvironmentTo: (project: string) => `Добавить окружение в ${project}`,
+  },
+
+  notifications: {
+    title: 'Каналы уведомлений', subtitle: 'Отправляйте уведомления об инцидентах в вебхуки, Telegram или по почте.', add: 'Создать канал',
+    empty: 'Каналов уведомлений пока нет', emptyDetail: 'Уведомления можно отправлять в вебхуки, чаты Telegram или по почте.',
+    loading: 'Загрузка каналов уведомлений', loadError: 'Не удалось загрузить каналы уведомлений', section: 'Каналы',
+    enabled: 'Включён', disabled: 'Выключен', enable: 'Включить', disable: 'Выключить', edit: 'Изменить', sendTest: 'Отправить тест', sending: 'Отправка…',
+    credentialConfigured: 'Учётные данные настроены', credentialMissing: 'Учётные данные не настроены', events: 'События', reasons: 'Причины',
+    incidentOpened: 'Инцидент открыт', incidentResolved: 'Инцидент закрыт', threshold: 'Превышение порога', noData: 'Нет данных',
+    webhook: 'Вебхук', telegram: 'Telegram', email: 'Почта', endpointSecure: 'Адрес настроен и хранится безопасно', chat: 'Чат', smtp: 'SMTP',
+    from: 'Отправитель', recipients: 'Получатели', start: 'Создать канал', createTitle: 'Новый канал уведомлений', editTitle: 'Изменить канал уведомлений', back: 'Каналы уведомлений',
+    name: 'Название', type: 'Тип канала', url: 'URL вебхука', urlHelper: 'Адрес хранится безопасно и больше не будет показан.',
+    secretKeep: 'Оставьте поле пустым, чтобы сохранить текущие учётные данные. Введите новое значение для замены.', secretRequired: 'Для этого канала нужны учётные данные.',
+    chatId: 'ID чата', botToken: 'Токен бота', smtpHost: 'SMTP-сервер', smtpPort: 'Порт SMTP', security: 'Защита соединения', username: 'Имя пользователя', password: 'Пароль', fromAddress: 'Адрес отправителя',
+    enabledAtCreate: 'Включить канал после создания', save: 'Сохранить канал', saving: 'Сохранение…', eventsRequired: 'Выберите хотя бы одно событие.', reasonsRequired: 'Выберите хотя бы одну причину.', nameRequired: 'Введите название.',
+    configRequired: 'Заполните настройки канала.', invalidUrl: 'Введите полный адрес HTTP или HTTPS.', invalidEmail: 'Проверьте адреса электронной почты.',
+    accessDenied: 'Недостаточно прав для управления каналами уведомлений.', notFound: 'Канал уведомлений не найден.', testSent: 'Тестовое уведомление отправлено.',
+    testRetry: 'Адрес временно недоступен. Попробуйте позже.', testPermanent: 'Проверьте настройки канала.', testError: 'Не удалось отправить тестовое уведомление.',
+    testCodes: { CHANNEL_NOT_FOUND: 'Канал уведомлений не найден.', CHANNEL_SECRET_NOT_FOUND: 'Не заданы учётные данные канала.', CHANNEL_CREDENTIAL_INVALID: 'Учётные данные канала недействительны.', DESTINATION_NOT_ALLOWED: 'Адрес назначения запрещён.', DESTINATION_RESOLUTION_FAILED: 'Не удалось определить адрес назначения.', WEBHOOK_URL_INVALID: 'Неверный URL вебхука.', WEBHOOK_TIMEOUT: 'Вебхук не ответил вовремя.', WEBHOOK_NETWORK_ERROR: 'Не удалось подключиться к вебхуку.', TELEGRAM_RATE_LIMITED: 'Превышен лимит запросов Telegram.', TELEGRAM_TIMEOUT: 'Telegram не ответил вовремя.', TELEGRAM_AUTH_ERROR: 'Telegram отклонил учётные данные бота.', TELEGRAM_API_ERROR: 'Telegram не смог доставить сообщение.', TELEGRAM_SERVER_ERROR: 'Telegram временно недоступен.', TELEGRAM_CONNECTION_FAILED: 'Не удалось подключиться к Telegram.', TELEGRAM_UNEXPECTED_ERROR: 'Telegram не смог доставить сообщение.', SMTP_TIMEOUT: 'Почтовый сервер не ответил вовремя.', SMTP_TLS_FAILURE: 'Не удалось установить защищённое соединение с почтовым сервером.', SMTP_TEMPORARY_FAILURE: 'Почтовый сервер временно недоступен.', SMTP_AUTH_FAILURE: 'Почтовый сервер отклонил учётные данные.', SMTP_PERMANENT_FAILURE: 'Почтовый сервер не смог доставить сообщение.', SMTP_UNEXPECTED_ERROR: 'Почтовый сервер не смог доставить сообщение.' } as Record<string, string>,
+    securityModes: { NONE: 'Нет', STARTTLS: 'STARTTLS', TLS: 'TLS' },
+    showSecret: 'Показать', hideSecret: 'Скрыть', recipientsHelp: 'Укажите по одному адресу в строке.',
   },
 
   projectForm: {
