@@ -10,6 +10,7 @@ import infrastructure.database.DoobieTransactionRunner
 import munit.FunSuite
 import org.typelevel.doobie.ConnectionIO
 import org.typelevel.doobie.implicits._
+import org.typelevel.doobie.postgres.implicits._
 
 import java.time.Instant
 import java.util.UUID
