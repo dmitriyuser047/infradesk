@@ -49,7 +49,9 @@ function SecurityEventsSection() {
   const [items, setItems] = useState<import('../types/auth').SecurityEventResponse[]>([])
   const events = useSecurityEvents(cursor)
   useEffect(() => {
-    if (events.data) setItems(cursor ? existing => [...existing, ...events.data!.items] : events.data.items)
+    if (events.data) setItems(cursor
+      ? existing => [...existing, ...events.data!.items.filter(event => !existing.some(saved => saved.id === event.id))]
+      : events.data.items)
   }, [events.data, cursor])
   const rows = items
 

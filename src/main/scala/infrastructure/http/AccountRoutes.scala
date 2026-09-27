@@ -102,7 +102,8 @@ final class AccountRoutes[Tx[_]](
   def securityEvents(session: AuthenticatedSession, request: Request[IO]): IO[Response[IO]] = {
     val params = request.uri.query.params
     (securityCursor(params.get("beforeOccurredAt"), params.get("beforeId")), securityLimit(params.get("limit"))) match {
-      case (Left(error), _) | (_, Left(error)) => BadRequest(error)
+      case (Left(error), _) => BadRequest(error)
+      case (_, Left(error)) => BadRequest(error)
       case (Right(before), Right(limit)) =>
         runner.run(listSecurityEvents.execute(session.user.id, before, limit)).attempt.flatMap {
           case Right(page) => Ok(SecurityEventPageResponse(page.items.map(event => SecurityEventResponse(event.id,

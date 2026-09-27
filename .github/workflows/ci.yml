@@ -129,6 +129,20 @@ jobs:
           test "${ready}" = "true"
       - name: Smoke-test the deployment
         run: ./scripts/check-production.sh http://127.0.0.1:8081
+      - name: Verify nginx login throttling preserves the InfraDesk JSON contract
+        run: |
+          response=""
+          for _ in $(seq 1 12); do
+            response="$(curl --silent --show-error --request POST \
+              --header 'Content-Type: application/json' \
+              --data '{"email":"edge-rate-limit@example.test","password":"wrong"}' \
+              --write-out $'\n%{http_code}\n%{content_type}' \
+              http://127.0.0.1:8081/api/v1/auth/login)"
+            if printf '%s' "${response}" | tail -n 2 | head -n 1 | grep -qx '429'; then break; fi
+          done
+          printf '%s' "${response}" | tail -n 2 | head -n 1 | grep -qx '429'
+          printf '%s' "${response}" | tail -n 1 | grep -q '^application/json'
+          printf '%s' "${response}" | head -n -2 | grep -q '"code":"LOGIN_RATE_LIMITED"'
       - name: Exercise production backup and restore
         run: |
           marker_id="00000000-0000-0000-0000-000000000014"

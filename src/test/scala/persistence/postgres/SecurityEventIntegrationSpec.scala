@@ -1,0 +1,67 @@
+package ru.bitec.app.ops
+package persistence.postgres
+
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
+import cats.syntax.all._
+import domain.auth.{SecurityEvent, SecurityEventCursor, SecurityEventType, UserAccount}
+import infrastructure.database.DoobieTransactionRunner
+import munit.FunSuite
+import org.typelevel.doobie.ConnectionIO
+import org.typelevel.doobie.implicits._
+
+import java.time.Instant
+import java.util.UUID
+
+/** Real PostgreSQL coverage for account-owned security history: isolation, the two-part cursor,
+  * retention deletion and the bounded indexed read path. */
+final class SecurityEventIntegrationSpec extends FunSuite {
+  test("pagination keeps every tied-timestamp event and never crosses user boundaries") {
+    withSetup { setup =>
+      val at = Instant.parse("2026-09-27T12:00:00Z")
+      val mine = List.fill(3)(UUID.randomUUID()).map(id => SecurityEvent(id, setup.userId,
+        SecurityEventType.LoginSucceeded, at, None, Some("203.0.113.10"), None))
+      val other = SecurityEvent(UUID.randomUUID(), setup.otherUserId, SecurityEventType.PasswordChanged, at, None, None, None)
+      for {
+        _ <- setup.run(mine.traverse_(setup.events.save) *> setup.events.save(other))
+        first <- setup.run(setup.events.listByUser(setup.userId, None, 2))
+        second <- setup.run(setup.events.listByUser(setup.userId,
+          Some(SecurityEventCursor(first.last.occurredAt, first.last.id)), 2))
+      } yield IO {
+        assertEquals((first ++ second).map(_.id).toSet, mine.map(_.id).toSet)
+        assertEquals((first ++ second).map(_.userId).toSet, Set(setup.userId))
+      }
+    }
+  }
+
+  test("retention deletes stale rows but retains recent events") {
+    withSetup { setup =>
+      val old = SecurityEvent(UUID.randomUUID(), setup.userId, SecurityEventType.PasswordChanged,
+        Instant.parse("2026-01-01T00:00:00Z"), None, None, None)
+      val recent = old.copy(id = UUID.randomUUID(), occurredAt = Instant.parse("2026-09-27T00:00:00Z"))
+      for {
+        _ <- setup.run(setup.events.save(old) *> setup.events.save(recent))
+        _ <- setup.run(setup.events.deleteBefore(Instant.parse("2026-06-01T00:00:00Z")))
+        rows <- setup.run(setup.events.listByUser(setup.userId, None, 10))
+      } yield IO(assertEquals(rows.map(_.id), List(recent.id)))
+    }
+  }
+
+  private def withSetup(body: Setup => IO[IO[Unit]]): Unit = {
+    assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"), "PostgreSQL integration tests disabled")
+    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+      val setup = new Setup(new DoobieTransactionRunner(xa)); body(setup).flatten.guarantee(setup.cleanUp)
+    }.unsafeRunSync()
+  }
+  private final class Setup(runner: DoobieTransactionRunner) {
+    val userId = UUID.randomUUID(); val otherUserId = UUID.randomUUID()
+    val users = new PostgresUserAccountRepository; val events = new PostgresSecurityEventRepository
+    def run[A](value: ConnectionIO[A]): IO[A] = runner.run(value)
+    private def user(id: UUID) = UserAccount(id, s"security-${id}@example.test", "hash", "User", true, Instant.EPOCH, Instant.EPOCH)
+    def cleanUp: IO[Unit] = run(for {
+      _ <- sql"delete from account_security_event where user_id in ($userId, $otherUserId)".update.run
+      _ <- sql"delete from user_account where id in ($userId, $otherUserId)".update.run
+    } yield ()).attempt.void
+    run(users.createIfMissing(user(userId)) *> users.createIfMissing(user(otherUserId))).unsafeRunSync()
+  }
+}

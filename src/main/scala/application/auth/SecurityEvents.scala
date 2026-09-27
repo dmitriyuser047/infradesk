@@ -16,7 +16,10 @@ final class ListSecurityEvents[Tx[_]: Functor](events: SecurityEventQuery[Tx]) {
   def execute(userId: UUID, before: Option[SecurityEventCursor], limit: Int): Tx[SecurityEventPage] =
     events.listByUser(userId, before, limit + 1).map { rows =>
       val page = rows.take(limit)
-      SecurityEventPage(page, rows.drop(limit).headOption.map(row => SecurityEventCursor(row.occurredAt, row.id)))
+      val nextCursor =
+        if (rows.size > limit) page.lastOption.map(row => SecurityEventCursor(row.occurredAt, row.id))
+        else None
+      SecurityEventPage(page, nextCursor)
     }
 }
 object ListSecurityEvents {
