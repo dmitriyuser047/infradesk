@@ -52,6 +52,20 @@ final class SecurityEventIntegrationSpec extends FunSuite {
     }
   }
 
+  test("security event writes roll back with their transaction") {
+    withSetup { setup =>
+      val event = SecurityEvent(UUID.randomUUID(), setup.userId, SecurityEventType.PasswordChanged,
+        Instant.parse("2026-09-27T12:00:00Z"), None, None, None)
+      for {
+        result <- setup.run(setup.events.save(event) *> setup.events.save(event)).attempt
+        rows <- setup.run(setup.events.listByUser(setup.userId, None, 10))
+      } yield {
+        assert(result.isLeft)
+        assertEquals(rows, Nil)
+      }
+    }
+  }
+
   private def withSetup(body: Setup => IO[Unit]): Unit = {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"), "PostgreSQL integration tests disabled")
     PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
