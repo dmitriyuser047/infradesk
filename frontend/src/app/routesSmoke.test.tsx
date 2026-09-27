@@ -97,6 +97,19 @@ const englishInterfaceWords = [
 ]
 
 describe('redesigned routes', () => {
+  it.each([
+    ['OWNER', 'SSH', true], ['MEMBER', 'SSH', false], ['OWNER', 'HTTP', false],
+  ])('terminal tab visibility for %s / %s', (role, connectorType, visible) => {
+    const client = queryClient()
+    client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Example org', role }])
+    client.setQueryData(['connection', 'org', 'connection'], (old: Record<string, unknown>) => ({ ...old, connectorType }))
+    const html = renderToStaticMarkup(<I18nProvider initialLocale="en"><QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/organizations/org/connections/connection']}><Routes>
+        <Route path="/organizations/:organizationId/connections/:connectionId" element={<ConnectionPage />} />
+      </Routes></MemoryRouter>
+    </QueryClientProvider></I18nProvider>)
+    expect(html.includes('id="tab-terminal"')).toBe(visible)
+  })
   for (const page of pages) {
     it(`renders ${page.path} in Russian by default`, () => {
       const html = renderPage(page)

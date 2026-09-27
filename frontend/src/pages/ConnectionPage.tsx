@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { CheckCircle2, Server, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 
@@ -29,7 +29,8 @@ import { ConnectionScopeType, SyncStatus, type ConnectionResponse } from '../typ
 import type { ConnectionInfrastructureSummary } from '../types/infrastructure'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
-const Tabs = ['overview', 'resources', 'incidents', 'synchronization'] as const
+const TerminalPanel = lazy(() => import('../components/terminal/TerminalPanel').then(module => ({ default: module.TerminalPanel })))
+const Tabs = ['overview', 'resources', 'terminal', 'incidents', 'synchronization'] as const
 type Tab = typeof Tabs[number]
 
 export function ConnectionPage() {
@@ -91,6 +92,9 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
   const syncAction = canSync && connection.active ? <button className="primary-button" type="button"
     disabled={sync.isPending || connection.lastSync?.status === SyncStatus.running}
     onClick={() => sync.mutate()}>{sync.isPending ? t.synchronizing : t.syncNow}</button> : null
+  const canOpenTerminal = connection.connectorType === 'SSH' && permissions.can('openTerminal')
+  if (canOpenTerminal) tabs.splice(2, 0, { id: 'terminal', label: i18n.t.terminal.title })
+  const activeTab = tab === 'terminal' && !canOpenTerminal ? 'overview' : tab
 
   return <AppShell><div className="workspace-page">
     <InfrastructureContextPath items={connectionPathItems(organizationId, connection, projectsQuery.data, environmentsQuery.data)} />
@@ -116,18 +120,21 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
     {sync.isError ? <InlineAlert tone="danger" title={describeError(sync.error, i18n)} /> : null}
     {sync.isSuccess ? <InlineAlert tone={sync.data.status === SyncStatus.failed ? 'danger' : 'success'}
       title={sync.data.status === SyncStatus.failed ? getSyncFailureMessage(sync.data, i18n) : t.syncCompleted} /> : null}
-    <WorkspaceTabs tabs={tabs} active={tab} onChange={selectTab} />
-    <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-      {tab === 'overview' ? <>
+    <WorkspaceTabs tabs={tabs} active={activeTab} onChange={selectTab} />
+    <div role="tabpanel" id={`panel-${activeTab}`} aria-labelledby={`tab-${activeTab}`}>
+      {activeTab === 'terminal' ? <Suspense fallback={<div className="row-skeleton" />}><TerminalPanel key={`${organizationId}/${connectionId}/${connection.updatedAt}`}
+        organizationId={organizationId} connection={connection}
+        editLink={canManage ? `${connectionBase}/${encodeURIComponent(connectionId)}/edit${context}` : undefined} /></Suspense> : null}
+      {activeTab === 'overview' ? <>
         <InfrastructureOverview organizationId={organizationId} connection={connection} query={summaryQuery}
           linkQuery={linkQuery} syncAction={syncAction} openTab={selectTab} />
         <ConnectionOverview connection={connection} projects={projectsQuery.data} environments={environmentsQuery.data} />
       </> : null}
-      {tab === 'resources' ? <ConnectionResources organizationId={organizationId} connection={connection}
+      {activeTab === 'resources' ? <ConnectionResources organizationId={organizationId} connection={connection}
         summary={summary} linkQuery={linkQuery} syncAction={syncAction} /> : null}
-      {tab === 'incidents' ? <ScopedIncidentsPanel organizationId={organizationId} scope={{ kind: 'connection', id: connectionId }}
+      {activeTab === 'incidents' ? <ScopedIncidentsPanel organizationId={organizationId} scope={{ kind: 'connection', id: connectionId }}
         options={{ linkQuery }} /> : null}
-      {tab === 'synchronization' ? <ConnectionSyncHistory organizationId={organizationId} connectionId={connectionId} context={context} /> : null}
+      {activeTab === 'synchronization' ? <ConnectionSyncHistory organizationId={organizationId} connectionId={connectionId} context={context} /> : null}
     </div>
   </div></AppShell>
 }

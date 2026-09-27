@@ -5,6 +5,20 @@
  * the codes stay stable in the API, only their presentation lives here.
  */
 export const en = {
+  terminal: {
+    title: 'Terminal', connect: 'Connect', disconnect: 'Disconnect', fullscreen: 'Fullscreen',
+    states: { idle: 'Not connected', connecting: 'Connecting', connected: 'Connected', closing: 'Disconnecting', closed: 'Disconnected', error: 'Connection failed' },
+    inactive: 'This connection is inactive.', untrusted: 'Confirm the SSH host key before connecting.',
+    missingCredentials: 'SSH credentials are not configured.', mismatch: 'The SSH host key has changed. Verify the host before connecting.',
+    reasons: {
+      CLIENT_CLOSE: 'Disconnected.', REMOTE_EOF: 'The remote session ended.', IDLE_TIMEOUT: 'The idle session expired.', MAX_LIFETIME: 'The session time limit was reached.',
+      TERMINAL_UNAVAILABLE: 'Could not establish the terminal connection.', SSH_UNAVAILABLE: 'The SSH server is unavailable.', SSH_IO_FAILED: 'The SSH connection failed.',
+      PROTOCOL_ERROR: 'The terminal protocol is invalid.', INPUT_BACKPRESSURE: 'Input exceeded the connection buffer. Connect again to continue.', TRANSPORT_CLOSED: 'The connection closed.',
+      AUTH_SESSION_ENDED: 'Your login session ended.', TERMINAL_PERMISSION_REVOKED: 'Terminal access was revoked.', CONNECTION_CHANGED: 'The connection settings changed.',
+      TERMINAL_SESSION_REVOKED: 'The terminal session was revoked.', SESSION_VALIDATION_FAILED: 'The session could not be validated.', TERMINAL_CAPACITY: 'The terminal session limit was reached.',
+    },
+    unknownError: 'The terminal connection ended.',
+  },
   units: { day: 'd', hour: 'h', minute: 'm', second: 's', megabytes: 'MB', gigabytes: 'GB' },
 
   common: {

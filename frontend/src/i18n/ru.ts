@@ -9,6 +9,20 @@ function plural(count: number, one: string, few: string, many: string): string {
 }
 
 export const ru: Messages = {
+  terminal: {
+    title: 'Терминал', connect: 'Подключиться', disconnect: 'Отключиться', fullscreen: 'На весь экран',
+    states: { idle: 'Не подключён', connecting: 'Подключение', connected: 'Подключён', closing: 'Отключение', closed: 'Отключён', error: 'Ошибка подключения' },
+    inactive: 'Подключение неактивно.', untrusted: 'Подтвердите ключ SSH-сервера перед подключением.',
+    missingCredentials: 'Учётные данные SSH не настроены.', mismatch: 'Ключ SSH-сервера изменился. Проверьте сервер перед подключением.',
+    reasons: {
+      CLIENT_CLOSE: 'Отключено.', REMOTE_EOF: 'Удалённая сессия завершена.', IDLE_TIMEOUT: 'Сессия завершена из-за отсутствия активности.', MAX_LIFETIME: 'Достигнут предел времени сессии.',
+      TERMINAL_UNAVAILABLE: 'Не удалось установить соединение с терминалом.', SSH_UNAVAILABLE: 'SSH-сервер недоступен.', SSH_IO_FAILED: 'Соединение SSH прервано.',
+      PROTOCOL_ERROR: 'Некорректный протокол терминала.', INPUT_BACKPRESSURE: 'Превышен размер буфера ввода. Подключитесь заново.', TRANSPORT_CLOSED: 'Соединение закрыто.',
+      AUTH_SESSION_ENDED: 'Сессия входа завершена.', TERMINAL_PERMISSION_REVOKED: 'Доступ к терминалу отозван.', CONNECTION_CHANGED: 'Настройки подключения изменились.',
+      TERMINAL_SESSION_REVOKED: 'Сессия терминала отозвана.', SESSION_VALIDATION_FAILED: 'Не удалось проверить сессию.', TERMINAL_CAPACITY: 'Достигнут лимит сессий терминала.',
+    },
+    unknownError: 'Соединение с терминалом завершено.',
+  },
   units: { day: ' д', hour: ' ч', minute: ' мин', second: ' с', megabytes: 'МБ', gigabytes: 'ГБ' },
 
   common: {
