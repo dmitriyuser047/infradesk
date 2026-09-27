@@ -50,6 +50,9 @@ export const ru: Messages = {
     tryLater: 'Попробуйте ещё раз немного позже.',
     codes: {
       ACCOUNT_NOT_FOUND: 'Учётная запись не найдена.',
+      ACCOUNT_STATE_CHANGED: 'Учётная запись изменилась во время запроса. Повторите попытку.',
+      SESSION_NOT_FOUND: 'Сессия не найдена.',
+      SESSION_IS_CURRENT: 'Текущую сессию завершите выходом.',
       CURRENT_PASSWORD_INVALID: 'Текущий пароль неверен.',
       PASSWORD_TOO_SHORT: 'Пароль должен содержать не менее 12 символов.',
       PASSWORD_TOO_LONG: 'Пароль должен содержать не более 128 символов.',
@@ -137,6 +140,18 @@ export const ru: Messages = {
     changePasswordFailed: 'Не удалось сменить пароль.',
     submit: 'Сменить пароль',
     cancel: 'Отмена',
+    sessionsHeading: 'Активные сессии',
+    currentSession: 'Текущая сессия',
+    otherSessions: 'Другие сессии',
+    noOtherSessions: 'Других сессий нет.',
+    started: 'Начата',
+    expires: 'Истекает',
+    thisDevice: 'Это устройство',
+    signOutSession: 'Завершить',
+    signOutOthers: 'Завершить другие сессии',
+    signOutAll: 'Выйти на всех устройствах',
+    sessionsLoadFailed: 'Не удалось загрузить сессии.',
+    sessionActionFailed: 'Не удалось выполнить действие.',
   },
 
   shell: {

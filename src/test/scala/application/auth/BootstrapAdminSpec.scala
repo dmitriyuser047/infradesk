@@ -64,7 +64,7 @@ final class BootstrapAdminSpec extends FunSuite {
     override def createIfMissing(user: UserAccount): IO[Unit] = IO {
       if (!values.exists(_.email == user.email)) values = user :: values
     }
-    override def updatePasswordHash(id: UUID, passwordHash: String, updatedAt: java.time.Instant): IO[Boolean] =
+    override def compareAndSetPasswordHash(id: UUID, expectedPasswordHash: String, newPasswordHash: String, updatedAt: java.time.Instant): IO[Boolean] =
       IO.pure(false)
     override def updateDisplayName(id: UUID, displayName: String, updatedAt: java.time.Instant): IO[Boolean] =
       IO.pure(false)

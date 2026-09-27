@@ -42,14 +42,16 @@ final class PostgresUserAccountRepository extends UserAccountRepository[Connecti
                     ${user.isActive}, ${user.createdAt}, ${user.updatedAt})
             on conflict do nothing""".update.run.void
 
-  override def updatePasswordHash(
+  override def compareAndSetPasswordHash(
     id: UUID,
-    passwordHash: String,
+    expectedPasswordHash: String,
+    newPasswordHash: String,
     updatedAt: Instant
   ): ConnectionIO[Boolean] =
     sql"""update user_account
-            set password_hash = $passwordHash, updated_at = $updatedAt
-            where id = $id and is_active = true""".update.run.map(_ == 1)
+            set password_hash = $newPasswordHash, updated_at = $updatedAt
+            where id = $id and is_active = true
+              and password_hash = $expectedPasswordHash""".update.run.map(_ == 1)
 
   override def updateDisplayName(
     id: UUID,

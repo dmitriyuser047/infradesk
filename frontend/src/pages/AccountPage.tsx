@@ -1,6 +1,14 @@
 import { useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 
-import { useChangePassword, useUpdateDisplayName } from '../api/account'
+import {
+  useChangePassword,
+  useRevokeAllSessions,
+  useRevokeOtherSessions,
+  useRevokeSession,
+  useSessions,
+  useUpdateDisplayName,
+} from '../api/account'
 import { useMe, useMyOrganizations } from '../api/auth'
 import { describeError } from '../i18n/errors'
 import { useI18n } from '../i18n'
@@ -27,6 +35,7 @@ export function AccountPage() {
       <ProfileSection displayName={me.data?.displayName ?? ''} email={me.data?.email ?? ''}
         organizations={organizations.data ?? []} />
       <PasswordSection />
+      <SessionsSection />
     </main>
   )
 }
@@ -134,6 +143,60 @@ function PasswordSection() {
         {change.isSuccess ? <p className="form-success" role="status">{t.passwordUpdated}</p> : null}
         <button className="primary-button" type="submit" disabled={change.isPending}>{t.submit}</button>
       </form>
+    </section>
+  )
+}
+
+function SessionsSection() {
+  const i18n = useI18n()
+  const t = i18n.t.account
+  const navigate = useNavigate()
+  const sessions = useSessions()
+  const revokeOne = useRevokeSession()
+  const revokeOthers = useRevokeOtherSessions()
+  const revokeAll = useRevokeAllSessions()
+
+  const rows = sessions.data ?? []
+  const current = rows.find((session) => session.current)
+  const others = rows.filter((session) => !session.current)
+  // While any revocation is in flight, every sign-out control is disabled: no double submit.
+  const busy = revokeOne.isPending || revokeOthers.isPending || revokeAll.isPending
+  const actionFailed = revokeOne.isError || revokeOthers.isError || revokeAll.isError
+
+  return (
+    <section className="account-panel" aria-labelledby="account-sessions-heading">
+      <h2 id="account-sessions-heading">{t.sessionsHeading}</h2>
+      {sessions.isError ? <p className="form-error" role="alert">{t.sessionsLoadFailed}</p> : null}
+
+      {current ? <div className="account-field">
+        <span className="account-field-label">{t.currentSession}</span>
+        <span className="account-field-value">{t.thisDevice}</span>
+        <small className="muted">{t.started}: {i18n.format.dateTime(current.createdAt)} · {t.expires}: {i18n.format.dateTime(current.expiresAt)}</small>
+      </div> : null}
+
+      <div className="account-field">
+        <span className="account-field-label">{t.otherSessions}</span>
+        {others.length === 0
+          ? <span className="account-field-value">{t.noOtherSessions}</span>
+          : <ul className="account-sessions">
+              {others.map((session) => <li key={session.id}>
+                <span>{i18n.format.dateTime(session.createdAt)}</span>
+                <button type="button" className="link-button" disabled={busy}
+                  onClick={() => revokeOne.mutate(session.id)}>{t.signOutSession}</button>
+              </li>)}
+            </ul>}
+      </div>
+
+      {actionFailed ? <p className="form-error" role="alert">{t.sessionActionFailed}</p> : null}
+
+      <div className="account-actions">
+        <button type="button" className="secondary-button" disabled={busy || others.length === 0}
+          onClick={() => revokeOthers.mutate()}>{t.signOutOthers}</button>
+        <button type="button" className="secondary-button" disabled={busy}
+          onClick={() => revokeAll.mutate(undefined, { onSuccess: () => navigate('/login', { replace: true }) })}>
+          {t.signOutAll}
+        </button>
+      </div>
     </section>
   )
 }

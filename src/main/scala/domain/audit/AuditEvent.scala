@@ -34,6 +34,12 @@ object AuditAction {
   case object AccountPasswordChanged extends AuditAction { override val code: String = "ACCOUNT_PASSWORD_CHANGED" }
   /** A user changed their own profile, currently the display name only. */
   case object AccountProfileUpdated extends AuditAction { override val code: String = "ACCOUNT_PROFILE_UPDATED" }
+  /** A user revoked one of their own sessions. */
+  case object AccountSessionRevoked extends AuditAction { override val code: String = "ACCOUNT_SESSION_REVOKED" }
+  /** A user revoked every session but the current one. */
+  case object AccountOtherSessionsRevoked extends AuditAction { override val code: String = "ACCOUNT_OTHER_SESSIONS_REVOKED" }
+  /** A user revoked every session, the current one included. */
+  case object AccountAllSessionsRevoked extends AuditAction { override val code: String = "ACCOUNT_ALL_SESSIONS_REVOKED" }
 
   val All: List[AuditAction] = List(
     ProjectCreated,
@@ -52,7 +58,10 @@ object AuditAction {
     NotificationChannelEnabled,
     NotificationChannelDisabled,
     AccountPasswordChanged,
-    AccountProfileUpdated
+    AccountProfileUpdated,
+    AccountSessionRevoked,
+    AccountOtherSessionsRevoked,
+    AccountAllSessionsRevoked
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =

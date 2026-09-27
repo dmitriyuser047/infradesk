@@ -24,4 +24,14 @@ object AccountError {
 
   /** The authenticated account is gone or was deactivated between the read and the write. */
   case object AccountNotFound extends AccountError { val code = "ACCOUNT_NOT_FOUND" }
+
+  /** The password changed under the request between the verify and the write (the compare-and-set
+    * found a different hash). The user can retry with the now-current password. */
+  case object AccountStateChanged extends AccountError { val code = "ACCOUNT_STATE_CHANGED" }
+
+  /** A session to revoke was not this user's, did not exist, or was already revoked. */
+  case object SessionNotFound extends AccountError { val code = "SESSION_NOT_FOUND" }
+
+  /** Revoke-one is for other sessions; the current one is ended through logout. */
+  case object SessionIsCurrent extends AccountError { val code = "SESSION_IS_CURRENT" }
 }

@@ -110,7 +110,14 @@ object HttpModule {
 
     val authRoutes = new AuthRoutes(application.login, application.authentication, authSettings)
     val accountRoutes = new AccountRoutes(
-      application.changePassword, application.updateAccountProfile, loggers.account)
+      application.changePassword,
+      application.updateAccountProfile,
+      application.listUserSessions,
+      application.revokeUserSession,
+      application.revokeOtherUserSessions,
+      application.revokeAllUserSessions,
+      authSettings,
+      loggers.account)
     val protectedApp =
       new AuthBoundary(authRoutes, accountRoutes, application.authentication, businessApp).app
     val platformApp = new HealthRoutes(persistence.readinessCheck, loggers.health).routes.orNotFound

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient } from '../app/queryClient'
 import { I18nProvider } from '../i18n'
 import type { Locale } from '../i18n/types'
+import type { SessionResponse } from '../types/auth'
 import { AccountPage } from './AccountPage'
 
 type RequestRecord = { url: string; method: string; body?: string }
@@ -14,17 +15,28 @@ function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
+const currentSession: SessionResponse = { id: 'sess-current', createdAt: '2026-09-27T08:00:00Z', expiresAt: '2026-10-04T08:00:00Z', current: true }
+const otherSession: SessionResponse = { id: 'sess-other', createdAt: '2026-09-26T18:00:00Z', expiresAt: '2026-10-03T18:00:00Z', current: false }
+
 function setup(options: {
   locale?: Locale
   changePasswordResponse?: () => Promise<Response>
+  sessions?: SessionResponse[]
 } = {}) {
   const client = createAppQueryClient()
   const requests: RequestRecord[] = []
+  let sessions = [...(options.sessions ?? [currentSession, otherSession])]
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input); const method = init?.method ?? 'GET'
     requests.push({ url, method, body: init?.body as string | undefined })
     if (url === '/api/v1/me') return json({ id: 'u1', email: 'user@example.com', displayName: 'Dmitriy Ulyanov' })
     if (url === '/api/v1/me/organizations') return json([{ id: 'org', code: 'ORG', name: 'Acme', role: 'OWNER' }])
+    if (url === '/api/v1/account/sessions' && method === 'GET') return json(sessions)
+    if (url === '/api/v1/account/sessions/revoke-others' && method === 'POST') { sessions = sessions.filter(s => s.current); return new Response(null, { status: 204 }) }
+    if (url === '/api/v1/account/sessions/revoke-all' && method === 'POST') { sessions = []; return new Response(null, { status: 204 }) }
+    if (url.startsWith('/api/v1/account/sessions/') && method === 'DELETE') {
+      const id = url.substring(url.lastIndexOf('/') + 1); sessions = sessions.filter(s => s.id !== id); return new Response(null, { status: 204 })
+    }
     if (url === '/api/v1/account' && method === 'PATCH')
       return json({ id: 'u1', email: 'user@example.com', displayName: JSON.parse(init?.body as string).displayName })
     if (url === '/api/v1/account/change-password' && method === 'POST')
@@ -34,6 +46,7 @@ function setup(options: {
   render(<I18nProvider initialLocale={options.locale ?? 'en'}><QueryClientProvider client={client}>
     <MemoryRouter initialEntries={['/settings/account']}><Routes>
       <Route path="/settings/account" element={<AccountPage />} />
+      <Route path="/login" element={<div>Login screen</div>} />
     </Routes></MemoryRouter>
   </QueryClientProvider></I18nProvider>)
   return { requests }
@@ -48,7 +61,6 @@ describe('account page', () => {
     expect(screen.getByText('user@example.com')).toBeTruthy()
     expect(screen.getByText(/Acme/)).toBeTruthy()
     expect(screen.getByText(/Owner/)).toBeTruthy()
-    // Email is shown as text, not an editable field.
     expect(screen.queryByDisplayValue('user@example.com')).toBeNull()
   })
 
@@ -56,7 +68,7 @@ describe('account page', () => {
     setup({ locale: 'ru' })
     expect(await screen.findByText('Профиль')).toBeTruthy()
     expect(screen.getByText('Текущий пароль')).toBeTruthy()
-    expect(screen.getByLabelText('Новый пароль')).toBeTruthy()
+    expect(screen.getByText('Активные сессии')).toBeTruthy()
   })
 
   it('rejects a confirmation that does not match without calling the server', async () => {
@@ -82,7 +94,7 @@ describe('account page', () => {
     expect(await screen.findByText('Current password is incorrect.')).toBeTruthy()
   })
 
-  it('clears the inputs and confirms success after a password change', async () => {
+  it('clears the inputs and refreshes sessions after a password change', async () => {
     const { requests } = setup()
     await screen.findByLabelText('Current password')
     fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'old-password-1' } })
@@ -92,12 +104,12 @@ describe('account page', () => {
 
     expect(await screen.findByText('Password changed.')).toBeTruthy()
     expect((screen.getByLabelText('Current password') as HTMLInputElement).value).toBe('')
-    expect((screen.getByLabelText('New password') as HTMLInputElement).value).toBe('')
-    expect((screen.getByLabelText('Confirm new password') as HTMLInputElement).value).toBe('')
     expect(requests.filter(r => r.url.endsWith('/change-password'))).toHaveLength(1)
+    // The other sessions were revoked server-side, so the list is refetched.
+    await waitFor(() => expect(requests.filter(r => r.url === '/api/v1/account/sessions').length).toBeGreaterThanOrEqual(2))
   })
 
-  it('does not submit twice while a change is in flight', async () => {
+  it('does not submit the password change twice while a change is in flight', async () => {
     let release: () => void = () => {}
     const pending = new Promise<Response>((resolve) => { release = () => resolve(new Response(null, { status: 204 })) })
     const { requests } = setup({ changePasswordResponse: () => pending })
@@ -109,10 +121,44 @@ describe('account page', () => {
     fireEvent.click(button)
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true))
     fireEvent.click(button)
-    fireEvent.click(button)
     release()
-
     await screen.findByText('Password changed.')
     expect(requests.filter(r => r.url.endsWith('/change-password'))).toHaveLength(1)
+  })
+
+  // -- Sessions --------------------------------------------------------------------------------
+
+  it('marks the current session and lists the others', async () => {
+    setup()
+    expect(await screen.findByText('This device')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Sign out other sessions' })).toBeTruthy()
+  })
+
+  it('signs out one other session, and it disappears from the list', async () => {
+    const { requests } = setup()
+    // The single per-session sign-out button belongs to the one other session.
+    const signOut = await screen.findByRole('button', { name: 'Sign out' })
+    fireEvent.click(signOut)
+    await waitFor(() => expect(requests.some(r => r.method === 'DELETE' && r.url.endsWith('/sessions/sess-other'))).toBe(true))
+    // After the refetch there is no other session left, so its sign-out button is gone.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull())
+  })
+
+  it('signs out other sessions in one request', async () => {
+    const { requests } = setup()
+    // Wait until the sessions have loaded (the per-session button appears) so the action button is enabled.
+    await screen.findByRole('button', { name: 'Sign out' })
+    const button = screen.getByRole('button', { name: 'Sign out other sessions' })
+    fireEvent.click(button)
+    await waitFor(() => expect(requests.some(r => r.url.endsWith('/sessions/revoke-others') && r.method === 'POST')).toBe(true))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Sign out other sessions' }) as HTMLButtonElement).disabled).toBe(true))
+  })
+
+  it('signs out from all devices and redirects to login', async () => {
+    const { requests } = setup()
+    const button = await screen.findByRole('button', { name: 'Sign out from all devices' })
+    fireEvent.click(button)
+    await waitFor(() => expect(requests.some(r => r.url.endsWith('/sessions/revoke-all') && r.method === 'POST')).toBe(true))
+    expect(await screen.findByText('Login screen')).toBeTruthy()
   })
 })

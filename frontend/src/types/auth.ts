@@ -11,6 +11,13 @@ export interface MyOrganizationResponse {
   role: string
 }
 
+export interface SessionResponse {
+  id: string
+  createdAt: string
+  expiresAt: string
+  current: boolean
+}
+
 export const OrganizationRole = {
   owner: 'OWNER',
   member: 'MEMBER',

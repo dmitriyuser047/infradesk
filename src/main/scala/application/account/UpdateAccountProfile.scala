@@ -1,13 +1,11 @@
 package ru.bitec.app.ops
 package application.account
 
-import application.audit.AuditRecorder
-import application.auth.ActorContext
-import application.port.{OrganizationMembershipRepository, TimeProvider, TransactionRunner, UserAccountRepository}
+import application.port.{TimeProvider, TransactionRunner, UserAccountRepository}
 import cats.Monad
 import cats.effect.IO
 import cats.syntax.all._
-import domain.audit.{AuditAction, AuditTargetType}
+import domain.audit.AuditAction
 
 import java.time.Instant
 import java.util.UUID
@@ -21,8 +19,7 @@ import java.util.UUID
   */
 final class UpdateAccountProfile[Tx[_]: Monad](
   users: UserAccountRepository[Tx],
-  memberships: OrganizationMembershipRepository[Tx],
-  audit: AuditRecorder[Tx],
+  accountAudit: AccountAudit[Tx],
   runner: TransactionRunner[IO, Tx],
   time: TimeProvider[IO]
 ) {
@@ -38,13 +35,8 @@ final class UpdateAccountProfile[Tx[_]: Monad](
     }
 
   private def write(userId: UUID, displayName: String, now: Instant): Tx[Boolean] =
-    for {
-      updated <- users.updateDisplayName(userId, displayName, now)
-      _ <- if (updated) recordAudit(userId) else ().pure[Tx]
-    } yield updated
-
-  private def recordAudit(userId: UUID): Tx[Unit] =
-    memberships.listActiveOrganizations(userId).flatMap(_.traverse_(org =>
-      audit.record(ActorContext(userId, org.id), AuditAction.AccountProfileUpdated,
-        AuditTargetType.Account, Some(userId))))
+    users.updateDisplayName(userId, displayName, now).flatMap {
+      case false => false.pure[Tx]
+      case true => accountAudit.record(userId, AuditAction.AccountProfileUpdated).as(true)
+    }
 }

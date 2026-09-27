@@ -4,7 +4,7 @@ package application.auth
 import application.port.{AuthSessionRepository, TransactionRunner, UserAccountRepository}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import domain.auth.{AuthSession, AuthenticatedUser, UserAccount}
+import domain.auth.{AuthSession, AuthenticatedSession, AuthenticatedUser, UserAccount, UserSessionSummary}
 import munit.FunSuite
 
 import java.time.Instant
@@ -60,7 +60,8 @@ final class AuthServicesSpec extends FunSuite {
     val current = Instant.now()
     sessions.values = List(AuthSession(UUID.randomUUID(), userId, hash, current, current.plusSeconds(3600), None))
 
-    assertEquals(authentication.authenticate(raw).unsafeRunSync(), Some(AuthenticatedUser(userId, user.email, user.displayName)))
+    assertEquals(authentication.authenticate(raw).unsafeRunSync().map(_.user),
+      Some(AuthenticatedUser(userId, user.email, user.displayName)))
     assertEquals(authentication.authenticate("unknown").unsafeRunSync(), None)
     sessions.values = sessions.values.map(_.copy(expiresAt = current.minusSeconds(1)))
     assertEquals(authentication.authenticate(raw).unsafeRunSync(), None)
@@ -83,8 +84,8 @@ final class AuthServicesSpec extends FunSuite {
     override def createIfMissing(user: UserAccount): IO[Unit] = IO {
       if (!values.exists(_.email == user.email)) values = user :: values
     }
-    override def updatePasswordHash(id: UUID, passwordHash: String, updatedAt: java.time.Instant): IO[Boolean] =
-      IO(values.exists(user => user.id == id && user.isActive))
+    override def compareAndSetPasswordHash(id: UUID, expectedPasswordHash: String, newPasswordHash: String, updatedAt: java.time.Instant): IO[Boolean] =
+      IO(values.exists(user => user.id == id && user.isActive && user.passwordHash == expectedPasswordHash))
     override def updateDisplayName(id: UUID, displayName: String, updatedAt: java.time.Instant): IO[Boolean] =
       IO(values.exists(user => user.id == id && user.isActive))
   }
@@ -92,13 +93,32 @@ final class AuthServicesSpec extends FunSuite {
   private final class MemorySessions(users: MemoryUsers) extends AuthSessionRepository[IO] {
     var values: List[AuthSession] = Nil
     override def create(session: AuthSession): IO[Unit] = IO { values = session :: values }
-    override def findAuthenticatedUserByTokenHash(hash: String, at: Instant): IO[Option[AuthenticatedUser]] = IO {
+    override def findAuthenticatedSessionByTokenHash(hash: String, at: Instant): IO[Option[AuthenticatedSession]] = IO {
       values.find(session => session.tokenHash == hash && session.revokedAt.isEmpty && session.expiresAt.isAfter(at))
-        .flatMap(session => users.values.find(user => user.id == session.userId && user.isActive))
-        .map(user => AuthenticatedUser(user.id, user.email, user.displayName))
+        .flatMap(session => users.values.find(user => user.id == session.userId && user.isActive).map(session -> _))
+        .map { case (session, user) => AuthenticatedSession(AuthenticatedUser(user.id, user.email, user.displayName), session.id) }
     }
     override def revokeByTokenHash(hash: String, at: Instant): IO[Unit] = IO {
       values = values.map(session => if (session.tokenHash == hash) session.copy(revokedAt = Some(at)) else session)
+    }
+    override def listActiveByUser(userId: UUID, at: Instant): IO[List[UserSessionSummary]] = IO {
+      values.filter(s => s.userId == userId && s.revokedAt.isEmpty && s.expiresAt.isAfter(at))
+        .sortBy(_.createdAt).reverse.map(s => UserSessionSummary(s.id, s.createdAt, s.expiresAt))
+    }
+    override def revokeByIdForUser(userId: UUID, sessionId: UUID, at: Instant): IO[Boolean] = IO {
+      val target = values.find(s => s.id == sessionId && s.userId == userId && s.revokedAt.isEmpty)
+      values = values.map(s => if (target.exists(_.id == s.id)) s.copy(revokedAt = Some(at)) else s)
+      target.isDefined
+    }
+    override def revokeOthersForUser(userId: UUID, exceptSessionId: UUID, at: Instant): IO[Int] = IO {
+      val hit = values.filter(s => s.userId == userId && s.id != exceptSessionId && s.revokedAt.isEmpty)
+      values = values.map(s => if (hit.exists(_.id == s.id)) s.copy(revokedAt = Some(at)) else s)
+      hit.size
+    }
+    override def revokeAllForUser(userId: UUID, at: Instant): IO[Int] = IO {
+      val hit = values.filter(s => s.userId == userId && s.revokedAt.isEmpty)
+      values = values.map(s => if (hit.exists(_.id == s.id)) s.copy(revokedAt = Some(at)) else s)
+      hit.size
     }
   }
 

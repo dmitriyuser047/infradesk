@@ -1,7 +1,15 @@
 package ru.bitec.app.ops
 package infrastructure.http
 
-import application.account.{ChangePassword, UpdateAccountProfile}
+import application.account.{
+  AccountAudit,
+  ChangePassword,
+  ListUserSessions,
+  RevokeAllUserSessions,
+  RevokeOtherUserSessions,
+  RevokeUserSession,
+  UpdateAccountProfile
+}
 import application.audit.AuditRecorder
 import application.auth.{Authentication, BCryptPasswordHasher, Login, SessionTokens}
 import application.port.{AuditEventRepository, AuthSessionRepository, IdGenerator, MyOrganization, OrganizationMembershipRepository, TimeProvider, TransactionRunner, UserAccountRepository}
@@ -10,11 +18,13 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.auth.{
   AuthSession,
+  AuthenticatedSession,
   AuthenticatedUser,
   OrganizationMembership,
   OrganizationPermission,
   OrganizationRole,
-  UserAccount
+  UserAccount,
+  UserSessionSummary
 }
 import io.circe.Json
 import munit.FunSuite
@@ -301,9 +311,15 @@ final class AuthBoundarySpec extends FunSuite {
         override def listByOrganization(organizationId: UUID, before: Option[AuditCursor], limit: Int): IO[List[AuditEvent]] = IO.pure(Nil)
       }
       val recorder = new AuditRecorder[IO](noAudit, ids, time)
+      val accountAudit = new AccountAudit[IO](recorder, memberships)
       new AccountRoutes[IO](
-        new ChangePassword[IO](users, memberships, recorder, runner, passwordHasher, time),
-        new UpdateAccountProfile[IO](users, memberships, recorder, runner, time),
+        new ChangePassword[IO](users, sessions, accountAudit, runner, passwordHasher, time),
+        new UpdateAccountProfile[IO](users, accountAudit, runner, time),
+        new ListUserSessions[IO](sessions, runner, time),
+        new RevokeUserSession[IO](sessions, accountAudit, runner, time),
+        new RevokeOtherUserSessions[IO](sessions, accountAudit, runner, time),
+        new RevokeAllUserSessions[IO](sessions, accountAudit, runner, time),
+        AuthSettings(3600, secure),
         org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.account"))
     }
     // The routes declare what they need, exactly as the real ones do; the boundary only supplies
@@ -359,8 +375,8 @@ final class AuthBoundarySpec extends FunSuite {
     override def findByEmail(email: String): IO[Option[UserAccount]] = IO(values.find(_.email == email))
     override def findActiveById(id: UUID): IO[Option[UserAccount]] = IO(values.find(value => value.id == id && value.isActive))
     override def createIfMissing(value: UserAccount): IO[Unit] = IO { values = value :: values }
-    override def updatePasswordHash(id: UUID, passwordHash: String, updatedAt: java.time.Instant): IO[Boolean] =
-      IO(values.exists(value => value.id == id && value.isActive))
+    override def compareAndSetPasswordHash(id: UUID, expectedPasswordHash: String, newPasswordHash: String, updatedAt: java.time.Instant): IO[Boolean] =
+      IO(values.exists(value => value.id == id && value.isActive && value.passwordHash == expectedPasswordHash))
     override def updateDisplayName(id: UUID, displayName: String, updatedAt: java.time.Instant): IO[Boolean] =
       IO(values.exists(value => value.id == id && value.isActive))
   }
@@ -368,13 +384,32 @@ final class AuthBoundarySpec extends FunSuite {
   private final class Sessions(users: Users) extends AuthSessionRepository[IO] {
     var values: List[AuthSession] = Nil
     override def create(session: AuthSession): IO[Unit] = IO { values = session :: values }
-    override def findAuthenticatedUserByTokenHash(hash: String, at: Instant): IO[Option[AuthenticatedUser]] = IO {
+    override def findAuthenticatedSessionByTokenHash(hash: String, at: Instant): IO[Option[AuthenticatedSession]] = IO {
       values.find(session => session.tokenHash == hash && session.revokedAt.isEmpty && session.expiresAt.isAfter(at))
-        .flatMap(session => users.values.find(value => value.id == session.userId && value.isActive))
-        .map(value => AuthenticatedUser(value.id, value.email, value.displayName))
+        .flatMap(session => users.values.find(value => value.id == session.userId && value.isActive).map(session -> _))
+        .map { case (session, value) => AuthenticatedSession(AuthenticatedUser(value.id, value.email, value.displayName), session.id) }
     }
     override def revokeByTokenHash(hash: String, at: Instant): IO[Unit] = IO {
       values = values.map(session => if (session.tokenHash == hash) session.copy(revokedAt = Some(at)) else session)
+    }
+    override def listActiveByUser(userId: UUID, at: Instant): IO[List[UserSessionSummary]] = IO {
+      values.filter(s => s.userId == userId && s.revokedAt.isEmpty && s.expiresAt.isAfter(at))
+        .map(s => UserSessionSummary(s.id, s.createdAt, s.expiresAt))
+    }
+    override def revokeByIdForUser(userId: UUID, sessionId: UUID, at: Instant): IO[Boolean] = IO {
+      val target = values.find(s => s.id == sessionId && s.userId == userId && s.revokedAt.isEmpty)
+      values = values.map(s => if (target.exists(_.id == s.id)) s.copy(revokedAt = Some(at)) else s)
+      target.isDefined
+    }
+    override def revokeOthersForUser(userId: UUID, exceptSessionId: UUID, at: Instant): IO[Int] = IO {
+      val hit = values.filter(s => s.userId == userId && s.id != exceptSessionId && s.revokedAt.isEmpty)
+      values = values.map(s => if (hit.exists(_.id == s.id)) s.copy(revokedAt = Some(at)) else s)
+      hit.size
+    }
+    override def revokeAllForUser(userId: UUID, at: Instant): IO[Int] = IO {
+      val hit = values.filter(s => s.userId == userId && s.revokedAt.isEmpty)
+      values = values.map(s => if (hit.exists(_.id == s.id)) s.copy(revokedAt = Some(at)) else s)
+      hit.size
     }
   }
 

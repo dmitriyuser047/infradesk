@@ -135,11 +135,12 @@ jobs:
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
-          # Build a representative production V26 dump: the version production runs before this
+          # Build a representative production V27 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V27 to the restored database before the backend reports itself ready. Only V27 is
-          # undone here (the account audit codes it added to the check constraints); everything
-          # V23 through V26 created, the V26 context column included, stays as it does in production.
+          # V28 to the restored database before the backend reports itself ready. Only V28 is
+          # undone here (the session-revocation audit codes it added to the action check
+          # constraint); everything V23 through V27 created — the V26 context column and the V27
+          # account audit codes included — stays as it does in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
@@ -149,18 +150,16 @@ jobs:
             'CONNECTION_DELETED','MONITOR_RULE_CREATED','MONITOR_RULE_UPDATED','MANUAL_SYNC_REQUESTED',
             'CONTAINER_START_REQUESTED','CONTAINER_STOP_REQUESTED','CONTAINER_RESTART_REQUESTED',
             'NOTIFICATION_CHANNEL_CREATED','NOTIFICATION_CHANNEL_UPDATED',
-            'NOTIFICATION_CHANNEL_ENABLED','NOTIFICATION_CHANNEL_DISABLED'));
-          alter table audit_event drop constraint ck_audit_event_target_type;
-          alter table audit_event add constraint ck_audit_event_target_type check (target_type in (
-            'PROJECT','ENVIRONMENT','CONNECTION','MONITOR_RULE','RESOURCE','NOTIFICATION_CHANNEL'));
-          delete from flyway_schema_history where version = '27';
+            'NOTIFICATION_CHANNEL_ENABLED','NOTIFICATION_CHANNEL_DISABLED',
+            'ACCOUNT_PASSWORD_CHANGED','ACCOUNT_PROFILE_UPDATED'));
+          delete from flyway_schema_history where version = '28';
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V27 to it.
+          # recover the marker and let Flyway apply V28 to it.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -181,19 +180,25 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "27"
+          test "${migrated}" = "28"
           # What V26 built survives the upgrade: the notification_delivery.context column was in the
-          # dump and is still there after Flyway ran V27 on the restored database.
+          # dump and is still there after Flyway ran V28 on the restored database.
           delivery_context="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from information_schema.columns where table_schema = current_schema() and table_name = 'notification_delivery' and column_name = 'context'")"
           test "${delivery_context}" = "1"
-          # And what V27 adds: the account audit action is now allowed by the check constraint,
-          # produced again by the upgrade Flyway ran on the restored database.
+          # What V27 built survives the upgrade: the account password/profile audit codes were in
+          # the dump and remain allowed by the check constraint.
           account_audit="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where conname = 'ck_audit_event_action' and pg_get_constraintdef(oid) like '%ACCOUNT_PASSWORD_CHANGED%'")"
           test "${account_audit}" = "1"
+          # And what V28 adds: the session-revocation audit action is now allowed too, produced
+          # again by the upgrade Flyway ran on the restored database.
+          session_audit="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from pg_constraint where conname = 'ck_audit_event_action' and pg_get_constraintdef(oid) like '%ACCOUNT_OTHER_SESSIONS_REVOKED%'")"
+          test "${session_audit}" = "1"
           credential_kind="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where conname = 'ck_connection_secret_kind' and pg_get_constraintdef(oid) like '%SSH_CREDENTIAL%'")"

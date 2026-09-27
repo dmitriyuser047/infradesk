@@ -46,6 +46,9 @@ export const en = {
     tryLater: 'Please try again shortly.',
     codes: {
       ACCOUNT_NOT_FOUND: 'Account not found.',
+      ACCOUNT_STATE_CHANGED: 'The account changed during the request. Please try again.',
+      SESSION_NOT_FOUND: 'Session not found.',
+      SESSION_IS_CURRENT: 'End the current session by signing out.',
       CURRENT_PASSWORD_INVALID: 'Current password is incorrect.',
       PASSWORD_TOO_SHORT: 'Password must contain at least 12 characters.',
       PASSWORD_TOO_LONG: 'Password must be at most 128 characters.',
@@ -133,6 +136,18 @@ export const en = {
     changePasswordFailed: 'Could not change the password.',
     submit: 'Change password',
     cancel: 'Cancel',
+    sessionsHeading: 'Active sessions',
+    currentSession: 'Current session',
+    otherSessions: 'Other sessions',
+    noOtherSessions: 'No other sessions.',
+    started: 'Started',
+    expires: 'Expires',
+    thisDevice: 'This device',
+    signOutSession: 'Sign out',
+    signOutOthers: 'Sign out other sessions',
+    signOutAll: 'Sign out from all devices',
+    sessionsLoadFailed: 'Could not load sessions.',
+    sessionActionFailed: 'Could not complete the action.',
   },
 
   shell: {

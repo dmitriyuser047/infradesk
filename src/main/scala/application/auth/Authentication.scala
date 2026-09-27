@@ -3,7 +3,7 @@ package application.auth
 
 import application.port.{AuthSessionRepository, MyOrganization, OrganizationMembershipRepository, TransactionRunner}
 import cats.effect.IO
-import domain.auth.AuthenticatedUser
+import domain.auth.AuthenticatedSession
 import domain.auth.OrganizationRole
 
 import java.time.Instant
@@ -15,9 +15,9 @@ final class Authentication[Tx[_]](
   runner: TransactionRunner[IO, Tx],
   tokens: SessionTokens
 ) {
-  def authenticate(rawToken: String): IO[Option[AuthenticatedUser]] =
+  def authenticate(rawToken: String): IO[Option[AuthenticatedSession]] =
     IO(Instant.now()).flatMap(now =>
-      runner.run(sessions.findAuthenticatedUserByTokenHash(tokens.hash(rawToken), now))
+      runner.run(sessions.findAuthenticatedSessionByTokenHash(tokens.hash(rawToken), now))
     )
 
   def revoke(rawToken: String): IO[Unit] =

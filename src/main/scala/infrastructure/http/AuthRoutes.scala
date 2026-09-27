@@ -58,9 +58,24 @@ final class AuthRoutes[Tx[_]](
       case Left(_) => InternalServerError(ApiErrorResponse("INTERNAL_ERROR", "Internal server error"))
     }
 
-  private def sessionCookie(rawToken: String): ResponseCookie =
+  private def sessionCookie(rawToken: String): ResponseCookie = AuthRoutes.sessionCookie(rawToken, settings)
+
+  private def clearCookie: ResponseCookie = AuthRoutes.clearCookie(settings)
+
+  private def sessionToken(request: Request[IO]): Option[String] =
+    request.cookies.find(_.name == AuthRoutes.CookieName).map(_.content).filter(_.nonEmpty)
+}
+
+object AuthRoutes {
+  val CookieName = "infradesk_session"
+
+  /** The session cookie is HttpOnly, path-wide, SameSite=Strict and Secure in production; the last
+    * two are what make the same-origin API safe without a separate CSRF token. Built here so every
+    * route that sets or clears it uses the one definition.
+    */
+  def sessionCookie(rawToken: String, settings: AuthSettings): ResponseCookie =
     ResponseCookie(
-      name = AuthRoutes.CookieName,
+      name = CookieName,
       content = rawToken,
       maxAge = Some(settings.ttlSeconds),
       path = Some("/"),
@@ -69,9 +84,9 @@ final class AuthRoutes[Tx[_]](
       httpOnly = true
     )
 
-  private def clearCookie: ResponseCookie =
+  def clearCookie(settings: AuthSettings): ResponseCookie =
     ResponseCookie(
-      name = AuthRoutes.CookieName,
+      name = CookieName,
       content = "",
       maxAge = Some(0L),
       path = Some("/"),
@@ -79,11 +94,4 @@ final class AuthRoutes[Tx[_]](
       secure = settings.secureCookie,
       httpOnly = true
     )
-
-  private def sessionToken(request: Request[IO]): Option[String] =
-    request.cookies.find(_.name == AuthRoutes.CookieName).map(_.content).filter(_.nonEmpty)
-}
-
-object AuthRoutes {
-  val CookieName = "infradesk_session"
 }

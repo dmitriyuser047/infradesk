@@ -1,14 +1,23 @@
 package ru.bitec.app.ops
 package infrastructure.http
 
-import application.account.{AccountError, ChangePassword, UpdateAccountProfile}
+import application.account.{
+  AccountError,
+  ChangePassword,
+  ListUserSessions,
+  RevokeAllUserSessions,
+  RevokeOtherUserSessions,
+  RevokeUserSession,
+  UpdateAccountProfile
+}
 import cats.effect.IO
-import domain.auth.AuthenticatedUser
+import domain.auth.{AuthenticatedSession, AuthenticatedUser}
 import infrastructure.http.dto.{
   ApiErrorResponse,
   ChangePasswordRequest,
   HttpJsonCodecs,
   MeResponse,
+  SessionResponse,
   UpdateAccountProfileRequest
 }
 import org.http4s.circe.{CirceEntityDecoder, CirceEntityEncoder}
@@ -16,20 +25,29 @@ import org.http4s.dsl.io._
 import org.http4s.{Request, Response, Status}
 import org.typelevel.log4cats.Logger
 
-/** Self-service account operations for the signed-in user.
+import java.util.UUID
+import scala.util.Try
+
+/** Self-service account operations for the signed-in user: profile, password and sessions.
   *
-  * Both handlers act on `user`, the account the authentication boundary resolved from the session
-  * cookie. The request body is only what to change; it never names the account, so a user cannot
-  * reach another account, and an owner has no more reach here than a member.
+  * Every handler acts on the session the authentication boundary resolved — its user and its own
+  * id. The body says only what to change; it never names an account or a session other than by an
+  * id that the query then scopes to this user, so a user cannot reach another account or another
+  * user's session, and an owner has no more reach here than a member. The raw session token is
+  * never read, returned or logged; sessions are addressed by their row id.
   *
-  * A refused change — the wrong current password, a password that is too short — is an ordinary
-  * outcome carried by a stable code, logged at info, never as an error and never with the values a
-  * person typed. Only an unexpected failure is logged as a throwable, and its message is not shown
-  * to the client.
+  * A refused change is an ordinary outcome carried by a stable code, logged at info, never as an
+  * error and never with the values a person typed. Only an unexpected failure is logged as a
+  * throwable, and its message is not shown to the client.
   */
 final class AccountRoutes[Tx[_]](
   changePassword: ChangePassword[Tx],
   updateProfile: UpdateAccountProfile[Tx],
+  listSessions: ListUserSessions[Tx],
+  revokeSession: RevokeUserSession[Tx],
+  revokeOtherSessions: RevokeOtherUserSessions[Tx],
+  revokeAllSessions: RevokeAllUserSessions[Tx],
+  settings: AuthSettings,
   logger: Logger[IO]
 ) {
   import HttpJsonCodecs._
@@ -38,19 +56,20 @@ final class AccountRoutes[Tx[_]](
 
   private val invalidRequest = ApiErrorResponse("INVALID_REQUEST", "The request could not be read")
   private val internalError = ApiErrorResponse("INTERNAL_ERROR", "Internal server error")
+  private val sessionNotFound = ApiErrorResponse(AccountError.SessionNotFound.code, "Session not found")
 
-  def change(user: AuthenticatedUser, request: Request[IO]): IO[Response[IO]] =
+  def change(session: AuthenticatedSession, request: Request[IO]): IO[Response[IO]] =
     request.as[ChangePasswordRequest].attempt.flatMap {
       case Left(_) => BadRequest(invalidRequest)
       case Right(body) =>
-        changePassword.execute(user.id, body.currentPassword, body.newPassword).attempt.flatMap {
-          case Right(Right(_)) =>
-            log(s"account.password.changed userId=${user.id}") *> NoContent()
-          case Right(Left(error)) =>
-            log(s"account.password.rejected userId=${user.id} code=${error.code}") *>
-              failure(error)
-          case Left(throwable) => unexpected("account.password.change.failed", user, throwable)
-        }
+        changePassword.execute(session.user.id, session.sessionId, body.currentPassword, body.newPassword)
+          .attempt.flatMap {
+            case Right(Right(_)) =>
+              log(s"account.password.changed userId=${session.user.id}") *> NoContent()
+            case Right(Left(error)) =>
+              log(s"account.password.rejected userId=${session.user.id} code=${error.code}") *> failure(error)
+            case Left(throwable) => unexpected("account.password.change.failed", session.user, throwable)
+          }
     }
 
   def updateDisplayName(user: AuthenticatedUser, request: Request[IO]): IO[Response[IO]] =
@@ -59,24 +78,58 @@ final class AccountRoutes[Tx[_]](
       case Right(body) =>
         updateProfile.execute(user.id, body.displayName).attempt.flatMap {
           case Right(Right(displayName)) =>
-            log(s"account.profile.updated userId=${user.id}") *>
-              Ok(MeResponse(user.id, user.email, displayName))
+            log(s"account.profile.updated userId=${user.id}") *> Ok(MeResponse(user.id, user.email, displayName))
           case Right(Left(error)) =>
             log(s"account.profile.rejected userId=${user.id} code=${error.code}") *> failure(error)
           case Left(throwable) => unexpected("account.profile.update.failed", user, throwable)
         }
     }
 
-  /** Maps an account error to its status and stable code. Everything except the two "not this
-    * request's fault" cases is a rejected input, which is a bad request.
-    */
+  def sessions(session: AuthenticatedSession): IO[Response[IO]] =
+    listSessions.execute(session.user.id).attempt.flatMap {
+      case Right(rows) => Ok(rows.map(row =>
+        SessionResponse(row.id, row.createdAt, row.expiresAt, current = row.id == session.sessionId)))
+      case Left(throwable) => unexpected("account.sessions.list.failed", session.user, throwable)
+    }
+
+  def revoke(session: AuthenticatedSession, rawSessionId: String): IO[Response[IO]] =
+    Try(UUID.fromString(rawSessionId)).toOption match {
+      // A malformed id is treated as an absent session, so the endpoint reveals nothing about which
+      // ids exist.
+      case None => NotFound(sessionNotFound)
+      case Some(sessionId) =>
+        revokeSession.execute(session.user.id, session.sessionId, sessionId).attempt.flatMap {
+          case Right(Right(_)) =>
+            log(s"account.session.revoked userId=${session.user.id} sessionId=$sessionId") *> NoContent()
+          case Right(Left(error)) =>
+            log(s"account.session.revoke.rejected userId=${session.user.id} code=${error.code}") *> failure(error)
+          case Left(throwable) => unexpected("account.session.revoke.failed", session.user, throwable)
+        }
+    }
+
+  def revokeOthers(session: AuthenticatedSession): IO[Response[IO]] =
+    revokeOtherSessions.execute(session.user.id, session.sessionId).attempt.flatMap {
+      case Right(count) => log(s"account.sessions.revoke-others userId=${session.user.id} revoked=$count") *> NoContent()
+      case Left(throwable) => unexpected("account.sessions.revoke-others.failed", session.user, throwable)
+    }
+
+  def revokeAll(session: AuthenticatedSession): IO[Response[IO]] =
+    revokeAllSessions.execute(session.user.id).attempt.flatMap {
+      case Right(count) =>
+        // The current session is gone too, so the cookie is cleared and the next request is
+        // unauthenticated.
+        log(s"account.sessions.revoke-all userId=${session.user.id} revoked=$count") *>
+          NoContent().map(_.addCookie(AuthRoutes.clearCookie(settings)))
+      case Left(throwable) => unexpected("account.sessions.revoke-all.failed", session.user, throwable)
+    }
+
   private def failure(error: AccountError): IO[Response[IO]] = {
     val status = error match {
-      case AccountError.AccountNotFound => Status.NotFound
+      case AccountError.AccountNotFound | AccountError.SessionNotFound => Status.NotFound
+      case AccountError.AccountStateChanged => Status.Conflict
       case _ => Status.BadRequest
     }
-    IO.pure(Response[IO](status = status)
-      .withEntity(ApiErrorResponse(error.code, message(error))))
+    IO.pure(Response[IO](status = status).withEntity(ApiErrorResponse(error.code, message(error))))
   }
 
   private def message(error: AccountError): String = error match {
@@ -92,6 +145,9 @@ final class AccountRoutes[Tx[_]](
       s"Name must be at most ${application.account.AccountValidation.MaxDisplayNameLength} characters"
     case AccountError.DisplayNameInvalidCharacters => "Name contains invalid characters"
     case AccountError.AccountNotFound => "Account not found"
+    case AccountError.AccountStateChanged => "The account changed during the request; please try again"
+    case AccountError.SessionNotFound => "Session not found"
+    case AccountError.SessionIsCurrent => "The current session is ended by signing out"
   }
 
   private def unexpected(event: String, user: AuthenticatedUser, throwable: Throwable): IO[Response[IO]] =

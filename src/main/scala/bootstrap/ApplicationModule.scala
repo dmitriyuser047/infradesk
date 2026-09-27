@@ -1,7 +1,15 @@
 package ru.bitec.app.ops
 package bootstrap
 
-import application.account.{ChangePassword, UpdateAccountProfile}
+import application.account.{
+  AccountAudit,
+  ChangePassword,
+  ListUserSessions,
+  RevokeAllUserSessions,
+  RevokeOtherUserSessions,
+  RevokeUserSession,
+  UpdateAccountProfile
+}
 import application.audit.{AuditRecorder, ListAuditEvents}
 import application.history.{
   HistoryRecorder,
@@ -84,6 +92,10 @@ final case class ApplicationComponents(
   authentication: Authentication[ConnectionIO],
   changePassword: ChangePassword[ConnectionIO],
   updateAccountProfile: UpdateAccountProfile[ConnectionIO],
+  listUserSessions: ListUserSessions[ConnectionIO],
+  revokeUserSession: RevokeUserSession[ConnectionIO],
+  revokeOtherUserSessions: RevokeOtherUserSessions[ConnectionIO],
+  revokeAllUserSessions: RevokeAllUserSessions[ConnectionIO],
   bootstrapAdmin: BootstrapAdmin[ConnectionIO],
   listAuditEvents: ListAuditEvents[ConnectionIO],
   listNotificationChannels: ListNotificationChannels[ConnectionIO],
@@ -131,6 +143,9 @@ object ApplicationModule {
         transactionIdGenerator,
         transactionTimeProvider
       )
+
+    // Journals self-service account changes once per organization the user belongs to.
+    val accountAudit = new AccountAudit[ConnectionIO](auditRecorder, membershipRepository)
 
     // Every durable transition journals its facts through this recorder, inside the transaction
     // that produced them.
@@ -347,19 +362,26 @@ object ApplicationModule {
       ),
       changePassword = new ChangePassword[ConnectionIO](
         userAccountRepository,
-        membershipRepository,
-        auditRecorder,
+        authSessionRepository,
+        accountAudit,
         transactionRunner,
         passwordHasher,
         timeProvider
       ),
       updateAccountProfile = new UpdateAccountProfile[ConnectionIO](
         userAccountRepository,
-        membershipRepository,
-        auditRecorder,
+        accountAudit,
         transactionRunner,
         timeProvider
       ),
+      listUserSessions = new ListUserSessions[ConnectionIO](
+        authSessionRepository, transactionRunner, timeProvider),
+      revokeUserSession = new RevokeUserSession[ConnectionIO](
+        authSessionRepository, accountAudit, transactionRunner, timeProvider),
+      revokeOtherUserSessions = new RevokeOtherUserSessions[ConnectionIO](
+        authSessionRepository, accountAudit, transactionRunner, timeProvider),
+      revokeAllUserSessions = new RevokeAllUserSessions[ConnectionIO](
+        authSessionRepository, accountAudit, transactionRunner, timeProvider),
       bootstrapAdmin = new BootstrapAdmin[ConnectionIO](
         userAccountRepository,
         membershipRepository,

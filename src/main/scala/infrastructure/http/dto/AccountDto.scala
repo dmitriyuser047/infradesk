@@ -6,3 +6,12 @@ package infrastructure.http.dto
   */
 final case class ChangePasswordRequest(currentPassword: String, newPassword: String)
 final case class UpdateAccountProfileRequest(displayName: String)
+
+/** One session as the account page sees it: a non-secret id, its lifetime, and whether it is the
+  * session making the request. No token and no device metadata. */
+final case class SessionResponse(
+  id: java.util.UUID,
+  createdAt: java.time.Instant,
+  expiresAt: java.time.Instant,
+  current: Boolean
+)

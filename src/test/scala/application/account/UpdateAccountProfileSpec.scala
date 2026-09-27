@@ -69,8 +69,8 @@ final class UpdateAccountProfileSpec extends FunSuite {
       isActive = true, Instant.EPOCH, Instant.EPOCH))
     val auditRepo = new RecordingAudit
     val recorder = new AuditRecorder[IO](auditRepo, new FixedIds, new FixedTime)
-    val update = new UpdateAccountProfile[IO](users, new FakeMemberships(Org), recorder,
-      new DirectRunner, new FixedTime)
+    val accountAudit = new AccountAudit[IO](recorder, new FakeMemberships(Org))
+    val update = new UpdateAccountProfile[IO](users, accountAudit, new DirectRunner, new FixedTime)
     Setup(update, users, auditRepo)
   }
 
@@ -82,7 +82,7 @@ final class UpdateAccountProfileSpec extends FunSuite {
     override def findByEmail(email: String): IO[Option[UserAccount]] = IO.pure(None)
     override def findActiveById(id: UUID): IO[Option[UserAccount]] = IO(synchronized(Option(user).filter(_.id == id)))
     override def createIfMissing(u: UserAccount): IO[Unit] = IO.unit
-    override def updatePasswordHash(id: UUID, passwordHash: String, updatedAt: Instant): IO[Boolean] = IO.pure(false)
+    override def compareAndSetPasswordHash(id: UUID, expectedPasswordHash: String, newPasswordHash: String, updatedAt: Instant): IO[Boolean] = IO.pure(false)
     override def updateDisplayName(id: UUID, displayName: String, updatedAt: Instant): IO[Boolean] =
       IO(synchronized {
         if (user.id == id && user.isActive) { user = user.copy(displayName = displayName, updatedAt = updatedAt); true }
