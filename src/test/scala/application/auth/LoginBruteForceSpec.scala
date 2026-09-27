@@ -4,9 +4,9 @@ package application.auth
 import application.port.{AuthSessionRepository, LoginThrottleKey, TimeProvider, TransactionRunner, UserAccountRepository}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import domain.auth.{AuthSession, AuthenticatedSession, LoginThrottleScope, UserAccount, UserSessionSummary}
+import domain.auth.{AuthSession, AuthenticatedSession, LoginThrottleScope, SecurityEventType, UserAccount, UserSessionSummary}
 import munit.FunSuite
-import support.InMemoryLoginThrottle
+import support.{InMemoryLoginThrottle, InMemorySecurityEvents}
 
 import java.time.Instant
 import java.util.UUID
@@ -81,6 +81,8 @@ final class LoginBruteForceSpec extends FunSuite {
     assertEquals(setup.throttle.failureCount(idKey(Email)), 0, "identifier throttle reset on success")
     assertEquals(setup.throttle.failureCount(srcKey(SourceA)), sourceBefore, "source history is not erased by one success")
     assertEquals(setup.sessions.created, 1)
+    assertEquals(setup.securityEvents.recorded.map(_.eventType), List(SecurityEventType.LoginSucceeded))
+    assertEquals(setup.securityEvents.recorded.head.source, Some(SourceA))
   }
 
   test("the source limiter accumulates across different identifiers") {
@@ -116,12 +118,14 @@ final class LoginBruteForceSpec extends FunSuite {
     val users = new FakeUsers
     val sessions = new FakeSessions
     val clock = new MutableClock(Instant.parse("2026-09-27T10:00:00Z"))
-    val login = new Login[IO](users, sessions, throttle, hasher, limits, new DirectRunner, recording,
+    val securityEvents = new InMemorySecurityEvents
+    val login = new Login[IO](users, sessions, throttle, securityEvents, hasher, limits, new DirectRunner, recording,
       new SessionTokens, clock, 3600)
-    Setup(login, throttle, recording, sessions, clock)
+    Setup(login, throttle, recording, sessions, securityEvents, clock)
   }
 
-  private final case class Setup(login: Login[IO], throttle: InMemoryLoginThrottle, hasher: RecordingHasher, sessions: FakeSessions, clock: MutableClock)
+  private final case class Setup(login: Login[IO], throttle: InMemoryLoginThrottle, hasher: RecordingHasher,
+    sessions: FakeSessions, securityEvents: InMemorySecurityEvents, clock: MutableClock)
 
   /** Records the hash each verify ran against, so the dummy vs real path is checked structurally. */
   private final class RecordingHasher extends PasswordHasher {

@@ -298,7 +298,7 @@ final class AuthBoundarySpec extends FunSuite {
     val sessions = new Sessions(users)
     val memberships = new Memberships
     val authentication = new Authentication[IO](sessions, memberships, runner, tokens)
-    val loginService = new Login[IO](users, sessions, new support.InMemoryLoginThrottle,
+    val loginService = new Login[IO](users, sessions, new support.InMemoryLoginThrottle, new support.InMemorySecurityEvents,
       new LoginThrottleHasher(Array.fill(32)(3.toByte)), AuthRateLimitSettings.default,
       runner, passwordHasher, tokens,
       new TimeProvider[IO] { override def now: IO[Instant] = IO(Instant.now()) }, 3600)
@@ -315,13 +315,15 @@ final class AuthBoundarySpec extends FunSuite {
       }
       val recorder = new AuditRecorder[IO](noAudit, ids, time)
       val accountAudit = new AccountAudit[IO](recorder, memberships)
+      val securityEvents = new support.InMemorySecurityEvents
       new AccountRoutes[IO](
-        new ChangePassword[IO](users, sessions, accountAudit, runner, passwordHasher, time),
+        new ChangePassword[IO](users, sessions, securityEvents, accountAudit, runner, passwordHasher, time),
         new UpdateAccountProfile[IO](users, accountAudit, runner, time),
         new ListUserSessions[IO](sessions, runner, time),
-        new RevokeUserSession[IO](sessions, accountAudit, runner, time),
-        new RevokeOtherUserSessions[IO](sessions, accountAudit, runner, time),
-        new RevokeAllUserSessions[IO](sessions, accountAudit, runner, time),
+        new RevokeUserSession[IO](sessions, securityEvents, accountAudit, runner, time),
+        new RevokeOtherUserSessions[IO](sessions, securityEvents, accountAudit, runner, time),
+        new RevokeAllUserSessions[IO](sessions, securityEvents, accountAudit, runner, time),
+        new application.auth.ListSecurityEvents[IO](securityEvents), runner,
         AuthSettings(3600, secure, trustForwardedFor = false),
         org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.account"))
     }

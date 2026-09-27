@@ -1,12 +1,12 @@
 package ru.bitec.app.ops
 package application.account
 
-import application.port.{AuthSessionRepository, TimeProvider, TransactionRunner}
+import application.port.{AuthSessionRepository, SecurityEventRepository, TimeProvider, TransactionRunner}
 import cats.Monad
 import cats.effect.IO
 import cats.syntax.all._
 import domain.audit.AuditAction
-import domain.auth.UserSessionSummary
+import domain.auth.{SecurityEvent, SecurityEventType, UserSessionSummary}
 
 import java.util.UUID
 
@@ -31,6 +31,7 @@ final class ListUserSessions[Tx[_]](
   */
 final class RevokeUserSession[Tx[_]: Monad](
   sessions: AuthSessionRepository[Tx],
+  securityEvents: SecurityEventRepository[Tx],
   accountAudit: AccountAudit[Tx],
   runner: TransactionRunner[IO, Tx],
   time: TimeProvider[IO]
@@ -40,7 +41,9 @@ final class RevokeUserSession[Tx[_]: Monad](
     else time.now.flatMap(now => runner.run(
       sessions.revokeByIdForUser(userId, targetSessionId, now).flatMap {
         case false => (Left(AccountError.SessionNotFound): Either[AccountError, Unit]).pure[Tx]
-        case true => accountAudit.record(userId, AuditAction.AccountSessionRevoked).as(().asRight[AccountError])
+        case true => accountAudit.record(userId, AuditAction.AccountSessionRevoked) *>
+          securityEvents.save(SecurityEvent(UUID.randomUUID(), userId, SecurityEventType.SessionRevoked,
+            now, Some(targetSessionId), None, Some(1))).as(().asRight[AccountError])
       }
     ))
 }
@@ -50,6 +53,7 @@ final class RevokeUserSession[Tx[_]: Monad](
   */
 final class RevokeOtherUserSessions[Tx[_]: Monad](
   sessions: AuthSessionRepository[Tx],
+  securityEvents: SecurityEventRepository[Tx],
   accountAudit: AccountAudit[Tx],
   runner: TransactionRunner[IO, Tx],
   time: TimeProvider[IO]
@@ -58,6 +62,8 @@ final class RevokeOtherUserSessions[Tx[_]: Monad](
     time.now.flatMap(now => runner.run(for {
       revoked <- sessions.revokeOthersForUser(userId, currentSessionId, now)
       _ <- accountAudit.record(userId, AuditAction.AccountOtherSessionsRevoked)
+      _ <- securityEvents.save(SecurityEvent(UUID.randomUUID(), userId, SecurityEventType.OtherSessionsRevoked,
+        now, None, None, Some(revoked)))
     } yield revoked))
 }
 
@@ -66,6 +72,7 @@ final class RevokeOtherUserSessions[Tx[_]: Monad](
   */
 final class RevokeAllUserSessions[Tx[_]: Monad](
   sessions: AuthSessionRepository[Tx],
+  securityEvents: SecurityEventRepository[Tx],
   accountAudit: AccountAudit[Tx],
   runner: TransactionRunner[IO, Tx],
   time: TimeProvider[IO]
@@ -74,5 +81,7 @@ final class RevokeAllUserSessions[Tx[_]: Monad](
     time.now.flatMap(now => runner.run(for {
       revoked <- sessions.revokeAllForUser(userId, now)
       _ <- accountAudit.record(userId, AuditAction.AccountAllSessionsRevoked)
+      _ <- securityEvents.save(SecurityEvent(UUID.randomUUID(), userId, SecurityEventType.AllSessionsRevoked,
+        now, None, None, Some(revoked)))
     } yield revoked))
 }

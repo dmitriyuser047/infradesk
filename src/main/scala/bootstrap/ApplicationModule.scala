@@ -16,7 +16,7 @@ import application.history.{
   HistoryRecordingMonitorRuleEvaluator,
   ListHistoryEvents
 }
-import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, CleanupLoginThrottle, Login, LoginThrottleHasher, SessionTokens}
+import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, CleanupLoginThrottle, CleanupSecurityEvents, ListSecurityEvents, Login, LoginThrottleHasher, SessionTokens}
 import application.connection.{
   GetConnection,
   GetConnectionSyncSession,
@@ -90,6 +90,7 @@ final case class ApplicationComponents(
   createEnvironment: CreateEnvironment[ConnectionIO],
   login: Login[ConnectionIO],
   cleanupLoginThrottle: CleanupLoginThrottle[IO, ConnectionIO],
+  cleanupSecurityEvents: CleanupSecurityEvents[IO, ConnectionIO],
   authentication: Authentication[ConnectionIO],
   changePassword: ChangePassword[ConnectionIO],
   updateAccountProfile: UpdateAccountProfile[ConnectionIO],
@@ -97,6 +98,7 @@ final case class ApplicationComponents(
   revokeUserSession: RevokeUserSession[ConnectionIO],
   revokeOtherUserSessions: RevokeOtherUserSessions[ConnectionIO],
   revokeAllUserSessions: RevokeAllUserSessions[ConnectionIO],
+  listSecurityEvents: ListSecurityEvents[ConnectionIO],
   bootstrapAdmin: BootstrapAdmin[ConnectionIO],
   listAuditEvents: ListAuditEvents[ConnectionIO],
   listNotificationChannels: ListNotificationChannels[ConnectionIO],
@@ -124,6 +126,7 @@ object ApplicationModule {
     * delete on the login path.
     */
   private val LoginThrottleCleanupInterval: FiniteDuration = 1.hour
+  private val SecurityEventCleanupInterval: FiniteDuration = 6.hours
 
   def build(
     config: AppConfig,
@@ -362,6 +365,7 @@ object ApplicationModule {
         userAccountRepository,
         authSessionRepository,
         loginThrottleRepository,
+        securityEventRepository,
         loginThrottleHasher,
         config.loginRateLimit,
         transactionRunner,
@@ -377,6 +381,10 @@ object ApplicationModule {
         config.loginRateLimit.retention,
         LoginThrottleCleanupInterval
       ),
+      cleanupSecurityEvents = new CleanupSecurityEvents[IO, ConnectionIO](
+        securityEventRepository, transactionRunner, loggers.account, config.securityEvents.retention,
+        SecurityEventCleanupInterval
+      ),
       authentication = new Authentication[ConnectionIO](
         authSessionRepository,
         membershipRepository,
@@ -386,6 +394,7 @@ object ApplicationModule {
       changePassword = new ChangePassword[ConnectionIO](
         userAccountRepository,
         authSessionRepository,
+        securityEventRepository,
         accountAudit,
         transactionRunner,
         passwordHasher,
@@ -400,11 +409,12 @@ object ApplicationModule {
       listUserSessions = new ListUserSessions[ConnectionIO](
         authSessionRepository, transactionRunner, timeProvider),
       revokeUserSession = new RevokeUserSession[ConnectionIO](
-        authSessionRepository, accountAudit, transactionRunner, timeProvider),
+        authSessionRepository, securityEventRepository, accountAudit, transactionRunner, timeProvider),
       revokeOtherUserSessions = new RevokeOtherUserSessions[ConnectionIO](
-        authSessionRepository, accountAudit, transactionRunner, timeProvider),
+        authSessionRepository, securityEventRepository, accountAudit, transactionRunner, timeProvider),
       revokeAllUserSessions = new RevokeAllUserSessions[ConnectionIO](
-        authSessionRepository, accountAudit, transactionRunner, timeProvider),
+        authSessionRepository, securityEventRepository, accountAudit, transactionRunner, timeProvider),
+      listSecurityEvents = new ListSecurityEvents[ConnectionIO](securityEventQuery),
       bootstrapAdmin = new BootstrapAdmin[ConnectionIO](
         userAccountRepository,
         membershipRepository,

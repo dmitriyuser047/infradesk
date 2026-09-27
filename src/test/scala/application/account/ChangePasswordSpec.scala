@@ -138,7 +138,7 @@ final class ChangePasswordSpec extends FunSuite {
     val auditRepo = new RecordingAudit(failAudit)
     val accountAudit = new AccountAudit[IO](new AuditRecorder[IO](auditRepo, new FixedIds, new FixedTime), memberships)
     val runner = new TransactionalRunner(users, sessions)
-    val change = new ChangePassword[IO](users, sessions, accountAudit, runner, hasher, new FixedTime)
+    val change = new ChangePassword[IO](users, sessions, new support.InMemorySecurityEvents, accountAudit, runner, hasher, new FixedTime)
     Setup(change, users, sessions, auditRepo, originalHash)
   }
 

@@ -12,7 +12,7 @@ import org.http4s.circe.CirceEntityDecoder._
 import org.http4s.circe.CirceEntityEncoder._
 import org.http4s.{Header, Method, Request, Status, Uri}
 import org.typelevel.ci.CIString
-import support.InMemoryLoginThrottle
+import support.{InMemoryLoginThrottle, InMemorySecurityEvents}
 
 import java.time.Instant
 import java.util.UUID
@@ -83,7 +83,7 @@ final class AuthLoginRoutesSpec extends FunSuite {
     val sessions = new FakeSessions
     val tokens = new SessionTokens
     val clock = new TimeProvider[IO] { override def now: IO[Instant] = IO(Instant.now()) }
-    val login = new Login[IO](users, sessions, throttle, hasher, limits, new DirectRunner,
+    val login = new Login[IO](users, sessions, throttle, new InMemorySecurityEvents, hasher, limits, new DirectRunner,
       new FakeHasher, tokens, clock, 3600)
     val authentication = new Authentication[IO](sessions, new EmptyMemberships, new DirectRunner, tokens)
     val routes = new AuthRoutes(login, authentication, AuthSettings(3600, secureCookie = false, trustForwardedFor))

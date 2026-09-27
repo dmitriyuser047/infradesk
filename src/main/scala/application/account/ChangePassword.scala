@@ -2,11 +2,12 @@ package ru.bitec.app.ops
 package application.account
 
 import application.auth.PasswordHasher
-import application.port.{AuthSessionRepository, TimeProvider, TransactionRunner, UserAccountRepository}
+import application.port.{AuthSessionRepository, SecurityEventRepository, TimeProvider, TransactionRunner, UserAccountRepository}
 import cats.Monad
 import cats.effect.IO
 import cats.syntax.all._
 import domain.audit.AuditAction
+import domain.auth.{SecurityEvent, SecurityEventType}
 
 import java.time.Instant
 import java.util.UUID
@@ -33,6 +34,7 @@ import java.util.UUID
 final class ChangePassword[Tx[_]: Monad](
   users: UserAccountRepository[Tx],
   sessions: AuthSessionRepository[Tx],
+  securityEvents: SecurityEventRepository[Tx],
   accountAudit: AccountAudit[Tx],
   runner: TransactionRunner[IO, Tx],
   passwords: PasswordHasher,
@@ -79,6 +81,8 @@ final class ChangePassword[Tx[_]: Monad](
         // The current session survives; every other session of this user is ended, so a stolen or
         // stale one stops working the moment the password changes.
         sessions.revokeOthersForUser(userId, currentSessionId, now) *>
-          accountAudit.record(userId, AuditAction.AccountPasswordChanged).as(true)
+          accountAudit.record(userId, AuditAction.AccountPasswordChanged) *>
+          securityEvents.save(SecurityEvent(UUID.randomUUID(), userId, SecurityEventType.PasswordChanged,
+            now, Some(currentSessionId), None, None)).as(true)
     }
 }

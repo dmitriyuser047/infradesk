@@ -48,6 +48,8 @@ final class AuthBoundary[Tx[_]](
         authenticated(request)(session => accountRoutes.updateDisplayName(session.user, request))
       case List("api", "v1", "account", "sessions") if request.method == GET =>
         authenticated(request)(accountRoutes.sessions)
+      case List("api", "v1", "account", "security-events") if request.method == GET =>
+        authenticated(request)(session => accountRoutes.securityEvents(session, request))
       case List("api", "v1", "account", "sessions", "revoke-others") if request.method == POST =>
         authenticated(request)(accountRoutes.revokeOthers)
       case List("api", "v1", "account", "sessions", "revoke-all") if request.method == POST =>

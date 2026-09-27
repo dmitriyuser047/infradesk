@@ -92,9 +92,9 @@ final class UserSessionsSpec extends FunSuite {
     val time = new FixedTime
     Setup(
       new ListUserSessions[IO](sessions, runner, time),
-      new RevokeUserSession[IO](sessions, accountAudit, runner, time),
-      new RevokeOtherUserSessions[IO](sessions, accountAudit, runner, time),
-      new RevokeAllUserSessions[IO](sessions, accountAudit, runner, time),
+      new RevokeUserSession[IO](sessions, new support.InMemorySecurityEvents, accountAudit, runner, time),
+      new RevokeOtherUserSessions[IO](sessions, new support.InMemorySecurityEvents, accountAudit, runner, time),
+      new RevokeAllUserSessions[IO](sessions, new support.InMemorySecurityEvents, accountAudit, runner, time),
       sessions, audit)
   }
 

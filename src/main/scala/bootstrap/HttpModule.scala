@@ -116,6 +116,8 @@ object HttpModule {
       application.revokeUserSession,
       application.revokeOtherUserSessions,
       application.revokeAllUserSessions,
+      application.listSecurityEvents,
+      transactionRunner,
       authSettings,
       loggers.account)
     val protectedApp =

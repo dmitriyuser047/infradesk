@@ -79,7 +79,7 @@ final class AuthServicesSpec extends FunSuite {
   }
 
   private def newLogin(users: MemoryUsers, sessions: MemorySessions): Login[IO] =
-    new Login[IO](users, sessions, new support.InMemoryLoginThrottle,
+    new Login[IO](users, sessions, new support.InMemoryLoginThrottle, new support.InMemorySecurityEvents,
       new LoginThrottleHasher(Array.fill(32)(7.toByte)), AuthRateLimitSettings.default,
       identityRunner, passwords, tokens, systemClock, 3600)
 

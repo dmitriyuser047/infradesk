@@ -18,6 +18,20 @@ export interface SessionResponse {
   current: boolean
 }
 
+export interface SecurityEventResponse {
+  id: string
+  type: 'LOGIN_SUCCEEDED' | 'PASSWORD_CHANGED' | 'SESSION_REVOKED' | 'OTHER_SESSIONS_REVOKED' | 'ALL_SESSIONS_REVOKED'
+  occurredAt: string
+  sessionId?: string
+  source?: string
+  affectedSessionCount?: number
+}
+
+export interface SecurityEventPageResponse {
+  items: SecurityEventResponse[]
+  nextCursor?: { occurredAt: string; id: string }
+}
+
 export const OrganizationRole = {
   owner: 'OWNER',
   member: 'MEMBER',

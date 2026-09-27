@@ -22,6 +22,7 @@ function setup(options: {
   locale?: Locale
   changePasswordResponse?: () => Promise<Response>
   sessions?: SessionResponse[]
+  securityEvents?: unknown[]
 } = {}) {
   const client = createAppQueryClient()
   const requests: RequestRecord[] = []
@@ -32,6 +33,7 @@ function setup(options: {
     if (url === '/api/v1/me') return json({ id: 'u1', email: 'user@example.com', displayName: 'Dmitriy Ulyanov' })
     if (url === '/api/v1/me/organizations') return json([{ id: 'org', code: 'ORG', name: 'Acme', role: 'OWNER' }])
     if (url === '/api/v1/account/sessions' && method === 'GET') return json(sessions)
+    if (url === '/api/v1/account/security-events' && method === 'GET') return json({ items: options.securityEvents ?? [], nextCursor: null })
     if (url === '/api/v1/account/sessions/revoke-others' && method === 'POST') { sessions = sessions.filter(s => s.current); return new Response(null, { status: 204 }) }
     if (url === '/api/v1/account/sessions/revoke-all' && method === 'POST') { sessions = []; return new Response(null, { status: 204 }) }
     if (url.startsWith('/api/v1/account/sessions/') && method === 'DELETE') {
@@ -132,6 +134,13 @@ describe('account page', () => {
     setup()
     expect(await screen.findByText('This device')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Sign out other sessions' })).toBeTruthy()
+  })
+
+  it('shows meaningful security activity and a trusted login source, not its UUID', async () => {
+    setup({ securityEvents: [{ id: 'event-private-id', type: 'LOGIN_SUCCEEDED', occurredAt: '2026-09-27T08:00:00Z', source: '203.0.113.10' }] })
+    expect(await screen.findByText('Signed in')).toBeTruthy()
+    expect(screen.getByText(/203\.0\.113\.10/)).toBeTruthy()
+    expect(screen.queryByText('event-private-id')).toBeNull()
   })
 
   it('signs out one other session, and it disappears from the list', async () => {

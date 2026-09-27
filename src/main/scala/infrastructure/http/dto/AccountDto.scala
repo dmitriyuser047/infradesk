@@ -15,3 +15,14 @@ final case class SessionResponse(
   expiresAt: java.time.Instant,
   current: Boolean
 )
+
+final case class SecurityEventResponse(
+  id: java.util.UUID,
+  eventType: String,
+  occurredAt: java.time.Instant,
+  sessionId: Option[java.util.UUID],
+  source: Option[String],
+  affectedSessionCount: Option[Int]
+)
+final case class SecurityEventPageResponse(items: List[SecurityEventResponse], nextCursor: Option[SecurityEventCursorResponse])
+final case class SecurityEventCursorResponse(occurredAt: java.time.Instant, id: java.util.UUID)

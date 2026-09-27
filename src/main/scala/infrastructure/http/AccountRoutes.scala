@@ -10,6 +10,8 @@ import application.account.{
   RevokeUserSession,
   UpdateAccountProfile
 }
+import application.auth.ListSecurityEvents
+import application.port.TransactionRunner
 import cats.effect.IO
 import domain.auth.{AuthenticatedSession, AuthenticatedUser}
 import infrastructure.http.dto.{
@@ -18,6 +20,9 @@ import infrastructure.http.dto.{
   HttpJsonCodecs,
   MeResponse,
   SessionResponse,
+  SecurityEventCursorResponse,
+  SecurityEventPageResponse,
+  SecurityEventResponse,
   UpdateAccountProfileRequest
 }
 import org.http4s.circe.{CirceEntityDecoder, CirceEntityEncoder}
@@ -47,6 +52,8 @@ final class AccountRoutes[Tx[_]](
   revokeSession: RevokeUserSession[Tx],
   revokeOtherSessions: RevokeOtherUserSessions[Tx],
   revokeAllSessions: RevokeAllUserSessions[Tx],
+  listSecurityEvents: ListSecurityEvents[Tx],
+  runner: TransactionRunner[IO, Tx],
   settings: AuthSettings,
   logger: Logger[IO]
 ) {
@@ -92,6 +99,20 @@ final class AccountRoutes[Tx[_]](
       case Left(throwable) => unexpected("account.sessions.list.failed", session.user, throwable)
     }
 
+  def securityEvents(session: AuthenticatedSession, request: Request[IO]): IO[Response[IO]] = {
+    val params = request.uri.query.params
+    (securityCursor(params.get("beforeOccurredAt"), params.get("beforeId")), securityLimit(params.get("limit"))) match {
+      case (Left(error), _) | (_, Left(error)) => BadRequest(error)
+      case (Right(before), Right(limit)) =>
+        runner.run(listSecurityEvents.execute(session.user.id, before, limit)).attempt.flatMap {
+          case Right(page) => Ok(SecurityEventPageResponse(page.items.map(event => SecurityEventResponse(event.id,
+            event.eventType.code, event.occurredAt, event.sessionId, event.source, event.affectedSessionCount)),
+            page.nextCursor.map(cursor => SecurityEventCursorResponse(cursor.occurredAt, cursor.id))))
+          case Left(throwable) => unexpected("account.security-events.list.failed", session.user, throwable)
+        }
+    }
+  }
+
   def revoke(session: AuthenticatedSession, rawSessionId: String): IO[Response[IO]] =
     Try(UUID.fromString(rawSessionId)).toOption match {
       // A malformed id is treated as an absent session, so the endpoint reveals nothing about which
@@ -130,6 +151,22 @@ final class AccountRoutes[Tx[_]](
       case _ => Status.BadRequest
     }
     IO.pure(Response[IO](status = status).withEntity(ApiErrorResponse(error.code, message(error))))
+  }
+
+  private def securityCursor(at: Option[String], id: Option[String]) = (at, id) match {
+    case (None, None) => Right(None)
+    case (Some(rawAt), Some(rawId)) =>
+      (Try(java.time.Instant.parse(rawAt)).toOption, Try(UUID.fromString(rawId)).toOption) match {
+        case (Some(parsedAt), Some(parsedId)) => Right(Some(domain.auth.SecurityEventCursor(parsedAt, parsedId)))
+        case _ => Left(ApiErrorResponse("INVALID_REQUEST", "Invalid security event cursor"))
+      }
+    case _ => Left(ApiErrorResponse("INVALID_REQUEST", "Invalid security event cursor"))
+  }
+
+  private def securityLimit(raw: Option[String]) = raw match {
+    case None => Right(ListSecurityEvents.DefaultLimit)
+    case Some(value) => Try(value.toInt).toOption.filter(v => v > 0 && v <= ListSecurityEvents.MaxLimit)
+      .toRight(ApiErrorResponse("INVALID_REQUEST", "Invalid limit"))
   }
 
   private def message(error: AccountError): String = error match {

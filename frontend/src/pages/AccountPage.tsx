@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import {
@@ -7,6 +7,7 @@ import {
   useRevokeOtherSessions,
   useRevokeSession,
   useSessions,
+  useSecurityEvents,
   useUpdateDisplayName,
 } from '../api/account'
 import { useMe, useMyOrganizations } from '../api/auth'
@@ -36,8 +37,48 @@ export function AccountPage() {
         organizations={organizations.data ?? []} />
       <PasswordSection />
       <SessionsSection />
+      <SecurityEventsSection />
     </main>
   )
+}
+
+function SecurityEventsSection() {
+  const i18n = useI18n()
+  const t = i18n.t.account
+  const [cursor, setCursor] = useState<{ occurredAt: string; id: string } | undefined>()
+  const [items, setItems] = useState<import('../types/auth').SecurityEventResponse[]>([])
+  const events = useSecurityEvents(cursor)
+  useEffect(() => {
+    if (events.data) setItems(cursor ? existing => [...existing, ...events.data!.items] : events.data.items)
+  }, [events.data, cursor])
+  const rows = items
+
+  return (
+    <section className="account-panel" aria-labelledby="account-security-events-heading">
+      <h2 id="account-security-events-heading">{t.securityHeading}</h2>
+      {events.isError ? <p className="form-error" role="alert">{t.securityLoadFailed}</p> : null}
+      {!events.isLoading && rows.length === 0 ? <p className="muted">{t.noSecurityEvents}</p> : null}
+      <ul className="account-sessions">
+        {rows.map((event) => <li key={event.id}>
+          <span>{securityEventLabel(event.type, t)}</span>
+          <small className="muted">{i18n.format.dateTime(event.occurredAt)}{event.source ? ` · ${event.source}` : ''}</small>
+        </li>)}
+      </ul>
+      {events.data?.nextCursor ? <button type="button" className="secondary-button"
+        onClick={() => setCursor(events.data?.nextCursor)}>{t.showMore}</button> : null}
+    </section>
+  )
+}
+
+function securityEventLabel(type: string, t: ReturnType<typeof useI18n>['t']['account']): string {
+  const labels: Record<string, string> = {
+    LOGIN_SUCCEEDED: t.securityEvents.loginSucceeded,
+    PASSWORD_CHANGED: t.securityEvents.passwordChanged,
+    SESSION_REVOKED: t.securityEvents.sessionRevoked,
+    OTHER_SESSIONS_REVOKED: t.securityEvents.otherSessionsRevoked,
+    ALL_SESSIONS_REVOKED: t.securityEvents.allSessionsRevoked,
+  }
+  return labels[type] ?? type
 }
 
 function ProfileSection(props: {

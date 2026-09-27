@@ -1,11 +1,11 @@
 package ru.bitec.app.ops
 package application.auth
 
-import application.port.{AuthSessionRepository, LoginThrottleKey, LoginThrottleRepository, TimeProvider, TransactionRunner, UserAccountRepository}
+import application.port.{AuthSessionRepository, LoginThrottleKey, LoginThrottleRepository, SecurityEventRepository, TimeProvider, TransactionRunner, UserAccountRepository}
 import cats.Monad
 import cats.effect.IO
 import cats.syntax.all._
-import domain.auth.{AuthSession, AuthenticatedUser, LoginThrottleScope, UserAccount}
+import domain.auth.{AuthSession, AuthenticatedUser, LoginThrottleScope, SecurityEvent, SecurityEventType, UserAccount}
 
 import java.time.Instant
 import java.util.UUID
@@ -41,6 +41,7 @@ final class Login[Tx[_]: Monad](
   users: UserAccountRepository[Tx],
   sessions: AuthSessionRepository[Tx],
   throttle: LoginThrottleRepository[Tx],
+  securityEvents: SecurityEventRepository[Tx],
   throttleHasher: LoginThrottleHasher,
   rateLimit: AuthRateLimitSettings,
   runner: TransactionRunner[IO, Tx],
@@ -60,7 +61,7 @@ final class Login[Tx[_]: Monad](
       blocked <- runner.run(throttle.blockedUntil(identifierKey :: sourceKey.toList, now))
       outcome <- blocked match {
         case Some(until) => IO.pure(LoginOutcome.RateLimited(retryAfterSeconds(until, now)))
-        case None => attempt(normalized, password, identifierKey, sourceKey)
+        case None => attempt(normalized, password, identifierKey, sourceKey, source)
       }
     } yield outcome
   }
@@ -69,7 +70,8 @@ final class Login[Tx[_]: Monad](
     normalized: String,
     password: String,
     identifierKey: LoginThrottleKey,
-    sourceKey: Option[LoginThrottleKey]
+    sourceKey: Option[LoginThrottleKey],
+    source: Option[String]
   ): IO[LoginOutcome] =
     runner.run(users.findByEmail(normalized)).flatMap { account =>
       account.filter(_.isActive) match {
@@ -79,7 +81,7 @@ final class Login[Tx[_]: Monad](
         case Some(user) =>
           passwords.verify(password, user.passwordHash).flatMap {
             case false => recordFailure(identifierKey, sourceKey)
-            case true => succeed(user, identifierKey)
+            case true => succeed(user, identifierKey, sourceKey.map(_ => source).flatten)
           }
       }
     }
@@ -99,13 +101,15 @@ final class Login[Tx[_]: Monad](
     // attempt is the one the pre-check turns away.
     ).as(LoginOutcome.InvalidCredentials)
 
-  private def succeed(user: UserAccount, identifierKey: LoginThrottleKey): IO[LoginOutcome] =
+  private def succeed(user: UserAccount, identifierKey: LoginThrottleKey, source: Option[String]): IO[LoginOutcome] =
     for {
       now <- time.now
       rawToken <- IO(tokens.generate())
       session = AuthSession(UUID.randomUUID(), user.id, tokens.hash(rawToken), now,
         now.plusSeconds(ttlSeconds), None)
-      _ <- runner.run(sessions.create(session) *> throttle.clear(identifierKey))
+      event = SecurityEvent(UUID.randomUUID(), user.id, SecurityEventType.LoginSucceeded, now, Some(session.id),
+        source.filter(_.length <= 45), None)
+      _ <- runner.run(sessions.create(session) *> throttle.clear(identifierKey) *> securityEvents.save(event))
     } yield LoginOutcome.Succeeded(
       LoginResult(AuthenticatedUser(user.id, user.email, user.displayName), rawToken))
 

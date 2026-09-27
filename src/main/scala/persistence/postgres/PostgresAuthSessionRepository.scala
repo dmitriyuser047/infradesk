@@ -45,22 +45,22 @@ final class PostgresAuthSessionRepository extends AuthSessionRepository[Connecti
             where user_id = $userId
               and revoked_at is null
               and expires_at > $now
-            order by created_at desc, id desc"""
+            order by created_at desc, id desc limit 100"""
       .query[(UUID, Instant, Instant)]
       .to[List].map(_.map { case (id, createdAt, expiresAt) => UserSessionSummary(id, createdAt, expiresAt) })
 
   override def revokeByIdForUser(userId: UUID, sessionId: UUID, now: Instant): ConnectionIO[Boolean] =
     sql"""update auth_session set revoked_at = $now
-            where id = $sessionId and user_id = $userId and revoked_at is null"""
+            where id = $sessionId and user_id = $userId and revoked_at is null and expires_at > $now"""
       .update.run.map(_ == 1)
 
   override def revokeOthersForUser(userId: UUID, exceptSessionId: UUID, now: Instant): ConnectionIO[Int] =
     sql"""update auth_session set revoked_at = $now
-            where user_id = $userId and id <> $exceptSessionId and revoked_at is null"""
+            where user_id = $userId and id <> $exceptSessionId and revoked_at is null and expires_at > $now"""
       .update.run
 
   override def revokeAllForUser(userId: UUID, now: Instant): ConnectionIO[Int] =
     sql"""update auth_session set revoked_at = $now
-            where user_id = $userId and revoked_at is null"""
+            where user_id = $userId and revoked_at is null and expires_at > $now"""
       .update.run
 }

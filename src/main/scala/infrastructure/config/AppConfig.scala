@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package infrastructure.config
 
-import application.auth.{AuthRateLimitSettings, BootstrapConfig}
+import application.auth.{AuthRateLimitSettings, BootstrapConfig, SecurityEventSettings}
 import cats.effect.IO
 import com.comcast.ip4s.{Host, Port}
 import infrastructure.database.DatabaseConfig
@@ -59,6 +59,7 @@ final case class AppConfig(
   http: HttpConfig,
   auth: AuthSettings,
   loginRateLimit: AuthRateLimitSettings,
+  securityEvents: SecurityEventSettings,
   bootstrap: Option[BootstrapConfig],
   secretEncryption: SecretEncryptionConfig,
   scheduler: SchedulerConfig,
@@ -75,11 +76,12 @@ object AppConfig {
       http <- parseHttp(values)
       auth <- AuthSettings.fromEnvironment(values)
       loginRateLimit <- parseLoginRateLimit(values)
+      securityEvents <- positiveInt(values, "INFRADESK_SECURITY_EVENT_RETENTION_SECONDS", SecurityEventSettings.default.retention.toSeconds.toInt)
       bootstrap <- BootstrapConfig.fromEnvironment(values)
       secretEncryption <- SecretEncryptionConfig.fromEnvironment(values)
       scheduler <- parseScheduler(values)
       notification <- parseNotification(values)
-    } yield AppConfig(database, http, auth, loginRateLimit, bootstrap, secretEncryption, scheduler,
+    } yield AppConfig(database, http, auth, loginRateLimit, SecurityEventSettings(securityEvents.seconds), bootstrap, secretEncryption, scheduler,
       notification, EnvironmentSecrets.fromEnvironment(values))
 
   private def parseLoginRateLimit(

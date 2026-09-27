@@ -98,6 +98,13 @@ object HttpJsonCodecs {
   implicit val sessionResponseEncoder: Encoder[SessionResponse] =
     Encoder.forProduct4("id", "createdAt", "expiresAt", "current")(value =>
       (value.id, value.createdAt, value.expiresAt, value.current))
+  implicit val securityEventResponseEncoder: Encoder[SecurityEventResponse] =
+    Encoder.forProduct6("id", "type", "occurredAt", "sessionId", "source", "affectedSessionCount")(value =>
+      (value.id, value.eventType, value.occurredAt, value.sessionId, value.source, value.affectedSessionCount))
+  implicit val securityEventCursorResponseEncoder: Encoder[SecurityEventCursorResponse] =
+    Encoder.forProduct2("occurredAt", "id")(value => (value.occurredAt, value.id))
+  implicit val securityEventPageResponseEncoder: Encoder[SecurityEventPageResponse] =
+    Encoder.forProduct2("items", "nextCursor")(value => (value.items, value.nextCursor))
 
   implicit val meResponseEncoder: Encoder[MeResponse] =
     Encoder.forProduct3("id", "email", "displayName")(value => (value.id, value.email, value.displayName))

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson, requestVoid } from './httpClient'
-import type { MeResponse, SessionResponse } from '../types/auth'
+import type { MeResponse, SecurityEventPageResponse, SessionResponse } from '../types/auth'
 
 /** Change the signed-in user's password. The account is the session's; the body says only what to
  * change. Returns nothing, and the credentials are never cached. */
@@ -24,6 +24,13 @@ export function getSessions(): Promise<SessionResponse[]> {
   return requestJson<SessionResponse[]>('/api/v1/account/sessions')
 }
 
+export function getSecurityEvents(cursor?: { occurredAt: string; id: string }): Promise<SecurityEventPageResponse> {
+  const query = new URLSearchParams()
+  if (cursor) { query.set('beforeOccurredAt', cursor.occurredAt); query.set('beforeId', cursor.id) }
+  const suffix = query.size === 0 ? '' : `?${query}`
+  return requestJson<SecurityEventPageResponse>(`/api/v1/account/security-events${suffix}`)
+}
+
 export function revokeSession(sessionId: string): Promise<void> {
   return requestVoid(`/api/v1/account/sessions/${sessionId}`, { method: 'DELETE' })
 }
@@ -40,6 +47,10 @@ export function useSessions() {
   return useQuery({ queryKey: ['account-sessions'], queryFn: getSessions })
 }
 
+export function useSecurityEvents(cursor?: { occurredAt: string; id: string }) {
+  return useQuery({ queryKey: ['account-security-events', cursor], queryFn: () => getSecurityEvents(cursor) })
+}
+
 export function useChangePassword() {
   const queryClient = useQueryClient()
   // No onSuccess cache write of the credentials: a password and its confirmation never enter the
@@ -47,7 +58,7 @@ export function useChangePassword() {
   return useMutation({
     mutationFn: ({ currentPassword, newPassword }: { currentPassword: string; newPassword: string }) =>
       changePassword(currentPassword, newPassword),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['account-sessions'] }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['account-sessions'] }); queryClient.invalidateQueries({ queryKey: ['account-security-events'] }) },
   })
 }
 
@@ -63,7 +74,7 @@ export function useRevokeSession() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (sessionId: string) => revokeSession(sessionId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['account-sessions'] }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['account-sessions'] }); queryClient.invalidateQueries({ queryKey: ['account-security-events'] }) },
   })
 }
 
@@ -71,7 +82,7 @@ export function useRevokeOtherSessions() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: revokeOtherSessions,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['account-sessions'] }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['account-sessions'] }); queryClient.invalidateQueries({ queryKey: ['account-security-events'] }) },
   })
 }
 

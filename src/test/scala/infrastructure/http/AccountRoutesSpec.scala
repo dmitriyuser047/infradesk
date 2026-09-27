@@ -156,13 +156,15 @@ final class AccountRoutesSpec extends FunSuite {
     val accountAudit = new AccountAudit[IO](new AuditRecorder[IO](new NoAudit, new FixedIds, new FixedTime), memberships)
     val runner = new DirectRunner
     val time = new FixedTime
+    val securityEvents = new support.InMemorySecurityEvents
     val routes = new AccountRoutes[IO](
-      new ChangePassword[IO](users, sessions, accountAudit, runner, hasher, time),
+      new ChangePassword[IO](users, sessions, securityEvents, accountAudit, runner, hasher, time),
       new UpdateAccountProfile[IO](users, accountAudit, runner, time),
       new ListUserSessions[IO](sessions, runner, time),
-      new RevokeUserSession[IO](sessions, accountAudit, runner, time),
-      new RevokeOtherUserSessions[IO](sessions, accountAudit, runner, time),
-      new RevokeAllUserSessions[IO](sessions, accountAudit, runner, time),
+      new RevokeUserSession[IO](sessions, securityEvents, accountAudit, runner, time),
+      new RevokeOtherUserSessions[IO](sessions, securityEvents, accountAudit, runner, time),
+      new RevokeAllUserSessions[IO](sessions, securityEvents, accountAudit, runner, time),
+      new application.auth.ListSecurityEvents[IO](securityEvents), runner,
       AuthSettings(3600, secureCookie = false, trustForwardedFor = false),
       logger)
     Setup(routes, users, otherHash)
