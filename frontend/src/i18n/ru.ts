@@ -123,6 +123,14 @@ export const ru: Messages = {
     email: 'Email',
     emailHint: 'Email используется для входа и не меняется здесь.',
     organization: 'Организация',
+    organizationCount: (count: number) => {
+      const lastTwo = count % 100
+      const last = count % 10
+      const word = lastTwo >= 11 && lastTwo <= 14 ? 'организаций'
+        : last === 1 ? 'организация' : last >= 2 && last <= 4 ? 'организации' : 'организаций'
+      return `${count} ${word}`
+    },
+    sessionItem: 'Сессия',
     role: 'Роль',
     noOrganizations: 'Нет организаций',
     profileHeading: 'Профиль',

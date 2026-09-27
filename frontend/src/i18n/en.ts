@@ -119,6 +119,8 @@ export const en = {
     email: 'Email',
     emailHint: 'Email is used to sign in and cannot be changed here.',
     organization: 'Organization',
+    organizationCount: (count: number) => `${count} ${count === 1 ? 'organization' : 'organizations'}`,
+    sessionItem: 'Session',
     role: 'Role',
     noOrganizations: 'No organizations',
     profileHeading: 'Profile',

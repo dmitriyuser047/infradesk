@@ -6,7 +6,7 @@ import { useLogout, useMe } from '../../api/auth'
 import { Locales, useI18n } from '../../i18n'
 import { usePopover } from './usePopover'
 
-/** Who is signed in, the interface language, and signing out. There is no profile page yet. */
+/** Who is signed in, the interface language, and signing out. */
 export function AccountMenu() {
   const i18n = useI18n()
   const t = i18n.t.shell
@@ -37,7 +37,7 @@ export function AccountMenu() {
     </button>
     {popover.open ? <div ref={popover.panelRef}
       id={popover.panelId} className="account-menu-panel" role="menu" aria-label={t.account} onKeyDown={onMenuKeyDown}>
-      <div className="account-identity" role="presentation">
+      <div className="account-menu-identity" role="presentation">
         <strong>{name}</strong>
         {me.data?.email ? <small>{me.data.email}</small> : null}
       </div>

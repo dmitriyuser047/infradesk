@@ -8,6 +8,7 @@ import { I18nProvider } from '../i18n'
 import type { Locale } from '../i18n/types'
 import type { SessionResponse } from '../types/auth'
 import { AccountPage } from './AccountPage'
+import { AccountMenu } from '../components/layout/AccountMenu'
 
 type RequestRecord = { url: string; method: string; body?: string }
 
@@ -51,7 +52,7 @@ function setup(options: {
       <Route path="/login" element={<div>Login screen</div>} />
     </Routes></MemoryRouter>
   </QueryClientProvider></I18nProvider>)
-  return { requests }
+  return { requests, client }
 }
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -60,7 +61,7 @@ describe('account page', () => {
   it('shows the account details and keeps email read-only', async () => {
     setup()
     expect(await screen.findByDisplayValue('Dmitriy Ulyanov')).toBeTruthy()
-    expect(screen.getByText('user@example.com')).toBeTruthy()
+    expect(screen.getAllByText('user@example.com')).toHaveLength(2)
     expect(screen.getByText(/Acme/)).toBeTruthy()
     expect(screen.getByText(/Owner/)).toBeTruthy()
     expect(screen.queryByDisplayValue('user@example.com')).toBeNull()
@@ -69,10 +70,26 @@ describe('account page', () => {
   it('uses workspace sections and keeps the account menu panel out of settings', async () => {
     setup()
     const page = await screen.findByRole('main')
+    await screen.findByText('1 organization')
 
     expect(page.classList.contains('workspace-page')).toBe(true)
     expect(page.querySelectorAll('.workspace-section')).toHaveLength(4)
-    expect(page.querySelector('.account-panel')).toBeNull()
+    expect(page.querySelector('.account-panel, .account-menu-panel, .account-menu-identity')).toBeNull()
+    expect(page.querySelector('.account-settings-grid')?.querySelectorAll('.workspace-section')).toHaveLength(2)
+    expect(page.querySelector('.account-summary-avatar')?.textContent).toBe('D')
+    expect(page.querySelector('.account-summary-meta')?.textContent).toBe('1 organization')
+    expect(page.querySelector('.account-org-list')?.querySelector('.status-neutral')).toBeTruthy()
+  })
+
+  it('keeps the account dropdown on its own panel class', async () => {
+    const { client } = setup()
+    await screen.findByText('Dmitriy Ulyanov')
+    render(<I18nProvider initialLocale="en"><QueryClientProvider client={client}>
+      <MemoryRouter><AccountMenu /></MemoryRouter>
+    </QueryClientProvider></I18nProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Account menu for Dmitriy Ulyanov' }))
+    expect((await screen.findByRole('menu')).classList.contains('account-menu-panel')).toBe(true)
+    expect(document.querySelector('.account-panel')).toBeNull()
   })
 
   it('renders Russian labels when the locale is ru', async () => {
@@ -142,7 +159,10 @@ describe('account page', () => {
   it('marks the current session and lists the others', async () => {
     setup()
     expect(await screen.findByText('This device')).toBeTruthy()
+    expect(screen.getByText('Current session')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Sign out other sessions' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Sign out from all devices' }).classList.contains('danger-button')).toBe(true)
+    expect(screen.getAllByRole('button', { name: 'Sign out' })).toHaveLength(1)
   })
 
   it('shows meaningful security activity and a trusted login source, not its UUID', async () => {
@@ -150,6 +170,25 @@ describe('account page', () => {
     expect(await screen.findByText('Signed in')).toBeTruthy()
     expect(screen.getByText(/203\.0\.113\.10/)).toBeTruthy()
     expect(screen.queryByText('event-private-id')).toBeNull()
+    expect(document.querySelector('.account-security-timeline')).toBeTruthy()
+  })
+
+  it('renders an unknown security event without breaking the timeline', async () => {
+    setup({ securityEvents: [{ id: 'unknown', type: 'FUTURE_EVENT', occurredAt: '2026-09-27T08:00:00Z', source: null }] })
+    expect(await screen.findByText('FUTURE_EVENT')).toBeTruthy()
+    expect(document.querySelector('.account-security-timeline')).toBeTruthy()
+  })
+
+  it('shows compact empty states for empty sessions and security activity', async () => {
+    setup({ sessions: [], securityEvents: [] })
+    expect(await screen.findByText('No security activity yet.')).toBeTruthy()
+    expect(screen.getByText('No other sessions.')).toBeTruthy()
+    expect(document.querySelectorAll('.empty-compact').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('renders organization count in Russian', async () => {
+    setup({ locale: 'ru' })
+    expect(await screen.findByText('1 организация')).toBeTruthy()
   })
 
   it('signs out one other session, and it disappears from the list', async () => {

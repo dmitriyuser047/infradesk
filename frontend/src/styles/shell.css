@@ -108,8 +108,8 @@
   position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 248px; padding: 6px;
   border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-md);
 }
-.account-identity { display: grid; gap: 2px; padding: var(--space-2) 10px; }
-.account-identity small { color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; }
+.account-menu-identity { display: grid; gap: 2px; padding: var(--space-2) 10px; }
+.account-menu-identity small { color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; }
 .menu-separator { height: 1px; margin: 6px 0; background: var(--border); }
 .menu-group-label {
   padding: 6px 10px 4px; color: var(--text-tertiary); font-size: 11px; font-weight: 600;

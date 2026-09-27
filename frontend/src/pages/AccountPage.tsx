@@ -13,7 +13,7 @@ import {
 import { useMe, useMyOrganizations } from '../api/auth'
 import { describeError } from '../i18n/errors'
 import { useI18n } from '../i18n'
-import { WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import type { MyOrganizationResponse } from '../types/auth'
 
 /** The signed-in user's account: their profile, their organizations, and changing their password.
@@ -30,10 +30,13 @@ export function AccountPage() {
   return (
     <main className="workspace-page">
       <WorkspaceHeader title={t.title} subtitle={t.subtitle} />
-
-      <ProfileSection displayName={me.data?.displayName ?? ''} email={me.data?.email ?? ''}
-        organizations={organizations.data ?? []} />
-      <PasswordSection />
+      <AccountSummary displayName={me.data?.displayName ?? ''} email={me.data?.email ?? ''}
+        organizationCount={organizations.data?.length ?? 0} />
+      <div className="account-settings-grid">
+        <ProfileSection displayName={me.data?.displayName ?? ''} email={me.data?.email ?? ''}
+          organizations={organizations.data ?? []} />
+        <PasswordSection />
+      </div>
       <SessionsSection />
       <SecurityEventsSection />
     </main>
@@ -55,15 +58,22 @@ function SecurityEventsSection() {
 
   return (
     <WorkspaceSection title={t.securityHeading} headingId="account-security-events-heading">
-      {events.isError ? <p className="form-error" role="alert">{t.securityLoadFailed}</p> : null}
-      {!events.isLoading && rows.length === 0 ? <p className="muted">{t.noSecurityEvents}</p> : null}
-      <ul className="account-security-events">
-        {rows.map((event) => <li key={event.id}>
-          <span>{securityEventLabel(event.type, t)}</span>
-          <small className="muted">{i18n.format.dateTime(event.occurredAt)}{event.source ? ` · ${event.source}` : ''}</small>
+      {events.isError ? <InlineAlert tone="danger">{t.securityLoadFailed}</InlineAlert> : null}
+      {!events.isLoading && !events.isError && rows.length === 0
+        ? <EmptyWorkspaceState compact title={t.noSecurityEvents} /> : null}
+      {rows.length > 0 ? <ul className="account-security-timeline">
+        {rows.map((event) => <li className={`account-security-event ${securityEventTone(event.type)}`} key={event.id}>
+          <span className="activity-marker account-security-event-marker" aria-hidden="true" />
+          <div className="activity-body account-security-event-body">
+            <div className="activity-heading">
+              <strong className="activity-title">{securityEventLabel(event.type, t)}</strong>
+              <time className="activity-time" dateTime={event.occurredAt}>{i18n.format.dateTime(event.occurredAt)}</time>
+            </div>
+            {event.source ? <span className="activity-secondary">{event.source}</span> : null}
+          </div>
         </li>)}
-      </ul>
-      {events.data?.nextCursor ? <button type="button" className="secondary-button"
+      </ul> : null}
+      {events.data?.nextCursor ? <button type="button" className="secondary-button account-show-more"
         onClick={() => setCursor(events.data?.nextCursor)}>{t.showMore}</button> : null}
     </WorkspaceSection>
   )
@@ -78,6 +88,28 @@ function securityEventLabel(type: string, t: ReturnType<typeof useI18n>['t']['ac
     ALL_SESSIONS_REVOKED: t.securityEvents.allSessionsRevoked,
   }
   return labels[type] ?? type
+}
+
+function securityEventTone(type: string): string {
+  return type === 'LOGIN_SUCCEEDED' ? 'activity-positive' : 'activity-neutral'
+}
+
+function AccountSummary({ displayName, email, organizationCount }: {
+  displayName: string
+  email: string
+  organizationCount: number
+}) {
+  const t = useI18n().t.account
+  const name = displayName.trim() || email.trim()
+  const initial = name[0]?.toLocaleUpperCase() ?? '?'
+  return <div className="account-summary">
+    <span className="account-summary-avatar" aria-hidden="true">{initial}</span>
+    <div className="account-summary-body">
+      <strong className="account-summary-name">{displayName || email}</strong>
+      {displayName && email ? <span className="account-summary-email">{email}</span> : null}
+      <span className="account-summary-meta">{t.organizationCount(organizationCount)}</span>
+    </div>
+  </div>
 }
 
 function ProfileSection(props: {
@@ -117,17 +149,18 @@ function ProfileSection(props: {
           <span className="account-field-label">{t.organization}</span>
           {props.organizations.length === 0
             ? <span className="account-field-value">{t.noOrganizations}</span>
-            : <ul className="account-orgs">
+            : <ul className="account-org-list">
                 {props.organizations.map((org) => <li key={org.id}>
-                  {org.name} — {roles[org.role] ?? org.role}
+                  <span className="account-org-name">{org.name}</span>
+                  <StatusIndicator label={roles[org.role] ?? org.role} tone="neutral" />
                 </li>)}
               </ul>}
         </div>
-        {update.isError ? <p className="form-error" role="alert">{t.nameSaveFailed}</p> : null}
-        {update.isSuccess && edited === null ? <p className="form-success" role="status">{t.nameUpdated}</p> : null}
-        <button className="primary-button" type="submit" disabled={update.isPending || trimmed === '' || unchanged}>
+        {update.isError ? <InlineAlert tone="danger">{t.nameSaveFailed}</InlineAlert> : null}
+        {update.isSuccess && edited === null ? <InlineAlert tone="success">{t.nameUpdated}</InlineAlert> : null}
+        <div className="account-form-actions"><button className="primary-button" type="submit" disabled={update.isPending || trimmed === '' || unchanged}>
           {t.saveName}
-        </button>
+        </button></div>
       </form>
     </WorkspaceSection>
   )
@@ -176,10 +209,10 @@ function PasswordSection() {
             onChange={(event) => setConfirmPassword(event.target.value)} />
         </label>
         <small className="muted">{t.passwordHint}</small>
-        {mismatch ? <p className="form-error" role="alert">{t.passwordMismatch}</p> : null}
-        {change.isError ? <p className="form-error" role="alert">{describeError(change.error, i18n)}</p> : null}
-        {change.isSuccess ? <p className="form-success" role="status">{t.passwordUpdated}</p> : null}
-        <button className="primary-button" type="submit" disabled={change.isPending}>{t.submit}</button>
+        {mismatch ? <InlineAlert tone="danger">{t.passwordMismatch}</InlineAlert> : null}
+        {change.isError ? <InlineAlert tone="danger">{describeError(change.error, i18n)}</InlineAlert> : null}
+        {change.isSuccess ? <InlineAlert tone="success">{t.passwordUpdated}</InlineAlert> : null}
+        <div className="account-form-actions"><button className="primary-button" type="submit" disabled={change.isPending}>{t.submit}</button></div>
       </form>
     </WorkspaceSection>
   )
@@ -203,33 +236,32 @@ function SessionsSection() {
 
   return (
     <WorkspaceSection title={t.sessionsHeading} headingId="account-sessions-heading">
-      {sessions.isError ? <p className="form-error" role="alert">{t.sessionsLoadFailed}</p> : null}
+      {sessions.isError ? <InlineAlert tone="danger">{t.sessionsLoadFailed}</InlineAlert> : null}
+      {!sessions.isError ? <ul className="account-session-list">
+        {current ? <li className="account-session-row account-session-current">
+          <div className="account-session-body">
+            <div className="account-session-title"><strong>{t.thisDevice}</strong><StatusIndicator label={t.currentSession} tone="success" /></div>
+            <div className="account-session-meta"><span>{t.started}: {i18n.format.dateTime(current.createdAt)}</span>
+              <span>{t.expires}: {i18n.format.dateTime(current.expiresAt)}</span></div>
+          </div>
+        </li> : null}
+        {others.map((session) => <li className="account-session-row" key={session.id}>
+          <div className="account-session-body">
+            <strong className="account-session-title">{t.sessionItem}</strong>
+            <span className="account-session-meta">{t.started}: {i18n.format.dateTime(session.createdAt)} · {t.expires}: {i18n.format.dateTime(session.expiresAt)}</span>
+          </div>
+          <button type="button" className="text-button account-session-action" disabled={busy}
+            onClick={() => revokeOne.mutate(session.id)}>{t.signOutSession}</button>
+        </li>)}
+      </ul> : null}
+      {sessions.data && others.length === 0 ? <EmptyWorkspaceState compact tone="success" title={t.noOtherSessions} /> : null}
 
-      {current ? <div className="account-field">
-        <span className="account-field-label">{t.currentSession}</span>
-        <span className="account-field-value">{t.thisDevice}</span>
-        <small className="muted">{t.started}: {i18n.format.dateTime(current.createdAt)} · {t.expires}: {i18n.format.dateTime(current.expiresAt)}</small>
-      </div> : null}
-
-      <div className="account-field">
-        <span className="account-field-label">{t.otherSessions}</span>
-        {others.length === 0
-          ? <span className="account-field-value">{t.noOtherSessions}</span>
-          : <ul className="account-sessions">
-              {others.map((session) => <li key={session.id}>
-                <span>{i18n.format.dateTime(session.createdAt)}</span>
-                <button type="button" className="link-button" disabled={busy}
-                  onClick={() => revokeOne.mutate(session.id)}>{t.signOutSession}</button>
-              </li>)}
-            </ul>}
-      </div>
-
-      {actionFailed ? <p className="form-error" role="alert">{t.sessionActionFailed}</p> : null}
+      {actionFailed ? <InlineAlert tone="danger">{t.sessionActionFailed}</InlineAlert> : null}
 
       <div className="account-actions">
         <button type="button" className="secondary-button" disabled={busy || others.length === 0}
           onClick={() => revokeOthers.mutate()}>{t.signOutOthers}</button>
-        <button type="button" className="secondary-button" disabled={busy}
+        <button type="button" className="danger-button" disabled={busy}
           onClick={() => revokeAll.mutate(undefined, { onSuccess: () => navigate('/login', { replace: true }) })}>
           {t.signOutAll}
         </button>
