@@ -131,16 +131,22 @@ jobs:
         run: ./scripts/check-production.sh http://127.0.0.1:8081
       - name: Verify spoofed forwarding headers cannot evade nginx login throttling
         run: |
+          # The host is the trusted external-TLS boundary in this topology, so host-side curl is
+          # deliberately not an attacker. Use one ordinary container on the internal network:
+          # nginx sees its socket address as untrusted and must ignore both forged headers.
+          docker run --detach --name infradesk-spoof-client --network infradesk_internal \
+            --entrypoint sh curlimages/curl:8.12.1 -c 'sleep 300'
+          trap 'docker rm --force infradesk-spoof-client >/dev/null 2>&1 || true' EXIT
           response=""
           for i in $(seq 1 20); do
             spoof="203.0.113.${i}"
-            response="$(curl --silent --show-error --request POST \
+            response="$(docker exec infradesk-spoof-client curl --silent --show-error --request POST \
               --header 'Content-Type: application/json' \
               --header "X-Forwarded-For: ${spoof}" \
               --header "X-Real-IP: ${spoof}" \
-              --data '{"email":"spoof-rate-limit@example.test","password":"wrong"}' \
-              --write-out $'\n%{http_code}\n%{content_type}' \
-              http://127.0.0.1:8081/api/v1/auth/login)"
+              --data "{\"email\":\"spoof-rate-limit-${i}@example.test\",\"password\":\"wrong\"}" \
+              --write-out '\n%{http_code}\n%{content_type}' \
+              http://proxy/api/v1/auth/login)"
             if printf '%s' "${response}" | tail -n 2 | head -n 1 | grep -qx '429'; then break; fi
           done
           printf '%s' "${response}" | tail -n 2 | head -n 1 | grep -qx '429'
