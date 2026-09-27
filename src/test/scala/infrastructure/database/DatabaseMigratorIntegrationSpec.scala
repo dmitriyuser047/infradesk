@@ -144,6 +144,15 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               assertEquals(history.getInt(3), 11)
               assertEquals(history.getInt(4), 3)
             } finally history.close()
+            val incidentByResource = statement.executeQuery(
+              "select count(*) from pg_indexes where schemaname = current_schema() " +
+                "and indexname = 'ix_incident_resource_opened'"
+            )
+            try {
+              assert(incidentByResource.next())
+              // The per-resource incident path of the infrastructure read models (V31).
+              assertEquals(incidentByResource.getInt(1), 1)
+            } finally incidentByResource.close()
             val syncDeadline = statement.executeQuery(
               "select (select count(*) from information_schema.columns " +
                 "where table_schema = current_schema() and table_name = 'sync_session' " +
