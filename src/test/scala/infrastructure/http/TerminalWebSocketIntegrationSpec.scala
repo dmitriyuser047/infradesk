@@ -56,7 +56,9 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
     val terminal = OpenSshTerminal.create(repository, runner, ssh, credentials, 2).unsafeRunSync()
     val authorization = support.AuthorizationFixtures.authorization
     val routes = new TerminalRoutes[IO](terminal, infrastructure.config.TerminalConfig.default, authorization,
-      Slf4jLogger.getLoggerFromName[IO]("test.terminal"))
+      Slf4jLogger.getLoggerFromName[IO]("test.terminal"), Some(new application.terminal.TerminalSessionLifecycle(
+        new LifecycleRepository(IO.pure(domain.terminal.TerminalRenewResult.Renewed(Instant.now().plusSeconds(45)))),
+        runner, UUID.randomUUID(), 4, 32, 45.seconds, Slf4jLogger.getLoggerFromName[IO]("test.terminal.lifecycle"))))
     val response = withServer(routes, OrganizationRole.Owner) { base =>
       val client = HttpClient.newHttpClient()
       val terminalUri = base.resolve(s"/api/v1/organizations/$organizationId/connections/$connectionId/terminal")
@@ -429,9 +431,11 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
       override def resolve(value: Connection): IO[SshAuthentication] = IO.pure(SshAuthentication.Password("test"))
     }
     val terminal = OpenSshTerminal.create(repository, runner, ssh, credentials, config.maxConcurrentSessions).unsafeRunSync()
+    val durableRepository = sessionRepository.getOrElse(new LifecycleRepository(
+      IO.pure(domain.terminal.TerminalRenewResult.Renewed(Instant.now().plusSeconds(45)))))
     TerminalFixture(new TerminalRoutes[IO](terminal, config, support.AuthorizationFixtures.authorization,
-      Slf4jLogger.getLoggerFromName[IO]("test.terminal"), sessionRepository.map(repo =>
-        new application.terminal.TerminalSessionLifecycle(repo, runner, UUID.randomUUID(), 4, 32,
+      Slf4jLogger.getLoggerFromName[IO]("test.terminal"), Some(
+        new application.terminal.TerminalSessionLifecycle(durableRepository, runner, UUID.randomUUID(), 4, 32,
           config.leaseDuration, Slf4jLogger.getLoggerFromName[IO]("test.terminal.lifecycle")))), input, released, terminal)
   }
 
@@ -451,6 +455,8 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
     try {
       val ready = listener.text.poll(5, TimeUnit.SECONDS)
       assert(Option(ready).exists(_.contains("\"type\":\"ready\"")), clues(ready))
+      val sessionId = io.circe.parser.parse(ready).toOption.get.hcursor.get[String]("sessionId").toOption.get
+      assertEquals(UUID.fromString(sessionId).toString, sessionId)
       use(socket, listener)
     } finally { socket.abort(); client.close() }
   }
@@ -467,7 +473,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
       Header.Raw(CIString("Sec-WebSocket-Version"), "13"),
       Header.Raw(CIString("Sec-WebSocket-Key"), "dGhlIHNhbXBsZSBub25jZQ==")))
     OrganizationAuthorization.withContext(request,
-      OrganizationAccessContext(AuthenticatedUser(UUID.randomUUID(), "test@example.test", "Test"), organizationId, OrganizationRole.Owner))
+      OrganizationAccessContext(AuthenticatedUser(UUID.randomUUID(), "test@example.test", "Test"), organizationId, OrganizationRole.Owner, Some(UUID.randomUUID())))
   }
 
   private def withServer[A](routes: TerminalRoutes[IO], role: OrganizationRole)(use: URI => A): A = {

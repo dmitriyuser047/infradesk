@@ -53,13 +53,14 @@ export function TerminalPanel({ organizationId, connection, editLink }: {
     const fit = new FitAddon()
     emulator.loadAddon(fit)
     // Consume OSC clipboard/title requests. Remote output never drives browser side effects.
-    const handlers = [0, 1, 2, 52].map(id => emulator.parser.registerOscHandler(id, () => true))
+    const handlers = [0, 1, 2, 8, 52].map(id => emulator.parser.registerOscHandler(id, () => true))
     emulator.open(host)
     function resize() {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
         if (!live || !host.clientWidth || !host.clientHeight) return
         fit.fit()
+        if (emulator.cols > 500 || emulator.rows > 200) emulator.resize(Math.min(emulator.cols, 500), Math.min(emulator.rows, 200))
         transport?.resize(emulator.cols, emulator.rows)
       })
     }

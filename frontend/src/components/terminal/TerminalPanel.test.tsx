@@ -49,7 +49,7 @@ describe('terminal panel lifecycle', () => {
     expect(Socket.instances).toHaveLength(0)
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
     expect(Socket.instances).toHaveLength(1)
-    expect(mocks.osc.mock.calls.map(([id]) => id)).toEqual([0, 1, 2, 52])
+    expect(mocks.osc.mock.calls.map(([id]) => id)).toEqual([0, 1, 2, 8, 52])
     view.unmount()
     expect(Socket.instances[0].close).toHaveBeenCalledTimes(1)
     expect(mocks.dispose).toHaveBeenCalledTimes(1)

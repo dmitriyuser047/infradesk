@@ -89,6 +89,19 @@ describe('terminal transport', () => {
     expect(socket.close).toHaveBeenCalled()
     expect(factory).toHaveBeenCalledTimes(1)
   })
+  it('coalesces pending resize while backpressured and eventually sends the latest size', () => {
+    vi.useFakeTimers()
+    const { socket, transport } = fixture()
+    socket.ready()
+    socket.bufferedAmount = 65536
+    transport.resize(100, 30)
+    transport.resize(120, 40)
+    expect(socket.send).not.toHaveBeenCalled()
+    socket.bufferedAmount = 0
+    vi.advanceTimersByTime(25)
+    expect(socket.send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ type: 'resize', columns: 120, rows: 40 }))
+    transport.dispose()
+  })
   it('rejects mismatched protocol and malformed controls safely', () => {
     const first = fixture()
     first.socket.protocol = 'other'

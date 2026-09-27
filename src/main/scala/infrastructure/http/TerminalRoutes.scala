@@ -31,7 +31,7 @@ final class TerminalRoutes[Tx[_]](
   config: TerminalConfig,
   authorization: OrganizationAuthorization,
   logger: Logger[IO],
-  lifecycle: Option[TerminalSessionLifecycle[Tx]] = None
+  lifecycle: Option[TerminalSessionLifecycle[Tx]]
 ) {
   import HttpJsonCodecs._
 
@@ -88,7 +88,7 @@ final class TerminalRoutes[Tx[_]](
   private def claimAndBuild(context: OrganizationAccessContext, connectionId: UUID, version: java.time.Instant,
     permit: terminals.CapacityPermit)(build: Option[TerminalSession] => IO[Response[IO]]): IO[Response[IO]] =
     lifecycle match {
-      case None => build(None)
+      case None => permit.release *> InternalServerError(error("INTERNAL_ERROR", "Internal server error"))
       case Some(service) => context.authSessionId match {
         case None => permit.release *> InternalServerError(error("INTERNAL_ERROR", "Internal server error"))
         case Some(authId) => IO.uncancelable { poll =>

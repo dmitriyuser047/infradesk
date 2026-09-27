@@ -9,7 +9,10 @@ export function terminalUrl(location: Pick<Location, 'protocol' | 'host'>, organ
 }
 
 export function inputChunks(value: string): Uint8Array[] {
-  const bytes = new TextEncoder().encode(value)
+  return byteChunks(new TextEncoder().encode(value))
+}
+
+function byteChunks(bytes: Uint8Array): Uint8Array[] {
   const chunks: Uint8Array[] = []
   for (let offset = 0; offset < bytes.length; offset += chunkBytes) chunks.push(bytes.slice(offset, offset + chunkBytes))
   return chunks
@@ -30,6 +33,7 @@ export class TerminalTransport {
   private active = false
   private disposed = false
   private lastSize = ''
+  private pendingSize: { columns: number; rows: number } | undefined
   sessionId: string | undefined
 
   constructor(url: string, private sink: TerminalSink, createSocket = (url: string, protocol: string) => new WebSocket(url, protocol)) {
@@ -42,7 +46,7 @@ export class TerminalTransport {
     this.socket.onmessage = event => {
       if (this.disposed) return
       if (event.data instanceof ArrayBuffer) {
-        if (this.active) sink.write(new Uint8Array(event.data))
+        if (this.active && event.data.byteLength <= 65536) sink.write(new Uint8Array(event.data))
         else this.fail('PROTOCOL_ERROR')
         return
       }
@@ -74,13 +78,13 @@ export class TerminalTransport {
 
   input(value: string): void {
     if (!this.active || this.disposed) return
-    const chunks = inputChunks(value)
-    const size = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-    if (size + this.queuedBytes + this.socket.bufferedAmount > queueLimit) {
+    const bytes = new TextEncoder().encode(value)
+    const size = bytes.length
+    if (size + this.queuedBytes + this.socket.bufferedAmount > queueLimit - 128) {
       this.fail('INPUT_BACKPRESSURE')
       return
     }
-    this.queue.push(...chunks)
+    this.queue.push(...byteChunks(bytes))
     this.queuedBytes += size
     this.flush()
   }
@@ -91,9 +95,8 @@ export class TerminalTransport {
     rows = Math.min(rows, 200)
     const key = `${cols}:${rows}`
     if (key === this.lastSize) return
-    if (this.socket.bufferedAmount > highWater) return
-    this.socket.send(JSON.stringify({ type: 'resize', columns: cols, rows }))
-    this.lastSize = key
+    this.pendingSize = { columns: cols, rows }
+    this.flush()
   }
 
   disconnect(): void {
@@ -113,6 +116,7 @@ export class TerminalTransport {
     this.timer = undefined
     this.queue = []
     this.queuedBytes = 0
+    this.pendingSize = undefined
     this.socket.onopen = this.socket.onmessage = this.socket.onerror = this.socket.onclose = null
     if (this.socket.readyState < 2) this.socket.close(1000)
   }
@@ -128,12 +132,17 @@ export class TerminalTransport {
     this.timer = undefined
     if (this.disposed || !this.active) return
     try {
+      if (this.pendingSize && this.socket.bufferedAmount < highWater) {
+        this.socket.send(JSON.stringify({ type: 'resize', ...this.pendingSize }))
+        this.lastSize = `${this.pendingSize.columns}:${this.pendingSize.rows}`
+        this.pendingSize = undefined
+      }
       while (this.queue.length && this.socket.bufferedAmount < highWater) {
         const chunk = this.queue.shift()!
         this.socket.send(chunk)
         this.queuedBytes -= chunk.length
       }
-      if (this.queue.length) this.timer = setTimeout(() => this.flush(), 25)
+      if (this.queue.length || this.pendingSize) this.timer = setTimeout(() => this.flush(), 25)
     } catch { this.fail('TERMINAL_UNAVAILABLE') }
   }
 }
