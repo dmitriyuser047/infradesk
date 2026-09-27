@@ -15,6 +15,7 @@ import infrastructure.http.{
   HealthRoutes,
   HistoryRoutes,
   IncidentRoutes,
+  InfrastructureContextRoutes,
   MonitorRuleRoutes,
   NavigationRoutes,
   NotificationChannelRoutes,
@@ -78,6 +79,18 @@ object HttpModule {
         ).routes <+>
         new IncidentRoutes(application.getIncident, application.listIncidents, transactionRunner,
           authorization).routes <+>
+        // Counts and the previews they summarize must agree: one read-only snapshot.
+        new InfrastructureContextRoutes(
+          application.getConnectionInfrastructureSummary,
+          application.listConnectionResources,
+          application.listConnectionIncidents,
+          application.listConnectionInfrastructureCounts,
+          application.getResourceContext,
+          application.listResourceIncidents,
+          application.listEnvironmentResourceSources,
+          persistence.readOnlySnapshotRunner,
+          authorization
+        ).routes <+>
         new MonitorRuleRoutes(
           application.listMonitorRules,
           application.createMonitorRule,

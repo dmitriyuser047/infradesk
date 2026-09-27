@@ -132,9 +132,6 @@ object HttpJsonCodecs {
   implicit val incidentResponseEncoder: Encoder[IncidentResponse] = Encoder.forProduct10("id","monitorRuleId","resourceId","status","reason","startedAt","openedAt","resolvedAt","createdAt","updatedAt")(v => (v.id,v.monitorRuleId,v.resourceId,v.status,v.reason,v.startedAt,v.openedAt,v.resolvedAt,v.createdAt,v.updatedAt))
   implicit val incidentResourceResponseEncoder: Encoder[IncidentResourceResponse] =
     Encoder.forProduct3("id", "name", "resourceTypeCode")(v => (v.id, v.name, v.resourceTypeCode))
-  implicit val incidentListItemResponseEncoder: Encoder[IncidentListItemResponse] = Encoder.instance { v =>
-    incidentResponseEncoder(v.incident).deepMerge(Json.obj("resource" -> incidentResourceResponseEncoder(v.resource)))
-  }
   implicit val monitorRuleResponseEncoder: Encoder[MonitorRuleResponse] = Encoder.forProduct11("id","resourceId","metricCode","operator","threshold","forSeconds","noDataSeconds","enabled","status","createdAt","updatedAt")(v=>(v.id,v.resourceId,v.metricCode,v.operator,v.threshold,v.forSeconds,v.noDataSeconds,v.enabled,v.status,v.createdAt,v.updatedAt))
   implicit val auditEventResponseEncoder: Encoder[AuditEventResponse] =
     Encoder.forProduct6("id", "actorUserId", "action", "targetType", "targetId", "occurredAt") { value =>

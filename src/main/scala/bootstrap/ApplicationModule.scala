@@ -28,7 +28,14 @@ import application.connection.{
 }
 import application.connector.{RunConnectionSync, SyncConnection, SyncConnectionById}
 import application.discovery.{CreateDiscoveredResource, ReconcileDiscoveredResource, SyncDiscoveredSnapshot}
-import application.incident.{GetIncident, ListIncidents}
+import application.context.{
+  GetConnectionInfrastructureSummary,
+  GetResourceContext,
+  ListConnectionInfrastructureCounts,
+  ListConnectionResources,
+  ListEnvironmentResourceSources
+}
+import application.incident.{GetIncidentDetail, ListConnectionIncidents, ListIncidents, ListResourceIncidents}
 import application.overview.GetOperationsOverview
 import application.monitor.{CreateMonitorRule, EvaluateMonitorRules, ListMonitorRules, UpdateMonitorRule}
 import application.notification.{
@@ -72,7 +79,14 @@ final case class ApplicationComponents(
   getResource: GetResource[ConnectionIO],
   listEnvironmentResources: ListEnvironmentResources[ConnectionIO],
   getResourceMetricHistory: GetResourceMetricHistory[ConnectionIO],
-  getIncident: GetIncident[ConnectionIO],
+  getIncident: GetIncidentDetail[ConnectionIO],
+  getConnectionInfrastructureSummary: GetConnectionInfrastructureSummary[ConnectionIO],
+  listConnectionResources: ListConnectionResources[ConnectionIO],
+  listConnectionIncidents: ListConnectionIncidents[ConnectionIO],
+  listConnectionInfrastructureCounts: ListConnectionInfrastructureCounts[ConnectionIO],
+  getResourceContext: GetResourceContext[ConnectionIO],
+  listResourceIncidents: ListResourceIncidents[ConnectionIO],
+  listEnvironmentResourceSources: ListEnvironmentResourceSources[ConnectionIO],
   listIncidents: ListIncidents[ConnectionIO],
   listMonitorRules: ListMonitorRules[ConnectionIO],
   createMonitorRule: CreateMonitorRule[ConnectionIO],
@@ -289,7 +303,15 @@ object ApplicationModule {
       listEnvironmentResources = ListEnvironmentResources[ConnectionIO](resourceRepository),
       getResourceMetricHistory =
         GetResourceMetricHistory[ConnectionIO](resourceRepository, metricObservationRepository),
-      getIncident = GetIncident[ConnectionIO](incidentRepository),
+      getIncident = GetIncidentDetail[ConnectionIO](incidentListQuery),
+      getConnectionInfrastructureSummary =
+        GetConnectionInfrastructureSummary[ConnectionIO](infrastructureContextQuery, incidentListQuery),
+      listConnectionResources = ListConnectionResources[ConnectionIO](infrastructureContextQuery),
+      listConnectionIncidents = ListConnectionIncidents[ConnectionIO](infrastructureContextQuery, incidentListQuery),
+      listConnectionInfrastructureCounts = ListConnectionInfrastructureCounts[ConnectionIO](infrastructureContextQuery),
+      getResourceContext = GetResourceContext[ConnectionIO](infrastructureContextQuery),
+      listResourceIncidents = ListResourceIncidents[ConnectionIO](infrastructureContextQuery, incidentListQuery),
+      listEnvironmentResourceSources = ListEnvironmentResourceSources[ConnectionIO](infrastructureContextQuery),
       listIncidents = ListIncidents[ConnectionIO](incidentListQuery),
       listMonitorRules = ListMonitorRules[ConnectionIO](
         resourceRepository,
