@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { requestJson } from './httpClient'
-import type { IncidentListItemResponse, IncidentResponse, KnownIncidentStatus } from '../types/incident'
+import type { IncidentListItemResponse, KnownIncidentStatus } from '../types/incident'
 
 export function getIncidents(
   organizationId: string,
@@ -21,8 +21,8 @@ export function getIncidents(
 export function getIncident(
   organizationId: string,
   incidentId: string,
-): Promise<IncidentResponse> {
-  return requestJson<IncidentResponse>(
+): Promise<IncidentListItemResponse> {
+  return requestJson<IncidentListItemResponse>(
     `/api/v1/organizations/${encodeURIComponent(organizationId)}/incidents/${encodeURIComponent(incidentId)}`,
   )
 }

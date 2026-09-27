@@ -112,3 +112,16 @@ export function isSupportedMetricCode(value: string): value is KnownMetricCode {
 export function isSupportedOperator(value: string): value is MonitorOperatorCode {
   return supportedOperators().includes(value as MonitorOperatorCode)
 }
+
+/**
+ * A rule's condition in one line — "CPU usage > 85% for 5m" — built from its typed fields, never
+ * from a stored string. Every metric this frontend knows is a percentage.
+ */
+export function formatMonitorCondition(
+  rule: { metricCode: string; operator: string; threshold: number; forSeconds: number },
+  i18n: I18n,
+): string {
+  const threshold = isSupportedMetricCode(rule.metricCode) ? `${i18n.format.number(rule.threshold)}%` : i18n.format.number(rule.threshold)
+  const condition = `${getMetricLabel(rule.metricCode, i18n)} ${getOperatorSymbol(rule.operator)} ${threshold}`
+  return rule.forSeconds === 0 ? condition : i18n.t.monitoring.conditionFor(condition, formatRuleDuration(rule.forSeconds, i18n))
+}

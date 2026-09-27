@@ -1,3 +1,5 @@
+import type { EnvironmentReference, ProjectReference, ResourceReference, SourceConnection } from './infrastructure'
+
 export const IncidentStatus = {
   open: 'OPEN',
   resolved: 'RESOLVED',
@@ -32,7 +34,25 @@ export interface IncidentResourceReference {
   resourceTypeCode: string
 }
 
-/** An incident as the list returns it: complete for its row, with no further request per row. */
+/** The typed condition of the rule that opened an incident. */
+export interface MonitorCondition {
+  id: string
+  metricCode: string
+  operator: string
+  threshold: number
+  forSeconds: number
+  noDataSeconds: number
+}
+
+/**
+ * An incident as every list and the detail return it: complete for its row or page — its resource,
+ * where that resource lives, the rule and every source connection — with no further request.
+ */
 export interface IncidentListItemResponse extends IncidentResponse {
   resource: IncidentResourceReference
+  project: ProjectReference
+  environment: EnvironmentReference
+  monitorRule: MonitorCondition
+  parentResource: ResourceReference | null
+  sourceConnections: SourceConnection[]
 }

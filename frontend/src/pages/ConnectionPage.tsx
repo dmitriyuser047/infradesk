@@ -1,8 +1,10 @@
-import { useState } from 'react'
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import type { ReactNode } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { CheckCircle2, Server, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 
 import { useConnection, useConnectionSyncSessions, useDeactivateConnection, useRunConnectionSync } from '../api/connections'
 import { ApiError } from '../api/httpClient'
+import { useConnectionInfrastructureSummary, useConnectionResources } from '../api/infrastructure'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import { useEnvironments, useProjects } from '../api/navigation'
@@ -12,16 +14,23 @@ import { environmentName, projectName } from '../components/connections/connecti
 import { formatScheduleInterval, formatSyncDuration, getConnectionScopeLabel,
   getConnectorTypeLabel, getSyncFailureMessage } from '../components/connections/connectionPresentation'
 import { SyncStatusBadge } from '../components/connections/SyncStatusBadge'
+import { IncidentList } from '../components/incidents/IncidentList'
+import { InfrastructureContextPath, type ContextPathItem } from '../components/infrastructure/InfrastructureContextPath'
+import { environmentPath, originQuery, projectPath, workspaceQuery } from '../components/infrastructure/infrastructureLinks'
+import { groupResourcesByEnvironment } from '../components/infrastructure/resourceGroups'
+import { ScopedIncidentsPanel } from '../components/infrastructure/ScopedIncidentsPanel'
 import { AppShell } from '../components/layout/AppShell'
 import {
   CopyButton, EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
 } from '../components/layout/WorkspacePrimitives'
-import { contextSearch } from '../components/layout/workspaceNavigation'
-import { ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
+import { useNow } from '../components/layout/useNow'
+import { ResourceTree } from '../components/resources/ResourceTree'
 import { ConnectionScopeType, SyncStatus, type ConnectionResponse } from '../types/connection'
+import type { ConnectionInfrastructureSummary } from '../types/infrastructure'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
-type Tab = 'overview' | 'synchronization'
+const Tabs = ['overview', 'resources', 'incidents', 'synchronization'] as const
+type Tab = typeof Tabs[number]
 
 export function ConnectionPage() {
   const { organizationId, connectionId } = useParams()
@@ -29,13 +38,19 @@ export function ConnectionPage() {
   return <ConnectionContent organizationId={organizationId} connectionId={connectionId} />
 }
 
+/**
+ * One infrastructure source: what it discovered, what is wrong with it and how its
+ * synchronization goes, with its technical settings as supporting detail. A connection is where
+ * resources were discovered, not their owner; the resources and incidents shown are those linked to
+ * it through discovery. The overview reads a bounded summary; the full lists load with their tab.
+ */
 function ConnectionContent({ organizationId, connectionId }: { organizationId: string; connectionId: string }) {
   const i18n = useI18n()
   const t = i18n.t.connections.page
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'overview', label: t.tabs.overview }, { id: 'synchronization', label: t.tabs.synchronization },
-  ]
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = parseTab(searchParams.get('tab'))
   const connectionQuery = useConnection(organizationId, connectionId)
+  const summaryQuery = useConnectionInfrastructureSummary(organizationId, connectionId)
   const projectsQuery = useProjects(organizationId)
   const scope = connectionQuery.data?.scope
   const scopedProjectId = scope && scope.type !== ConnectionScopeType.organization ? scope.projectId : null
@@ -43,14 +58,20 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
   const permissions = useOrganizationPermissions(organizationId)
   const deactivate = useDeactivateConnection(organizationId, connectionId)
   const sync = useRunConnectionSync(organizationId, connectionId)
-  const [tab, setTab] = useState<Tab>('overview')
   const navigate = useNavigate()
-  const location = useLocation()
-  const context = contextSearch(new URLSearchParams(location.search))
+  const context = workspaceQuery(searchParams)
   const canManage = permissions.can('manageConnections')
   const canSync = permissions.can('runConnectionSync')
   const connectionBase = `/organizations/${encodeURIComponent(organizationId)}/connections`
   const back = `${connectionBase}${context}`
+  // Links out of this page remember it, so "back" on the resource or incident returns here.
+  const linkQuery = originQuery(searchParams, { kind: 'connection', id: connectionId })
+  const selectTab = (next: Tab) => setSearchParams(previous => {
+    const updated = new URLSearchParams(previous)
+    if (next === 'overview') updated.delete('tab')
+    else updated.set('tab', next)
+    return updated
+  }, { replace: true })
 
   if (connectionQuery.isPending) return <AppShell><PageLoading title={t.loading} back={{ label: t.back, to: back }} label={t.loading} /></AppShell>
   if (connectionQuery.isError || !connectionQuery.data) {
@@ -59,15 +80,25 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
       notFoundTitle={t.notFound} errorTitle={t.loadError} /></AppShell>
   }
   const connection = connectionQuery.data
+  const summary = summaryQuery.data
+  const tabs: { id: Tab; label: string; count?: number }[] = [
+    { id: 'overview', label: t.tabs.overview },
+    { id: 'resources', label: t.tabs.resources, count: summary?.activeResourceCount },
+    // Open incidents are counted only when there are some; the overview says so either way.
+    { id: 'incidents', label: t.tabs.incidents, count: summary?.openIncidentCount || undefined },
+    { id: 'synchronization', label: t.tabs.synchronization },
+  ]
+  const syncAction = canSync && connection.active ? <button className="primary-button" type="button"
+    disabled={sync.isPending || connection.lastSync?.status === SyncStatus.running}
+    onClick={() => sync.mutate()}>{sync.isPending ? t.synchronizing : t.syncNow}</button> : null
 
   return <AppShell><div className="workspace-page">
+    <InfrastructureContextPath items={connectionPathItems(organizationId, connection, projectsQuery.data, environmentsQuery.data)} />
     <WorkspaceHeader title={connection.name}
       subtitle={`${getConnectorTypeLabel(connection.connectorType, i18n)} · ${getConnectionScopeLabel(connection.scope, i18n)} · ${connection.code}`}
       back={{ label: t.back, to: back }} status={<ConnectionStatusBadge active={connection.active} />}
       actions={<>
-        {canSync && connection.active ? <button className="primary-button" type="button"
-          disabled={sync.isPending || connection.lastSync?.status === SyncStatus.running}
-          onClick={() => sync.mutate()}>{sync.isPending ? t.synchronizing : t.syncNow}</button> : null}
+        {syncAction}
         {canManage && connection.active && connection.connectorType === 'SSH' ? <>
           <Link className="secondary-button" to={`${connectionBase}/${encodeURIComponent(connectionId)}/edit${context}`}>{i18n.t.common.edit}</Link>
           <details className="toolbar-overflow"><summary aria-label={t.moreActions} title={t.moreActions}>⋯</summary>
@@ -85,13 +116,164 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
     {sync.isError ? <InlineAlert tone="danger" title={describeError(sync.error, i18n)} /> : null}
     {sync.isSuccess ? <InlineAlert tone={sync.data.status === SyncStatus.failed ? 'danger' : 'success'}
       title={sync.data.status === SyncStatus.failed ? getSyncFailureMessage(sync.data, i18n) : t.syncCompleted} /> : null}
-    <WorkspaceTabs tabs={tabs} active={tab} onChange={setTab} />
+    <WorkspaceTabs tabs={tabs} active={tab} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-      {tab === 'overview' ? <ConnectionOverview connection={connection}
-        projects={projectsQuery.data} environments={environmentsQuery.data} /> :
-        <ConnectionSyncHistory organizationId={organizationId} connectionId={connectionId} context={context} />}
+      {tab === 'overview' ? <>
+        <InfrastructureOverview organizationId={organizationId} connection={connection} query={summaryQuery}
+          linkQuery={linkQuery} syncAction={syncAction} openTab={selectTab} />
+        <ConnectionOverview connection={connection} projects={projectsQuery.data} environments={environmentsQuery.data} />
+      </> : null}
+      {tab === 'resources' ? <ConnectionResources organizationId={organizationId} connection={connection}
+        summary={summary} linkQuery={linkQuery} syncAction={syncAction} /> : null}
+      {tab === 'incidents' ? <ScopedIncidentsPanel organizationId={organizationId} scope={{ kind: 'connection', id: connectionId }}
+        options={{ linkQuery }} /> : null}
+      {tab === 'synchronization' ? <ConnectionSyncHistory organizationId={organizationId} connectionId={connectionId} context={context} /> : null}
     </div>
   </div></AppShell>
+}
+
+function parseTab(value: string | null): Tab {
+  return Tabs.find(tab => tab === value) ?? 'overview'
+}
+
+/** The connection's own scope, by name. Shown only once the names are known: never an identifier. */
+function connectionPathItems(
+  organizationId: string,
+  connection: ConnectionResponse,
+  projects: ReturnType<typeof useProjects>['data'],
+  environments: ReturnType<typeof useEnvironments>['data'],
+): ContextPathItem[] {
+  const scope = connection.scope
+  if (scope.type === ConnectionScopeType.organization) return []
+  const project = projects?.find(value => value.id === scope.projectId)
+  if (!project) return []
+  const items: ContextPathItem[] = [{ label: project.name, to: projectPath(organizationId, project.id) }]
+  if (scope.type === ConnectionScopeType.environment) {
+    const environment = environments?.find(value => value.id === scope.environmentId)
+    if (!environment) return []
+    items.push({ label: environment.name, to: environmentPath(organizationId, project.id, environment.id) })
+  }
+  return [...items, { label: connection.name }]
+}
+
+/**
+ * What the connection discovered and what is wrong with it, from one bounded summary read. A
+ * failed summary is reported here alone; the connection's own details below stay usable.
+ */
+function InfrastructureOverview({ organizationId, connection, query, linkQuery, syncAction, openTab }: {
+  organizationId: string
+  connection: ConnectionResponse
+  query: ReturnType<typeof useConnectionInfrastructureSummary>
+  linkQuery: string
+  syncAction: ReactNode
+  openTab: (tab: Tab) => void
+}) {
+  const i18n = useI18n()
+  const t = i18n.t.infrastructure
+  const now = useNow(60_000)
+  if (query.isPending) return <div className="row-skeleton" aria-label={t.loadingSummary}><span /><span /><span /></div>
+  if (query.isError || !query.data) {
+    return <InlineAlert tone="danger" title={t.summaryError}
+      action={<button className="secondary-button" type="button" onClick={() => query.refetch()}>{i18n.t.common.retry}</button>}>
+      {describeError(query.error, i18n)}</InlineAlert>
+  }
+  const summary = query.data
+  const latest = connection.lastSync
+  const groups = groupResourcesByEnvironment(summary.resources)
+
+  return <>
+    <dl className="summary-strip">
+      <div className="summary-item">
+        <dt>{t.resources}</dt>
+        <dd><button type="button" className="summary-value" onClick={() => openTab('resources')}>{summary.activeResourceCount}</button>
+          <small>{typeCounts(summary, i18n)}{summary.inactiveResourceCount > 0 ? ` · ${t.inactiveCount(summary.inactiveResourceCount)}` : ''}</small></dd>
+      </div>
+      <div className="summary-item">
+        <dt>{t.openIncidents}</dt>
+        <dd><button type="button" className={`summary-value ${summary.openIncidentCount > 0 ? 'summary-alert' : ''}`}
+          onClick={() => openTab('incidents')}>{summary.openIncidentCount}</button>
+          <small>{summary.openIncidentCount > 0 ? t.openIncidentCount(summary.openIncidentCount) : t.noActiveIncidents}</small></dd>
+      </div>
+      <div className="summary-item">
+        <dt>{t.lastSync}</dt>
+        <dd>{latest ? <><SyncStatusBadge status={latest.status} />
+          <small><time dateTime={latest.startedAt} title={i18n.format.dateTime(latest.startedAt)}>
+            {i18n.format.relative(latest.startedAt, now)}</time></small></>
+          : <span className="muted-cell">{i18n.t.connections.neverSynchronized}</span>}</dd>
+      </div>
+    </dl>
+    <div className="workspace-split detail-split">
+      <WorkspaceSection title={t.infrastructure} actions={summary.activeResourceCount > 0 ? <button className="text-button" type="button"
+        onClick={() => openTab('resources')}>{t.viewAllResources}</button> : null}>
+        {summary.activeResourceCount === 0 ? <NoResources connection={connection} syncAction={syncAction} />
+          : groups.map(group => <div key={group.environment.id} className="resource-group">
+            {groups.length > 1 ? <h3 className="resource-group-title">{group.environment.name}</h3> : null}
+            <ResourceTree roots={group.roots} organizationId={organizationId} linkQuery={linkQuery}
+              label={`${t.infrastructure} · ${group.environment.name}`} />
+          </div>)}
+      </WorkspaceSection>
+      <WorkspaceSection title={t.openIncidents} actions={summary.openIncidentCount > 0 ? <button className="text-button" type="button"
+        onClick={() => openTab('incidents')}>{t.viewAllIncidents}</button> : null}>
+        {summary.openIncidents.length === 0 ? <EmptyWorkspaceState compact tone="success" icon={CheckCircle2}
+          title={t.noActiveIncidents} detail={t.noActiveIncidentsDetail} />
+          : <IncidentList organizationId={organizationId} incidents={summary.openIncidents} now={now}
+            label={t.openIncidents} options={{ linkQuery, showContext: false }} />}
+      </WorkspaceSection>
+    </div>
+  </>
+}
+
+function typeCounts(summary: ConnectionInfrastructureSummary, i18n: ReturnType<typeof useI18n>): string {
+  return summary.resourceTypeCounts
+    .map(count => `${i18n.t.resources.filter.types[count.resourceTypeCode] ?? count.resourceTypeCode} ${count.count}`)
+    .join(' · ')
+}
+
+/** Before the first synchronization there is nothing yet; after one, nothing was found. */
+function NoResources({ connection, syncAction }: { connection: ConnectionResponse; syncAction: ReactNode }) {
+  const { t } = useI18n()
+  return connection.lastSync === null
+    ? <EmptyWorkspaceState compact icon={Server} title={t.infrastructure.resourcesAfterSync}
+      detail={t.infrastructure.resourcesAfterSyncDetail} action={syncAction ?? undefined} />
+    : <EmptyWorkspaceState compact icon={Server} title={t.infrastructure.noResources} detail={t.infrastructure.noResourcesDetail} />
+}
+
+/**
+ * Every active resource the connection discovered, one tree per environment: a connection scoped
+ * to an organization or project may reach several, and they are never mixed without saying which.
+ */
+function ConnectionResources({ organizationId, connection, summary, linkQuery, syncAction }: {
+  organizationId: string
+  connection: ConnectionResponse
+  summary: ConnectionInfrastructureSummary | undefined
+  linkQuery: string
+  syncAction: ReactNode
+}) {
+  const i18n = useI18n()
+  const t = i18n.t.infrastructure
+  const query = useConnectionResources(organizationId, connection.id, true)
+  const resources = query.data
+  const groups = resources ? groupResourcesByEnvironment(resources) : []
+  const columns = i18n.t.resources.columns
+
+  return <WorkspaceSection title={t.resources}
+    actions={resources ? <span className="resource-count">{t.resourceCount(summary?.activeResourceCount ?? resources.length)}</span> : null}>
+    {query.isPending ? <div className="tree-skeleton" aria-label={t.loadingResources}><span /><span /><span /></div> : null}
+    {query.isError ? <InlineAlert tone="danger" title={t.resourcesError}
+      action={<button className="secondary-button" type="button" onClick={() => query.refetch()}>{i18n.t.common.retry}</button>}>
+      {describeError(query.error, i18n)}</InlineAlert> : null}
+    {resources?.length === 0 ? <NoResources connection={connection} syncAction={syncAction} /> : null}
+    {resources && summary && resources.length < summary.activeResourceCount
+      ? <InlineAlert tone="info" title={t.truncated(resources.length, summary.activeResourceCount)} /> : null}
+    {groups.map(group => <div key={group.environment.id} className="resource-group">
+      {groups.length > 1 ? <h3 className="resource-group-title">{group.environment.name}</h3> : null}
+      <div className="table-scroll">
+        <div className="tree-grid-header"><span>{columns.name}</span><span>{columns.type}</span><span>{columns.status}</span></div>
+        <ResourceTree roots={group.roots} organizationId={organizationId} linkQuery={linkQuery}
+          label={`${t.resources} · ${group.environment.name}`} />
+      </div>
+    </div>)}
+  </WorkspaceSection>
 }
 
 function ConnectionOverview({ connection, projects, environments }: {

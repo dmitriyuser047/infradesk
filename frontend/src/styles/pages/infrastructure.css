@@ -1,0 +1,59 @@
+/* Connected infrastructure: the context path, connection summary, sources and contextual rows. */
+
+/* Where a page sits: visible, quieter than the title, wrapping on a narrow screen. */
+.context-path { margin-bottom: calc(-1 * var(--space-2)); font-size: var(--font-size-small); }
+.context-path ol { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-1); margin: 0; padding: 0; list-style: none; }
+.context-path li { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; }
+.context-path a { overflow: hidden; max-width: 24ch; color: var(--text-secondary); text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.context-path a:hover { color: var(--primary); text-decoration: underline; }
+.context-path [aria-current="page"] { overflow: hidden; max-width: 32ch; color: var(--text-primary); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.context-path-separator { flex: 0 0 auto; color: var(--text-tertiary); }
+
+/* A count after a tab label: supporting, the label still names the tab. */
+.tab-count {
+  display: inline-grid; place-items: center; min-width: 20px; height: 20px; margin-inline-start: var(--space-2); padding: 0 6px;
+  border-radius: 999px; background: var(--surface-muted); color: var(--text-secondary); font-size: var(--font-size-caption); font-weight: 600;
+}
+.workspace-tab.active .tab-count { background: var(--primary-soft); color: var(--primary); }
+
+/* Connection summary: three compact figures, not dashboard tiles. */
+.summary-strip {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); margin: 0;
+}
+.summary-item {
+  display: grid; gap: var(--space-1); padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface);
+}
+.summary-item dt { color: var(--text-secondary); font-size: var(--font-size-caption); font-weight: 600; }
+.summary-item dd { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: 0; min-width: 0; }
+.summary-item small { color: var(--text-tertiary); font-size: var(--font-size-small); }
+.summary-value {
+  padding: 0; border: 0; background: transparent; color: var(--text-primary); font-size: var(--font-size-section); font-weight: 600; cursor: pointer;
+}
+.summary-value:hover { color: var(--primary); text-decoration: underline; }
+.summary-value.summary-alert { color: var(--danger); }
+
+/* Resources grouped by environment when a connection reaches several. */
+.resource-group + .resource-group { margin-top: var(--space-4); }
+.resource-group-title { margin: 0 0 var(--space-2); color: var(--text-secondary); font-size: var(--font-size-small); font-weight: 600; }
+
+/* Source connections: every one listed, none singled out. */
+.source-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.source-meta { color: var(--text-tertiary); font-size: var(--font-size-small); }
+
+/* An incident row's place: environment and sources, as quiet metadata. */
+.incident-context { overflow: hidden; color: var(--text-tertiary); font-size: var(--font-size-small); text-overflow: ellipsis; white-space: nowrap; }
+.incident-condition { color: var(--text-tertiary); font-weight: 400; }
+.list-more { display: flex; justify-content: center; padding-top: var(--space-3); }
+
+/* The environment list with its source column. */
+.with-sources .tree-grid-header, .with-sources .resource-link { grid-template-columns: minmax(240px, 1fr) 130px 160px 170px; }
+.with-sources .tree-grid-header, .with-sources .resource-tree { min-width: 760px; }
+.resource-source-cell { overflow: hidden; color: var(--text-secondary); text-overflow: ellipsis; white-space: nowrap; }
+
+.numeric-cell { font-variant-numeric: tabular-nums; }
+
+@media (max-width: 720px) {
+  .summary-strip { grid-template-columns: 1fr; }
+  .context-path a { max-width: 16ch; }
+}

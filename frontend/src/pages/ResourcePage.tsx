@@ -1,32 +1,44 @@
 import { useState } from 'react'
 import type { ComponentType } from 'react'
-import { useLocation, useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { ApiError } from '../api/httpClient'
+import { useResourceContext } from '../api/infrastructure'
 import { createLastHourWindow, useResourceMetrics } from '../api/metrics'
 import { useResource } from '../api/resources'
 import { AppShell } from '../components/layout/AppShell'
 import {
-  InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
+  InlineAlert, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
 } from '../components/layout/WorkspacePrimitives'
 import { useAvailableResourceOperations, useResourceOperationExecutions } from '../api/resourceOperations'
 import { operationsApplicability } from '../components/resources/operationPresentation'
 import { MetricChart } from '../components/metrics/MetricChart'
 import { filterMetricSeries } from '../components/metrics/metricSeries'
 import { ResourceActivitySection } from '../components/history/ResourceActivitySection'
+import { InfrastructureContextPath, resourceContextPath } from '../components/infrastructure/InfrastructureContextPath'
+import {
+  connectionPath, environmentPath, originQuery, projectPath, readOrigin, resourcePath, withTab, workspaceQuery,
+} from '../components/infrastructure/infrastructureLinks'
+import { asTree } from '../components/infrastructure/resourceGroups'
+import { ScopedIncidentsPanel } from '../components/infrastructure/ScopedIncidentsPanel'
+import { SourceConnectionLinks } from '../components/infrastructure/SourceConnections'
 import { MonitorRulesSection } from '../components/monitoring/MonitorRulesSection'
 import { supportsResourceMonitoring } from '../components/monitoring/resourceMonitoringSupport'
+import { ResourceTree } from '../components/resources/ResourceTree'
 import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
 import type { ResourcePresentationProps } from '../components/resources/presentation/ResourcePresentation'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
+import type { ResourceContextResponse } from '../types/infrastructure'
 import { MetricCode, type MetricObservationResponse } from '../types/metric'
 import type { ResourceResponse } from '../types/resource'
 import { ResourceOperationsPanel } from '../components/resources/ResourceOperationsPanel'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
-type Tab = 'overview' | 'monitoring' | 'activity' | 'operations'
+const Tabs = ['overview', 'monitoring', 'incidents', 'activity', 'operations'] as const
+type Tab = typeof Tabs[number]
 
 export function ResourcePage() {
   const { organizationId, environmentId, resourceId } = useParams()
@@ -35,19 +47,23 @@ export function ResourcePage() {
 }
 
 /**
- * One resource: its name and status first, then tabs for what applies to it. How it looks comes
- * from its presentation; whether it is monitored comes from the monitoring feature and whether it
- * has operations from the backend — three separate answers, never derived from each other.
+ * One resource: its name and status first, where it lives, then tabs for what applies to it. How it
+ * looks comes from its presentation; whether it is monitored comes from the monitoring feature and
+ * whether it has operations from the backend — three separate answers, never derived from each
+ * other. Its place in the infrastructure is its own read, so a direct link needs no list in cache,
+ * and a failure of that read leaves the resource itself usable.
  */
 function ResourceContent({ organizationId, environmentId, resourceId }: {
   organizationId: string; environmentId: string; resourceId: string
 }) {
   const i18n = useI18n()
   const t = i18n.t.resources.page
-  const location = useLocation()
-  const [tab, setTab] = useState<Tab>('overview')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = Tabs.find(value => value === searchParams.get('tab')) ?? 'overview'
   const [metricWindow, setMetricWindow] = useState(() => createLastHourWindow())
   const resourceQuery = useResource(organizationId, resourceId)
+  const contextQuery = useResourceContext(organizationId, resourceId)
+  const context = contextQuery.data
   const presentation = resourcePresentationRegistry.resolve(resourceQuery.data?.resourceTypeCode ?? '')
   const monitored = supportsResourceMonitoring(resourceQuery.data?.resourceTypeCode)
   // The same two reads the operations tab shows; asking them here only decides whether it exists,
@@ -56,9 +72,15 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
     useAvailableResourceOperations(organizationId, resourceId, resourceQuery.isSuccess),
     useResourceOperationExecutions(organizationId, resourceId, resourceQuery.isSuccess))
   const metricsQuery = useResourceMetrics(organizationId, resourceId, metricWindow,
-    monitored && tab === 'monitoring')
-  const back = { label: t.back,
-    to: `/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(environmentId)}${location.search}` }
+    monitored && requestedTab === 'monitoring')
+  const back = backLink(organizationId, environmentId, searchParams, context, i18n)
+  const linkQuery = originQuery(searchParams, { kind: 'resource', id: resourceId, environmentId })
+  const selectTab = (next: Tab) => setSearchParams(previous => {
+    const updated = new URLSearchParams(previous)
+    if (next === 'overview') updated.delete('tab')
+    else updated.set('tab', next)
+    return updated
+  }, { replace: true })
 
   if (resourceQuery.isPending) return <AppShell><PageLoading title={t.loading} back={back} label={t.loading} /></AppShell>
   if (resourceQuery.isError || !resourceQuery.data) {
@@ -67,25 +89,32 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
       notFoundTitle={t.notFound} notFoundDetail={t.notFoundDetail} errorTitle={t.loadError} /></AppShell>
   }
   const resource = resourceQuery.data
-  const tabs: { id: Tab; label: string }[] = [
+  // Incidents come from monitor rules, so they belong where monitoring does; whether the resource
+  // has operations says nothing about either.
+  const tabs: { id: Tab; label: string; count?: number }[] = [
     { id: 'overview', label: t.tabs.overview },
     ...(monitored ? [{ id: 'monitoring' as const, label: t.tabs.monitoring }] : []),
+    ...(monitored ? [{ id: 'incidents' as const, label: t.tabs.incidents, count: context?.openIncidentCount || undefined }] : []),
     { id: 'activity', label: t.tabs.activity },
     ...(operations === 'applicable' ? [{ id: 'operations' as const, label: t.tabs.operations }] : []),
   ]
-  // A tab that stopped applying (the operations answer changed) falls back to the overview.
-  const active = tabs.some(item => item.id === tab) ? tab : 'overview'
+  // A tab that does not apply (the operations answer changed, or a stale link) falls back to the overview.
+  const active = tabs.some(item => item.id === requestedTab) ? requestedTab : 'overview'
   const status = presentation.headerStatus?.(resource, i18n)
   const Overview = presentation.Overview
   const typeLabel = i18n.t.resources.types[resource.resourceTypeCode] ?? resource.resourceTypeCode
 
   return <AppShell><div className="workspace-page resource-page">
+    {context ? <InfrastructureContextPath items={resourceContextPath(organizationId, context, [{ label: resource.name }])} /> : null}
     <WorkspaceHeader title={resource.name} subtitle={t.subtitle(typeLabel, resource.code)} back={back}
       status={<>{status ? <StatusIndicator label={status.label} tone={status.tone} /> : null}
         {!resource.active ? <StatusIndicator label={t.inactive} tone="neutral" /> : null}</>} />
-    <WorkspaceTabs tabs={tabs} active={active} onChange={setTab} />
+    <WorkspaceTabs tabs={tabs} active={active} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
-      {active === 'overview' ? <Overview resource={resource} /> : null}
+      {active === 'overview' ? <>
+        <Overview resource={resource} />
+        <ResourceContextSections organizationId={organizationId} query={contextQuery} linkQuery={linkQuery} />
+      </> : null}
       {active === 'monitoring' ? <>
         <MetricsSection resource={resource} Summary={presentation.MetricSummary}
           isPending={metricsQuery.isPending} isError={metricsQuery.isError} error={metricsQuery.error}
@@ -93,12 +122,79 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
           retry={metricsQuery.refetch} />
         <MonitorRulesSection organizationId={organizationId} resourceId={resourceId} />
       </> : null}
+      {active === 'incidents' ? <ScopedIncidentsPanel organizationId={organizationId}
+        scope={{ kind: 'resource', id: resourceId }}
+        options={{ showResource: false, showContext: false, showCondition: true, linkQuery }} /> : null}
       {active === 'activity' ?
         <ResourceActivitySection organizationId={organizationId} resourceId={resourceId} /> : null}
       {active === 'operations' ?
         <ResourceOperationsPanel organizationId={organizationId} resourceId={resourceId} resourceName={resource.name} /> : null}
     </div>
   </div></AppShell>
+}
+
+/**
+ * Where "back" leads: to the page this one was opened from when that was a connection or another
+ * resource, otherwise to the resource's environment. Never the browser history, so a direct link
+ * has the same way back.
+ */
+function backLink(
+  organizationId: string,
+  environmentId: string,
+  params: URLSearchParams,
+  context: ResourceContextResponse | undefined,
+  i18n: ReturnType<typeof useI18n>,
+): { label: string; to: string } {
+  const origin = readOrigin(params)
+  const workspace = workspaceQuery(params)
+  if (origin?.kind === 'connection') {
+    const source = context?.sourceConnections.find(value => value.id === origin.id)
+    return { label: source?.name ?? i18n.t.infrastructure.connection,
+      to: connectionPath(organizationId, origin.id, withTab(workspace, 'resources')) }
+  }
+  if (origin?.kind === 'resource') {
+    const name = context?.parentResource?.id === origin.id ? context.parentResource.name : i18n.t.common.back
+    return { label: name, to: resourcePath(organizationId, origin.environmentId, origin.id, workspace) }
+  }
+  return { label: i18n.t.resources.page.back, to: context
+    ? environmentPath(organizationId, context.project.id, environmentId)
+    : `/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(environmentId)}${workspace}` }
+}
+
+/** Where the resource lives, what discovered it and what it contains. */
+function ResourceContextSections({ organizationId, query, linkQuery }: {
+  organizationId: string
+  query: ReturnType<typeof useResourceContext>
+  linkQuery: string
+}) {
+  const i18n = useI18n()
+  const t = i18n.t.infrastructure
+  if (query.isPending) {
+    return <WorkspaceSection title={t.context}><div className="row-skeleton" aria-label={t.loadingContext}><span /><span /></div></WorkspaceSection>
+  }
+  if (query.isError || !query.data) {
+    return <WorkspaceSection title={t.context}><InlineAlert tone="danger" title={t.contextError}
+      action={<button className="secondary-button" type="button" onClick={() => query.refetch()}>{i18n.t.common.retry}</button>}>
+      {describeError(query.error, i18n)}</InlineAlert></WorkspaceSection>
+  }
+  const context = query.data
+  const { project, environment, parentResource, sourceConnections } = context
+  return <>
+    <WorkspaceSection title={t.context}><PropertyGrid items={[
+      { label: t.project, value: <Link className="property-link" to={projectPath(organizationId, project.id)}>{project.name}</Link> },
+      { label: t.environment, value: <Link className="property-link" to={environmentPath(organizationId, project.id, environment.id)}>
+        {environment.name}</Link> },
+      ...(parentResource ? [{ label: t.parent, value: <Link className="property-link"
+        to={resourcePath(organizationId, environment.id, parentResource.id, linkQuery)}>
+        {parentResource.name}</Link> }] : []),
+      { label: sourceConnections.length > 1 ? t.sources : t.source,
+        value: <SourceConnectionLinks organizationId={organizationId} sources={sourceConnections} /> },
+    ]} /></WorkspaceSection>
+    {context.activeChildCount > 0 ? <WorkspaceSection title={t.children}
+      actions={<span className="resource-count">{t.childrenShown(context.children.length, context.activeChildCount)}</span>}>
+      <ResourceTree roots={asTree(context.children)} organizationId={organizationId} linkQuery={linkQuery} label={t.children} />
+    </WorkspaceSection> : null}
+  </>
 }
 
 function MetricsSection({ resource, Summary, isPending, isError, error, observations, refresh, retry }: {

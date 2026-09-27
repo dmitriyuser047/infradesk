@@ -49,8 +49,11 @@ function queryClient(): QueryClient {
   client.setQueryData(['sync-sessions', 'org', 'connection'], [session])
   const incident = { id: 'incident', monitorRuleId: 'rule', resourceId: 'resource', status: 'OPEN', reason: 'THRESHOLD',
     startedAt: '2026-09-23T10:00:00Z', openedAt: '2026-09-23T10:00:00Z', resolvedAt: null,
-    createdAt: '', updatedAt: '' }
-  client.setQueryData(['incidents', 'org', 'OPEN'], [{ ...incident, resource: { id: 'resource', name: 'Node', resourceTypeCode: 'NODE' } }])
+    createdAt: '', updatedAt: '', resource: { id: 'resource', name: 'Node', resourceTypeCode: 'NODE' },
+    project: { id: 'project', name: 'SvinPeak' }, environment: { id: 'env', name: 'Production', kind: 'PROD' },
+    monitorRule: { id: 'rule', metricCode: 'CPU_USAGE_PERCENT', operator: 'GREATER_THAN', threshold: 85, forSeconds: 300, noDataSeconds: 900 },
+    parentResource: null, sourceConnections: [{ id: 'connection', name: 'Finnish Node', connectorType: 'SSH', active: true }] }
+  client.setQueryData(['incidents', 'org', 'OPEN'], [incident])
   client.setQueryData(['incident', 'org', 'incident'], incident)
   client.setQueryData(['notification-channel', 'org', 'channel'], {
     id: 'channel', name: 'Ops Telegram', type: 'TELEGRAM', enabled: true,
@@ -78,7 +81,7 @@ const pages = [
   { path: '/organizations/org/connections/connection', route: '/organizations/:organizationId/connections/:connectionId', element: <ConnectionPage />, title: 'SSH host', titleEn: 'SSH host' },
   { path: '/organizations/org/connections/connection/sync-sessions/session', route: '/organizations/:organizationId/connections/:connectionId/sync-sessions/:sessionId', element: <ConnectionSyncSessionPage />, title: 'Синхронизация', titleEn: 'Synchronization' },
   { path: '/organizations/org/incidents', route: '/organizations/:organizationId/incidents', element: <IncidentsPage />, title: 'Инциденты', titleEn: 'Incidents' },
-  { path: '/organizations/org/incidents/incident', route: '/organizations/:organizationId/incidents/:incidentId', element: <IncidentPage />, title: 'Пороговое значение превышено · Node', titleEn: 'Threshold exceeded · Node' },
+  { path: '/organizations/org/incidents/incident', route: '/organizations/:organizationId/incidents/:incidentId', element: <IncidentPage />, title: 'Нарушен порог: Загрузка процессора', titleEn: 'CPU usage threshold breached' },
   { path: '/organizations/org/resources', route: '/organizations/:organizationId/resources', element: <ResourcesIndexPage />, title: 'Ресурсы обнаруживаются в каждом окружении отдельно', titleEn: 'Resources are discovered per environment' },
   { path: '/missing', route: '*', element: <InvalidRoutePage />, title: 'Страница недоступна', titleEn: 'Page unavailable' },
 ]

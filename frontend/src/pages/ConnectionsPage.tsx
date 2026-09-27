@@ -4,6 +4,7 @@ import { Link, useLocation, useParams } from 'react-router-dom'
 import { Cable, Plus } from 'lucide-react'
 
 import { useConnections } from '../api/connections'
+import { useConnectionInfrastructureCounts } from '../api/infrastructure'
 import { getEnvironments, useProjects } from '../api/navigation'
 import { ConnectionList } from '../components/connections/ConnectionList'
 import { filterConnections } from '../components/connections/connectionFilters'
@@ -43,6 +44,9 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
   const [type, setType] = useState('ALL')
   const [status, setStatus] = useState('ALL')
   const filtered = filterConnections(connectionsQuery.data ?? [], search, type, status)
+  // One grouped read for every row; the list still renders without it.
+  const countsQuery = useConnectionInfrastructureCounts(organizationId)
+  const counts = countsQuery.data ? new Map(countsQuery.data.map(value => [value.connectionId, value])) : undefined
   const newPath = `/organizations/${organizationId}/connections/new${location.search}`
 
   return (
@@ -69,7 +73,7 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
           ) : null}
           {!connectionsQuery.isPending && !connectionsQuery.isError && connectionsQuery.data !== undefined && connectionsQuery.data.length > 0 ? (
             filtered.length ? <ConnectionList organizationId={organizationId} connections={filtered}
-              projects={projectsQuery.data} environments={environments} /> :
+              projects={projectsQuery.data} environments={environments} counts={counts} /> :
               <EmptyWorkspaceState title={t.noMatch} />
           ) : null}
         </WorkspaceSection>

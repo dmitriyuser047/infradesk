@@ -54,4 +54,28 @@ describe('connections list', () => {
     expect(member).toContain('Владелец организации ещё не добавил подключений.')
     expect(member).not.toContain('/connections/new')
   })
+
+  it('counts the resources and open incidents of every connection from one grouped read', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    client.setQueryData(['me'], { id: 'user', email: 'a@example.com', displayName: 'Dmitriy' })
+    client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Northwind', role: 'MEMBER' }])
+    client.setQueryData(['projects', 'org'], [])
+    client.setQueryData(['connections', 'org'], [connection('finnish'), connection('german')])
+    client.setQueryData(['connection-infrastructure', 'org'], [
+      { connectionId: 'finnish', activeResourceCount: 8, openIncidentCount: 2 },
+      { connectionId: 'german', activeResourceCount: 3, openIncidentCount: 0 }])
+    const html = renderToStaticMarkup(<QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/organizations/org/connections']}><Routes>
+        <Route path="/organizations/:organizationId/connections" element={<ConnectionsPage />} />
+      </Routes></MemoryRouter>
+    </QueryClientProvider>)
+    expect(html).toContain('<th>Ресурсы</th><th>Открытые инциденты</th>')
+    expect(html).toMatch(/finnish<\/a>.*<td class="numeric-cell">8<\/td>.*2 открытых инцидента/s)
+    expect(html).toMatch(/german<\/a>.*<td class="numeric-cell">3<\/td><td class="numeric-cell"><span class="muted-cell">0<\/span>/s)
+  })
+
+  it('says nothing rather than zero while the counts are unknown', () => {
+    const html = render('MEMBER', [connection('finnish')])
+    expect(html).toMatch(/<td class="numeric-cell"><span class="muted-cell">—<\/span><\/td><td class="numeric-cell"><span class="muted-cell">—<\/span>/)
+  })
 })

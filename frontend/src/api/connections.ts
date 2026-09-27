@@ -3,6 +3,7 @@ import { useRef } from 'react'
 
 import { ApiError, requestJson } from './httpClient'
 import { invalidateOverview } from './overview'
+import { invalidateConnectionInfrastructure } from './infrastructure'
 import type { ConnectionResponse, SaveSshConnectionRequest, SshCredentialsRequest, SyncSessionResponse } from '../types/connection'
 import { requestVoid } from './httpClient'
 
@@ -80,6 +81,7 @@ export function useRunConnectionSync(organizationId: string, connectionId: strin
       void queryClient.invalidateQueries({ queryKey: ['connections', organizationId] })
       void queryClient.invalidateQueries({ queryKey: ['sync-sessions', organizationId, connectionId] })
       void queryClient.invalidateQueries({ queryKey: ['environment-resources', organizationId] })
+      invalidateConnectionInfrastructure(queryClient, organizationId, connectionId)
       void invalidateOverview(queryClient, organizationId)
     },
     onError: error => {

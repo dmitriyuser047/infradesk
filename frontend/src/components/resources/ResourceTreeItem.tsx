@@ -3,6 +3,9 @@ import { Link, useLocation } from 'react-router-dom'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 
 import type { FilteredResourceNode } from './resourceFilter'
+import type { SourceConnection } from '../../types/infrastructure'
+import { resourcePath } from '../infrastructure/infrastructureLinks'
+import { sourceSummary } from '../infrastructure/SourceConnections'
 import { StatusIndicator } from '../layout/WorkspacePrimitives'
 import { resourcePresentationRegistry } from './presentation/resourcePresentations'
 import { useI18n } from '../../i18n'
@@ -11,14 +14,16 @@ interface ResourceTreeItemProps {
   node: FilteredResourceNode
   depth: number
   organizationId: string
-  environmentId: string
+  linkQuery?: string
+  sources?: ReadonlyMap<string, readonly SourceConnection[]>
 }
 
 export function ResourceTreeItem({
   node,
   depth,
   organizationId,
-  environmentId,
+  linkQuery,
+  sources,
 }: ResourceTreeItemProps) {
   const i18n = useI18n()
   const [expanded, setExpanded] = useState(true)
@@ -26,7 +31,9 @@ export function ResourceTreeItem({
   const hasChildren = node.children.length > 0
   const presentation = resourcePresentationRegistry.resolve(node.resource.resourceTypeCode)
   const Icon = presentation.Icon
-  const destination = `/organizations/${organizationId}/environments/${environmentId}/resources/${node.resource.id}${location.search}`
+  // The resource's own environment: one tree may span several, as a connection's does.
+  const destination = resourcePath(organizationId, node.resource.environmentId, node.resource.id, linkQuery ?? location.search)
+  const source = sources ? sourceSummary(sources.get(node.resource.id) ?? [], i18n.t.infrastructure.moreSources) : undefined
   const status = presentation.rowStatus(node.resource, i18n)
 
   return (
@@ -59,6 +66,7 @@ export function ResourceTreeItem({
           <span className="resource-type-cell">{i18n.t.resources.types[node.resource.resourceTypeCode] ?? node.resource.resourceTypeCode}</span>
           <span className="resource-state-cell">
             <StatusIndicator label={status.label} tone={status.tone} /></span>
+          {sources ? <span className="resource-source-cell">{source ?? <span className="muted-cell">—</span>}</span> : null}
         </Link>
       </div>
       {hasChildren && expanded ? (
@@ -69,7 +77,8 @@ export function ResourceTreeItem({
               node={child}
               depth={depth + 1}
               organizationId={organizationId}
-              environmentId={environmentId}
+              linkQuery={linkQuery}
+              sources={sources}
             />
           ))}
         </div>

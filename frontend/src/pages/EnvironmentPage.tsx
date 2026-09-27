@@ -3,6 +3,7 @@ import { SearchX } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router-dom'
 
 import { useEnvironmentResources } from '../api/resources'
+import { useEnvironmentResourceSources } from '../api/infrastructure'
 import { useEnvironments } from '../api/navigation'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
@@ -46,6 +47,11 @@ function EnvironmentContent({ organizationId, environmentId }: EnvironmentConten
   // Local to this page: filtering the loaded list changes nothing in the URL and requests nothing.
   const [criteria, setCriteria] = useState(noResourceFilter)
   const resources = resourcesQuery.data
+  // Which connections discovered each resource: one read for the whole list. Without it the
+  // column is simply not shown; the list itself does not depend on it.
+  const sourcesQuery = useEnvironmentResourceSources(organizationId, environmentId)
+  const sources = useMemo(() => sourcesQuery.data === undefined ? undefined
+    : new Map(sourcesQuery.data.map(entry => [entry.resourceId, entry.sourceConnections])), [sourcesQuery.data])
   const filtered = useMemo(() => resources === undefined ? null
     : buildFilteredResourceTree(resources, criteria, describeWithPresentations(resourcePresentationRegistry, i18n)),
   [resources, criteria, i18n])
@@ -72,9 +78,10 @@ function EnvironmentContent({ organizationId, environmentId }: EnvironmentConten
         {filtered !== null && filtered.total > 0 && filtered.roots.length === 0 ? <EmptyWorkspaceState icon={SearchX}
           title={f.noResults} detail={f.noResultsDetail}
           action={<button className="secondary-button" type="button" onClick={() => setCriteria(noResourceFilter)}>{f.reset}</button>} /> : null}
-        {filtered !== null && filtered.roots.length > 0 ? <div className="table-scroll">
-          <div className="tree-grid-header"><span>{t.columns.name}</span><span>{t.columns.type}</span><span>{t.columns.status}</span></div>
-          <ResourceTree roots={filtered.roots} organizationId={organizationId} environmentId={environmentId} />
+        {filtered !== null && filtered.roots.length > 0 ? <div className={sources ? 'table-scroll with-sources' : 'table-scroll'}>
+          <div className="tree-grid-header"><span>{t.columns.name}</span><span>{t.columns.type}</span><span>{t.columns.status}</span>
+            {sources ? <span>{t.columns.source}</span> : null}</div>
+          <ResourceTree roots={filtered.roots} organizationId={organizationId} sources={sources} />
         </div> : null}
       </WorkspaceSection></div>
     </AppShell>

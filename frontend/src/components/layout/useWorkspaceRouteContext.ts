@@ -2,7 +2,6 @@ import { useParams, useSearchParams } from 'react-router-dom'
 
 import { useConnection } from '../../api/connections'
 import { useIncident } from '../../api/incidents'
-import { useResource } from '../../api/resources'
 
 export function useWorkspaceRouteContext() {
   const { organizationId, projectId: routeProjectId, environmentId: routeEnvironmentId,
@@ -10,15 +9,15 @@ export function useWorkspaceRouteContext() {
   const [searchParams] = useSearchParams()
   const connection = useConnection(organizationId, connectionId)
   const incident = useIncident(organizationId, incidentId)
-  const incidentResource = useResource(organizationId, incident.data?.resourceId)
   const scope = connection.data?.scope
   const scopeProjectId = scope && scope.type !== 'ORGANIZATION' ? scope.projectId : undefined
   const scopeEnvironmentId = scope?.type === 'ENVIRONMENT' ? scope.environmentId : undefined
 
   return {
     organizationId,
-    projectId: routeProjectId ?? searchParams.get('project') ?? scopeProjectId,
+    // An incident carries the project and environment of its resource: no further read.
+    projectId: routeProjectId ?? searchParams.get('project') ?? scopeProjectId ?? incident.data?.project.id,
     environmentId: routeEnvironmentId ?? searchParams.get('environment') ??
-      scopeEnvironmentId ?? incidentResource.data?.environmentId,
+      scopeEnvironmentId ?? incident.data?.environment.id,
   }
 }

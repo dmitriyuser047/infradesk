@@ -69,7 +69,7 @@ describe('registering a new resource presentation', () => {
 
   it('shows the new type through the generic infrastructure tree', () => {
     const html = renderToStaticMarkup(<MemoryRouter>
-      <ResourceTree roots={unfiltered([resource])} organizationId="org" environmentId="environment" />
+      <ResourceTree roots={unfiltered([resource])} organizationId="org" />
     </MemoryRouter>)
 
     expect(html).toContain('Test resource name')

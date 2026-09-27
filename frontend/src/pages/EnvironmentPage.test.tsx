@@ -20,9 +20,19 @@ const fleet: ResourceResponse[] = [
     data: { kind: 'NODE', spec: null, status: { online: false, cpuUsagePercent: null, memoryUsagePercent: null, uptimeSeconds: null } } },
 ]
 
-/** Renders the page with the shell data seeded; the resource list is the only request it can make. */
+const sources = [
+  { resourceId: 'finland', sourceConnections: [{ id: 'finnish', name: 'Finnish Node', connectorType: 'SSH', active: true }] },
+  { resourceId: 'postgres', sourceConnections: [{ id: 'finnish', name: 'Finnish Node', connectorType: 'SSH', active: true },
+    { id: 'prom', name: 'Prometheus', connectorType: 'PROMETHEUS', active: true }] },
+]
+
+/**
+ * Renders the page with the shell data seeded. The page makes two requests: the resource list and,
+ * for the whole list at once, which connections discovered each resource.
+ */
 async function renderPage(resources: ResourceResponse[], locale: Locale = 'ru') {
-  const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(resources),
+  const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(new Response(
+    JSON.stringify(String(url).endsWith('/resource-sources') ? sources : resources),
     { status: 200, headers: { 'Content-Type': 'application/json' } })))
   vi.stubGlobal('fetch', fetchMock)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
@@ -70,9 +80,17 @@ describe('resources page filters', () => {
     expect((screen.getByRole('radio', { name: 'Контейнеры' }) as HTMLInputElement).checked).toBe(false)
     expect(screen.queryByRole('button', { name: 'Сбросить фильтры' })).toBeNull()
 
-    // One request loaded the list; typing and filtering made none.
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/organizations/org/environments/env/resources')
+    // One request loaded the list and one its sources, whatever its size; typing and filtering made none.
+    expect(fetchMock.mock.calls.map(([url]) => String(url)).sort()).toEqual([
+      '/api/v1/organizations/org/environments/env/resource-sources', '/api/v1/organizations/org/environments/env/resources'])
+  })
+
+  it('names the connections that discovered each resource, without a request per row', async () => {
+    await renderPage(fleet, 'en')
+    await screen.findByRole('tree')
+    expect(await screen.findByText('Source')).toBeTruthy()
+    const postgres = screen.getAllByRole('treeitem').find(item => item.querySelector('.resource-name')?.firstChild?.textContent === 'postgres')
+    expect(postgres?.querySelector('.resource-source-cell')?.textContent).toBe('Finnish Node +1')
   })
 
   it('clears the search with its button or with Escape', async () => {

@@ -74,7 +74,8 @@ export function WorkspaceSection({ title, description, actions, children, classN
 }
 
 export function WorkspaceTabs<T extends string>({ tabs, active, onChange }: {
-  tabs: readonly { id: T; label: string }[]
+  /** `count`, when known, follows the label as a small badge; the label alone still names the tab. */
+  tabs: readonly { id: T; label: string; count?: number }[]
   active: T
   onChange: (value: T) => void
 }) {
@@ -93,7 +94,7 @@ export function WorkspaceTabs<T extends string>({ tabs, active, onChange }: {
           document.getElementById(`tab-${next.id}`)?.focus()
         }
       }}>
-      {tab.label}
+      {tab.label}{tab.count === undefined ? null : <> <span className="tab-count">{tab.count}</span></>}
     </button>)}
   </div>
 }

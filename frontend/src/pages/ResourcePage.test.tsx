@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { I18nProvider, type Locale } from '../i18n'
 import type { HistoryEventResponse } from '../types/historyEvent'
+import type { ResourceContextResponse } from '../types/infrastructure'
 import type { ResourceResponse } from '../types/resource'
 import { ResourcePage } from './ResourcePage'
 
@@ -22,6 +23,8 @@ const event: HistoryEventResponse = {
 
 interface Answers {
   resource: ResourceResponse
+  context?: ResourceContextResponse
+  incidents?: unknown[]
   operations?: string[]
   executions?: unknown[]
   history?: HistoryEventResponse[]
@@ -33,10 +36,14 @@ function renderPage(answers: Answers, options: { locale?: Locale; cachedList?: R
   vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
     const path = String(input)
     requests.push(path.replace('/api/v1/organizations/org', ''))
-    const body = path.endsWith('/operations') ? { operations: answers.operations ?? [], unavailableReason: null }
+    const body = path.endsWith('/context') ? answers.context ?? context
+      : path.includes('/incidents?') ? answers.incidents ?? []
+      : path.endsWith('/operations') ? { operations: answers.operations ?? [], unavailableReason: null }
       : path.includes('/operation-executions') ? answers.executions ?? []
         : path.includes('/history-events') ? answers.history ?? []
           : path.includes('/monitor-rules') ? [] : path.includes('/metrics') ? [] : answers.resource
+    if ((body as unknown) === 'fail') return Promise.resolve(new Response(JSON.stringify({ code: 'INTERNAL_ERROR', message: 'x' }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }))
     return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
   }))
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
@@ -53,17 +60,23 @@ function renderPage(answers: Answers, options: { locale?: Locale; cachedList?: R
   return requests
 }
 
+const context: ResourceContextResponse = {
+  project: { id: 'project', name: 'App' }, environment: { id: 'env', name: 'Production', kind: 'PROD' },
+  parentResource: null, sourceConnections: [{ id: 'finnish', name: 'Finnish Node', connectorType: 'SSH', active: true }],
+  children: [], activeChildCount: 0, openIncidentCount: 0,
+}
+
 const tabNames = () => screen.getAllByRole('tab').map(tab => tab.textContent)
 
 describe('resource detail page', () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
-  it('makes only the reads it made before: the resource and its operations', async () => {
+  it('makes one read each for the resource, its place in the infrastructure and its operations', async () => {
     const requests = renderPage({ resource: container, operations: ['CONTAINER_STOP'] })
     await screen.findByRole('tab', { name: 'Operations' })
 
-    expect([...requests].sort()).toEqual(['/resources/postgres', '/resources/postgres/operation-executions?limit=20',
-      '/resources/postgres/operations'])
+    expect([...requests].sort()).toEqual(['/resources/postgres', '/resources/postgres/context',
+      '/resources/postgres/operation-executions?limit=20', '/resources/postgres/operations'])
   })
 
   it('shows the operations tab only when the backend offers operations or some ran before', async () => {
@@ -86,7 +99,7 @@ describe('resource detail page', () => {
   it('opens monitoring on a server, in Russian, and loads metrics only then', async () => {
     const requests = renderPage({ resource: server }, { locale: 'ru' })
     await screen.findByText('Время работы')
-    expect(tabNames()).toEqual(['Обзор', 'Мониторинг', 'События'])
+    expect(tabNames()).toEqual(['Обзор', 'Мониторинг', 'Инциденты', 'События'])
     expect(requests.some(path => path.includes('/metrics'))).toBe(false)
 
     fireEvent.click(screen.getByRole('tab', { name: 'Мониторинг' }))
@@ -137,9 +150,39 @@ describe('resource detail page', () => {
     </QueryClientProvider></I18nProvider>)
 
     expect(await screen.findByText('Возможно, ресурс больше не существует или находится в другом окружении.')).toBeTruthy()
-    // The operations reads wait for the resource, so a missing one costs a single request.
-    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([url]) => String(url)))
-      .toEqual(['/api/v1/organizations/org/resources/missing'])
+    // The operations reads wait for the resource; only the resource and its context are asked.
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([url]) => String(url)).sort())
+      .toEqual(['/api/v1/organizations/org/resources/missing', '/api/v1/organizations/org/resources/missing/context'])
     expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/environments/env?project=project')
+  })
+
+  it('says where the resource lives and names every source, from its own read', async () => {
+    const requests = renderPage({ resource: container, context: { ...context,
+      parentResource: { id: 'server', name: 'fin-prod-01', resourceTypeCode: 'NODE' },
+      sourceConnections: [...context.sourceConnections, { id: 'prom', name: 'Prometheus', connectorType: 'PROMETHEUS', active: true }] } })
+
+    const path = await screen.findByRole('navigation', { name: 'Location in the infrastructure' })
+    // Two sources: the path does not pretend one of them is the source.
+    expect(within(path).getAllByRole('link').map(link => link.textContent)).toEqual(['App', 'Production', 'fin-prod-01'])
+    expect(within(path).getByText('postgres').getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('link', { name: 'Open connection Finnish Node' }).getAttribute('href')).toBe('/organizations/org/connections/finnish')
+    expect(screen.getByRole('link', { name: 'Open connection Prometheus' })).toBeTruthy()
+    expect(screen.getByText('Sources')).toBeTruthy()
+    // Direct navigation: nothing was in the cache, and no list was loaded to find the context.
+    expect(requests.some(value => value.includes('/environments/'))).toBe(false)
+  })
+
+  it('keeps the resource usable when its context cannot be read', async () => {
+    renderPage({ resource: container, context: 'fail' as unknown as ResourceContextResponse })
+    expect(await screen.findByText('postgres:17')).toBeTruthy()
+    expect(await screen.findByText('Unable to load where this resource lives')).toBeTruthy()
+  })
+
+  it('lists the incidents of a monitored resource in its own tab, open first', async () => {
+    const requests = renderPage({ resource: server, context: { ...context, openIncidentCount: 1 } })
+    fireEvent.click(await screen.findByRole('tab', { name: 'Incidents 1' }))
+    expect(await screen.findByText('No active incidents')).toBeTruthy()
+    await waitFor(() => expect(requests).toContain('/resources/server/incidents?status=OPEN&limit=200'))
+    expect(requests).toContain('/resources/server/incidents?status=RESOLVED&limit=20')
   })
 })

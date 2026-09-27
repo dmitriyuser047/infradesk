@@ -13,6 +13,9 @@ function incident(overrides: Partial<IncidentListItemResponse>): IncidentListIte
     id: 'incident', monitorRuleId: 'rule', resourceId: 'node', status: 'OPEN', reason: 'THRESHOLD',
     startedAt: '2026-09-25T14:32:00Z', openedAt: '2026-09-25T14:32:00Z', resolvedAt: null,
     createdAt: '', updatedAt: '', resource: { id: 'node', name: 'finland-node-01', resourceTypeCode: 'NODE' },
+    project: { id: 'project', name: 'SvinPeak' }, environment: { id: 'env', name: 'Production', kind: 'PROD' },
+    monitorRule: { id: 'rule', metricCode: 'CPU_USAGE_PERCENT', operator: 'GREATER_THAN', threshold: 85, forSeconds: 300, noDataSeconds: 900 },
+    parentResource: null, sourceConnections: [{ id: 'connection', name: 'Finnish Node', connectorType: 'SSH', active: true }],
     ...overrides,
   }
 }
@@ -81,5 +84,24 @@ describe('incident list', () => {
     expect(names[2]).toMatch(/^finland-node-01 — Данные не поступают, Закрыт /)
     expect([...render(sameResource, 'en').matchAll(/aria-label="(finland-node-01 — [^"]+)"/g)][1][1])
       .toMatch(/^finland-node-01 — Threshold exceeded, Opened /)
+  })
+
+  it('places each row in its environment and source connections, from the row itself', () => {
+    const shared = incident({ id: 'shared', sourceConnections: [
+      { id: 'a', name: 'Finnish Node', connectorType: 'SSH', active: true },
+      { id: 'b', name: 'Prometheus', connectorType: 'PROMETHEUS', active: true }] })
+    const html = render([shared], 'en')
+    expect(html).toContain('<span class="incident-context">Production · Finnish Node +1</span>')
+  })
+
+  it('names the rule instead of the resource in the list of one resource', () => {
+    const html = renderToStaticMarkup(<I18nProvider initialLocale="en"><MemoryRouter>
+      <IncidentList organizationId="org" incidents={[open]} now={now}
+        options={{ showResource: false, showContext: false, linkQuery: '?fromResource=node&fromEnvironment=env' }} />
+    </MemoryRouter></I18nProvider>)
+    expect(html).toContain('href="/organizations/org/incidents/open?fromResource=node&amp;fromEnvironment=env"')
+    expect(html).toContain('>CPU usage &gt; 85% for 5m</a>')
+    expect(html).not.toContain('incident-context')
+    expect(html).not.toContain('finland-node-01')
   })
 })

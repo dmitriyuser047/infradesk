@@ -32,6 +32,9 @@ export function useExecuteResourceOperation(organizationId: string, resourceId: 
         queryClient.invalidateQueries({ queryKey: ['resource-operation-executions', organizationId, resourceId] }),
         queryClient.invalidateQueries({ queryKey: ['resource-operations', organizationId, resourceId] }),
         queryClient.invalidateQueries({ queryKey: ['resource', organizationId, resourceId] }),
+        // The resource's status also shows in its parent's children preview; only mounted
+        // contexts refetch, so this costs one request at most.
+        queryClient.invalidateQueries({ queryKey: ['resource-context', organizationId] }),
         invalidateOverview(queryClient, organizationId),
       ])
     },

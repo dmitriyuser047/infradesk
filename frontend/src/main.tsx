@@ -14,6 +14,7 @@ import './styles/pages/resources.css'
 import './styles/pages/incidents.css'
 import './styles/pages/workspace.css'
 import './styles/pages/account.css'
+import './styles/pages/infrastructure.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

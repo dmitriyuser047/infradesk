@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { useI18n } from '../../i18n'
 import type { ConnectionResponse } from '../../types/connection'
+import type { ConnectionInfrastructureCounts } from '../../types/infrastructure'
 import type { EnvironmentResponse, ProjectResponse } from '../../types/navigation'
 import { StatusIndicator } from '../layout/WorkspacePrimitives'
 import { connectionScopeDisplayLabel } from './connectionContextPresentation'
@@ -10,11 +11,14 @@ import { getLastSyncSummary, getScheduleSummary } from './connectionPresentation
 import { SyncStatusBadge } from './SyncStatusBadge'
 
 /** One connection: where it points, whether that server is trusted, and how its syncs go. */
-export function ConnectionRow({ organizationId, connection, projects, environments }: {
+export function ConnectionRow({ organizationId, connection, projects, environments, counts, countsKnown = false }: {
   organizationId: string
   connection: ConnectionResponse
   projects: readonly ProjectResponse[] | undefined
   environments: readonly EnvironmentResponse[]
+  counts?: ConnectionInfrastructureCounts
+  /** False while the counts are loading or failed: the cells say nothing rather than zero. */
+  countsKnown?: boolean
 }) {
   const i18n = useI18n()
   const t = i18n.t.connections
@@ -34,6 +38,11 @@ export function ConnectionRow({ organizationId, connection, projects, environmen
         ? <StatusIndicator label={t.form.statusMismatch} tone="danger" icon={ShieldAlert} />
         : <StatusIndicator label={ssh.hostTrusted ? t.trust.trusted : t.trust.untrusted}
           tone={ssh.hostTrusted ? 'success' : 'warning'} icon={ssh.hostTrusted ? ShieldCheck : ShieldQuestion} />}</td>
+    <td className="numeric-cell">{countsKnown ? counts?.activeResourceCount ?? 0 : <span className="muted-cell">—</span>}</td>
+    <td className="numeric-cell">{!countsKnown ? <span className="muted-cell">—</span>
+      : (counts?.openIncidentCount ?? 0) > 0
+        ? <StatusIndicator label={i18n.t.infrastructure.openIncidentCount(counts?.openIncidentCount ?? 0)} tone="danger" />
+        : <span className="muted-cell">0</span>}</td>
     <td>{connection.lastSync ? <><SyncStatusBadge status={connection.lastSync.status} />
       <small className="cell-secondary">{getLastSyncSummary(connection.lastSync, i18n)}</small></>
       : <span className="muted-cell">{t.neverSynchronized}</span>}</td>
