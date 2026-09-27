@@ -31,7 +31,7 @@ interface Answers {
 }
 
 /** Answers each read the page may make and records it; the shell's own data is seeded. */
-function renderPage(answers: Answers, options: { locale?: Locale; cachedList?: ResourceResponse[] } = {}) {
+function renderPage(answers: Answers, options: { locale?: Locale; cachedList?: ResourceResponse[]; path?: string } = {}) {
   const requests: string[] = []
   vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
     const path = String(input)
@@ -53,7 +53,7 @@ function renderPage(answers: Answers, options: { locale?: Locale; cachedList?: R
   client.setQueryData(['environments', 'org', 'project'], [{ id: 'env', organizationId: 'org', projectId: 'project', code: 'prod', name: 'Production', kind: 'PROD' }])
   if (options.cachedList) client.setQueryData(['environment-resources', 'org', 'env'], options.cachedList)
   render(<I18nProvider initialLocale={options.locale ?? 'en'}><QueryClientProvider client={client}>
-    <MemoryRouter initialEntries={[`/organizations/org/environments/env/resources/${answers.resource.id}?project=project`]}><Routes>
+    <MemoryRouter initialEntries={[options.path ?? `/organizations/org/environments/env/resources/${answers.resource.id}?project=project`]}><Routes>
       <Route path="/organizations/:organizationId/environments/:environmentId/resources/:resourceId" element={<ResourcePage />} />
     </Routes></MemoryRouter>
   </QueryClientProvider></I18nProvider>)
@@ -156,20 +156,52 @@ describe('resource detail page', () => {
     expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/environments/env?project=project')
   })
 
-  it('says where the resource lives and names every source, from its own read', async () => {
-    const requests = renderPage({ resource: container, context: { ...context,
+  it('says where the resource lives in its path, not in a context table, and keeps its children', async () => {
+    const requests = renderPage({ resource: server, context: { ...context,
+      children: [container], activeChildCount: 1 } })
+
+    const path = await screen.findByRole('navigation', { name: 'Location in the infrastructure' })
+    // One source: it is part of the path, and remembers where it was followed from.
+    expect(within(path).getAllByRole('link').map(link => [link.textContent, link.getAttribute('href')])).toEqual([
+      ['App', '/organizations/org/resources?project=project'],
+      ['Production', '/organizations/org/environments/env?project=project&environment=env'],
+      ['Finnish Node', '/organizations/org/connections/finnish?project=project&fromResource=server&fromEnvironment=env'],
+    ])
+    expect(within(path).getByText('finland_node').getAttribute('aria-current')).toBe('page')
+    // Project, environment and source are not repeated as a section below.
+    expect(screen.queryByRole('heading', { name: 'Context' })).toBeNull()
+    expect(screen.queryByText('Sources · 1')).toBeNull()
+    // What it contains is operational and stays.
+    expect(await screen.findByRole('heading', { name: 'Contained resources' })).toBeTruthy()
+    expect(within(screen.getByRole('tree', { name: 'Contained resources' })).getByRole('link', { name: /postgres/ })).toBeTruthy()
+    // Direct navigation: nothing was in the cache, and no list was loaded to find the context.
+    expect(requests.some(value => value.includes('/environments/'))).toBe(false)
+  })
+
+  it('lists several sources compactly, pretending none is the one', async () => {
+    renderPage({ resource: container, context: { ...context,
       parentResource: { id: 'server', name: 'fin-prod-01', resourceTypeCode: 'NODE' },
       sourceConnections: [...context.sourceConnections, { id: 'prom', name: 'Prometheus', connectorType: 'PROMETHEUS', active: true }] } })
 
     const path = await screen.findByRole('navigation', { name: 'Location in the infrastructure' })
-    // Two sources: the path does not pretend one of them is the source.
     expect(within(path).getAllByRole('link').map(link => link.textContent)).toEqual(['App', 'Production', 'fin-prod-01'])
-    expect(within(path).getByText('postgres').getAttribute('aria-current')).toBe('page')
-    expect(screen.getByRole('link', { name: 'Open connection Finnish Node' }).getAttribute('href')).toBe('/organizations/org/connections/finnish')
+    expect(screen.getByText('Sources · 2')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Open connection Finnish Node' }).getAttribute('href'))
+      .toBe('/organizations/org/connections/finnish?project=project&fromResource=postgres&fromEnvironment=env')
     expect(screen.getByRole('link', { name: 'Open connection Prometheus' })).toBeTruthy()
-    expect(screen.getByText('Sources')).toBeTruthy()
-    // Direct navigation: nothing was in the cache, and no list was loaded to find the context.
-    expect(requests.some(value => value.includes('/environments/'))).toBe(false)
+    expect(screen.queryByRole('heading', { name: 'Context' })).toBeNull()
+  })
+
+  it('returns to the incident or connection it was opened from', async () => {
+    renderPage({ resource: container }, { path: '/organizations/org/environments/env/resources/postgres?fromIncident=cpu' })
+    await screen.findByText('postgres:17')
+    expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/incidents/cpu')
+    cleanup()
+
+    renderPage({ resource: container }, { path: '/organizations/org/environments/env/resources/postgres?fromConnection=finnish' })
+    await screen.findByText('postgres:17')
+    await waitFor(() => expect(document.querySelector('.workspace-back')?.textContent).toBe('Finnish Node'))
+    expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/connections/finnish?tab=resources')
   })
 
   it('keeps the resource usable when its context cannot be read', async () => {
@@ -182,7 +214,7 @@ describe('resource detail page', () => {
     const requests = renderPage({ resource: server, context: { ...context, openIncidentCount: 1 } })
     fireEvent.click(await screen.findByRole('tab', { name: 'Incidents 1' }))
     expect(await screen.findByText('No active incidents')).toBeTruthy()
-    await waitFor(() => expect(requests).toContain('/resources/server/incidents?status=OPEN&limit=200'))
+    await waitFor(() => expect(requests).toContain('/resources/server/incidents?status=OPEN&limit=50'))
     expect(requests).toContain('/resources/server/incidents?status=RESOLVED&limit=20')
   })
 })

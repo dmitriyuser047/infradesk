@@ -2,7 +2,6 @@ import { useState } from 'react'
 import type { ComponentType } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
-import { Link } from 'react-router-dom'
 
 import { ApiError } from '../api/httpClient'
 import { useResourceContext } from '../api/infrastructure'
@@ -10,7 +9,7 @@ import { createLastHourWindow, useResourceMetrics } from '../api/metrics'
 import { useResource } from '../api/resources'
 import { AppShell } from '../components/layout/AppShell'
 import {
-  InlineAlert, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
+  InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
 } from '../components/layout/WorkspacePrimitives'
 import { useAvailableResourceOperations, useResourceOperationExecutions } from '../api/resourceOperations'
 import { operationsApplicability } from '../components/resources/operationPresentation'
@@ -19,7 +18,7 @@ import { filterMetricSeries } from '../components/metrics/metricSeries'
 import { ResourceActivitySection } from '../components/history/ResourceActivitySection'
 import { InfrastructureContextPath, resourceContextPath } from '../components/infrastructure/InfrastructureContextPath'
 import {
-  connectionPath, environmentPath, originQuery, projectPath, readOrigin, resourcePath, withTab, workspaceQuery,
+  environmentPath, originPath, originQuery, readOrigin, workspaceQuery,
 } from '../components/infrastructure/infrastructureLinks'
 import { asTree } from '../components/infrastructure/resourceGroups'
 import { ScopedIncidentsPanel } from '../components/infrastructure/ScopedIncidentsPanel'
@@ -105,15 +104,21 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
   const typeLabel = i18n.t.resources.types[resource.resourceTypeCode] ?? resource.resourceTypeCode
 
   return <AppShell><div className="workspace-page resource-page">
-    {context ? <InfrastructureContextPath items={resourceContextPath(organizationId, context, [{ label: resource.name }])} /> : null}
+    {context ? <InfrastructureContextPath items={resourceContextPath(organizationId, context, [{ label: resource.name }], linkQuery)} /> : null}
     <WorkspaceHeader title={resource.name} subtitle={t.subtitle(typeLabel, resource.code)} back={back}
       status={<>{status ? <StatusIndicator label={status.label} tone={status.tone} /> : null}
-        {!resource.active ? <StatusIndicator label={t.inactive} tone="neutral" /> : null}</>} />
+        {!resource.active ? <StatusIndicator label={t.inactive} tone="neutral" /> : null}</>}
+      actions={context && context.sourceConnections.length > 1
+        // One source is already in the path; several are listed on request, none preferred.
+        ? <details className="toolbar-overflow source-disclosure">
+          <summary>{i18n.t.infrastructure.sourcesCount(context.sourceConnections.length)}</summary>
+          <SourceConnectionLinks organizationId={organizationId} sources={context.sourceConnections} linkQuery={linkQuery} />
+        </details> : undefined} />
     <WorkspaceTabs tabs={tabs} active={active} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
       {active === 'overview' ? <>
         <Overview resource={resource} />
-        <ResourceContextSections organizationId={organizationId} query={contextQuery} linkQuery={linkQuery} />
+        <ResourceChildren organizationId={organizationId} query={contextQuery} linkQuery={linkQuery} />
       </> : null}
       {active === 'monitoring' ? <>
         <MetricsSection resource={resource} Summary={presentation.MetricSummary}
@@ -124,7 +129,8 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
       </> : null}
       {active === 'incidents' ? <ScopedIncidentsPanel organizationId={organizationId}
         scope={{ kind: 'resource', id: resourceId }}
-        options={{ showResource: false, showContext: false, showCondition: true, linkQuery }} /> : null}
+        options={{ showResource: false, showContext: false, showCondition: true, linkQuery }}
+        openTotal={context?.openIncidentCount} /> : null}
       {active === 'activity' ?
         <ResourceActivitySection organizationId={organizationId} resourceId={resourceId} /> : null}
       {active === 'operations' ?
@@ -149,52 +155,41 @@ function backLink(
   const workspace = workspaceQuery(params)
   if (origin?.kind === 'connection') {
     const source = context?.sourceConnections.find(value => value.id === origin.id)
-    return { label: source?.name ?? i18n.t.infrastructure.connection,
-      to: connectionPath(organizationId, origin.id, withTab(workspace, 'resources')) }
+    return { label: source?.name ?? i18n.t.infrastructure.connection, to: originPath(organizationId, origin, workspace, 'resources') }
   }
   if (origin?.kind === 'resource') {
-    const name = context?.parentResource?.id === origin.id ? context.parentResource.name : i18n.t.common.back
-    return { label: name, to: resourcePath(organizationId, origin.environmentId, origin.id, workspace) }
+    const name = context?.parentResource?.id === origin.id ? context.parentResource.name : i18n.t.infrastructure.resource
+    return { label: name, to: originPath(organizationId, origin, workspace) }
   }
+  if (origin?.kind === 'incident') return { label: i18n.t.incidents.page.crumb, to: originPath(organizationId, origin, workspace) }
   return { label: i18n.t.resources.page.back, to: context
     ? environmentPath(organizationId, context.project.id, environmentId)
     : `/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(environmentId)}${workspace}` }
 }
 
-/** Where the resource lives, what discovered it and what it contains. */
-function ResourceContextSections({ organizationId, query, linkQuery }: {
+/**
+ * What the resource contains. Where it lives is the path above the title; it is not repeated here
+ * as a table. A failed context read is reported here alone and the rest of the page stays usable.
+ */
+function ResourceChildren({ organizationId, query, linkQuery }: {
   organizationId: string
   query: ReturnType<typeof useResourceContext>
   linkQuery: string
 }) {
   const i18n = useI18n()
   const t = i18n.t.infrastructure
-  if (query.isPending) {
-    return <WorkspaceSection title={t.context}><div className="row-skeleton" aria-label={t.loadingContext}><span /><span /></div></WorkspaceSection>
-  }
+  if (query.isPending) return null
   if (query.isError || !query.data) {
-    return <WorkspaceSection title={t.context}><InlineAlert tone="danger" title={t.contextError}
+    return <InlineAlert tone="warning" title={t.contextError}
       action={<button className="secondary-button" type="button" onClick={() => query.refetch()}>{i18n.t.common.retry}</button>}>
-      {describeError(query.error, i18n)}</InlineAlert></WorkspaceSection>
+      {describeError(query.error, i18n)}</InlineAlert>
   }
   const context = query.data
-  const { project, environment, parentResource, sourceConnections } = context
-  return <>
-    <WorkspaceSection title={t.context}><PropertyGrid items={[
-      { label: t.project, value: <Link className="property-link" to={projectPath(organizationId, project.id)}>{project.name}</Link> },
-      { label: t.environment, value: <Link className="property-link" to={environmentPath(organizationId, project.id, environment.id)}>
-        {environment.name}</Link> },
-      ...(parentResource ? [{ label: t.parent, value: <Link className="property-link"
-        to={resourcePath(organizationId, environment.id, parentResource.id, linkQuery)}>
-        {parentResource.name}</Link> }] : []),
-      { label: sourceConnections.length > 1 ? t.sources : t.source,
-        value: <SourceConnectionLinks organizationId={organizationId} sources={sourceConnections} /> },
-    ]} /></WorkspaceSection>
-    {context.activeChildCount > 0 ? <WorkspaceSection title={t.children}
-      actions={<span className="resource-count">{t.childrenShown(context.children.length, context.activeChildCount)}</span>}>
-      <ResourceTree roots={asTree(context.children)} organizationId={organizationId} linkQuery={linkQuery} label={t.children} />
-    </WorkspaceSection> : null}
-  </>
+  if (context.activeChildCount === 0) return null
+  return <WorkspaceSection title={t.children}
+    actions={<span className="resource-count">{t.childrenShown(context.children.length, context.activeChildCount)}</span>}>
+    <ResourceTree roots={asTree(context.children)} organizationId={organizationId} linkQuery={linkQuery} label={t.children} />
+  </WorkspaceSection>
 }
 
 function MetricsSection({ resource, Summary, isPending, isError, error, observations, refresh, retry }: {

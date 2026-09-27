@@ -35,8 +35,13 @@ final case class IncidentCursor(openedAt: Instant, id: UUID)
   */
 trait IncidentListQuery[F[_]] {
 
-  /** Every incident of an organization, newest first. */
-  def list(organizationId: UUID, status: Option[IncidentStatus]): F[List[IncidentListItem]]
+  /** The incidents of an organization, newest first, one page at a time. */
+  def list(
+    organizationId: UUID,
+    status: Option[IncidentStatus],
+    before: Option[IncidentCursor],
+    limit: Int
+  ): F[List[IncidentListItem]]
 
   /** The incidents of the resources a connection discovered, newest first, one page at a time. */
   def listByConnection(

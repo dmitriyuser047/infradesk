@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query'
 
 import { requestJson } from './httpClient'
+import { nextIncidentCursor, type IncidentCursor } from './incidents'
 import type { IncidentListItemResponse, KnownIncidentStatus } from '../types/incident'
 import type {
   ConnectionInfrastructureCounts,
@@ -17,8 +18,11 @@ import type {
 
 const organizationPath = (organizationId: string) => `/api/v1/organizations/${encodeURIComponent(organizationId)}`
 
-/** Open incidents are all shown at once; the history is paged. */
-export const OpenIncidentLimit = 200
+/**
+ * Both open and resolved incidents are paged: an open list that stops at a fixed ceiling would hide
+ * active problems while looking complete.
+ */
+export const OpenIncidentPageSize = 50
 export const IncidentHistoryPageSize = 20
 
 export function useConnectionInfrastructureSummary(organizationId: string, connectionId: string) {
@@ -76,7 +80,7 @@ export function getScopedIncidents(
   scope: IncidentScope,
   status: KnownIncidentStatus,
   limit: number,
-  before?: Pick<IncidentListItemResponse, 'openedAt' | 'id'>,
+  before?: IncidentCursor,
 ): Promise<IncidentListItemResponse[]> {
   const query = new URLSearchParams({ status, limit: String(limit) })
   if (before) {
@@ -87,22 +91,14 @@ export function getScopedIncidents(
   return requestJson<IncidentListItemResponse[]>(`${scopePath(organizationId, scope)}?${query.toString()}`)
 }
 
-/** Every open incident of the scope, newest first. */
-export function useOpenScopedIncidents(organizationId: string, scope: IncidentScope, enabled: boolean) {
-  return useQuery({
-    queryKey: [`${scope.kind}-incidents`, organizationId, scope.id, 'OPEN'],
-    queryFn: () => getScopedIncidents(organizationId, scope, 'OPEN', OpenIncidentLimit),
-    enabled,
-  })
-}
-
-/** Resolved incidents of the scope, one page at a time, newest first. */
-export function useResolvedScopedIncidents(organizationId: string, scope: IncidentScope, enabled: boolean) {
+/** One status of the scope's incidents, a page at a time, newest first. */
+export function useScopedIncidentPages(organizationId: string, scope: IncidentScope, status: KnownIncidentStatus, enabled: boolean) {
+  const size = status === 'OPEN' ? OpenIncidentPageSize : IncidentHistoryPageSize
   return useInfiniteQuery({
-    queryKey: [`${scope.kind}-incidents`, organizationId, scope.id, 'RESOLVED'],
-    queryFn: ({ pageParam }) => getScopedIncidents(organizationId, scope, 'RESOLVED', IncidentHistoryPageSize, pageParam),
-    initialPageParam: undefined as Pick<IncidentListItemResponse, 'openedAt' | 'id'> | undefined,
-    getNextPageParam: lastPage => lastPage.length < IncidentHistoryPageSize ? undefined : lastPage[lastPage.length - 1],
+    queryKey: [`${scope.kind}-incidents`, organizationId, scope.id, status],
+    queryFn: ({ pageParam }) => getScopedIncidents(organizationId, scope, status, size, pageParam),
+    initialPageParam: undefined as IncidentCursor | undefined,
+    getNextPageParam: lastPage => nextIncidentCursor(lastPage, size),
     enabled,
   })
 }

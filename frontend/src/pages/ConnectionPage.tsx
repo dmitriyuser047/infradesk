@@ -16,7 +16,7 @@ import { formatScheduleInterval, formatSyncDuration, getConnectionScopeLabel,
 import { SyncStatusBadge } from '../components/connections/SyncStatusBadge'
 import { IncidentList } from '../components/incidents/IncidentList'
 import { InfrastructureContextPath, type ContextPathItem } from '../components/infrastructure/InfrastructureContextPath'
-import { environmentPath, originQuery, projectPath, workspaceQuery } from '../components/infrastructure/infrastructureLinks'
+import { environmentPath, originPath, originQuery, projectPath, readOrigin, workspaceQuery } from '../components/infrastructure/infrastructureLinks'
 import { groupResourcesByEnvironment } from '../components/infrastructure/resourceGroups'
 import { ScopedIncidentsPanel } from '../components/infrastructure/ScopedIncidentsPanel'
 import { AppShell } from '../components/layout/AppShell'
@@ -64,7 +64,12 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
   const canManage = permissions.can('manageConnections')
   const canSync = permissions.can('runConnectionSync')
   const connectionBase = `/organizations/${encodeURIComponent(organizationId)}/connections`
-  const back = `${connectionBase}${context}`
+  // Back to the resource or incident this connection was opened from, otherwise to the list.
+  const origin = readOrigin(searchParams)
+  const backLink = origin && origin.kind !== 'connection'
+    ? { label: origin.kind === 'incident' ? i18n.t.incidents.page.crumb : i18n.t.infrastructure.resource,
+      to: originPath(organizationId, origin, context) }
+    : { label: t.back, to: `${connectionBase}${context}` }
   // Links out of this page remember it, so "back" on the resource or incident returns here.
   const linkQuery = originQuery(searchParams, { kind: 'connection', id: connectionId })
   const selectTab = (next: Tab) => setSearchParams(previous => {
@@ -74,9 +79,9 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
     return updated
   }, { replace: true })
 
-  if (connectionQuery.isPending) return <AppShell><PageLoading title={t.loading} back={{ label: t.back, to: back }} label={t.loading} /></AppShell>
+  if (connectionQuery.isPending) return <AppShell><PageLoading title={t.loading} back={backLink} label={t.loading} /></AppShell>
   if (connectionQuery.isError || !connectionQuery.data) {
-    return <AppShell><PageUnavailable back={{ label: t.back, to: back }} onRetry={() => connectionQuery.refetch()} error={connectionQuery.error}
+    return <AppShell><PageUnavailable back={backLink} onRetry={() => connectionQuery.refetch()} error={connectionQuery.error}
       notFound={connectionQuery.error instanceof ApiError && connectionQuery.error.code === 'CONNECTION_NOT_FOUND'}
       notFoundTitle={t.notFound} errorTitle={t.loadError} /></AppShell>
   }
@@ -100,7 +105,7 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
     <InfrastructureContextPath items={connectionPathItems(organizationId, connection, projectsQuery.data, environmentsQuery.data)} />
     <WorkspaceHeader title={connection.name}
       subtitle={`${getConnectorTypeLabel(connection.connectorType, i18n)} · ${getConnectionScopeLabel(connection.scope, i18n)} · ${connection.code}`}
-      back={{ label: t.back, to: back }} status={<ConnectionStatusBadge active={connection.active} />}
+      back={backLink} status={<ConnectionStatusBadge active={connection.active} />}
       actions={<>
         {syncAction}
         {canManage && connection.active && connection.connectorType === 'SSH' ? <>
@@ -108,7 +113,7 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
           <details className="toolbar-overflow"><summary aria-label={t.moreActions} title={t.moreActions}>⋯</summary>
             <button type="button" className="danger-action" disabled={deactivate.isPending} onClick={() => {
               if (window.confirm(t.deactivateConfirm)) {
-                deactivate.mutate(undefined, { onSuccess: () => navigate(back) })
+                deactivate.mutate(undefined, { onSuccess: () => navigate(`${connectionBase}${context}`) })
               }
             }}>{t.deactivate}</button>
           </details>
@@ -133,7 +138,7 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
       {activeTab === 'resources' ? <ConnectionResources organizationId={organizationId} connection={connection}
         summary={summary} linkQuery={linkQuery} syncAction={syncAction} /> : null}
       {activeTab === 'incidents' ? <ScopedIncidentsPanel organizationId={organizationId} scope={{ kind: 'connection', id: connectionId }}
-        options={{ linkQuery }} /> : null}
+        options={{ linkQuery }} openTotal={summary?.openIncidentCount} /> : null}
       {activeTab === 'synchronization' ? <ConnectionSyncHistory organizationId={organizationId} connectionId={connectionId} context={context} /> : null}
     </div>
   </div></AppShell>

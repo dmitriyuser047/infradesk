@@ -79,7 +79,7 @@ object HttpModule {
           authorization
         ).routes <+>
         new IncidentRoutes(application.getIncident, application.listIncidents, transactionRunner,
-          authorization).routes <+>
+          authorization, loggers.readModels).routes <+>
         // Counts and the previews they summarize must agree: one read-only snapshot.
         new InfrastructureContextRoutes(
           application.getConnectionInfrastructureSummary,
@@ -90,7 +90,8 @@ object HttpModule {
           application.listResourceIncidents,
           application.listEnvironmentResourceSources,
           persistence.readOnlySnapshotRunner,
-          authorization
+          authorization,
+          loggers.readModels
         ).routes <+>
         new MonitorRuleRoutes(
           application.listMonitorRules,

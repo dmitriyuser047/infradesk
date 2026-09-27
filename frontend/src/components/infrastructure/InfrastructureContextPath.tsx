@@ -47,6 +47,8 @@ export function resourceContextPath(
     parentResource: ResourceReference | null
   },
   tail: readonly ContextPathItem[],
+  /** The query links to the connection and the parent carry, so their "back" returns here. */
+  linkQuery = '',
 ): ContextPathItem[] {
   const { project, environment, sourceConnections, parentResource } = context
   const items: ContextPathItem[] = [
@@ -54,10 +56,10 @@ export function resourceContextPath(
     { label: environment.name, to: environmentPath(organizationId, project.id, environment.id) },
   ]
   if (sourceConnections.length === 1) {
-    items.push({ label: sourceConnections[0].name, to: connectionPath(organizationId, sourceConnections[0].id) })
+    items.push({ label: sourceConnections[0].name, to: connectionPath(organizationId, sourceConnections[0].id, linkQuery) })
   }
   if (parentResource) {
-    items.push({ label: parentResource.name, to: resourcePath(organizationId, environment.id, parentResource.id) })
+    items.push({ label: parentResource.name, to: resourcePath(organizationId, environment.id, parentResource.id, linkQuery) })
   }
   return [...items, ...tail]
 }

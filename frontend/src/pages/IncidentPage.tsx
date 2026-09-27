@@ -7,7 +7,7 @@ import { IncidentStatusBadge } from '../components/incidents/IncidentStatusBadge
 import { formatIncidentDuration, getIncidentReasonPresentation } from '../components/incidents/incidentPresentation'
 import { InfrastructureContextPath, resourceContextPath } from '../components/infrastructure/InfrastructureContextPath'
 import {
-  connectionPath, environmentPath, projectPath, readOrigin, resourcePath, withTab, workspaceQuery,
+  connectionPath, environmentPath, originQuery, projectPath, readOrigin, resourcePath, withTab, workspaceQuery,
 } from '../components/infrastructure/infrastructureLinks'
 import { SourceConnectionLinks } from '../components/infrastructure/SourceConnections'
 import { AppShell } from '../components/layout/AppShell'
@@ -54,24 +54,25 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
   const metric = getMetricLabel(rule.metricCode, i18n)
   const title = incident.reason === IncidentReason.noData ? t.noDataTitle(metric)
     : incident.reason === IncidentReason.threshold ? t.thresholdTitle(metric) : reason.label
-  const workspace = workspaceQuery(searchParams)
-  const resourceLink = resourcePath(organizationId, incident.environment.id, resource.id, workspace)
+  // Links out of the incident remember it, so "back" on the resource or connection returns here.
+  const fromIncident = originQuery(searchParams, { kind: 'incident', id: incident.id })
+  const resourceLink = resourcePath(organizationId, incident.environment.id, resource.id, fromIncident)
   const sources = incident.sourceConnections
   const infra = i18n.t.infrastructure
 
   return <AppShell><div className="workspace-page">
     <InfrastructureContextPath items={resourceContextPath(organizationId, incident, [
-      { label: resource.name, to: resourceLink }, { label: t.crumb }])} />
+      { label: resource.name, to: resourceLink }, { label: t.crumb }], fromIncident)} />
     <WorkspaceHeader title={title} subtitle={t.subtitle(resource.name, typeLabel)}
       back={back} status={<IncidentStatusBadge status={incident.status} />}
       actions={<>
         <Link className="secondary-button" to={resourceLink}>{infra.openResource}</Link>
         {/* One source is the connection to open; several are listed below, none preferred. */}
-        {sources.length === 1 ? <Link className="secondary-button" to={connectionPath(organizationId, sources[0].id, workspace)}>
+        {sources.length === 1 ? <Link className="secondary-button" to={connectionPath(organizationId, sources[0].id, fromIncident)}>
           {infra.openConnection}</Link> : null}
         {/* Operations run from the resource page, with its confirmation; this only leads there. */}
         {operations === 'applicable' ? <Link className="secondary-button" to={resourcePath(organizationId, incident.environment.id,
-          resource.id, withTab(workspace, 'operations'))}>{infra.goToOperations}</Link> : null}
+          resource.id, withTab(fromIncident, 'operations'))}>{infra.goToOperations}</Link> : null}
       </>} />
     <div className="workspace-split detail-split">
       <WorkspaceSection title={t.overview}><PropertyGrid items={[
@@ -89,18 +90,18 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
         { label: t.affectedResource, value: <Link className="property-link" to={resourceLink}
           aria-label={infra.resourceLink(resource.name)}>{resource.name} · {typeLabel}</Link> },
         ...(incident.parentResource ? [{ label: infra.parent, value: <Link className="property-link"
-          to={resourcePath(organizationId, incident.environment.id, incident.parentResource.id, workspace)}>
+          to={resourcePath(organizationId, incident.environment.id, incident.parentResource.id, fromIncident)}>
           {incident.parentResource.name} · {i18n.t.resources.types[incident.parentResource.resourceTypeCode]
             ?? incident.parentResource.resourceTypeCode}</Link> }] : []),
         { label: sources.length > 1 ? infra.sources : infra.source,
-          value: <SourceConnectionLinks organizationId={organizationId} sources={sources} /> },
+          value: <SourceConnectionLinks organizationId={organizationId} sources={sources} linkQuery={fromIncident} /> },
         { label: infra.environment, value: <Link className="property-link"
           to={environmentPath(organizationId, incident.project.id, incident.environment.id)}>{incident.environment.name}</Link> },
         { label: infra.project, value: <Link className="property-link" to={projectPath(organizationId, incident.project.id)}>
           {incident.project.name}</Link> },
         // The rules of a resource live on its monitoring tab; that is the rule's page.
         { label: t.monitorRule, value: <Link className="property-link"
-          to={resourcePath(organizationId, incident.environment.id, resource.id, withTab(workspace, 'monitoring'))}>
+          to={resourcePath(organizationId, incident.environment.id, resource.id, withTab(fromIncident, 'monitoring'))}>
           {formatMonitorCondition(rule, i18n)}</Link> },
       ]} /></WorkspaceSection>
     </div>

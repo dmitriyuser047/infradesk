@@ -1,7 +1,8 @@
 package ru.bitec.app.ops
 package persistence.postgres
 
-import application.incident.ListIncidents
+import application.incident.{IncidentPageRequest, ListIncidents}
+import application.port.IncidentCursor
 import application.port.IncidentResourceReference
 import cats.effect.{IO, Ref}
 import cats.effect.unsafe.implicits.global
@@ -81,7 +82,7 @@ final class IncidentListIntegrationSpec extends FunSuite {
           val xa = Transactor.fromDriverManager[IO](
             "org.postgresql.Driver", world.config.url, world.config.user, world.config.password,
             Some(handler))
-          new DoobieTransactionRunner(xa).run(world.useCase.execute(world.org, None))
+          new DoobieTransactionRunner(xa).run(world.useCase.execute(world.org, IncidentPageRequest(None, None, IncidentPageRequest.MaxLimit)))
             .flatMap(items => counter.get.map(count => (count, items.size)))
         }
 
@@ -101,6 +102,44 @@ final class IncidentListIntegrationSpec extends FunSuite {
       } yield {
         assertEquals(small, (1, 1))
         assertEquals(large, (1, 61))
+      }
+    }
+  }
+
+  test("pages through every incident without loss or duplicate, even at one instant") {
+    withWorld { world =>
+      // Walks the whole list a page at a time, the way the incident list does.
+      def walk(status: Option[IncidentStatus], limit: Int): IO[List[UUID]] = {
+        def loop(before: Option[IncidentCursor], seen: List[UUID]): IO[List[UUID]] =
+          world.page(status, before, limit).flatMap { page =>
+            val ids = seen ++ page.map(_.incident.id)
+            page.lastOption match {
+              case Some(last) if page.size == limit => loop(Some(IncidentCursor(last.incident.openedAt, last.incident.id)), ids)
+              case _ => IO.pure(ids)
+            }
+          }
+        loop(None, List.empty)
+      }
+
+      for {
+        node <- world.node("busy")
+        // More open incidents than any old ceiling, most of them opened at the very same instant.
+        open <- (1 to 230).toList.traverse(index => world.incident(node, open = true, if (index % 3 == 0) Now.minusSeconds(index.toLong) else Now))
+        resolved <- (1 to 30).toList.traverse(_ => world.incident(node, open = false, Now))
+        foreignNode <- world.node("theirs", organization = world.foreignOrg)
+        _ <- (1 to 5).toList.traverse_(_ => world.incident(foreignNode, open = true, Now, organization = world.foreignOrg))
+        openIds <- walk(Some(IncidentStatus.Open), 50)
+        resolvedIds <- walk(Some(IncidentStatus.Resolved), 7)
+        allIds <- walk(None, 50)
+      } yield {
+        assertEquals(openIds.size, 230)
+        assertEquals(openIds.distinct.size, 230)
+        assertEquals(openIds.toSet, open.toSet)
+        assertEquals(resolvedIds.toSet, resolved.toSet)
+        assertEquals(resolvedIds.distinct.size, 30)
+        // Another organization's incidents are never on any page.
+        assertEquals(allIds.toSet, (open ++ resolved).toSet)
+        assertEquals(allIds.distinct.size, 260)
       }
     }
   }
@@ -138,7 +177,10 @@ final class IncidentListIntegrationSpec extends FunSuite {
 
     def run[A](program: ConnectionIO[A]): IO[A] = runner.run(program)
 
-    def list(status: Option[IncidentStatus]) = run(useCase.execute(org, status))
+    def list(status: Option[IncidentStatus]) = page(status, None, IncidentPageRequest.MaxLimit)
+
+    def page(status: Option[IncidentStatus], before: Option[IncidentCursor], limit: Int) =
+      run(useCase.execute(org, IncidentPageRequest(status, before, limit)))
 
     def setUp: IO[Unit] = run(List(org, foreignOrg).traverse_ { id =>
       val project = UUID.randomUUID()

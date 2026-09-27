@@ -14,9 +14,10 @@ final case class GetIncidentDetail[Tx[_]](query: IncidentListQuery[Tx]) {
     query.find(organizationId, incidentId)
 }
 
+/** The organization's incidents, one keyset page at a time: never the whole history at once. */
 final case class ListIncidents[Tx[_]](query: IncidentListQuery[Tx]) {
-  def execute(organizationId: UUID, status: Option[IncidentStatus]): Tx[List[IncidentListItem]] =
-    query.list(organizationId, status)
+  def execute(organizationId: UUID, page: IncidentPageRequest): Tx[List[IncidentListItem]] =
+    query.list(organizationId, page.status, page.before, page.limit)
 }
 
 /** One page of incidents, however it was filtered. */

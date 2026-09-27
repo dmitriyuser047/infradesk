@@ -8,16 +8,18 @@ import { connectionPath } from './infrastructureLinks'
  * Every connection a resource was discovered through, each a link. The order is the backend's
  * (by name); none is marked as the primary one, because the model has no such thing.
  */
-export function SourceConnectionLinks({ organizationId, sources }: {
+export function SourceConnectionLinks({ organizationId, sources, linkQuery = '' }: {
   organizationId: string
   sources: readonly SourceConnection[]
+  /** The query each link carries, so the connection's "back" returns to this page. */
+  linkQuery?: string
 }) {
   const i18n = useI18n()
   const t = i18n.t.infrastructure
   if (sources.length === 0) return <span className="muted-cell">{t.noSource}</span>
   return <ul className="source-list">
     {sources.map(source => <li key={source.id}>
-      <Link className="property-link" to={connectionPath(organizationId, source.id)} aria-label={t.connectionLink(source.name)}>
+      <Link className="property-link" to={connectionPath(organizationId, source.id, linkQuery)} aria-label={t.connectionLink(source.name)}>
         {source.name}</Link>
       <span className="source-meta"> · {i18n.t.connections.connectorTypes[source.connectorType] ?? source.connectorType}
         {source.active ? null : ` · ${t.inactive}`}</span>

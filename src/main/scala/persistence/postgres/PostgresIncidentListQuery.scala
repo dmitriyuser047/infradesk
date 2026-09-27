@@ -34,8 +34,13 @@ import PostgresIncidentListQuery.{ContextColumns, groupSources}
   */
 final class PostgresIncidentListQuery extends IncidentListQuery[ConnectionIO] {
 
-  override def list(organizationId: UUID, status: Option[IncidentStatus]): ConnectionIO[List[IncidentListItem]] =
-    run(organizationId, statusFilter(status), None)
+  override def list(
+    organizationId: UUID,
+    status: Option[IncidentStatus],
+    before: Option[IncidentCursor],
+    limit: Int
+  ): ConnectionIO[List[IncidentListItem]] =
+    run(organizationId, statusFilter(status) ++ cursorFilter(before), Some(limit))
 
   override def listByConnection(
     organizationId: UUID,

@@ -30,19 +30,37 @@ export function incidentPath(organizationId: string, incidentId: string, query =
 }
 
 /**
- * Where a detail page was opened from, when that was another detail page. It only decides where
- * "back" leads; without it every page falls back to its own deterministic parent.
+ * Where a detail page was opened from, when that was another detail page: only the immediate
+ * logical parent, never a history. It decides where "back" leads; without it every page falls back
+ * to its own deterministic parent. Identifiers only — names are never put in a URL.
  */
-export type Origin = { kind: 'connection'; id: string } | { kind: 'resource'; id: string; environmentId: string }
+export type Origin =
+  | { kind: 'connection'; id: string }
+  | { kind: 'resource'; id: string; environmentId: string }
+  | { kind: 'incident'; id: string }
 
-export const OriginParams = { connection: 'fromConnection', resource: 'fromResource', environment: 'fromEnvironment' } as const
+export const OriginParams = {
+  connection: 'fromConnection', resource: 'fromResource', environment: 'fromEnvironment', incident: 'fromIncident',
+} as const
 
 export function readOrigin(params: URLSearchParams): Origin | null {
   const connection = params.get(OriginParams.connection)
   if (connection) return { kind: 'connection', id: connection }
+  const incident = params.get(OriginParams.incident)
+  if (incident) return { kind: 'incident', id: incident }
   const resource = params.get(OriginParams.resource)
   const environment = params.get(OriginParams.environment)
   return resource && environment ? { kind: 'resource', id: resource, environmentId: environment } : null
+}
+
+/** Where "back" to an origin leads: the page it names, on the tab the link was followed from. */
+export function originPath(organizationId: string, origin: Origin, workspace: string, tab?: string): string {
+  const query = tab ? withTab(workspace, tab) : workspace
+  switch (origin.kind) {
+    case 'connection': return connectionPath(organizationId, origin.id, query)
+    case 'resource': return resourcePath(organizationId, origin.environmentId, origin.id, query)
+    case 'incident': return incidentPath(organizationId, origin.id, workspace)
+  }
 }
 
 /**
@@ -53,6 +71,7 @@ export function originQuery(current: URLSearchParams, origin: Origin): string {
   const values: Record<string, string | null> = { project: current.get('project'), environment: current.get('environment') }
   if (!values.project) values.environment = null
   if (origin.kind === 'connection') values[OriginParams.connection] = origin.id
+  else if (origin.kind === 'incident') values[OriginParams.incident] = origin.id
   else {
     values[OriginParams.resource] = origin.id
     values[OriginParams.environment] = origin.environmentId

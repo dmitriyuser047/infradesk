@@ -53,7 +53,7 @@ function queryClient(): QueryClient {
     project: { id: 'project', name: 'SvinPeak' }, environment: { id: 'env', name: 'Production', kind: 'PROD' },
     monitorRule: { id: 'rule', metricCode: 'CPU_USAGE_PERCENT', operator: 'GREATER_THAN', threshold: 85, forSeconds: 300, noDataSeconds: 900 },
     parentResource: null, sourceConnections: [{ id: 'connection', name: 'Finnish Node', connectorType: 'SSH', active: true }] }
-  client.setQueryData(['incidents', 'org', 'OPEN'], [incident])
+  client.setQueryData(['incidents', 'org', 'OPEN'], { pages: [[incident]], pageParams: [undefined] })
   client.setQueryData(['incident', 'org', 'incident'], incident)
   client.setQueryData(['notification-channel', 'org', 'channel'], {
     id: 'channel', name: 'Ops Telegram', type: 'TELEGRAM', enabled: true,

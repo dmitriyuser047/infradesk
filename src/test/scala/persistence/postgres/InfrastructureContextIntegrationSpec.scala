@@ -114,6 +114,42 @@ final class InfrastructureContextIntegrationSpec extends FunSuite {
     }
   }
 
+  test("open incidents of a connection page past any ceiling, once each, whatever the source fan-out") {
+    withWorld { world =>
+      def walk(connection: UUID, limit: Int): IO[List[UUID]] = {
+        def loop(before: Option[IncidentCursor], seen: List[UUID]): IO[List[UUID]] =
+          world.run(world.connectionIncidents.execute(world.org, connection,
+            page(Some(IncidentStatus.Open), limit, before))).flatMap { result =>
+            val rows = result.getOrElse(fail("connection not found"))
+            val ids = seen ++ rows.map(_.incident.id)
+            rows.lastOption match {
+              case Some(last) if rows.size == limit => loop(Some(IncidentCursor(last.incident.openedAt, last.incident.id)), ids)
+              case _ => IO.pure(ids)
+            }
+          }
+        loop(None, List.empty)
+      }
+
+      for {
+        finnish <- world.connection("Finnish Node")
+        prometheus <- world.connection("Prometheus")
+        backend <- world.container("backend")
+        // Two sources: the lateral join must not turn one incident into two rows.
+        _ <- world.discover(finnish, backend)
+        _ <- world.discover(prometheus, backend)
+        open <- (1 to 237).toList.traverse(index => world.incident(backend, open = true, if (index % 4 == 0) Now.minusSeconds(index.toLong) else Now))
+        _ <- world.incident(backend, open = false, Now)
+        seen <- walk(finnish, 50)
+        first <- world.run(world.connectionIncidents.execute(world.org, finnish, page(Some(IncidentStatus.Open), 50)))
+      } yield {
+        assertEquals(seen.size, 237)
+        assertEquals(seen.distinct.size, 237)
+        assertEquals(seen.toSet, open.toSet)
+        assertEquals(first.toList.flatten.head.sourceConnections.map(_.name), List("Finnish Node", "Prometheus"))
+      }
+    }
+  }
+
   test("a resource context names its place, its parent and every source connection") {
     withWorld { world =>
       for {

@@ -42,6 +42,19 @@ final class IncidentRoutesSpec extends FunSuite {
     val listed=run(f,s"/api/v1/organizations/$Org/incidents")._2.asArray.flatMap(_.headOption).getOrElse(fail("no incident")).hcursor
     assertEquals(listed.downField("environment").get[String]("name"),Right("Production"))
   }
+  test("lists one keyset page and validates its cursor and size") {
+    val f=fixture(List(open,resolved,noData))
+    val first=run(f,s"/api/v1/organizations/$Org/incidents?limit=2")
+    assertEquals(first._2.asArray.map(_.size),Some(2))
+    val next=run(f,s"/api/v1/organizations/$Org/incidents?status=OPEN&limit=1&beforeOpenedAt=$Now&beforeId=${open.id}")
+    assertEquals(next._1.status,Status.Ok)
+    assertEquals(f._2.pages,List(None->2,Some(IncidentCursor(Now,open.id))->1))
+    // Without a limit the default page applies: never the whole history.
+    run(f,s"/api/v1/organizations/$Org/incidents")
+    assertEquals(f._2.pages.last,None->50)
+    assertEquals(run(f,s"/api/v1/organizations/$Org/incidents?limit=201")._1.status,Status.BadRequest)
+    assertEquals(run(f,s"/api/v1/organizations/$Org/incidents?beforeId=${open.id}")._1.status,Status.BadRequest)
+  }
   test("validates list status and returns empty list") {
     val invalid=run(fixture(List.empty),s"/api/v1/organizations/$Org/incidents?status=BAD"); val empty=run(fixture(List.empty),s"/api/v1/organizations/$Org/incidents")
     assertEquals(invalid._1.status,Status.BadRequest); assertEquals(invalid._2.hcursor.get[String]("code"),Right("INVALID_REQUEST")); assertEquals(empty._2.asArray,Some(Vector.empty))
@@ -59,12 +72,13 @@ final class IncidentRoutesSpec extends FunSuite {
     val badOrg=run(fixture(List.empty),s"/api/v1/organizations/bad/incidents"); val badId=run(fixture(List.empty),s"/api/v1/organizations/$Org/incidents/bad"); val failed=run(fixture(List.empty,Some(new IllegalStateException("sql secret"))),s"/api/v1/organizations/$Org/incidents")
     assertEquals(badOrg._1.status,Status.BadRequest);assertEquals(badId._1.status,Status.BadRequest);assertEquals(failed._1.status,Status.InternalServerError);assert(!failed._2.noSpaces.contains("sql secret"))
   }
-  private def fixture(values:List[Incident], failure:Option[Throwable]=None)={val r=new Repo(values,failure);val t=new Runner; (new IncidentRoutes[IO](GetIncidentDetail(r:IncidentListQuery[IO]),ListIncidents(r:IncidentListQuery[IO]),t,support.AuthorizationFixtures.authorization),r,t)}
+  private def fixture(values:List[Incident], failure:Option[Throwable]=None)={val r=new Repo(values,failure);val t=new Runner; (new IncidentRoutes[IO](GetIncidentDetail(r:IncidentListQuery[IO]),ListIncidents(r:IncidentListQuery[IO]),t,support.AuthorizationFixtures.authorization,org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.incidents")),r,t)}
   private def run(f:(IncidentRoutes[IO],Repo,Runner), path:String)={val r=support.AuthorizationFixtures.authorized(f._1.routes.orNotFound).run(Request[IO](Method.GET,Uri.unsafeFromString(path))).unsafeRunSync();(r,r.as[Json].unsafeRunSync())}
   private final class Runner extends TransactionRunner[IO,IO]{var calls=0;def run[A](p:IO[A])=IO{calls+=1}*>p}
   private final class Repo(values:List[Incident], failure:Option[Throwable]) extends IncidentRepository[IO] with IncidentListQuery[IO] {
     var listCalls=0
-    def list(o:UUID,s:Option[IncidentStatus])=IO{listCalls+=1}*>findByOrganization(o,s).map(_.map(item))
+    var pages=List.empty[(Option[IncidentCursor],Int)]
+    def list(o:UUID,s:Option[IncidentStatus],b:Option[IncidentCursor],l:Int)=IO{listCalls+=1;pages=pages:+(b->l)}*>findByOrganization(o,s).map(_.take(l).map(item))
     def listByConnection(o:UUID,c:UUID,s:Option[IncidentStatus],b:Option[IncidentCursor],l:Int)=IO.pure(List.empty[IncidentListItem])
     def listByResource(o:UUID,r:UUID,s:Option[IncidentStatus],b:Option[IncidentCursor],l:Int)=IO.pure(List.empty[IncidentListItem])
     def find(o:UUID,id:UUID)=findById(o,id).map(_.map(item))

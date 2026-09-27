@@ -1,13 +1,14 @@
 import { CheckCircle2, History, Siren } from 'lucide-react'
 import { useSearchParams, useParams } from 'react-router-dom'
 
-import { useIncidents } from '../api/incidents'
+import { useIncidentPages } from '../api/incidents'
 import { AppShell } from '../components/layout/AppShell'
 import {
   EmptyWorkspaceState, InlineAlert, SegmentedControl, WorkspaceHeader, WorkspaceSection,
 } from '../components/layout/WorkspacePrimitives'
 import { useNow } from '../components/layout/useNow'
 import { IncidentList } from '../components/incidents/IncidentList'
+import { loadedCount, ShowMore } from '../components/infrastructure/ScopedIncidentsPanel'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import { IncidentStatus } from '../types/incident'
@@ -29,8 +30,9 @@ export function IncidentsPage() {
 const emptyIcons = { OPEN: CheckCircle2, RESOLVED: History, ALL: Siren } as const
 
 /**
- * The incident list of an organization. The filter is the `status` the list request already
- * takes, kept in the URL; each choice is one request, however many resources the incidents name.
+ * The incident list of an organization, a page at a time. The filter is the `status` the list
+ * request already takes, kept in the URL; each filter pages from its own first page, and each page
+ * is one request however many resources its incidents name.
  */
 function IncidentsContent({ organizationId }: { organizationId: string }) {
   const i18n = useI18n()
@@ -38,9 +40,9 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const filter = parseFilter(searchParams.get('status'))
   const queryStatus = filter === 'ALL' ? undefined : filter
-  const incidentsQuery = useIncidents(organizationId, queryStatus)
+  const incidentsQuery = useIncidentPages(organizationId, queryStatus)
   const now = useNow(60_000)
-  const incidents = incidentsQuery.data
+  const incidents = incidentsQuery.data?.pages.flat()
 
   const selectFilter = (next: Filter) => {
     setSearchParams(previous => { const updated = new URLSearchParams(previous); updated.set('status', next); return updated })
@@ -51,7 +53,7 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
     <AppShell>
       <div className="workspace-page">
         <WorkspaceHeader title={t.title} subtitle={t.subtitle} />
-        <WorkspaceSection title={t.section[filter]} actions={incidents ? <span className="resource-count">{t.count(incidents.length)}</span> : null}>
+        <WorkspaceSection title={t.section[filter]} actions={incidents ? <span className="resource-count">{loadedCount(incidents.length, incidentsQuery.hasNextPage, i18n)}</span> : null}>
           <div className="filter-bar">
             <SegmentedControl name="incident-status" label={t.filterLabel} value={filter} onChange={selectFilter}
               options={(['OPEN', 'RESOLVED', 'ALL'] as const).map(value => ({ value, label: t.filters[value] }))} />
@@ -74,6 +76,7 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
           {incidents !== undefined && incidents.length > 0 ? (
             <IncidentList organizationId={organizationId} incidents={incidents} now={now} />
           ) : null}
+          <ShowMore query={incidentsQuery} />
         </WorkspaceSection>
       </div>
     </AppShell>

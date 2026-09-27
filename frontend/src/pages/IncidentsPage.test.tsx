@@ -53,7 +53,7 @@ describe('incidents page', () => {
     expect(await screen.findByText(`node-${count - 1}`)).toBeTruthy()
     expect(rows()).toHaveLength(count)
     // One read for the list, however many resources it mentions: no request per row.
-    expect(urls(fetchMock)).toEqual([`${list}?status=OPEN`])
+    expect(urls(fetchMock)).toEqual([`${list}?limit=50&status=OPEN`])
   })
 
   it('opens on the open incidents and asks for each filter once, through the status the list already takes', async () => {
@@ -71,7 +71,7 @@ describe('incidents page', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Все' }))
     await waitFor(() => expect(rows()).toHaveLength(2))
 
-    expect(urls(fetchMock)).toEqual([`${list}?status=OPEN`, `${list}?status=RESOLVED`, list])
+    expect(urls(fetchMock)).toEqual([`${list}?limit=50&status=OPEN`, `${list}?limit=50&status=RESOLVED`, `${list}?limit=50`])
   })
 
   it('tells a healthy "no open incidents" apart from the other empty lists', async () => {
@@ -130,5 +130,38 @@ describe('incidents page', () => {
     expect(await screen.findByText('Не удалось обновить список инцидентов')).toBeTruthy()
     expect(screen.getByText('node-0')).toBeTruthy()
     expect(screen.getByText(/Показан список на/)).toBeTruthy()
+  })
+
+  it.each(['OPEN', 'RESOLVED', 'ALL'] as const)('pages the %s list: a full page offers more, the next continues after its last row', async filter => {
+    const status = filter === 'ALL' ? 'OPEN' : filter
+    // Every incident opened at the same instant: only the id tells the pages apart.
+    const first = Array.from({ length: 50 }, (_, index) => incident(index, status))
+    const second = Array.from({ length: 3 }, (_, index) => incident(50 + index, status))
+    const fetchMock = renderPage({ path: `/organizations/org/incidents?status=${filter}`,
+      answer: url => json(url.includes('beforeId=') ? second : first) })
+    await screen.findByText('node-49')
+    expect(screen.getByText('50+ инцидентов')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Показать ещё' }))
+    expect(await screen.findByText('node-52')).toBeTruthy()
+    expect(rows()).toHaveLength(53)
+    // A short page is the last one: no more button, and the count is now exact.
+    expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull()
+    expect(screen.getByText('53 инцидента')).toBeTruthy()
+    const next = new URL(urls(fetchMock)[1], 'http://localhost').searchParams
+    expect(next.get('beforeOpenedAt')).toBe('2026-09-25T10:00:00Z')
+    expect(next.get('beforeId')).toBe('incident-49')
+    expect(next.get('status')).toBe(filter === 'ALL' ? null : filter)
+  })
+
+  it('starts another filter from its own first page, not from the cursor of the previous one', async () => {
+    const fetchMock = renderPage({ answer: url => json(url.includes('beforeId=') ? []
+      : Array.from({ length: 50 }, (_, index) => incident(index, url.includes('RESOLVED') ? 'RESOLVED' : 'OPEN'))) })
+    await screen.findByText('node-49')
+    fireEvent.click(screen.getByRole('button', { name: 'Показать ещё' }))
+    await waitFor(() => expect(urls(fetchMock)).toHaveLength(2))
+    fireEvent.click(screen.getByRole('radio', { name: 'Закрытые' }))
+    await waitFor(() => expect(urls(fetchMock)).toHaveLength(3))
+    expect(urls(fetchMock)[2]).toBe(`${list}?limit=50&status=RESOLVED`)
   })
 })

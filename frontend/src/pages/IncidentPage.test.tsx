@@ -63,15 +63,17 @@ describe('incident page', () => {
     expect(within(path).getAllByRole('link').map(link => [link.textContent, link.getAttribute('href')])).toEqual([
       ['SvinPeak', '/organizations/org/resources?project=project'],
       ['Production', '/organizations/org/environments/env?project=project&environment=env'],
-      ['Finnish Node', '/organizations/org/connections/finnish'],
-      ['fin-prod-01', '/organizations/org/environments/env/resources/node'],
-      ['backend', '/organizations/org/environments/env/resources/backend'],
+      // Links out of the incident remember it, so their "back" returns to it.
+      ['Finnish Node', '/organizations/org/connections/finnish?fromIncident=cpu'],
+      ['fin-prod-01', '/organizations/org/environments/env/resources/node?fromIncident=cpu'],
+      ['backend', '/organizations/org/environments/env/resources/backend?fromIncident=cpu'],
     ])
     expect(screen.getByRole('link', { name: 'Open resource backend' }).getAttribute('href'))
-      .toBe('/organizations/org/environments/env/resources/backend')
-    expect(screen.getByRole('link', { name: 'Open connection' }).getAttribute('href')).toBe('/organizations/org/connections/finnish')
+      .toBe('/organizations/org/environments/env/resources/backend?fromIncident=cpu')
+    expect(screen.getByRole('link', { name: 'Open connection' }).getAttribute('href'))
+      .toBe('/organizations/org/connections/finnish?fromIncident=cpu')
     expect(screen.getByRole('link', { name: 'CPU usage > 85% for 5m' }).getAttribute('href'))
-      .toBe('/organizations/org/environments/env/resources/backend?tab=monitoring')
+      .toBe('/organizations/org/environments/env/resources/backend?fromIncident=cpu&tab=monitoring')
     // Operations are only led to when the resource offers them.
     expect(screen.queryByRole('link', { name: 'Go to operations' })).toBeNull()
   })
@@ -79,7 +81,7 @@ describe('incident page', () => {
   it('offers operations only as a way to the resource page, where they are confirmed', async () => {
     renderPage(incident, { operations: ['CONTAINER_RESTART'] })
     expect((await screen.findByRole('link', { name: 'Go to operations' })).getAttribute('href'))
-      .toBe('/organizations/org/environments/env/resources/backend?tab=operations')
+      .toBe('/organizations/org/environments/env/resources/backend?fromIncident=cpu&tab=operations')
   })
 
   it('keeps every source connection and pretends none is the one', async () => {

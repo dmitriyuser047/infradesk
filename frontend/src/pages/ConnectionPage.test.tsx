@@ -50,6 +50,7 @@ const summary: ConnectionInfrastructureSummary = {
 
 interface Answers {
   connection?: ConnectionResponse
+  open?: (url: string) => IncidentListItemResponse[]
   summary?: ConnectionInfrastructureSummary | 'fail'
 }
 
@@ -65,7 +66,7 @@ function renderPage(answers: Answers = {}, options: { locale?: Locale; role?: 'O
       return answers.summary === 'fail' ? json({ code: 'INTERNAL_ERROR', message: 'x' }, 500) : json(answers.summary ?? summary)
     }
     if (path.endsWith('/finnish/resources')) return json([node, backend, redis])
-    if (path.includes('/finnish/incidents?status=OPEN')) return json([incident])
+    if (path.includes('/finnish/incidents?status=OPEN')) return json(answers.open ? answers.open(path) : [incident])
     if (path.includes('/finnish/incidents?status=RESOLVED')) return json([])
     if (path.endsWith('/sync-sessions')) return json([synced])
     return json(answers.connection ?? connection())
@@ -120,7 +121,7 @@ describe('connection workspace', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Incidents 1' }))
     expect(await screen.findByRole('list', { name: 'Open incidents' })).toBeTruthy()
     expect(await screen.findByText('No resolved incidents yet')).toBeTruthy()
-    await waitFor(() => expect(requests).toContain('/connections/finnish/incidents?status=OPEN&limit=200'))
+    await waitFor(() => expect(requests).toContain('/connections/finnish/incidents?status=OPEN&limit=50'))
     expect(requests).toContain('/connections/finnish/incidents?status=RESOLVED&limit=20')
     // The environment and source of each row come from the list response.
     expect(screen.getByText('Production · Finnish Node')).toBeTruthy()
@@ -160,5 +161,35 @@ describe('connection workspace', () => {
     expect(await screen.findByRole('tab', { name: 'Ресурсы 3' })).toBeTruthy()
     expect(screen.getByText('Открытые инциденты', { selector: 'dt' })).toBeTruthy()
     expect(screen.getByText('1 открытый инцидент')).toBeTruthy()
+  })
+
+  it('pages open incidents and keeps the authoritative total, never the loaded count', async () => {
+    const opened = (index: number) => ({ ...incident, id: `open-${index}`, resource: { ...incident.resource, name: `svc-${index}` } })
+    const requests = renderPage({ summary: { ...summary, openIncidentCount: 237 },
+      open: url => url.includes('beforeId=') ? Array.from({ length: 50 }, (_, index) => opened(50 + index))
+        : Array.from({ length: 50 }, (_, index) => opened(index)) }, { path: '/organizations/org/connections/finnish?tab=incidents' })
+    expect(await screen.findByText('50 of 237')).toBeTruthy()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show more' })[0])
+    expect(await screen.findByText('100 of 237')).toBeTruthy()
+    // The page continues after the exact last row, even though every row opened at the same instant.
+    const next = requests.find(path => path.includes('beforeId='))
+    expect(next).toContain('beforeId=open-49')
+    expect(next).toContain(`beforeOpenedAt=${encodeURIComponent(incident.openedAt)}`)
+  })
+
+  it('returns to the resource or incident it was opened from, and to the list otherwise', async () => {
+    renderPage({}, { path: '/organizations/org/connections/finnish?fromResource=backend&fromEnvironment=env' })
+    await screen.findByRole('heading', { level: 1, name: 'Finnish Node' })
+    expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/environments/env/resources/backend')
+    cleanup()
+
+    renderPage({}, { path: '/organizations/org/connections/finnish?fromIncident=cpu' })
+    await screen.findByRole('heading', { level: 1, name: 'Finnish Node' })
+    expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/incidents/cpu')
+    cleanup()
+
+    renderPage()
+    await screen.findByRole('heading', { level: 1, name: 'Finnish Node' })
+    expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/connections')
   })
 })

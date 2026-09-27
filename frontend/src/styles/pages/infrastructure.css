@@ -40,6 +40,12 @@
 /* Source connections: every one listed, none singled out. */
 .source-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .source-meta { color: var(--text-tertiary); font-size: var(--font-size-small); }
+/* Several sources, on request: a quiet text button, the list opening below it. */
+.source-disclosure summary { width: auto; padding: 0 var(--space-3); color: var(--text-secondary); font-size: var(--font-size-small); font-weight: 500; }
+.source-disclosure[open] > .source-list {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 220px; padding: var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-md);
+}
 
 /* An incident row's place: environment and sources, as quiet metadata. */
 .incident-context { overflow: hidden; color: var(--text-tertiary); font-size: var(--font-size-small); text-overflow: ellipsis; white-space: nowrap; }

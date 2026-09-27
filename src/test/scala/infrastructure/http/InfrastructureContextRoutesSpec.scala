@@ -136,7 +136,7 @@ final class InfrastructureContextRoutesSpec extends FunSuite {
       guard(Option.when(o == Org && r == ResourceId)(ResourceContextView(location, None, sources, List.empty, 0, 1)))
     def environmentResourceSources(o: UUID, e: UUID) = guard(List(ResourceSources(ResourceId, sources)))
 
-    def list(o: UUID, s: Option[IncidentStatus]) = guard(List(incident))
+    def list(o: UUID, s: Option[IncidentStatus], b: Option[IncidentCursor], l: Int) = guard(List(incident))
     def listByConnection(o: UUID, c: UUID, s: Option[IncidentStatus], b: Option[IncidentCursor], l: Int) = guard(List(incident))
     def listByResource(o: UUID, r: UUID, s: Option[IncidentStatus], b: Option[IncidentCursor], l: Int) = guard(List(incident))
     def find(o: UUID, id: UUID) = guard(Option.when(id == IncidentId)(incident))
@@ -157,7 +157,8 @@ final class InfrastructureContextRoutesSpec extends FunSuite {
       ListResourceIncidents[IO](query, query),
       ListEnvironmentResourceSources[IO](query),
       new Runner,
-      support.AuthorizationFixtures.authorization
+      support.AuthorizationFixtures.authorization,
+      org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.read-models")
     )
     val response = support.AuthorizationFixtures.authorized(routes.routes.orNotFound)
       .run(Request[IO](Method.GET, Uri.unsafeFromString(path))).unsafeRunSync()
