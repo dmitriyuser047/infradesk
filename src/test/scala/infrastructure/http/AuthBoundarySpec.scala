@@ -11,7 +11,7 @@ import application.account.{
   UpdateAccountProfile
 }
 import application.audit.AuditRecorder
-import application.auth.{Authentication, BCryptPasswordHasher, Login, SessionTokens}
+import application.auth.{AuthRateLimitSettings, Authentication, BCryptPasswordHasher, Login, LoginThrottleHasher, SessionTokens}
 import application.port.{AuditEventRepository, AuthSessionRepository, IdGenerator, MyOrganization, OrganizationMembershipRepository, TimeProvider, TransactionRunner, UserAccountRepository}
 import domain.audit.{AuditCursor, AuditEvent}
 import cats.effect.IO
@@ -298,8 +298,11 @@ final class AuthBoundarySpec extends FunSuite {
     val sessions = new Sessions(users)
     val memberships = new Memberships
     val authentication = new Authentication[IO](sessions, memberships, runner, tokens)
-    val loginService = new Login[IO](users, sessions, runner, passwordHasher, tokens, 3600)
-    val authRoutes = new AuthRoutes(loginService, authentication, AuthSettings(3600, secure))
+    val loginService = new Login[IO](users, sessions, new support.InMemoryLoginThrottle,
+      new LoginThrottleHasher(Array.fill(32)(3.toByte)), AuthRateLimitSettings.default,
+      runner, passwordHasher, tokens,
+      new TimeProvider[IO] { override def now: IO[Instant] = IO(Instant.now()) }, 3600)
+    val authRoutes = new AuthRoutes(loginService, authentication, AuthSettings(3600, secure, trustForwardedFor = false))
     // Present so the boundary is wired as in production; this spec exercises routing and access,
     // not the account handlers themselves (those have their own spec).
     val accountRoutes = {
@@ -319,7 +322,7 @@ final class AuthBoundarySpec extends FunSuite {
         new RevokeUserSession[IO](sessions, accountAudit, runner, time),
         new RevokeOtherUserSessions[IO](sessions, accountAudit, runner, time),
         new RevokeAllUserSessions[IO](sessions, accountAudit, runner, time),
-        AuthSettings(3600, secure),
+        AuthSettings(3600, secure, trustForwardedFor = false),
         org.typelevel.log4cats.slf4j.Slf4jLogger.getLoggerFromName[IO]("test.account"))
     }
     // The routes declare what they need, exactly as the real ones do; the boundary only supplies

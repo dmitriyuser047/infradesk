@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package infrastructure.config
 
-import application.auth.BootstrapConfig
+import application.auth.{AuthRateLimitSettings, BootstrapConfig}
 import cats.effect.IO
 import com.comcast.ip4s.{Host, Port}
 import infrastructure.database.DatabaseConfig
@@ -58,6 +58,7 @@ final case class AppConfig(
   database: DatabaseConfig,
   http: HttpConfig,
   auth: AuthSettings,
+  loginRateLimit: AuthRateLimitSettings,
   bootstrap: Option[BootstrapConfig],
   secretEncryption: SecretEncryptionConfig,
   scheduler: SchedulerConfig,
@@ -73,12 +74,29 @@ object AppConfig {
       database <- DatabaseConfig.fromEnvironment(values)
       http <- parseHttp(values)
       auth <- AuthSettings.fromEnvironment(values)
+      loginRateLimit <- parseLoginRateLimit(values)
       bootstrap <- BootstrapConfig.fromEnvironment(values)
       secretEncryption <- SecretEncryptionConfig.fromEnvironment(values)
       scheduler <- parseScheduler(values)
       notification <- parseNotification(values)
-    } yield AppConfig(database, http, auth, bootstrap, secretEncryption, scheduler, notification,
-      EnvironmentSecrets.fromEnvironment(values))
+    } yield AppConfig(database, http, auth, loginRateLimit, bootstrap, secretEncryption, scheduler,
+      notification, EnvironmentSecrets.fromEnvironment(values))
+
+  private def parseLoginRateLimit(
+    values: Map[String, String]
+  ): Either[IllegalArgumentException, AuthRateLimitSettings] = {
+    val d = AuthRateLimitSettings.default
+    for {
+      idWindow <- positiveInt(values, "INFRADESK_AUTH_IDENTIFIER_WINDOW_SECONDS", d.identifierWindow.toSeconds.toInt)
+      idMax <- positiveInt(values, "INFRADESK_AUTH_IDENTIFIER_MAX_FAILURES", d.identifierMaxFailures)
+      idBlock <- positiveInt(values, "INFRADESK_AUTH_IDENTIFIER_BLOCK_SECONDS", d.identifierBlock.toSeconds.toInt)
+      srcWindow <- positiveInt(values, "INFRADESK_AUTH_SOURCE_WINDOW_SECONDS", d.sourceWindow.toSeconds.toInt)
+      srcMax <- positiveInt(values, "INFRADESK_AUTH_SOURCE_MAX_FAILURES", d.sourceMaxFailures)
+      srcBlock <- positiveInt(values, "INFRADESK_AUTH_SOURCE_BLOCK_SECONDS", d.sourceBlock.toSeconds.toInt)
+      retention <- positiveInt(values, "INFRADESK_AUTH_THROTTLE_RETENTION_SECONDS", d.retention.toSeconds.toInt)
+    } yield AuthRateLimitSettings(idWindow.seconds, idMax, idBlock.seconds, srcWindow.seconds, srcMax,
+      srcBlock.seconds, retention.seconds)
+  }
 
   private def parseHttp(values: Map[String, String]): Either[IllegalArgumentException, HttpConfig] = {
     val host = values.get("INFRADESK_HTTP_HOST") match {

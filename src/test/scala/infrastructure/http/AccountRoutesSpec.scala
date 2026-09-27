@@ -163,7 +163,7 @@ final class AccountRoutesSpec extends FunSuite {
       new RevokeUserSession[IO](sessions, accountAudit, runner, time),
       new RevokeOtherUserSessions[IO](sessions, accountAudit, runner, time),
       new RevokeAllUserSessions[IO](sessions, accountAudit, runner, time),
-      AuthSettings(3600, secureCookie = false),
+      AuthSettings(3600, secureCookie = false, trustForwardedFor = false),
       logger)
     Setup(routes, users, otherHash)
   }

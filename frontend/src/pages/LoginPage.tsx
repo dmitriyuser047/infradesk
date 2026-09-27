@@ -4,7 +4,15 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useLogin } from '../api/auth'
 import { ApiError } from '../api/httpClient'
 import { safeReturnPath } from '../components/auth/authPresentation'
-import { useI18n } from '../i18n'
+import { useI18n, type Messages } from '../i18n'
+
+/** A login failure is deliberately vague about the account, but a rate-limit is worth naming so a
+ * person knows to wait rather than keep trying. */
+function loginErrorMessage(error: unknown, t: Messages): string {
+  if (error instanceof ApiError && error.code === 'LOGIN_RATE_LIMITED') return t.auth.tooManyAttempts
+  if (error instanceof ApiError && error.code === 'INVALID_CREDENTIALS') return t.auth.invalidCredentials
+  return t.auth.unableToSignIn
+}
 
 export function LoginPage() {
   const { t } = useI18n()
@@ -34,8 +42,7 @@ export function LoginPage() {
           <input type="password" autoComplete="current-password" value={password} required onChange={(event) => setPassword(event.target.value)} />
         </label>
         {login.isError ? (
-          <p className="form-error" role="alert">{login.error instanceof ApiError && login.error.code === 'INVALID_CREDENTIALS'
-            ? t.auth.invalidCredentials : t.auth.unableToSignIn}</p>
+          <p className="form-error" role="alert">{loginErrorMessage(login.error, t)}</p>
         ) : null}
         <button className="primary-button" type="submit" disabled={login.isPending}>{t.auth.signIn}</button>
       </form>

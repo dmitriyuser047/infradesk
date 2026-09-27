@@ -48,6 +48,13 @@ final class AppConfigSpec extends FunSuite {
     assertEquals(config.http.port.value, 8080)
     assertEquals(config.auth.ttlSeconds, 604800L)
     assertEquals(config.auth.secureCookie, false)
+    assertEquals(config.auth.trustForwardedFor, false)
+    assertEquals(config.loginRateLimit.identifierWindow, 15.minutes)
+    assertEquals(config.loginRateLimit.identifierMaxFailures, 10)
+    assertEquals(config.loginRateLimit.identifierBlock, 15.minutes)
+    assertEquals(config.loginRateLimit.sourceWindow, 15.minutes)
+    assertEquals(config.loginRateLimit.sourceMaxFailures, 50)
+    assertEquals(config.loginRateLimit.sourceBlock, 15.minutes)
     assertEquals(config.bootstrap, None)
     assertEquals(config.scheduler.enabled, true)
     assertEquals(config.scheduler.pollInterval, 1.second)
@@ -123,6 +130,30 @@ final class AppConfigSpec extends FunSuite {
     assertInvalid("INFRADESK_AUTH_SESSION_TTL_SECONDS", "0")
     assertInvalid("INFRADESK_AUTH_SESSION_TTL_SECONDS", "nope")
     assertInvalid("INFRADESK_AUTH_COOKIE_SECURE", "yes")
+    assertInvalid("INFRADESK_TRUST_FORWARDED_FOR", "yes")
+  }
+
+  test("login throttle settings and trusted forwarding are explicit and typed") {
+    val config = AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_TRUST_FORWARDED_FOR" -> "true",
+      "INFRADESK_AUTH_IDENTIFIER_WINDOW_SECONDS" -> "600",
+      "INFRADESK_AUTH_IDENTIFIER_MAX_FAILURES" -> "7",
+      "INFRADESK_AUTH_IDENTIFIER_BLOCK_SECONDS" -> "120",
+      "INFRADESK_AUTH_SOURCE_WINDOW_SECONDS" -> "900",
+      "INFRADESK_AUTH_SOURCE_MAX_FAILURES" -> "42",
+      "INFRADESK_AUTH_SOURCE_BLOCK_SECONDS" -> "180",
+      "INFRADESK_AUTH_THROTTLE_RETENTION_SECONDS" -> "86400"
+    )).toOption.get
+
+    assert(config.auth.trustForwardedFor)
+    assertEquals(config.loginRateLimit.identifierWindow, 600.seconds)
+    assertEquals(config.loginRateLimit.identifierMaxFailures, 7)
+    assertEquals(config.loginRateLimit.identifierBlock, 120.seconds)
+    assertEquals(config.loginRateLimit.sourceWindow, 900.seconds)
+    assertEquals(config.loginRateLimit.sourceMaxFailures, 42)
+    assertEquals(config.loginRateLimit.sourceBlock, 180.seconds)
+    assertEquals(config.loginRateLimit.retention, 1.day)
+    assertInvalid("INFRADESK_AUTH_IDENTIFIER_MAX_FAILURES", "0")
   }
 
   test("partial bootstrap settings fail without exposing their values") {

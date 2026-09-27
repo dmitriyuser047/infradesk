@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package application.auth
 
-import application.port.{AuthSessionRepository, TransactionRunner, UserAccountRepository}
+import application.port.{AuthSessionRepository, TimeProvider, TransactionRunner, UserAccountRepository}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.auth.{AuthSession, AuthenticatedSession, AuthenticatedUser, UserAccount, UserSessionSummary}
@@ -34,19 +34,21 @@ final class AuthServicesSpec extends FunSuite {
     val user = UserAccount(userId, "member@example.com", passwordHash, "Member", true, now, now)
     val users = new MemoryUsers(List(user))
     val sessions = new MemorySessions(users)
-    val login = new Login[IO](users, sessions, identityRunner, passwords, tokens, 3600)
+    val login = newLogin(users, sessions)
 
-    val success = login.execute(" MEMBER@EXAMPLE.COM ", "correct-password").unsafeRunSync()
-      .getOrElse(fail("Expected successful login"))
+    val success = login.execute(" MEMBER@EXAMPLE.COM ", "correct-password", None).unsafeRunSync() match {
+      case LoginOutcome.Succeeded(result) => result
+      case other => fail(s"Expected successful login, got $other")
+    }
     assertEquals(success.user, AuthenticatedUser(userId, user.email, user.displayName))
     assertEquals(sessions.values.length, 1)
     assertEquals(sessions.values.head.tokenHash, tokens.hash(success.rawToken))
     assertNotEquals(sessions.values.head.tokenHash, success.rawToken)
 
-    assertEquals(login.execute("missing@example.com", "correct-password").unsafeRunSync(), None)
-    assertEquals(login.execute(user.email, "wrong-password").unsafeRunSync(), None)
+    assertEquals(login.execute("missing@example.com", "correct-password", None).unsafeRunSync(), LoginOutcome.InvalidCredentials)
+    assertEquals(login.execute(user.email, "wrong-password", None).unsafeRunSync(), LoginOutcome.InvalidCredentials)
     users.values = List(user.copy(isActive = false))
-    assertEquals(login.execute(user.email, "correct-password").unsafeRunSync(), None)
+    assertEquals(login.execute(user.email, "correct-password", None).unsafeRunSync(), LoginOutcome.InvalidCredentials)
     assertEquals(sessions.values.length, 1)
   }
 
@@ -75,6 +77,13 @@ final class AuthServicesSpec extends FunSuite {
   private val identityRunner = new TransactionRunner[IO, IO] {
     override def run[A](program: IO[A]): IO[A] = program
   }
+
+  private def newLogin(users: MemoryUsers, sessions: MemorySessions): Login[IO] =
+    new Login[IO](users, sessions, new support.InMemoryLoginThrottle,
+      new LoginThrottleHasher(Array.fill(32)(7.toByte)), AuthRateLimitSettings.default,
+      identityRunner, passwords, tokens, systemClock, 3600)
+
+  private val systemClock = new TimeProvider[IO] { override def now: IO[Instant] = IO(Instant.now()) }
 
   private final class MemoryUsers(var values: List[UserAccount]) extends UserAccountRepository[IO] {
     override def findByEmail(email: String): IO[Option[UserAccount]] =

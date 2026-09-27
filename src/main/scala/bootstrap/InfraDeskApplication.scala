@@ -64,7 +64,9 @@ object InfraDeskApplication {
         val notificationWorkers =
           (application.notificationDispatcher.toList :+ application.managedNotificationDispatcher)
             .map(_.run(config.notification.pollInterval, limit = config.notification.batchSize))
-        val workers = schedulerWorkers ++ notificationWorkers
+        // A light periodic sweep keeps the login-throttle table bounded; it runs beside the other
+        // background workers and never on the login path itself.
+        val workers = schedulerWorkers ++ notificationWorkers :+ application.cleanupLoginThrottle.run
 
         application.bootstrapAdmin.run(config.bootstrap) *>
           loggers.lifecycle.info(

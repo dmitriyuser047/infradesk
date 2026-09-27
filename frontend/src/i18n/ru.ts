@@ -109,6 +109,7 @@ export const ru: Messages = {
     email: 'Email',
     password: 'Пароль',
     invalidCredentials: 'Неверный email или пароль',
+    tooManyAttempts: 'Слишком много попыток входа. Попробуйте позже.',
     unableToSignIn: 'Не удалось войти',
     checkingSession: 'Проверка сессии…',
     unableToCheckSession: 'Не удалось проверить сессию',

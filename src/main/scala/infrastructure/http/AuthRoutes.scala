@@ -1,12 +1,13 @@
 package ru.bitec.app.ops
 package infrastructure.http
 
-import application.auth.{Authentication, Login}
+import application.auth.{Authentication, Login, LoginOutcome}
 import cats.effect.IO
 import cats.syntax.all._
 import domain.auth.AuthenticatedUser
 import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs, LoginRequest, MeResponse, MyOrganizationResponse}
-import org.http4s.{HttpRoutes, Request, Response, ResponseCookie, SameSite, Status}
+import org.http4s.{Header, HttpRoutes, Request, Response, ResponseCookie, SameSite, Status}
+import org.typelevel.ci.CIString
 import org.http4s.circe.{CirceEntityDecoder, CirceEntityEncoder}
 import org.http4s.dsl.io._
 
@@ -24,12 +25,15 @@ final class AuthRoutes[Tx[_]](
       request.as[LoginRequest].attempt.flatMap {
         case Left(_) => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid login request"))
         case Right(credentials) =>
-          login.execute(credentials.email, credentials.password).attempt.flatMap {
-            case Right(Some(result)) =>
+          login.execute(credentials.email, credentials.password, sourceOf(request)).attempt.flatMap {
+            case Right(LoginOutcome.Succeeded(result)) =>
               Ok(MeResponse(result.user.id, result.user.email, result.user.displayName))
                 .map(_.addCookie(sessionCookie(result.rawToken)))
-            case Right(None) => IO.pure(Response[IO](status = Status.Unauthorized)
+            case Right(LoginOutcome.InvalidCredentials) => IO.pure(Response[IO](status = Status.Unauthorized)
               .withEntity(ApiErrorResponse("INVALID_CREDENTIALS", "Invalid email or password")))
+            case Right(LoginOutcome.RateLimited(retryAfter)) => IO.pure(Response[IO](status = Status.TooManyRequests)
+              .withEntity(ApiErrorResponse("LOGIN_RATE_LIMITED", "Too many login attempts. Try again later."))
+              .putHeaders(Header.Raw(CIString("Retry-After"), retryAfter.toString)))
             case Left(_) => InternalServerError(ApiErrorResponse("INTERNAL_ERROR", "Internal server error"))
           }
       }
@@ -64,6 +68,17 @@ final class AuthRoutes[Tx[_]](
 
   private def sessionToken(request: Request[IO]): Option[String] =
     request.cookies.find(_.name == AuthRoutes.CookieName).map(_.content).filter(_.nonEmpty)
+
+  /** The client source used for login throttling, or nothing.
+    *
+    * Only trusted when the deployment says the backend sits behind the reverse proxy that sets it,
+    * because otherwise a client could send the header itself and pick its own throttle bucket. The
+    * production proxy overwrites X-Real-IP with the resolved client address and the backend is
+    * reachable only through it, so under that setting the value cannot be spoofed by a client.
+    */
+  private def sourceOf(request: Request[IO]): Option[String] =
+    if (!settings.trustForwardedFor) None
+    else request.headers.get(CIString("X-Real-IP")).map(_.head.value.trim).filter(_.nonEmpty)
 }
 
 object AuthRoutes {

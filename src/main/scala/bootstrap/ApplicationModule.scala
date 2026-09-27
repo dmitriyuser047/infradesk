@@ -16,7 +16,7 @@ import application.history.{
   HistoryRecordingMonitorRuleEvaluator,
   ListHistoryEvents
 }
-import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, Login, SessionTokens}
+import application.auth.{Authentication, BCryptPasswordHasher, BootstrapAdmin, CleanupLoginThrottle, Login, LoginThrottleHasher, SessionTokens}
 import application.connection.{
   GetConnection,
   GetConnectionSyncSession,
@@ -89,6 +89,7 @@ final case class ApplicationComponents(
   createProject: CreateProject[ConnectionIO],
   createEnvironment: CreateEnvironment[ConnectionIO],
   login: Login[ConnectionIO],
+  cleanupLoginThrottle: CleanupLoginThrottle[IO, ConnectionIO],
   authentication: Authentication[ConnectionIO],
   changePassword: ChangePassword[ConnectionIO],
   updateAccountProfile: UpdateAccountProfile[ConnectionIO],
@@ -116,6 +117,13 @@ final case class ApplicationComponents(
 )
 
 object ApplicationModule {
+
+  import scala.concurrent.duration._
+
+  /** How often the login-throttle table is swept for stale rows. A light background sweep, not a
+    * delete on the login path.
+    */
+  private val LoginThrottleCleanupInterval: FiniteDuration = 1.hour
 
   def build(
     config: AppConfig,
@@ -262,6 +270,10 @@ object ApplicationModule {
 
     val passwordHasher = new BCryptPasswordHasher
     val sessionTokens = new SessionTokens
+    // A purpose-separated subkey of the master secret hashes throttle keys, so the throttle table
+    // never stores a raw login email or client address.
+    val loginThrottleHasher = new LoginThrottleHasher(
+      config.secretEncryption.deriveSubkey("infradesk/login-throttle/v1"))
     val resourceOperationPreparation = new ResourceOperationPreparation[ConnectionIO](
       resourceOperationTargetQuery, operationExecutionRepository, transactionIdGenerator,
       transactionTimeProvider, auditRecorder, historyRecorder,
@@ -349,10 +361,21 @@ object ApplicationModule {
       login = new Login[ConnectionIO](
         userAccountRepository,
         authSessionRepository,
+        loginThrottleRepository,
+        loginThrottleHasher,
+        config.loginRateLimit,
         transactionRunner,
         passwordHasher,
         sessionTokens,
+        timeProvider,
         config.auth.ttlSeconds
+      ),
+      cleanupLoginThrottle = new CleanupLoginThrottle[IO, ConnectionIO](
+        loginThrottleRepository,
+        transactionRunner,
+        loggers.account,
+        config.loginRateLimit.retention,
+        LoginThrottleCleanupInterval
       ),
       authentication = new Authentication[ConnectionIO](
         authSessionRepository,
