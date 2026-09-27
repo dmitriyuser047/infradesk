@@ -135,31 +135,23 @@ jobs:
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
-          # Build a representative production V27 dump: the version production runs before this
+          # Build a representative production V28 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V28 to the restored database before the backend reports itself ready. Only V28 is
-          # undone here (the session-revocation audit codes it added to the action check
-          # constraint); everything V23 through V27 created — the V26 context column and the V27
-          # account audit codes included — stays as it does in production.
+          # V29 to the restored database before the backend reports itself ready. Only V29 is
+          # undone here (the auth_login_throttle table it added); everything V23 through V28 created
+          # — the V26 context column and the V27/V28 audit codes included — stays as in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
-          alter table audit_event drop constraint ck_audit_event_action;
-          alter table audit_event add constraint ck_audit_event_action check (action in (
-            'PROJECT_CREATED','ENVIRONMENT_CREATED','CONNECTION_CREATED','CONNECTION_UPDATED',
-            'CONNECTION_DELETED','MONITOR_RULE_CREATED','MONITOR_RULE_UPDATED','MANUAL_SYNC_REQUESTED',
-            'CONTAINER_START_REQUESTED','CONTAINER_STOP_REQUESTED','CONTAINER_RESTART_REQUESTED',
-            'NOTIFICATION_CHANNEL_CREATED','NOTIFICATION_CHANNEL_UPDATED',
-            'NOTIFICATION_CHANNEL_ENABLED','NOTIFICATION_CHANNEL_DISABLED',
-            'ACCOUNT_PASSWORD_CHANGED','ACCOUNT_PROFILE_UPDATED'));
-          delete from flyway_schema_history where version = '28';
+          drop table auth_login_throttle;
+          delete from flyway_schema_history where version = '29';
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V28 to it.
+          # recover the marker and let Flyway apply V29 to it.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -180,9 +172,9 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "28"
+          test "${migrated}" = "29"
           # What V26 built survives the upgrade: the notification_delivery.context column was in the
-          # dump and is still there after Flyway ran V28 on the restored database.
+          # dump and is still there after Flyway ran V29 on the restored database.
           delivery_context="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from information_schema.columns where table_schema = current_schema() and table_name = 'notification_delivery' and column_name = 'context'")"
@@ -199,6 +191,12 @@ jobs:
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where conname = 'ck_audit_event_action' and pg_get_constraintdef(oid) like '%ACCOUNT_OTHER_SESSIONS_REVOKED%'")"
           test "${session_audit}" = "1"
+          # And what V29 adds: the login throttle table, absent from the V28 dump and created again
+          # by the upgrade Flyway ran on the restored database.
+          login_throttle="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from information_schema.tables where table_schema = current_schema() and table_name = 'auth_login_throttle'")"
+          test "${login_throttle}" = "1"
           credential_kind="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where conname = 'ck_connection_secret_kind' and pg_get_constraintdef(oid) like '%SSH_CREDENTIAL%'")"

@@ -105,6 +105,7 @@ export const en = {
     email: 'Email',
     password: 'Password',
     invalidCredentials: 'Invalid email or password',
+    tooManyAttempts: 'Too many login attempts. Try again later.',
     unableToSignIn: 'Unable to sign in',
     checkingSession: 'Checking session…',
     unableToCheckSession: 'Unable to check session',
