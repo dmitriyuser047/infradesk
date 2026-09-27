@@ -90,6 +90,7 @@ import persistence.postgres.{
   * individual ports to constructors. It is never passed into a business object.
   */
 final case class PersistenceComponents(
+  terminalSessionRepository: application.port.TerminalSessionRepository[ConnectionIO],
   transactionRunner: TransactionRunner[IO, ConnectionIO],
   /** One read-only snapshot, for read models composed of several statements. */
   readOnlySnapshotRunner: TransactionRunner[IO, ConnectionIO],
@@ -149,6 +150,7 @@ object PersistenceModule {
 
   def build(xa: Transactor[IO], resourceTypes: ResourceDefinitionRegistry): PersistenceComponents =
     PersistenceComponents(
+      terminalSessionRepository = new persistence.postgres.PostgresTerminalSessionRepository(new PostgresAuditEventRepository),
       transactionRunner = new DoobieTransactionRunner(xa),
       readOnlySnapshotRunner = new DoobieReadOnlySnapshotRunner(xa),
       readinessCheck = new PostgresReadinessCheck(xa),

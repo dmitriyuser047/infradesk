@@ -24,7 +24,7 @@ class Socket {
   onerror: (() => void) | null = null
   send = vi.fn(); close = vi.fn(() => { this.readyState = 3 })
   constructor() { Socket.instances.push(this) }
-  ready() { this.onmessage?.({ data: JSON.stringify({ type: 'ready', protocolVersion: 1 }) }) }
+  ready() { this.onmessage?.({ data: JSON.stringify({ type: 'ready', protocolVersion: 1, sessionId: '00000000-0000-0000-0000-000000000001' }) }) }
 }
 const connection: ConnectionResponse = {
   id: 'connection', connectorType: 'SSH', code: 'ssh', name: 'Host', active: true,

@@ -13,7 +13,11 @@ final case class TerminalConfig(
   maxControlBytes: Int = 8192,
   idleTimeout: FiniteDuration = 30.minutes,
   maxLifetime: FiniteDuration = 2.hours,
-  maxConcurrentSessions: Int = 16
+  maxConcurrentSessions: Int = 16,
+  maxUserSessions: Int = 4,
+  maxOrganizationSessions: Int = 32,
+  heartbeatInterval: FiniteDuration = 15.seconds,
+  leaseDuration: FiniteDuration = 45.seconds
 ) {
   require(initialColumns > 0 && initialColumns <= maxColumns)
   require(initialRows > 0 && initialRows <= maxRows)
@@ -22,6 +26,10 @@ final case class TerminalConfig(
   require(maxControlBytes > 0 && maxControlBytes <= 8192)
   require(idleTimeout > Duration.Zero && maxLifetime >= idleTimeout)
   require(maxConcurrentSessions > 0 && maxConcurrentSessions <= 256)
+  require(maxUserSessions > 0 && maxUserSessions <= 256)
+  require(maxOrganizationSessions > 0 && maxOrganizationSessions <= 1024)
+  require(heartbeatInterval > Duration.Zero && heartbeatInterval <= 5.minutes)
+  require(leaseDuration >= heartbeatInterval * 2 && leaseDuration <= 15.minutes)
 }
 
 object TerminalConfig {
@@ -38,8 +46,12 @@ object TerminalConfig {
       idleSeconds <- bounded(values, "INFRADESK_TERMINAL_IDLE_TIMEOUT_SECONDS", default.idleTimeout.toSeconds.toInt, 1, 7200)
       lifetimeSeconds <- bounded(values, "INFRADESK_TERMINAL_MAX_LIFETIME_SECONDS", default.maxLifetime.toSeconds.toInt, idleSeconds, 86400)
       sessions <- bounded(values, "INFRADESK_TERMINAL_MAX_CONCURRENT_SESSIONS", default.maxConcurrentSessions, 1, 256)
+      userSessions <- bounded(values, "INFRADESK_TERMINAL_MAX_USER_SESSIONS", default.maxUserSessions, 1, 256)
+      orgSessions <- bounded(values, "INFRADESK_TERMINAL_MAX_ORGANIZATION_SESSIONS", default.maxOrganizationSessions, 1, 1024)
+      heartbeat <- bounded(values, "INFRADESK_TERMINAL_HEARTBEAT_SECONDS", default.heartbeatInterval.toSeconds.toInt, 1, 300)
+      lease <- bounded(values, "INFRADESK_TERMINAL_LEASE_SECONDS", default.leaseDuration.toSeconds.toInt, heartbeat * 2, 900)
     } yield TerminalConfig(columns, rows, maxColumns, maxRows, frameBytes, controlBytes,
-      idleSeconds.seconds, lifetimeSeconds.seconds, sessions)
+      idleSeconds.seconds, lifetimeSeconds.seconds, sessions, userSessions, orgSessions, heartbeat.seconds, lease.seconds)
 
   private def bounded(values: Map[String, String], key: String, default: Int, min: Int, max: Int):
     Either[IllegalArgumentException, Int] = values.get(key) match {

@@ -24,7 +24,8 @@ import java.util.UUID
 final case class OrganizationAccessContext(
   user: AuthenticatedUser,
   organizationId: UUID,
-  role: OrganizationRole
+  role: OrganizationRole,
+  authSessionId: Option[UUID] = None
 ) {
   def allows(permission: OrganizationPermission): Boolean =
     OrganizationAuthorizationPolicy.allows(role, permission)

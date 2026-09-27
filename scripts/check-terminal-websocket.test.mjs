@@ -63,16 +63,26 @@ test("smoke executable logs in, upgrades with matching Origin and exchanges term
   const sockets = new Set();
   let handshakeValid = false;
   let receivedInput = false;
+  let terminalSocket;
   const server = http.createServer((request, response) => {
     request.resume();
     response.writeHead(200, { "Set-Cookie": "infradesk_session=fixture-session; HttpOnly", "Content-Type": "application/json" });
     response.end("{}");
+    if (request.url === "/api/v1/auth/logout") {
+      assert.equal(request.headers.cookie, "infradesk_session=fixture-session");
+      terminalSocket.write(serverFrame(1, Buffer.from('{"type":"closed","protocolVersion":1,"code":"AUTH_SESSION_ENDED"}')));
+      const close = Buffer.alloc(2 + Buffer.byteLength("AUTH_SESSION_ENDED"));
+      close.writeUInt16BE(1008);
+      close.write("AUTH_SESSION_ENDED", 2);
+      terminalSocket.write(serverFrame(8, close));
+    }
   });
   server.on("connection", (socket) => {
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
   });
   server.on("upgrade", (request, socket) => {
+    terminalSocket = socket;
     handshakeValid = request.headers.origin === `http://${request.headers.host}` &&
       request.headers.cookie === "infradesk_session=fixture-session" &&
       request.headers["sec-websocket-protocol"] === "infradesk-terminal-v1";
@@ -82,7 +92,7 @@ test("smoke executable logs in, upgrades with matching Origin and exchanges term
       "HTTP/1.1 101 Switching Protocols", "Upgrade: websocket", "Connection: Upgrade",
       `Sec-WebSocket-Accept: ${accept}`, "Sec-WebSocket-Protocol: infradesk-terminal-v1", "", "",
     ].join("\r\n"));
-    socket.write(serverFrame(1, Buffer.from('{"type":"ready","protocolVersion":1}')));
+    socket.write(serverFrame(1, Buffer.from('{"type":"ready","protocolVersion":1,"sessionId":"00000000-0000-0000-0000-000000000001"}')));
     let buffered = Buffer.alloc(0);
     socket.on("data", (chunk) => {
       buffered = Buffer.concat([buffered, chunk]);

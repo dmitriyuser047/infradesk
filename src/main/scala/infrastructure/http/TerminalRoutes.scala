@@ -5,6 +5,8 @@ import application.connection.{OpenSshTerminal, TerminalOpenFailure}
 import cats.effect.{IO, Ref}
 import cats.syntax.all._
 import domain.auth.OrganizationPermission
+import domain.terminal.{TerminalSession, TerminalClaimResult, TerminalRenewResult, TerminalCloseReason}
+import application.terminal.TerminalSessionLifecycle
 import fs2.{Chunk, Pipe, Stream}
 import infrastructure.config.TerminalConfig
 import infrastructure.http.dto.HttpJsonCodecs
@@ -28,7 +30,8 @@ final class TerminalRoutes[Tx[_]](
   terminals: OpenSshTerminal[Tx],
   config: TerminalConfig,
   authorization: OrganizationAuthorization,
-  logger: Logger[IO]
+  logger: Logger[IO],
+  lifecycle: Option[TerminalSessionLifecycle[Tx]] = None
 ) {
   import HttpJsonCodecs._
 
@@ -57,9 +60,10 @@ final class TerminalRoutes[Tx[_]](
                         logger.warn(s"terminal.capacity.rejected $logContext errorType=Capacity") *>
                           ServiceUnavailable(error("TERMINAL_CAPACITY", "Terminal capacity is full"))
                       case Some(permit) =>
-                        poll(session(builder, prepared, permit,
+                        poll(claimAndBuild(context, connectionId, prepared.connectionUpdatedAt, permit) { durable => session(builder, prepared, permit,
                           request.headers.headers.find(_.name == CIString("Sec-WebSocket-Protocol"))
-                            .exists(_.value.split(',').exists(_.trim == protocol)), logContext))
+                            .exists(_.value.split(',').exists(_.trim == protocol)),
+                          logContext + durable.fold("")(value => s" sessionId=${value.id}"), durable) })
                           .guaranteeCase {
                             case cats.effect.kernel.Outcome.Errored(failure) =>
                               permit.release *> logger.error(failure)(s"terminal.open.failed $logContext errorType=${errorType(failure)}")
@@ -81,6 +85,24 @@ final class TerminalRoutes[Tx[_]](
       }
   }
 
+  private def claimAndBuild(context: OrganizationAccessContext, connectionId: UUID, version: java.time.Instant,
+    permit: terminals.CapacityPermit)(build: Option[TerminalSession] => IO[Response[IO]]): IO[Response[IO]] =
+    lifecycle match {
+      case None => build(None)
+      case Some(service) => context.authSessionId match {
+        case None => permit.release *> InternalServerError(error("INTERNAL_ERROR", "Internal server error"))
+        case Some(authId) => IO.uncancelable { poll =>
+          service.claim(context.organizationId, connectionId, context.user.id, authId, version).flatMap {
+            case TerminalClaimResult.Claimed(durable) => poll(build(Some(durable))).guaranteeCase {
+              case cats.effect.kernel.Outcome.Succeeded(_) => IO.unit
+              case _ => service.close(durable, TerminalCloseReason.ServerShutdown) *> permit.release
+            }
+            case _ => permit.release *> ServiceUnavailable(error("TERMINAL_CAPACITY", "Terminal capacity is full"))
+          }
+        }
+      }
+    }
+
   private def mapOpenFailure(failure: TerminalOpenFailure): IO[Response[IO]] = failure match {
     case TerminalOpenFailure.NotFound => NotFound(error("CONNECTION_NOT_FOUND", "Connection was not found"))
     case TerminalOpenFailure.Unsupported => BadRequest(error("TERMINAL_UNSUPPORTED", "Connection does not support SSH terminal"))
@@ -94,10 +116,16 @@ final class TerminalRoutes[Tx[_]](
     prepared: terminals.Prepared,
     permit: terminals.CapacityPermit,
     protocolRequested: Boolean,
-    logContext: String
+    logContext: String,
+    durable: Option[TerminalSession]
   ): IO[Response[IO]] =
     Ref.of[IO, Long](System.nanoTime()).flatMap { activity =>
-      Ref.of[IO, String]("normal").flatMap { closeReason =>
+      Ref.of[IO, String]("CLIENT_CLOSE").flatMap { closeReason =>
+        def finish: IO[Unit] = durable.traverse_(value => lifecycle.traverse_ { service =>
+          closeReason.get.flatMap(reason => service.close(value,
+            TerminalCloseReason.fromCode(reason).getOrElse(TerminalCloseReason.ProtocolError)))
+            .handleErrorWith(failure => logger.error(failure)(s"terminal.session.close.failed sessionId=${value.id}"))
+        })
         val exchange: Pipe[IO, WebSocketFrame, WebSocketFrame] = input =>
           Stream.resource(terminals.resource(prepared, TerminalSize(config.initialColumns, config.initialRows), permit)
             .attempt).flatMap {
@@ -110,7 +138,8 @@ final class TerminalRoutes[Tx[_]](
             case Right(terminal) =>
               val ready = control("ready", "", "").mapObject(_.add("protocolVersion", Json.fromInt(1))
                 .add("columns", Json.fromInt(config.initialColumns))
-                .add("rows", Json.fromInt(config.initialRows)))
+                .add("rows", Json.fromInt(config.initialRows))
+                .add("sessionId", durable.fold(Json.Null)(value => Json.fromString(value.id.toString))))
               val output = terminal.output.chunks.flatMap { bytes =>
                 val frames = bytes.toVector.grouped(config.maxFrameBytes).map(group =>
                   WebSocketFrame.Binary(Chunk.array(group.toArray).toByteVector)).toList
@@ -124,6 +153,10 @@ final class TerminalRoutes[Tx[_]](
                       closeFrame("SSH_FAILURE", 1011)
                     ))
                 }
+              val activate = durable.traverse_(value => lifecycle.traverse_(service => service.activate(value).flatMap {
+                case true => IO.unit
+                case false => IO.raiseError(new IllegalStateException("Terminal lease activation rejected"))
+              }))
               val outgoing = (Stream.eval(logger.info(s"terminal.opened $logContext")) >>
                 (Stream.emit(WebSocketFrame.Text(ready.noSpaces)) ++ output ++
                   Stream.emit(WebSocketFrame.Text(control("closed", "REMOTE_EOF", "SSH shell closed").noSpaces)) ++
@@ -152,12 +185,40 @@ final class TerminalRoutes[Tx[_]](
               }.unNone.take(1)
               val lifetime = Stream.sleep_[IO](config.maxLifetime) ++
                 Stream.emit(closeFrame("MAX_LIFETIME", 1000)).evalTap(_ => closeReason.set("MAX_LIFETIME"))
-              outgoing.mergeHaltBoth(incoming).mergeHaltBoth(timeout).mergeHaltBoth(lifetime)
-          }.onFinalize(closeReason.get.flatMap(reason => logger.info(s"terminal.closed $logContext closeReason=$reason")))
+              val traffic = outgoing.mergeHaltBoth(incoming).mergeHaltBoth(timeout).mergeHaltBoth(lifetime)
+              Stream.eval(activate) >> ((durable, lifecycle) match {
+                case (Some(value), Some(service)) =>
+                  val heartbeat = Stream.awakeEvery[IO](config.heartbeatInterval).evalMap(_ => service.renew(value).attempt.flatMap {
+                    case Right(_: TerminalRenewResult.Renewed) => IO.pure(List.empty[WebSocketFrame])
+                    case Right(result) =>
+                      val reason = result match {
+                        case TerminalRenewResult.Revoked(reason) => reason.code
+                        case _ => "TERMINAL_SESSION_REVOKED"
+                      }
+                      closeReason.set(reason) *> logger.warn(s"terminal.session.revoked sessionId=${value.id} closeReason=$reason") *>
+                        IO.pure(List(WebSocketFrame.Text(control("closed", reason, "Terminal session ended").noSpaces), closeFrame(reason, 1008)))
+                    case Left(failure) =>
+                      closeReason.set("SESSION_VALIDATION_FAILED") *>
+                        logger.error(failure)(s"terminal.session.validation.failed sessionId=${value.id}") *>
+                        IO.pure(List(WebSocketFrame.Text(control("error", "SESSION_VALIDATION_FAILED", "Terminal session validation failed").noSpaces),
+                          closeFrame("SESSION_VALIDATION_FAILED", 1011)))
+                  }).flatMap(frames => Stream.emits(frames)).takeThrough {
+                    case _: WebSocketFrame.Close => false
+                    case _ => true
+                  }
+                  traffic.mergeHaltBoth(heartbeat)
+                case _ => traffic
+              })
+          }.handleErrorWith { failure =>
+            Stream.eval(closeReason.set("SESSION_VALIDATION_FAILED") *>
+              logger.error(failure)(s"terminal.session.failed $logContext")) >>
+              Stream.emits(List(WebSocketFrame.Text(control("error", "SESSION_VALIDATION_FAILED", "Terminal session validation failed").noSpaces),
+                closeFrame("SESSION_VALIDATION_FAILED", 1011)))
+          }.onFinalize(finish *> closeReason.get.flatMap(reason => logger.info(s"terminal.closed $logContext closeReason=$reason")))
         // Builder returns a fallback response template; Ember performs the actual handshake.
         val socketBuilder = builder.withDefragment(false)
-          .withOnClose(permit.release)
-          .withOnHandshakeFailure(permit.release *>
+          .withOnClose(finish *> permit.release)
+          .withOnHandshakeFailure(finish *> permit.release *>
             logger.warn(s"terminal.protocol.failed $logContext errorType=INVALID_WEBSOCKET_HANDSHAKE") *>
             BadRequest(error("INVALID_WEBSOCKET_HANDSHAKE", "WebSocket handshake is invalid")))
         val negotiated = if (protocolRequested)

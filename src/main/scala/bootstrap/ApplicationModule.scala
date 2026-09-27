@@ -76,6 +76,7 @@ import java.util.UUID
   * cases they need through their constructors, never this record.
   */
 final case class ApplicationComponents(
+  terminalSessionLifecycle: application.terminal.TerminalSessionLifecycle[ConnectionIO],
   getResource: GetResource[ConnectionIO],
   listEnvironmentResources: ListEnvironmentResources[ConnectionIO],
   getResourceMetricHistory: GetResourceMetricHistory[ConnectionIO],
@@ -357,6 +358,10 @@ object ApplicationModule {
         auditRecorder
       ),
       openSshTerminal = integrations.openSshTerminal,
+      terminalSessionLifecycle = new application.terminal.TerminalSessionLifecycle(
+        terminalSessionRepository, transactionRunner, schedulerInstanceId,
+        config.terminal.maxUserSessions, config.terminal.maxOrganizationSessions,
+        config.terminal.leaseDuration, loggers.terminal),
       listConnectionSyncSessions =
         new ListConnectionSyncSessions[ConnectionIO](connectionRepository, syncSessionRepository),
       getConnectionSyncSession = new GetConnectionSyncSession[ConnectionIO](syncSessionRepository),

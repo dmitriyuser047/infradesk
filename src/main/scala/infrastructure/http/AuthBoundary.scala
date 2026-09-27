@@ -66,7 +66,7 @@ final class AuthBoundary[Tx[_]](
             case Some(organizationId) =>
               authentication.organizationRole(user.id, organizationId).attempt.flatMap {
                 case Right(Some(role)) =>
-                  val context = OrganizationAccessContext(user, organizationId, role)
+                  val context = OrganizationAccessContext(user, organizationId, role, Some(session.sessionId))
                   organizationRoutes.run(OrganizationAuthorization.withContext(request, context))
                 // A user who is not an active member learns nothing about the organization.
                 case Right(None) => NotFound(organizationNotFound)

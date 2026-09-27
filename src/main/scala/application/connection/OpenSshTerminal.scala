@@ -33,7 +33,8 @@ final class OpenSshTerminal[Tx[_]] private (
 
   final case class Prepared private[OpenSshTerminal](
     config: SshConnectionConfig,
-    authentication: integration.ssh.SshAuthentication
+    authentication: integration.ssh.SshAuthentication,
+    connectionUpdatedAt: java.time.Instant
   )
 
   def prepare(organizationId: UUID, connectionId: UUID): IO[Prepared] =
@@ -44,7 +45,7 @@ final class OpenSshTerminal[Tx[_]] private (
       config <- IO.fromEither(SshConnectionConfig.from(connection.config)
         .leftMap(_ => InvalidConfiguration))
       authentication <- credentials.resolve(connection)
-    } yield Prepared(config, authentication)
+    } yield Prepared(config, authentication, connection.updatedAt)
 
   final class CapacityPermit private[OpenSshTerminal] (released: Ref[IO, Boolean]) {
     def release: IO[Unit] = IO.uncancelable { _ =>

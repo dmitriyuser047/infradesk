@@ -10,6 +10,8 @@ sealed trait AuditAction {
 }
 
 object AuditAction {
+  case object TerminalSessionOpened extends AuditAction { val code = "TERMINAL_SESSION_OPENED" }
+  case object TerminalSessionClosed extends AuditAction { val code = "TERMINAL_SESSION_CLOSED" }
 
   case object ProjectCreated extends AuditAction { override val code: String = "PROJECT_CREATED" }
   case object EnvironmentCreated extends AuditAction { override val code: String = "ENVIRONMENT_CREATED" }
@@ -61,7 +63,9 @@ object AuditAction {
     AccountProfileUpdated,
     AccountSessionRevoked,
     AccountOtherSessionsRevoked,
-    AccountAllSessionsRevoked
+    AccountAllSessionsRevoked,
+    TerminalSessionOpened,
+    TerminalSessionClosed
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =
@@ -75,6 +79,7 @@ sealed trait AuditTargetType {
 }
 
 object AuditTargetType {
+  case object TerminalSession extends AuditTargetType { val code = "TERMINAL_SESSION" }
 
   case object Project extends AuditTargetType { override val code: String = "PROJECT" }
   case object Environment extends AuditTargetType { override val code: String = "ENVIRONMENT" }
@@ -86,7 +91,7 @@ object AuditTargetType {
   case object Account extends AuditTargetType { override val code: String = "ACCOUNT" }
 
   val All: List[AuditTargetType] =
-    List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Account)
+    List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Account, TerminalSession)
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditTargetType] =
     All.find(_.code == code)

@@ -13,7 +13,7 @@ class Socket {
   send = vi.fn()
   close = vi.fn(() => { this.readyState = 3 })
   message(data: unknown) { this.onmessage?.({ data }) }
-  ready() { this.message(JSON.stringify({ type: 'ready', protocolVersion: 1, columns: 80, rows: 24 })) }
+  ready() { this.message(JSON.stringify({ type: 'ready', protocolVersion: 1, columns: 80, rows: 24, sessionId: '00000000-0000-0000-0000-000000000001' })) }
 }
 function fixture() {
   const socket = new Socket()

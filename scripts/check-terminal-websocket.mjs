@@ -167,7 +167,12 @@ async function run() {
         let message;
         try { message = JSON.parse(frame.payload.toString("utf8")); }
         catch { throw failure("server sent malformed terminal control JSON"); }
-        if (message.type === "ready" && message.protocolVersion === 1) ready = true;
+        if (message.type === "ready" && message.protocolVersion === 1) {
+          if (typeof message.sessionId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(message.sessionId)) {
+            throw failure("server did not announce a valid terminal session UUID");
+          }
+          ready = true;
+        }
         if (message.type === "error") {
           currentStage = "terminal error code";
           throw failure(`server returned ${String(message.code ?? "UNKNOWN")}`);
@@ -187,7 +192,7 @@ async function run() {
 
       if (ready && !sentInput) {
         socket.write(clientFrame(1, Buffer.from('{"type":"resize","columns":100,"rows":35}')));
-        socket.write(clientFrame(2, Buffer.from("printf 'terminal-smoke-%s\\n' ok\nexit\n")));
+        socket.write(clientFrame(2, Buffer.from("printf 'terminal-smoke-%s\\n' ok\n")));
         sentInput = true;
       }
     }
@@ -195,6 +200,26 @@ async function run() {
     if (!output.includes("terminal-smoke-ok")) {
       currentStage = "binary output timeout";
       throw failure("expected safe terminal marker was not received in a binary frame");
+    }
+    currentStage = "live auth revocation";
+    const logout = await fetch(new URL("/api/v1/auth/logout", base), {
+      method: "POST", headers: { cookie, origin: base.origin }, signal: AbortSignal.timeout(10000),
+    });
+    if (!logout.ok) throw failure(`logout HTTP ${logout.status}`);
+    let closedControl = false;
+    const revokeDeadline = Date.now() + 20000;
+    for (;;) {
+      const frame = await withTimeout(reader.frame(), Math.max(1, revokeDeadline - Date.now()), currentStage);
+      if (frame.opcode === 1) {
+        const control = JSON.parse(frame.payload.toString("utf8"));
+        if (control.type === "closed" && control.code === "AUTH_SESSION_ENDED") closedControl = true;
+      } else if (frame.opcode === 9) socket.write(clientFrame(10, frame.payload));
+      else if (frame.opcode === 8) {
+        if (!closedControl || frame.payload.readUInt16BE(0) !== 1008 || frame.payload.subarray(2).toString("utf8") !== "AUTH_SESSION_ENDED") {
+          throw failure("auth revocation did not close the terminal with policy code 1008");
+        }
+        break;
+      }
     }
   } catch (error) {
     if (error.stage) throw error;

@@ -50,6 +50,8 @@ export class TerminalTransport {
         if (typeof event.data !== 'string' || new TextEncoder().encode(event.data).length > 8192) throw new Error()
         const message = JSON.parse(event.data)
         if (message.type === 'ready' && message.protocolVersion === 1 && !this.active) {
+          if (typeof message.sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(message.sessionId)) throw new Error()
+          this.sessionId = message.sessionId
           this.active = true
           sink.state('connected')
           sink.ready()
