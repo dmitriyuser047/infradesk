@@ -4,9 +4,10 @@ package integration.ssh
 import cats.effect.kernel.Resource.ExitCase
 import cats.effect.{Async, Resource}
 import cats.syntax.all._
+import fs2.Chunk
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.SecurityUtils
-import net.schmizz.sshj.connection.channel.direct.Session
+import net.schmizz.sshj.connection.channel.direct.{PTYMode, Session}
 import net.schmizz.sshj.transport.TransportException
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import net.schmizz.sshj.userauth.UserAuthException
@@ -79,6 +80,88 @@ final class SshjClient[F[_]: Async](
         override def execute(command: String): F[SshCommandResult] =
           runCommand(ssh, observedFingerprint, config, command)
       })
+    }
+
+  override def terminal(
+    config: SshConnectionConfig,
+    authentication: SshAuthentication,
+    size: TerminalSize
+  ): Resource[F, InteractiveSshTerminal[F]] =
+    Resource.makeCase(Async[F].blocking(open(config, authentication))) {
+      case ((ssh, _), exitCase) => closeClient(ssh, exitCase)
+    }.flatMap { case (ssh, _) =>
+      Resource.makeCase(Async[F].blocking(startTerminal(ssh, size))) {
+        case (terminal, exitCase) => closeTerminal(terminal, exitCase)
+      }.map { terminal =>
+        val shell = terminal.shell
+        new InteractiveSshTerminal[F] {
+          override val output: fs2.Stream[F, Byte] =
+            fs2.io.readInputStream(Async[F].pure(shell.getInputStream), 8192, closeAfterUse = false)
+              .handleErrorWith(error => fs2.Stream.raiseError[F](SshTransportFailure.fromCommandTransport(
+                error match {
+                  case io: IOException => io
+                  case other => new IOException("SSH terminal output failed", other)
+                }
+              )))
+
+          override def write(bytes: Chunk[Byte]): F[Unit] =
+            Async[F].blocking {
+              val stream = shell.getOutputStream
+              bytes.foreach(byte => stream.write(byte.toInt))
+              stream.flush()
+            }.adaptError {
+              case error: IOException => SshTransportFailure.fromCommandTransport(error)
+            }
+
+          override def resize(next: TerminalSize): F[Unit] =
+            Async[F].blocking(shell.changeWindowDimensions(next.columns, next.rows, 0, 0))
+              .adaptError {
+                case error: IOException => SshTransportFailure.fromCommandTransport(error)
+              }
+        }
+      }
+    }
+
+  private final case class RunningTerminal(session: Session, shell: Session.Shell)
+
+  private def startTerminal(ssh: SSHClient, size: TerminalSize): RunningTerminal = {
+    val session = ssh.startSession()
+    try {
+      session.allocatePTY("xterm-256color", size.columns, size.rows, 0, 0,
+        Collections.emptyMap[PTYMode, Integer]())
+      RunningTerminal(session, session.startShell())
+    } catch {
+      case primary: Throwable =>
+        try session.close()
+        catch {
+          case closeError: Throwable if closeError ne primary => primary.addSuppressed(closeError)
+        }
+        throw primary
+    }
+  }
+
+  private def closeTerminal(terminal: RunningTerminal, exitCase: ExitCase): F[Unit] =
+    Async[F].blocking {
+      var primary: Option[Throwable] = None
+      try terminal.shell.close()
+      catch { case error: Throwable => primary = Some(error) }
+      try terminal.session.close()
+      catch {
+        case closeError: Throwable => primary match {
+          case Some(error) if closeError ne error => error.addSuppressed(closeError)
+          case None => primary = Some(closeError)
+          case _ => ()
+        }
+      }
+      primary.foreach(throw _)
+    }.attempt.flatMap {
+      case Right(_) => Async[F].unit
+      case Left(closeError) => exitCase match {
+        case ExitCase.Errored(primary) => Async[F].delay {
+          if (closeError ne primary) primary.addSuppressed(closeError)
+        }
+        case _ => closeError.raiseError[F, Unit]
+      }
     }
 
   private def runCommand(

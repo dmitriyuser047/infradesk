@@ -13,6 +13,7 @@ import application.port.{
   TelegramNotificationTransport,
   WebhookNotificationTransport
 }
+import application.connection.OpenSshTerminal
 import domain.operation.ResourceOperationCode
 import cats.effect.{IO, Resource}
 import cats.syntax.all._
@@ -55,12 +56,13 @@ final case class IntegrationComponents(
   resourceOperationExecutor: ResourceOperationExecutor[IO],
   resourceOperationBudget: ResourceOperationBudget,
   connectionSyncBudget: ConnectionSyncBudget,
+  openSshTerminal: OpenSshTerminal[ConnectionIO],
   connectorRegistry: ResourceConnectorRegistry[IO]
 )
 
 object IntegrationModule {
 
-  def build(config: AppConfig, persistence: PersistenceComponents): IntegrationComponents = {
+  def build(config: AppConfig, persistence: PersistenceComponents): IO[IntegrationComponents] = {
     val secretCipher = ConnectionSecretCipher.fromConfig(config.secretEncryption)
     // The same key and the same primitive as an SSH credential; a different payload and a
     // different table.
@@ -88,7 +90,13 @@ object IntegrationModule {
         )
       )
 
-    IntegrationComponents(
+    OpenSshTerminal.create(
+      persistence.connectionRepository,
+      persistence.transactionRunner,
+      sshClient,
+      sshAuthenticationProvider,
+      config.terminal.maxConcurrentSessions
+    ).map { openSshTerminal => IntegrationComponents(
       secretCipher = secretCipher,
       notificationChannelCipher = notificationChannelCipher,
       sshConnectionProbe = new SshConnectionProbeAdapter(sshClient),
@@ -96,8 +104,9 @@ object IntegrationModule {
       resourceOperationExecutor = sshContainerOperations,
       resourceOperationBudget = sshContainerOperations,
       connectionSyncBudget = new SshConnectionSyncBudget,
+      openSshTerminal = openSshTerminal,
       connectorRegistry = connectorRegistry
-    )
+    ) }
   }
 
   /** Everything the notification workers need in order to reach the outside world.

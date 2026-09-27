@@ -5,7 +5,6 @@ import cats.effect.{IO, Resource}
 import cats.syntax.all._
 import infrastructure.config.{AppConfig, HttpConfig}
 import infrastructure.database.{Database, DatabaseMigrator}
-import org.http4s.HttpApp
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
 
@@ -48,11 +47,9 @@ object InfraDeskApplication {
       ).tupled
       _ <- runtime.use { case (xa, transports) =>
         val persistence = PersistenceModule.build(xa, resourceTypes)
-        val integrations = IntegrationModule.build(config, persistence)
+        IntegrationModule.build(config, persistence).flatMap { integrations =>
         val application = ApplicationModule.build(config, persistence, integrations, loggers,
           schedulerInstanceId, transports, dispatcherInstanceId)
-        val httpApp = HttpModule.build(persistence, application, config.auth, loggers)
-
         val schedulerWorkers =
           if (config.scheduler.enabled)
             List(application.scheduler.run(config.scheduler.pollInterval,
@@ -74,7 +71,8 @@ object InfraDeskApplication {
             s"application.started version=${BuildInfo.version} gitSha=${BuildInfo.gitSha} " +
               s"workers=${workers.size}"
           ) *>
-          serve(httpServer(config.http, httpApp), workers)
+          serve(httpServer(config.http, persistence, application, config.auth, config.terminal, loggers), workers)
+        }
       }
     } yield ()
   }
@@ -89,11 +87,19 @@ object InfraDeskApplication {
     // cancels it and therefore releases the server, client and database resources in order.
     server.use(_ => (IO.never[Unit] :: workers).parTraverse_(identity)).void
 
-  private def httpServer(config: HttpConfig, app: HttpApp[IO]): Resource[IO, Server] =
+  private def httpServer(
+    config: HttpConfig,
+    persistence: PersistenceComponents,
+    application: ApplicationComponents,
+    authSettings: infrastructure.http.AuthSettings,
+    terminalConfig: infrastructure.config.TerminalConfig,
+    loggers: AppLoggers
+  ): Resource[IO, Server] =
     EmberServerBuilder
       .default[IO]
       .withHost(config.host)
       .withPort(config.port)
-      .withHttpApp(app)
+      .withHttpWebSocketApp(builder =>
+        HttpModule.build(persistence, application, authSettings, loggers, terminalConfig, Some(builder)))
       .build
 }

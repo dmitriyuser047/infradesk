@@ -64,7 +64,8 @@ final case class AppConfig(
   secretEncryption: SecretEncryptionConfig,
   scheduler: SchedulerConfig,
   notification: NotificationConfig,
-  sshEnvironmentSecrets: EnvironmentSecrets
+  sshEnvironmentSecrets: EnvironmentSecrets,
+  terminal: TerminalConfig
 )
 
 object AppConfig {
@@ -81,8 +82,9 @@ object AppConfig {
       secretEncryption <- SecretEncryptionConfig.fromEnvironment(values)
       scheduler <- parseScheduler(values)
       notification <- parseNotification(values)
+      terminal <- TerminalConfig.fromEnvironment(values)
     } yield AppConfig(database, http, auth, loginRateLimit, SecurityEventSettings(securityEvents.seconds), bootstrap, secretEncryption, scheduler,
-      notification, EnvironmentSecrets.fromEnvironment(values))
+      notification, EnvironmentSecrets.fromEnvironment(values), terminal)
 
   private def parseLoginRateLimit(
     values: Map[String, String]

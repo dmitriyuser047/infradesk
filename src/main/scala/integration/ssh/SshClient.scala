@@ -1,6 +1,9 @@
 package ru.bitec.app.ops
 package integration.ssh
 
+import cats.effect.Resource
+import fs2.{Chunk, Stream}
+
 sealed trait SshAuthentication
 
 object SshAuthentication {
@@ -50,4 +53,21 @@ trait SshClient[F[_]] {
   /** Authenticates and runs commands. The configuration must pin a trusted host key. */
   def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
                     (use: SshSession[F] => F[A]): F[A]
+
+  /** Opens an interactive PTY through the same pinned-host-key and authentication path. */
+  def terminal(
+    config: SshConnectionConfig,
+    authentication: SshAuthentication,
+    size: TerminalSize
+  ): Resource[F, InteractiveSshTerminal[F]] =
+    Resource.eval(throw new UnsupportedOperationException("Interactive SSH terminals are not supported"))
+
+}
+
+final case class TerminalSize(columns: Int, rows: Int)
+
+trait InteractiveSshTerminal[F[_]] {
+  def output: Stream[F, Byte]
+  def write(bytes: Chunk[Byte]): F[Unit]
+  def resize(size: TerminalSize): F[Unit]
 }

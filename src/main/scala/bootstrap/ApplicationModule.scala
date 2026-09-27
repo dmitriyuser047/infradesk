@@ -22,6 +22,7 @@ import application.connection.{
   GetConnectionSyncSession,
   ListConnectionSyncSessions,
   ListConnections,
+  OpenSshTerminal,
   RunManualConnectionSync,
   SshConnectionManagement
 }
@@ -79,6 +80,7 @@ final case class ApplicationComponents(
   getConnection: GetConnection[ConnectionIO],
   listConnections: ListConnections[ConnectionIO],
   sshConnectionManagement: SshConnectionManagement[ConnectionIO],
+  openSshTerminal: OpenSshTerminal[ConnectionIO],
   listConnectionSyncSessions: ListConnectionSyncSessions[ConnectionIO],
   getConnectionSyncSession: GetConnectionSyncSession[ConnectionIO],
   runManualConnectionSync: RunManualConnectionSync[ConnectionIO],
@@ -332,6 +334,7 @@ object ApplicationModule {
         integrations.secretCipher,
         auditRecorder
       ),
+      openSshTerminal = integrations.openSshTerminal,
       listConnectionSyncSessions =
         new ListConnectionSyncSessions[ConnectionIO](connectionRepository, syncSessionRepository),
       getConnectionSyncSession = new GetConnectionSyncSession[ConnectionIO](syncSessionRepository),

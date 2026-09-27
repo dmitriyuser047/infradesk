@@ -3,13 +3,16 @@ package integration.ssh
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import fs2.Chunk
 import munit.FunSuite
 import org.apache.sshd.server.SshServer
 import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider
+import org.apache.sshd.server.shell.InteractiveProcessShellFactory
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.concurrent.atomic.AtomicInteger
+import scala.concurrent.duration._
 
 /** Exercises the concrete SSHJ transport against a real in-process SSH server. Test identities
   * are generated for the suite and are unrelated to every deployment credential.
@@ -80,6 +83,22 @@ final class SshjClientIntegrationSpec extends FunSuite {
     }
   }
 
+  test("opens an authenticated PTY shell, resizes it, and streams terminal bytes") {
+    withServer(acceptPublicKeys = false) { server =>
+      val config = trustedConfig(server)
+      val script = if (System.getProperty("os.name").toLowerCase.contains("win"))
+        "echo terminal-ok\r\nexit\r\n"
+      else "printf terminal-ok\nexit\n"
+      val output = client.terminal(config, SshAuthentication.Password("terminal-test"), TerminalSize(80, 24)).use {
+        terminal =>
+          terminal.resize(TerminalSize(100, 40)) *>
+            terminal.write(Chunk.array(script.getBytes(StandardCharsets.UTF_8))) *>
+            terminal.output.compile.toVector.map(bytes => new String(bytes.toArray, StandardCharsets.UTF_8)).timeout(10.seconds)
+      }.unsafeRunSync()
+      assert(output.contains("terminal-ok"), clues(output))
+    }
+  }
+
   private def trustedConfig(server: RunningServer): SshConnectionConfig = {
     val config = baseConfig(server)
     val fingerprint = client.probeHostKey(config).unsafeRunSync()
@@ -100,6 +119,8 @@ final class SshjClientIntegrationSpec extends FunSuite {
       attempts.incrementAndGet()
       acceptPublicKeys
     })
+    sshd.setPasswordAuthenticator((_, _, _) => true)
+    sshd.setShellFactory(InteractiveProcessShellFactory.INSTANCE)
     sshd.start()
     try use(RunningServer(sshd.getPort, attempts))
     finally sshd.stop(true)

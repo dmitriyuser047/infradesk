@@ -66,6 +66,9 @@ jobs:
     needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - name: Build backend production image
         run: |
           docker build \
@@ -114,10 +117,44 @@ jobs:
             echo "INFRADESK_GIT_SHA=${GITHUB_SHA}"
             echo "INFRADESK_BUILD_VERSION=0.1.0-${GITHUB_SHA::7}"
             echo "INFRADESK_HTTP_PUBLISH=127.0.0.1:8081"
+            echo "INFRADESK_CI_TERMINAL_PASSWORD=stage20-ci-only-password"
           } > .env
       - name: Start the production topology
         run: |
+          docker compose -f compose.prod.yml up -d postgres
+          ready=false
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.prod.yml exec -T postgres pg_isready -U infradesk -d infradesk >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          test "${ready}" = "true"
+          docker build --file deploy/ci-terminal-sshd.Dockerfile \
+            --tag infradesk-ci-terminal-sshd .
+          docker run --detach --name infradesk-ci-terminal-sshd \
+            --network infradesk_internal --network-alias terminal-sshd infradesk-ci-terminal-sshd
           docker compose -f compose.prod.yml up -d
+          ready=false
+          for _ in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 5
+          done
+          test "${ready}" = "true"
+          docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk \
+            --set ON_ERROR_STOP=1 --command "insert into organization (id, code, name) values \
+            ('00000000-0000-0000-0000-000000000020', 'terminal-ci', 'Terminal CI')"
+          {
+            echo "INFRADESK_BOOTSTRAP_EMAIL=terminal-ci@example.test"
+            echo "INFRADESK_BOOTSTRAP_PASSWORD=stage20-ci-admin-password"
+            echo "INFRADESK_BOOTSTRAP_ORGANIZATION_ID=00000000-0000-0000-0000-000000000020"
+            echo "INFRADESK_BOOTSTRAP_DISPLAY_NAME=CI Terminal"
+          } >> .env
+          docker compose -f compose.prod.yml up -d --force-recreate backend
           ready=false
           for _ in $(seq 1 60); do
             if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then
@@ -129,6 +166,27 @@ jobs:
           test "${ready}" = "true"
       - name: Smoke-test the deployment
         run: ./scripts/check-production.sh http://127.0.0.1:8081
+      - name: Exercise authenticated terminal WebSocket through production nginx
+        run: |
+          fingerprint="$(docker exec infradesk-ci-terminal-sshd \
+            ssh-keygen -E md5 -lf /etc/ssh/ssh_host_rsa_key.pub | awk '{ sub(/^MD5:/, "", $2); print $2 }')"
+          test -n "${fingerprint}"
+          docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
+            --command "insert into connection \
+              (id, organization_id, scope_type, connector_type, code, name, config, secret_ref) \
+              values ('00000000-0000-0000-0000-000000000021', \
+              '00000000-0000-0000-0000-000000000020', 'ORGANIZATION', 'SSH', \
+              'terminal-ci', 'Terminal CI SSH', \
+              jsonb_build_object('host', 'terminal-sshd', 'port', '22', 'username', 'ci', \
+                'hostKeyFingerprint', '${fingerprint}'), \
+              'env:INFRADESK_CI_TERMINAL_PASSWORD')"
+          INFRADESK_BASE_URL=http://127.0.0.1:8081 \
+          INFRADESK_TERMINAL_TEST_ORGANIZATION_ID=00000000-0000-0000-0000-000000000020 \
+          INFRADESK_TERMINAL_TEST_CONNECTION_ID=00000000-0000-0000-0000-000000000021 \
+          INFRADESK_TERMINAL_TEST_EMAIL=terminal-ci@example.test \
+          INFRADESK_TERMINAL_TEST_PASSWORD=stage20-ci-admin-password \
+            node scripts/check-terminal-websocket.mjs
       - name: Verify spoofed forwarding headers cannot evade nginx login throttling
         run: |
           # The host is the trusted external-TLS boundary in this topology, so host-side curl is
@@ -338,4 +396,6 @@ jobs:
         run: docker compose -f compose.prod.yml logs --no-color --tail 200
       - name: Stop the production topology
         if: always()
-        run: docker compose -f compose.prod.yml down -v
+        run: |
+          docker rm --force infradesk-ci-terminal-sshd >/dev/null 2>&1 || true
+          docker compose -f compose.prod.yml down -v

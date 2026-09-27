@@ -207,4 +207,25 @@ final class AppConfigSpec extends FunSuite {
     assert(error.getMessage.contains(key))
     assert(!error.getMessage.contains(value))
   }
+
+  test("terminal limits have bounded defaults and reject unsafe configuration") {
+    val terminal = AppConfig.fromEnvironment(minimal).toOption.get.terminal
+    assertEquals(terminal.initialColumns, 80)
+    assertEquals(terminal.initialRows, 24)
+    assertEquals(terminal.maxColumns, 500)
+    assertEquals(terminal.maxRows, 200)
+    assertEquals(terminal.maxFrameBytes, 65536)
+    assertEquals(terminal.maxControlBytes, 8192)
+    assertEquals(terminal.maxConcurrentSessions, 16)
+
+    List(
+      "INFRADESK_TERMINAL_INITIAL_COLUMNS" -> "0",
+      "INFRADESK_TERMINAL_MAX_ROWS" -> "201",
+      "INFRADESK_TERMINAL_MAX_FRAME_BYTES" -> "1000000",
+      "INFRADESK_TERMINAL_IDLE_TIMEOUT_SECONDS" -> "nope",
+      "INFRADESK_TERMINAL_MAX_LIFETIME_SECONDS" -> "100"
+    ).foreach { case (key, value) =>
+      assert(AppConfig.fromEnvironment(minimal + (key -> value)).isLeft, s"accepted $key=$value")
+    }
+  }
 }
