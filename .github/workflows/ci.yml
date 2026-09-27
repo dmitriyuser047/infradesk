@@ -129,13 +129,16 @@ jobs:
           test "${ready}" = "true"
       - name: Smoke-test the deployment
         run: ./scripts/check-production.sh http://127.0.0.1:8081
-      - name: Verify nginx login throttling preserves the InfraDesk JSON contract
+      - name: Verify spoofed forwarding headers cannot evade nginx login throttling
         run: |
           response=""
-          for _ in $(seq 1 12); do
+          for i in $(seq 1 20); do
+            spoof="203.0.113.${i}"
             response="$(curl --silent --show-error --request POST \
               --header 'Content-Type: application/json' \
-              --data '{"email":"edge-rate-limit@example.test","password":"wrong"}' \
+              --header "X-Forwarded-For: ${spoof}" \
+              --header "X-Real-IP: ${spoof}" \
+              --data '{"email":"spoof-rate-limit@example.test","password":"wrong"}' \
               --write-out $'\n%{http_code}\n%{content_type}' \
               http://127.0.0.1:8081/api/v1/auth/login)"
             if printf '%s' "${response}" | tail -n 2 | head -n 1 | grep -qx '429'; then break; fi

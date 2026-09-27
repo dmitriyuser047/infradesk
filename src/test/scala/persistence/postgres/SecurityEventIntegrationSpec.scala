@@ -4,6 +4,7 @@ package persistence.postgres
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
+import application.auth.ListSecurityEvents
 import domain.auth.{SecurityEvent, SecurityEventCursor, SecurityEventType, UserAccount}
 import infrastructure.database.DoobieTransactionRunner
 import munit.FunSuite
@@ -24,12 +25,15 @@ final class SecurityEventIntegrationSpec extends FunSuite {
       val other = SecurityEvent(UUID.randomUUID(), setup.otherUserId, SecurityEventType.PasswordChanged, at, None, None, None)
       for {
         _ <- setup.run(mine.traverse_(setup.events.save) *> setup.events.save(other))
-        first <- setup.run(setup.events.listByUser(setup.userId, None, 2))
-        second <- setup.run(setup.events.listByUser(setup.userId,
-          Some(SecurityEventCursor(first.last.occurredAt, first.last.id)), 2))
-      } yield IO {
-        assertEquals((first ++ second).map(_.id).toSet, mine.map(_.id).toSet)
-        assertEquals((first ++ second).map(_.userId).toSet, Set(setup.userId))
+        first <- setup.run(new ListSecurityEvents[ConnectionIO](setup.events).execute(setup.userId, None, 2))
+        second <- setup.run(new ListSecurityEvents[ConnectionIO](setup.events).execute(setup.userId, first.nextCursor, 2))
+      } yield {
+        assertEquals(first.items.size, 2)
+        assertEquals(first.nextCursor, first.items.lastOption.map(row => SecurityEventCursor(row.occurredAt, row.id)))
+        assertEquals(second.items.size, 1)
+        assertEquals((first.items ++ second.items).map(_.id).toSet, mine.map(_.id).toSet)
+        assertEquals((first.items ++ second.items).map(_.id).distinct.size, 3)
+        assertEquals((first.items ++ second.items).map(_.userId).toSet, Set(setup.userId))
       }
     }
   }
@@ -43,14 +47,14 @@ final class SecurityEventIntegrationSpec extends FunSuite {
         _ <- setup.run(setup.events.save(old) *> setup.events.save(recent))
         _ <- setup.run(setup.events.deleteBefore(Instant.parse("2026-06-01T00:00:00Z")))
         rows <- setup.run(setup.events.listByUser(setup.userId, None, 10))
-      } yield IO(assertEquals(rows.map(_.id), List(recent.id)))
+      } yield assertEquals(rows.map(_.id), List(recent.id))
     }
   }
 
-  private def withSetup(body: Setup => IO[IO[Unit]]): Unit = {
+  private def withSetup(body: Setup => IO[Unit]): Unit = {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"), "PostgreSQL integration tests disabled")
     PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
-      val setup = new Setup(new DoobieTransactionRunner(xa)); body(setup).flatten.guarantee(setup.cleanUp)
+      val setup = new Setup(new DoobieTransactionRunner(xa)); setup.initialize *> body(setup).guarantee(setup.cleanUp)
     }.unsafeRunSync()
   }
   private final class Setup(runner: DoobieTransactionRunner) {
@@ -58,10 +62,10 @@ final class SecurityEventIntegrationSpec extends FunSuite {
     val users = new PostgresUserAccountRepository; val events = new PostgresSecurityEventRepository
     def run[A](value: ConnectionIO[A]): IO[A] = runner.run(value)
     private def user(id: UUID) = UserAccount(id, s"security-${id}@example.test", "hash", "User", true, Instant.EPOCH, Instant.EPOCH)
+    def initialize: IO[Unit] = run(users.createIfMissing(user(userId)) *> users.createIfMissing(user(otherUserId)))
     def cleanUp: IO[Unit] = run(for {
       _ <- sql"delete from account_security_event where user_id in ($userId, $otherUserId)".update.run
       _ <- sql"delete from user_account where id in ($userId, $otherUserId)".update.run
     } yield ()).attempt.void
-    run(users.createIfMissing(user(userId)) *> users.createIfMissing(user(otherUserId))).unsafeRunSync()
   }
 }
