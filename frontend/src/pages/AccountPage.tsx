@@ -13,6 +13,7 @@ import {
 import { useMe, useMyOrganizations } from '../api/auth'
 import { describeError } from '../i18n/errors'
 import { useI18n } from '../i18n'
+import { WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import type { MyOrganizationResponse } from '../types/auth'
 
 /** The signed-in user's account: their profile, their organizations, and changing their password.
@@ -27,11 +28,8 @@ export function AccountPage() {
   const organizations = useMyOrganizations()
 
   return (
-    <main className="account-page">
-      <header>
-        <h1>{t.title}</h1>
-        <p className="muted">{t.subtitle}</p>
-      </header>
+    <main className="workspace-page">
+      <WorkspaceHeader title={t.title} subtitle={t.subtitle} />
 
       <ProfileSection displayName={me.data?.displayName ?? ''} email={me.data?.email ?? ''}
         organizations={organizations.data ?? []} />
@@ -56,11 +54,10 @@ function SecurityEventsSection() {
   const rows = items
 
   return (
-    <section className="account-panel" aria-labelledby="account-security-events-heading">
-      <h2 id="account-security-events-heading">{t.securityHeading}</h2>
+    <WorkspaceSection title={t.securityHeading} headingId="account-security-events-heading">
       {events.isError ? <p className="form-error" role="alert">{t.securityLoadFailed}</p> : null}
       {!events.isLoading && rows.length === 0 ? <p className="muted">{t.noSecurityEvents}</p> : null}
-      <ul className="account-sessions">
+      <ul className="account-security-events">
         {rows.map((event) => <li key={event.id}>
           <span>{securityEventLabel(event.type, t)}</span>
           <small className="muted">{i18n.format.dateTime(event.occurredAt)}{event.source ? ` · ${event.source}` : ''}</small>
@@ -68,7 +65,7 @@ function SecurityEventsSection() {
       </ul>
       {events.data?.nextCursor ? <button type="button" className="secondary-button"
         onClick={() => setCursor(events.data?.nextCursor)}>{t.showMore}</button> : null}
-    </section>
+    </WorkspaceSection>
   )
 }
 
@@ -105,9 +102,8 @@ function ProfileSection(props: {
   }
 
   return (
-    <section className="account-panel" aria-labelledby="account-profile-heading">
-      <h2 id="account-profile-heading">{t.profileHeading}</h2>
-      <form onSubmit={submit}>
+    <WorkspaceSection title={t.profileHeading} headingId="account-profile-heading">
+      <form className="account-fields" onSubmit={submit}>
         <label>{t.name}
           <input type="text" value={name} maxLength={255} autoComplete="name"
             onChange={(event) => setEdited(event.target.value)} />
@@ -133,7 +129,7 @@ function ProfileSection(props: {
           {t.saveName}
         </button>
       </form>
-    </section>
+    </WorkspaceSection>
   )
 }
 
@@ -165,9 +161,8 @@ function PasswordSection() {
   }
 
   return (
-    <section className="account-panel" aria-labelledby="account-password-heading">
-      <h2 id="account-password-heading">{t.changePassword}</h2>
-      <form onSubmit={submit}>
+    <WorkspaceSection title={t.changePassword} headingId="account-password-heading">
+      <form className="account-fields" onSubmit={submit}>
         <label>{t.currentPassword}
           <input type="password" autoComplete="current-password" value={currentPassword} required
             onChange={(event) => setCurrentPassword(event.target.value)} />
@@ -186,7 +181,7 @@ function PasswordSection() {
         {change.isSuccess ? <p className="form-success" role="status">{t.passwordUpdated}</p> : null}
         <button className="primary-button" type="submit" disabled={change.isPending}>{t.submit}</button>
       </form>
-    </section>
+    </WorkspaceSection>
   )
 }
 
@@ -207,8 +202,7 @@ function SessionsSection() {
   const actionFailed = revokeOne.isError || revokeOthers.isError || revokeAll.isError
 
   return (
-    <section className="account-panel" aria-labelledby="account-sessions-heading">
-      <h2 id="account-sessions-heading">{t.sessionsHeading}</h2>
+    <WorkspaceSection title={t.sessionsHeading} headingId="account-sessions-heading">
       {sessions.isError ? <p className="form-error" role="alert">{t.sessionsLoadFailed}</p> : null}
 
       {current ? <div className="account-field">
@@ -240,6 +234,6 @@ function SessionsSection() {
           {t.signOutAll}
         </button>
       </div>
-    </section>
+    </WorkspaceSection>
   )
 }

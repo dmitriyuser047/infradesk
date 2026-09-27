@@ -36,7 +36,7 @@ export function AccountMenu() {
       <span className="account-name">{name}</span>
     </button>
     {popover.open ? <div ref={popover.panelRef}
-      id={popover.panelId} className="account-panel" role="menu" aria-label={t.account} onKeyDown={onMenuKeyDown}>
+      id={popover.panelId} className="account-menu-panel" role="menu" aria-label={t.account} onKeyDown={onMenuKeyDown}>
       <div className="account-identity" role="presentation">
         <strong>{name}</strong>
         {me.data?.email ? <small>{me.data.email}</small> : null}

@@ -58,15 +58,16 @@ export function PageUnavailable({ back, notFound, notFoundTitle, notFoundDetail,
   </div>
 }
 
-export function WorkspaceSection({ title, description, actions, children, className = '' }: {
+export function WorkspaceSection({ title, description, actions, children, className = '', headingId }: {
   title: string
   description?: ReactNode
   actions?: ReactNode
   children: ReactNode
   className?: string
+  headingId?: string
 }) {
   return <section className={`workspace-section ${className}`}>
-    <div className="workspace-section-heading"><h2>{title}</h2>{actions}</div>
+    <div className="workspace-section-heading"><h2 id={headingId}>{title}</h2>{actions}</div>
     {description ? <p className="section-description">{description}</p> : null}
     <div className="section-content">{children}</div>
   </section>

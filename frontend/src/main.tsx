@@ -13,6 +13,7 @@ import './styles/pages/connections.css'
 import './styles/pages/resources.css'
 import './styles/pages/incidents.css'
 import './styles/pages/workspace.css'
+import './styles/pages/account.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

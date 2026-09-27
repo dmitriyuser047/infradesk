@@ -66,6 +66,15 @@ describe('account page', () => {
     expect(screen.queryByDisplayValue('user@example.com')).toBeNull()
   })
 
+  it('uses workspace sections and keeps the account menu panel out of settings', async () => {
+    setup()
+    const page = await screen.findByRole('main')
+
+    expect(page.classList.contains('workspace-page')).toBe(true)
+    expect(page.querySelectorAll('.workspace-section')).toHaveLength(4)
+    expect(page.querySelector('.account-panel')).toBeNull()
+  })
+
   it('renders Russian labels when the locale is ru', async () => {
     setup({ locale: 'ru' })
     expect(await screen.findByText('Профиль')).toBeTruthy()

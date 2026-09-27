@@ -104,7 +104,7 @@
   background: var(--primary-soft); color: var(--primary); font-size: 12px; font-weight: 700;
 }
 .account-name { max-width: 20ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.account-panel {
+.account-menu-panel {
   position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 248px; padding: 6px;
   border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-md);
 }
