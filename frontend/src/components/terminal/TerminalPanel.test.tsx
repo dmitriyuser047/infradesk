@@ -77,6 +77,21 @@ describe('terminal panel lifecycle', () => {
     expect(Socket.instances).toHaveLength(2)
     expect(Socket.instances[0].onmessage).toBeNull()
   })
+  it('fits after ready and fullscreenchange and detaches fullscreen listeners on unmount', () => {
+    const view = render(panel())
+    const host = screen.getByLabelText('Terminal')
+    Object.defineProperties(host, { clientWidth: { value: 800 }, clientHeight: { value: 400 } })
+    vi.stubGlobal('requestAnimationFrame', vi.fn(callback => { callback(); return 1 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    act(() => Socket.instances[0].ready())
+    expect(screen.getByText('Connected')).toBeTruthy()
+    const before = mocks.fit.mock.calls.length
+    fireEvent(document, new Event('fullscreenchange'))
+    expect(mocks.fit).toHaveBeenCalledTimes(before + 1)
+    view.unmount()
+    fireEvent(document, new Event('fullscreenchange'))
+    expect(mocks.fit).toHaveBeenCalledTimes(before + 1)
+  })
   it('localizes unknown server errors without exposing their text or reconnecting', () => {
     render(panel())
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))

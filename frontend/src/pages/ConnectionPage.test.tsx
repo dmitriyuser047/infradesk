@@ -91,7 +91,7 @@ describe('connection workspace', () => {
   it('shows what the connection discovered, with counts in the tabs, and loads no full list up front', async () => {
     const requests = renderPage()
     expect(await screen.findByRole('tree', { name: 'Infrastructure · Production' })).toBeTruthy()
-    expect(tabNames()).toEqual(['Overview', 'Resources 3', 'Incidents 1', 'Synchronization'])
+    expect(tabNames()).toEqual(['Overview', 'Resources 3', 'Terminal', 'Incidents 1', 'Synchronization'])
     // The containers sit under their server.
     const server = screen.getAllByRole('treeitem')[0]
     const names = (item: HTMLElement) => item.querySelector('.resource-name')?.firstChild?.textContent
@@ -144,7 +144,7 @@ describe('connection workspace', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Finnish Node' })).toBeTruthy()
     expect(screen.getByText('fin.example')).toBeTruthy()
     // Without counts the tabs still name themselves.
-    expect(tabNames()).toEqual(['Overview', 'Resources', 'Incidents', 'Synchronization'])
+    expect(tabNames()).toEqual(['Overview', 'Resources', 'Terminal', 'Incidents', 'Synchronization'])
   })
 
   it('places the connection in its project and environment, by name', async () => {

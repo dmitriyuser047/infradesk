@@ -98,6 +98,16 @@ describe('terminal transport', () => {
     second.socket.message('{')
     expect(second.sink.state).toHaveBeenLastCalledWith('error', 'PROTOCOL_ERROR')
   })
+  it('requires a UUID session id and clears it on cleanup', () => {
+    const first = fixture()
+    first.socket.message(JSON.stringify({ type: 'ready', protocolVersion: 1, sessionId: 'not-a-uuid' }))
+    expect(first.sink.state).toHaveBeenLastCalledWith('error', 'PROTOCOL_ERROR')
+    const second = fixture()
+    second.socket.ready()
+    expect(second.transport.sessionId).toBe('00000000-0000-0000-0000-000000000001')
+    second.transport.dispose()
+    expect(second.transport.sessionId).toBeUndefined()
+  })
   it('preserves safe error and close codes and creates no replacement socket', () => {
     const first = fixture()
     first.socket.message(JSON.stringify({ type: 'error', code: 'SSH_UNAVAILABLE' }))
