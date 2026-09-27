@@ -21,6 +21,10 @@ resize control frames are JSON text:
 Server text control frames report `error` or `closed` with a stable code and safe message. PTY
 output is never logged or persisted. Fragmented and unsupported frames are rejected. Binary frames
 are bounded to 64 KiB and controls to 8 KiB; dimensions are limited to 500 columns by 200 rows.
+Server frames are unfragmented. Oversized binary/control frames close with 1009; unsupported
+fragmentation, invalid JSON/control, and invalid dimensions close with 1002. SSH/internal failures
+close with 1011; normal disconnect, remote EOF, idle timeout, and maximum lifetime close with 1000.
+An ordinary authenticated same-origin GET returns 426 `TERMINAL_WEBSOCKET_REQUIRED`.
 
 Default limits are 80x24 initial dimensions, 30 minutes idle time, two hours maximum lifetime,
 and 16 simultaneous sessions per backend process. Activity means terminal input, resize, or SSH
@@ -29,6 +33,9 @@ within hard bounds using the `INFRADESK_TERMINAL_*` variables in the production 
 
 The server loads the tenant-scoped connection and credential before Upgrade. The PostgreSQL
 transaction ends before SSH connect; no database work occurs during the terminal stream. SSH
-shares the existing sshj pinned-host-key verifier and authentication provider. SSH session and
+capacity is reserved atomically before Upgrade; a full process returns HTTP 503 `TERMINAL_CAPACITY`.
+Invalid handshakes are rejected before capacity is reserved; failed or cancelled WebSocket builds
+release their reservations. SSH shares the existing sshj pinned-host-key verifier and authentication
+provider. SSH session and
 client resources, as well as the in-process capacity permit, are released when the WebSocket
 stream closes, fails, times out, or is cancelled during process shutdown.

@@ -57,7 +57,7 @@ object HttpModule {
     val authorization = new OrganizationAuthorization(loggers.authorization)
 
     val terminalRoutes = webSocketBuilder.fold(org.http4s.HttpRoutes.empty[IO]) { builder =>
-      new TerminalRoutes(application.openSshTerminal, terminalConfig, authorization).routes(builder)
+      new TerminalRoutes(application.openSshTerminal, terminalConfig, authorization, loggers.terminal).routes(builder)
     }
 
     val businessApp = (

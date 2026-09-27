@@ -166,6 +166,8 @@ jobs:
           test "${ready}" = "true"
       - name: Smoke-test the deployment
         run: ./scripts/check-production.sh http://127.0.0.1:8081
+      - name: Verify terminal smoke client and WebSocket frame parser
+        run: node --test scripts/check-terminal-websocket.test.mjs
       - name: Exercise authenticated terminal WebSocket through production nginx
         run: |
           fingerprint="$(docker exec infradesk-ci-terminal-sshd \

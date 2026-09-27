@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package integration.ssh
 
-import cats.effect.IO
+import cats.effect.{Deferred, IO}
 import cats.effect.unsafe.implicits.global
 import fs2.Chunk
 import munit.FunSuite
@@ -99,6 +99,35 @@ final class SshjClientIntegrationSpec extends FunSuite {
     }
   }
 
+  test("terminal rejects a changed pinned host key before password authentication") {
+    withServer(acceptPublicKeys = false) { server =>
+      intercept[SshTransportFailure.HostKeyMismatch] {
+        client.terminal(baseConfig(server).copy(hostKeyFingerprint = Some("not-the-host-key")),
+          SshAuthentication.Password("terminal-test"), TerminalSize(80, 24)).use(_ => IO.unit).unsafeRunSync()
+      }
+      assertEquals(server.authenticationAttempts.get(), 0)
+    }
+  }
+
+  test("cancelling a real terminal with a blocked output read closes the SSH session") {
+    withServer(acceptPublicKeys = false) { server =>
+      val config = trustedConfig(server)
+      val cancelled = for {
+        opened <- Deferred[IO, Unit]
+        fiber <- client.terminal(config, SshAuthentication.Password("terminal-test"), TerminalSize(80, 24)).use { terminal =>
+          opened.complete(()) *> terminal.output.compile.drain
+        }.start
+        _ <- opened.get.timeout(5.seconds)
+        _ <- IO.sleep(200.millis)
+        _ <- fiber.cancel.timeout(5.seconds)
+      } yield ()
+      cancelled.unsafeRunSync()
+      val deadline = System.nanoTime() + 5.seconds.toNanos
+      while (server.sshd.getActiveSessions.size() > 0 && System.nanoTime() < deadline) Thread.sleep(20)
+      assertEquals(server.sshd.getActiveSessions.size(), 0)
+    }
+  }
+
   private def trustedConfig(server: RunningServer): SshConnectionConfig = {
     val config = baseConfig(server)
     val fingerprint = client.probeHostKey(config).unsafeRunSync()
@@ -119,10 +148,10 @@ final class SshjClientIntegrationSpec extends FunSuite {
       attempts.incrementAndGet()
       acceptPublicKeys
     })
-    sshd.setPasswordAuthenticator((_, _, _) => true)
+    sshd.setPasswordAuthenticator((_, _, _) => { attempts.incrementAndGet(); true })
     sshd.setShellFactory(InteractiveProcessShellFactory.INSTANCE)
     sshd.start()
-    try use(RunningServer(sshd.getPort, attempts))
+    try use(RunningServer(sshd.getPort, attempts, sshd))
     finally sshd.stop(true)
   }
 
@@ -145,5 +174,5 @@ final class SshjClientIntegrationSpec extends FunSuite {
     directory
   }
 
-  private final case class RunningServer(port: Int, authenticationAttempts: AtomicInteger)
+  private final case class RunningServer(port: Int, authenticationAttempts: AtomicInteger, sshd: SshServer)
 }

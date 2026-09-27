@@ -96,7 +96,13 @@ final class SshjClient[F[_]: Async](
         val shell = terminal.shell
         new InteractiveSshTerminal[F] {
           override val output: fs2.Stream[F, Byte] =
-            fs2.io.readInputStream(Async[F].pure(shell.getInputStream), 8192, closeAfterUse = false)
+            // SSHJ's channel read waits interruptibly; cancellation must reach it before
+            // Resource finalizers can close the shell, session, and client.
+            fs2.Stream.repeatEval(Async[F].interruptibleMany {
+              val bytes = new Array[Byte](8192)
+              val size = shell.getInputStream.read(bytes)
+              if (size < 0) None else Some(Chunk.array(bytes, 0, size))
+            }).unNoneTerminate.flatMap(fs2.Stream.chunk(_))
               .handleErrorWith(error => fs2.Stream.raiseError[F](SshTransportFailure.fromCommandTransport(
                 error match {
                   case io: IOException => io
@@ -107,7 +113,7 @@ final class SshjClient[F[_]: Async](
           override def write(bytes: Chunk[Byte]): F[Unit] =
             Async[F].blocking {
               val stream = shell.getOutputStream
-              bytes.foreach(byte => stream.write(byte.toInt))
+              stream.write(bytes.toArray)
               stream.flush()
             }.adaptError {
               case error: IOException => SshTransportFailure.fromCommandTransport(error)
