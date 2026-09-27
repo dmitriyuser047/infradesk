@@ -127,7 +127,7 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
       title={sync.data.status === SyncStatus.failed ? getSyncFailureMessage(sync.data, i18n) : t.syncCompleted} /> : null}
     <WorkspaceTabs tabs={tabs} active={activeTab} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${activeTab}`} aria-labelledby={`tab-${activeTab}`}>
-      {activeTab === 'terminal' ? <Suspense fallback={<div className="row-skeleton" />}><TerminalPanel key={`${organizationId}/${connectionId}/${connection.updatedAt}`}
+      {activeTab === 'terminal' ? <Suspense fallback={<div className="row-skeleton" />}><TerminalPanel
         organizationId={organizationId} connection={connection}
         editLink={canManage ? `${connectionBase}/${encodeURIComponent(connectionId)}/edit${context}` : undefined} /></Suspense> : null}
       {activeTab === 'overview' ? <>

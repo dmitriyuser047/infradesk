@@ -7,6 +7,11 @@
 export const en = {
   terminal: {
     title: 'Terminal', connect: 'Connect', disconnect: 'Disconnect', fullscreen: 'Fullscreen',
+    reconnect: 'Reconnect', close: 'Close',
+    dock: 'Open terminals',
+    dockOpen: (name: string, state: string) => `Terminal ${name}, ${state}`,
+    dockClose: (name: string) => `Close terminal ${name}`,
+    closeConfirm: (name: string) => `Close the SSH session ${name}?`,
     states: { idle: 'Not connected', connecting: 'Connecting', connected: 'Connected', closing: 'Disconnecting', closed: 'Disconnected', error: 'Connection failed' },
     inactive: 'This connection is inactive.', untrusted: 'Confirm the SSH host key before connecting.',
     missingCredentials: 'SSH credentials are not configured.', mismatch: 'The SSH host key has changed. Verify the host before connecting.',

@@ -5,6 +5,8 @@ import { Link, Outlet, useLocation } from 'react-router-dom'
 import { useI18n, type Messages } from '../../i18n'
 import { useOrganizationPermissions, type OrganizationPermission } from '../auth/authorization'
 import { AccountMenu } from './AccountMenu'
+import { WorkspaceDock } from '../workspace/WorkspaceDock'
+import { useTerminalSessions } from '../workspace/TerminalWorkspaceProvider'
 import { ContextSwitcher } from './ContextSwitcher'
 import { useWorkspaceRouteContext } from './useWorkspaceRouteContext'
 import { activeWorkspaceModule, modulePath, type WorkspaceModule } from './workspaceNavigation'
@@ -68,6 +70,7 @@ function ShellFrame({ children }: { children: ReactNode }) {
   const permissions = useOrganizationPermissions(scope.organizationId)
   const active = activeWorkspaceModule(location.pathname)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const docked = useTerminalSessions().length > 0
   const toggleRef = useRef<HTMLButtonElement>(null)
   const sidebarRef = useRef<HTMLElement>(null)
 
@@ -87,7 +90,7 @@ function ShellFrame({ children }: { children: ReactNode }) {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [drawerOpen])
 
-  return <div className={`app-shell ${drawerOpen ? 'drawer-open' : ''}`}>
+  return <div className={`app-shell ${drawerOpen ? 'drawer-open' : ''} ${docked ? 'has-dock' : ''}`}>
     <a className="skip-link" href="#main-content">{t.shell.skipToContent}</a>
     <aside ref={sidebarRef} id="app-sidebar" className="sidebar">
       <div className="sidebar-header">
@@ -135,5 +138,6 @@ function ShellFrame({ children }: { children: ReactNode }) {
       </header>
       <main className="content" id="main-content" tabIndex={-1}>{children}</main>
     </div>
+    <WorkspaceDock />
   </div>
 }

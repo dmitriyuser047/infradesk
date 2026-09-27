@@ -7,3 +7,45 @@
 .terminal-panel:fullscreen { display: flex; flex-direction: column; padding: var(--space-3); }
 .terminal-panel:fullscreen .terminal-screen { flex: 1; min-height: 0; height: auto; }
 @media (max-width: 600px) { .terminal-screen { height: 60vh; min-height: 280px; } }
+.terminal-host { height: 100%; }
+
+/* Workspace dock: live work of this tab, one compact row along the bottom of the application. */
+:root { --dock-height: 44px; }
+.has-dock .content { padding-bottom: calc(var(--space-6) + var(--dock-height)); }
+.workspace-dock {
+  position: fixed; right: 0; bottom: 0; left: var(--sidebar-width); z-index: 30; height: var(--dock-height);
+  border-top: 1px solid var(--border); background: var(--surface);
+}
+.workspace-dock ul {
+  display: flex; align-items: stretch; gap: var(--space-1); height: 100%; margin: 0; padding: 0 var(--space-3);
+  list-style: none; overflow-x: auto; overscroll-behavior-x: contain;
+}
+.dock-tab {
+  display: flex; flex: 0 0 auto; align-items: center; max-width: 280px; border-top: 2px solid transparent;
+  color: var(--text-secondary);
+}
+.dock-tab:hover { background: var(--surface-muted); }
+.dock-tab-selected { border-top-color: var(--primary); color: var(--text-primary); background: var(--surface-muted); }
+.dock-tab-link {
+  display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; height: 100%; padding: 0 var(--space-2) 0 var(--space-3);
+  color: inherit; font-size: var(--font-size-small); text-decoration: none;
+}
+.dock-tab-link:focus-visible, .dock-tab-close:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.dock-tab-name { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.dock-tab-state { display: inline-flex; align-items: center; gap: 5px; color: var(--text-tertiary); font-size: var(--font-size-caption); white-space: nowrap; }
+.dock-tab-state .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--neutral); }
+.dock-success .status-dot { background: var(--success); }
+.dock-danger .status-dot { background: var(--danger); }
+.dock-danger .dock-tab-state { color: var(--danger); }
+.dock-tab-close {
+  display: inline-grid; place-items: center; width: 32px; height: 100%; padding: 0; border: 0;
+  background: transparent; color: var(--text-tertiary); cursor: pointer;
+}
+.dock-tab-close:hover { color: var(--text-primary); }
+@media (max-width: 960px) {
+  .workspace-dock { left: 0; }
+  .workspace-dock ul { padding: 0 var(--space-2); }
+  .dock-tab { max-width: 200px; }
+  /* Touch: the close target keeps a finger-sized width. */
+  .dock-tab-close { width: 40px; }
+}

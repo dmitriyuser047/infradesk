@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { useLogout, useMe } from '../../api/auth'
 import { Locales, useI18n } from '../../i18n'
 import { usePopover } from './usePopover'
+import { useOptionalTerminalWorkspace } from '../workspace/TerminalWorkspaceProvider'
 
 /** Who is signed in, the interface language, and signing out. */
 export function AccountMenu() {
@@ -12,6 +13,7 @@ export function AccountMenu() {
   const t = i18n.t.shell
   const me = useMe()
   const logout = useLogout()
+  const workspace = useOptionalTerminalWorkspace()
   const navigate = useNavigate()
   const popover = usePopover()
   const menuRef = popover.panelRef
@@ -56,7 +58,12 @@ export function AccountMenu() {
       </button>)}
       <div className="menu-separator" role="separator" />
       <button type="button" role="menuitem" className="menu-item" disabled={logout.isPending}
-        onClick={() => logout.mutate(undefined, { onSuccess: () => navigate('/login', { replace: true }) })}>
+        onClick={() => {
+          // Terminals end first. Closing does not wait on the server, so signing out is never held up;
+          // revoking the session ends any terminal still open on the server's side.
+          workspace?.closeAll()
+          logout.mutate(undefined, { onSuccess: () => navigate('/login', { replace: true }) })
+        }}>
         <span className="menu-check" aria-hidden><LogOut size={16} /></span>{t.signOut}
       </button>
       {logout.isError ? <p className="menu-error" role="alert">{t.signOutFailed}</p> : null}
