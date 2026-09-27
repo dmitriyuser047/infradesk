@@ -63,9 +63,9 @@ final class SecurityEventIntegrationSpec extends FunSuite {
     def run[A](value: ConnectionIO[A]): IO[A] = runner.run(value)
     private def user(id: UUID) = UserAccount(id, s"security-${id}@example.test", "hash", "User", true, Instant.EPOCH, Instant.EPOCH)
     def initialize: IO[Unit] = run(users.createIfMissing(user(userId)) *> users.createIfMissing(user(otherUserId)))
-    def cleanUp: IO[Unit] = run(for {
-      _ <- sql"delete from account_security_event where user_id = $userId or user_id = $otherUserId".update.run
-      _ <- sql"delete from user_account where id = $userId or id = $otherUserId".update.run
-    } yield ()).attempt.void
+    def cleanUp: IO[Unit] = run(List(userId, otherUserId).traverse_ { id =>
+      sql"delete from account_security_event where user_id = $id".update.run *>
+        sql"delete from user_account where id = $id".update.run
+    }).attempt.void
   }
 }
