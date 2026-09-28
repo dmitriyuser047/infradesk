@@ -1,4 +1,7 @@
 # shellcheck shell=bash
+# The constants and platform facts below are read by the scripts that source this library, which
+# ShellCheck cannot see when it checks this file on its own.
+# shellcheck disable=SC2034
 # Shared functions of the InfraDesk self-hosted installer, CLI and lifecycle scripts.
 #
 # Sourced, never executed. Nothing here prints a secret: values from the environment file are read
