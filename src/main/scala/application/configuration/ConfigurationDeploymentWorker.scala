@@ -109,12 +109,16 @@ final class ConfigurationDeploymentWorker[Tx[_]](
         }
     }
 
-    def verify: IO[Unit] = initial.policy.activation match {
-      case ConfigurationActivation.None => IO.unit
-      case _ =>
-        val unit = initial.policy.unitName.getOrElse(throw DeploymentFailure("CONFIGURATION_HEALTH_CHECK_FAILED"))
-        guard(initial, token) *> remote.execute("/usr/bin/systemctl", List("is-active", unit), 30)
-          .flatMap(status => IO.raiseUnless(status == 0)(DeploymentFailure("CONFIGURATION_HEALTH_CHECK_FAILED")))
+    def verify: IO[Unit] = readTarget.flatMap { target =>
+      IO.raiseUnless(target.exists && ConfigurationDeployment.sha256Bytes(target.bytes) == initial.desiredSha256)(
+        DeploymentFailure("CONFIGURATION_REMOTE_CHANGED")) *>
+        (initial.policy.activation match {
+          case ConfigurationActivation.None => IO.unit
+          case _ =>
+            val unit = initial.policy.unitName.getOrElse(throw DeploymentFailure("CONFIGURATION_HEALTH_CHECK_FAILED"))
+            guard(initial, token) *> remote.execute("/usr/bin/systemctl", List("is-active", unit), 30)
+              .flatMap(status => IO.raiseUnless(status == 0)(DeploymentFailure("CONFIGURATION_HEALTH_CHECK_FAILED")))
+        })
     }
 
     def rollback: IO[Unit] = for {
@@ -158,7 +162,14 @@ final class ConfigurationDeploymentWorker[Tx[_]](
       }
     }
 
-    def continue(phase: ConfigurationDeploymentPhase): IO[Unit] = phase match {
+    def cancellationRequested: IO[Boolean] =
+      runner.run(deployments.find(initial.organizationId, initial.id)).map(_.exists(_.cancelRequested))
+
+    def cancelBeforeReplace: IO[Unit] =
+      guard(initial, token) *> remote.remove(temp).attempt.void *>
+        remote.remove(backup).attempt.void *> finish(initial, token, Cancelled, None)
+
+    def step(phase: ConfigurationDeploymentPhase): IO[Unit] = phase match {
       case Precheck =>
         readTarget.flatMap { file =>
           IO.raiseUnless(expected(file))(DeploymentFailure("CONFIGURATION_REMOTE_CHANGED")) *>
@@ -188,11 +199,14 @@ final class ConfigurationDeploymentWorker[Tx[_]](
           if (file.exists && ConfigurationDeployment.sha256Bytes(file.bytes) == initial.desiredSha256)
             advance(initial, token, Replace, Activate) *> continue(Activate)
           else IO.raiseUnless(expected(file))(DeploymentFailure("CONFIGURATION_REMOTE_CHANGED")) *>
-            remote.read(temp, maxRemoteBytes).flatMap { candidate =>
-              IO.raiseUnless(candidate.exists && ConfigurationDeployment.sha256Bytes(candidate.bytes) == initial.desiredSha256)(
-                DeploymentFailure("CONFIGURATION_UPLOAD_FAILED")) *>
-                guard(initial, token) *> remote.atomicReplace(temp, initial.targetPath) *>
-                advance(initial, token, Replace, Activate) *> continue(Activate)
+            cancellationRequested.flatMap {
+              case true => cancelBeforeReplace
+              case false => remote.read(temp, maxRemoteBytes).flatMap { candidate =>
+                IO.raiseUnless(candidate.exists && ConfigurationDeployment.sha256Bytes(candidate.bytes) == initial.desiredSha256)(
+                  DeploymentFailure("CONFIGURATION_UPLOAD_FAILED")) *>
+                  guard(initial, token) *> remote.atomicReplace(temp, initial.targetPath) *>
+                  advance(initial, token, Replace, Activate) *> continue(Activate)
+              }
             }
         }
       case Activate => activate *> advance(initial, token, Activate, Verify) *> continue(Verify)
@@ -202,6 +216,14 @@ final class ConfigurationDeploymentWorker[Tx[_]](
           remote.remove(temp).attempt.void *>
           (if (initial.rolloutId.isEmpty) remote.remove(backup).attempt.void else IO.unit) *>
           finish(initial, token, Succeeded, None)
+    }
+
+    def continue(phase: ConfigurationDeploymentPhase): IO[Unit] = phase match {
+      case Precheck | Upload | Validate => cancellationRequested.flatMap {
+        case true => cancelBeforeReplace
+        case false => step(phase)
+      }
+      case _ => step(phase)
     }
 
     continue(initial.phase).handleErrorWith(recover)

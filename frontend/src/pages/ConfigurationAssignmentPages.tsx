@@ -211,7 +211,7 @@ function EditContent({ organizationId, assignmentId }: { organizationId: string;
       submitLabel={t.save} pendingLabel={t.saving} validate={() => null}
       onSubmit={draft => update.mutate({ expectedVersion: detail.version, ...draft }, { onSuccess: () => navigate(back.to, { replace: true }) })} />}
     {!removed && detail.resource.active && permissions.can('deployConfigurations')
-      ? <ConfigurationDeploymentPanel key={detail.version} organizationId={organizationId} assignment={detail} /> : null}
+      ? <ConfigurationDeploymentPanel key={`deployment-${detail.version}`} organizationId={organizationId} assignment={detail} /> : null}
   </div>
 }
 

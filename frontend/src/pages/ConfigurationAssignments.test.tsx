@@ -95,6 +95,21 @@ function backend(initial: Partial<State> = {}) {
     }
     if (path === '/configuration-assignments' && method === 'POST') return json(detail(assignment({ id: 'created' })), 201)
     if (path === '/configuration-assignments/a1' && method === 'GET') return json(state.detail)
+    if (path === '/configuration-assignments/a1/deployment-preview') return json({
+      assignmentVersion: state.detail.version, profileRevisionNumber: 1, targetPath: state.detail.targetPath,
+      remote: { exists: true, sha256: 'a'.repeat(64) }, desired: { sha256: 'b'.repeat(64) }, changed: true,
+      diff: { text: '--- remote\n+++ desired\n-old\n+new\n', truncated: false, addedLines: 1, removedLines: 1 },
+      connection: { id: 'ssh-source', name: 'Production SSH', updatedAt: '2026-09-28T10:00:00Z' },
+    })
+    if (path === '/configuration-assignments/a1/deployments' && method === 'POST')
+      return json({ deploymentId: 'deployment-1', state: 'QUEUED' }, 202)
+    if (path === '/configuration-deployments/deployment-1') return json({
+      id: 'deployment-1', assignmentId: 'a1', assignmentVersion: state.detail.version, resourceId: 'node',
+      profileId: 'p1', profileRevisionNumber: 1, targetPath: state.detail.targetPath, connectionId: 'ssh-source',
+      desiredSha256: 'b'.repeat(64), expectedRemoteSha256: 'a'.repeat(64), state: 'SUCCEEDED', phase: 'CLEANUP',
+      failureCode: null, createdAt: '2026-09-28T10:00:00Z', startedAt: '2026-09-28T10:00:01Z',
+      finishedAt: '2026-09-28T10:00:02Z', rolloutId: null,
+    })
     if (path === '/configuration-assignments/a1' && method === 'PATCH') {
       if (state.conflictOnce) {
         state.conflictOnce = false
@@ -110,7 +125,8 @@ function backend(initial: Partial<State> = {}) {
     if (path === '/environments/env/resources') return json([node, retired, container])
     if (path === '/resources/node') return json(node)
     if (path === '/resources/node/context') return json({ project: { id: 'project', name: 'App' },
-      environment: { id: 'env', name: 'Production', kind: 'PROD' }, parentResource: null, sourceConnections: [],
+      environment: { id: 'env', name: 'Production', kind: 'PROD' }, parentResource: null,
+      sourceConnections: [{ id: 'ssh-source', name: 'Production SSH', connectorType: 'SSH', active: true }],
       children: [], activeChildCount: 0, openIncidentCount: 0 })
     if (path === '/resources/node/operations') return json({ operations: [], unavailableReason: null })
     if (path.startsWith('/resources/node/')) return json([])
@@ -240,6 +256,27 @@ describe('configuration assignments', () => {
     await waitFor(() => expect(requests.filter(item => item.method === 'GET' && item.path === '/configuration-assignments/a1')).toHaveLength(2))
     await waitFor(() => expect(input('Value of domain').value).toBe('example.com'))
     expect(screen.queryByText(/Someone else changed this assignment/)).toBeNull()
+  })
+
+  it('previews a remote diff before deploying the exact hashes through the selected SSH source', async () => {
+    const { requests } = backend()
+    renderApp('/organizations/org/configuration-assignments/a1')
+    const preview = await screen.findByRole('button', { name: 'Preview remote changes' })
+    await waitFor(() => expect(preview.hasAttribute('disabled')).toBe(false))
+    expect(screen.getByRole('button', { name: 'Deploy previewed version' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.click(preview)
+    expect(await screen.findByText(/Remote SHA-256/)).toBeTruthy()
+    expect(screen.getByText(/-old/).tagName).toBe('PRE')
+    fireEvent.change(select('Activation'), { target: { value: 'SYSTEMD_RELOAD' } })
+    fireEvent.change(input('Systemd unit'), { target: { value: 'nginx.service' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy previewed version' }))
+    expect(await screen.findByText('Succeeded')).toBeTruthy()
+    expect(requests.find(item => item.path === '/configuration-assignments/a1/deployment-preview')?.body)
+      .toEqual({ expectedAssignmentVersion: 3, connectionId: 'ssh-source' })
+    expect(requests.find(item => item.path === '/configuration-assignments/a1/deployments')?.body)
+      .toMatchObject({ expectedAssignmentVersion: 3, connectionId: 'ssh-source',
+        expectedRemoteSha256: 'a'.repeat(64), expectedRemoteMissing: false,
+        execution: { activation: 'SYSTEMD_RELOAD', unitName: 'nginx.service', validator: null, newFileMode: 420 } })
   })
 
   it('removes an assignment only after a confirmation that says the server file is untouched', async () => {
