@@ -21,6 +21,7 @@ CREATE TABLE configuration_rollout (
   created_at timestamptz NOT NULL,
   started_at timestamptz,
   finished_at timestamptz,
+  next_action_at timestamptz,
   CONSTRAINT uq_configuration_rollout_id_organization UNIQUE (id, organization_id),
   CONSTRAINT uq_configuration_rollout_request UNIQUE (organization_id, request_id),
   CONSTRAINT fk_configuration_rollout_profile FOREIGN KEY (profile_id, organization_id)
