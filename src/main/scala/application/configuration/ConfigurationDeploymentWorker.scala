@@ -35,7 +35,7 @@ final class ConfigurationDeploymentWorker[Tx[_]](
     _ <- claimed.traverse_(process)
   } yield ()
 
-  def run: IO[Unit] = (tick.handleErrorWith(_ => IO.unit) *> IO.sleep(2.seconds)).foreverM
+  def run: IO[Nothing] = (tick.handleErrorWith(_ => IO.unit) *> IO.sleep(2.seconds)).foreverM
 
   private def process(initial: ConfigurationDeployment): IO[Unit] = {
     val token = initial.leaseToken.getOrElse(throw new IllegalStateException("Claim without token"))

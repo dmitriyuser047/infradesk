@@ -15,6 +15,7 @@ import infrastructure.http.{
   HealthRoutes,
   HistoryRoutes,
   ConfigurationAssignmentRoutes,
+  ConfigurationDeploymentRoutes,
   ConfigurationProfileRoutes,
   IncidentRoutes,
   InfrastructureContextRoutes,
@@ -112,6 +113,8 @@ object HttpModule {
           authorization,
           loggers.configuration
         ).routes <+>
+        new ConfigurationDeploymentRoutes(application.configurationDeployments, authorization,
+          loggers.configuration).routes <+>
         new MonitorRuleRoutes(
           application.listMonitorRules,
           application.createMonitorRule,

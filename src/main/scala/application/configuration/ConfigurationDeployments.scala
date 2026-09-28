@@ -163,6 +163,10 @@ final class ConfigurationDeployments[F[_]: MonadThrow, Tx[_]: MonadThrow](
   def detail(organizationId: UUID, id: UUID): F[ConfigurationDeployment] =
     reads.run(deployments.find(organizationId, id)).flatMap(_.liftTo[F](NotFound))
 
+  def history(organizationId: UUID, profileId: Option[UUID], before: Option[(Instant, UUID)],
+              limit: Int): F[List[ConfigurationDeployment]] =
+    reads.run(deployments.history(organizationId, profileId, before, limit))
+
   def cancel(actor: ActorContext, id: UUID): F[Unit] =
     writes.run(for {
       now <- time.now

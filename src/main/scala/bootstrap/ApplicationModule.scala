@@ -31,6 +31,8 @@ import application.discovery.{CreateDiscoveredResource, ReconcileDiscoveredResou
 import application.configuration.{
   ConfigurationAssignmentQueries,
   ConfigurationAssignments,
+  ConfigurationDeployments,
+  ConfigurationDeploymentWorker,
   ConfigurationProfileManagement,
   ConfigurationProfileQueries
 }
@@ -98,6 +100,8 @@ final case class ApplicationComponents(
   configurationProfileManagement: ConfigurationProfileManagement[ConnectionIO],
   configurationAssignments: ConfigurationAssignments[IO, ConnectionIO],
   configurationAssignmentQueries: ConfigurationAssignmentQueries[ConnectionIO],
+  configurationDeployments: ConfigurationDeployments[IO, ConnectionIO],
+  configurationDeploymentWorker: ConfigurationDeploymentWorker[ConnectionIO],
   listIncidents: ListIncidents[ConnectionIO],
   listMonitorRules: ListMonitorRules[ConnectionIO],
   createMonitorRule: CreateMonitorRule[ConnectionIO],
@@ -330,6 +334,15 @@ object ApplicationModule {
         auditRecorder, readOnlySnapshotRunner, transactionRunner),
       configurationAssignmentQueries =
         new ConfigurationAssignmentQueries[ConnectionIO](configurationAssignmentQuery, configurationProfileQuery),
+      configurationDeployments = new ConfigurationDeployments[IO, ConnectionIO](
+        configurationAssignmentRepository, configurationAssignmentQuery, configurationProfileQuery,
+        configurationDeploymentSourceQuery, configurationDeploymentRepository,
+        integrations.configurationTransport, transactionIdGenerator, transactionTimeProvider,
+        auditRecorder, readOnlySnapshotRunner, transactionRunner),
+      configurationDeploymentWorker = new ConfigurationDeploymentWorker[ConnectionIO](
+        configurationDeploymentRepository, configurationAssignmentRepository, configurationAssignmentQuery,
+        configurationProfileQuery, configurationDeploymentSourceQuery, integrations.configurationTransport,
+        transactionRunner, schedulerInstanceId),
       configurationProfileManagement = new ConfigurationProfileManagement[ConnectionIO](configurationProfileRepository,
         transactionIdGenerator, transactionTimeProvider, auditRecorder),
       listIncidents = ListIncidents[ConnectionIO](incidentListQuery),

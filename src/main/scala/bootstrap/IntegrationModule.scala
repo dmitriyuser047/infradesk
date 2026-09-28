@@ -37,7 +37,8 @@ import integration.ssh.{
   SshConnectionProbeAdapter,
   SshConnectionSyncBudget,
   SshConnector,
-  SshjClient
+  SshjClient,
+  SshjConfigurationTransport
 }
 import integration.ssh.docker.SshContainerOperationExecutor
 import org.typelevel.doobie.ConnectionIO
@@ -57,6 +58,7 @@ final case class IntegrationComponents(
   resourceOperationBudget: ResourceOperationBudget,
   connectionSyncBudget: ConnectionSyncBudget,
   openSshTerminal: OpenSshTerminal[ConnectionIO],
+  configurationTransport: application.port.RemoteConfigurationTransport[IO],
   connectorRegistry: ResourceConnectorRegistry[IO]
 )
 
@@ -105,6 +107,7 @@ object IntegrationModule {
       resourceOperationBudget = sshContainerOperations,
       connectionSyncBudget = new SshConnectionSyncBudget,
       openSshTerminal = openSshTerminal,
+      configurationTransport = new SshjConfigurationTransport(sshClient, sshAuthenticationProvider),
       connectorRegistry = connectorRegistry
     ) }
   }
