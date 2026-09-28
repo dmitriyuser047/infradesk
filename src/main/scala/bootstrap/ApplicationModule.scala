@@ -34,6 +34,7 @@ import application.configuration.{
   ConfigurationDeployments,
   ConfigurationDeploymentWorker,
   ConfigurationPromotions,
+  ConfigurationRollouts,
   ConfigurationProfileManagement,
   ConfigurationProfileQueries
 }
@@ -104,6 +105,7 @@ final case class ApplicationComponents(
   configurationDeployments: ConfigurationDeployments[IO, ConnectionIO],
   configurationDeploymentWorker: ConfigurationDeploymentWorker[ConnectionIO],
   configurationPromotions: ConfigurationPromotions[IO, ConnectionIO],
+  configurationRollouts: ConfigurationRollouts[IO, ConnectionIO],
   listIncidents: ListIncidents[ConnectionIO],
   listMonitorRules: ListMonitorRules[ConnectionIO],
   createMonitorRule: CreateMonitorRule[ConnectionIO],
@@ -349,6 +351,16 @@ object ApplicationModule {
         configurationAssignmentRepository, configurationAssignmentQuery, configurationProfileQuery,
         configurationPromotionRepository, transactionTimeProvider, auditRecorder,
         readOnlySnapshotRunner, transactionRunner),
+      configurationRollouts = new ConfigurationRollouts[IO, ConnectionIO](
+        configurationAssignmentRepository, configurationAssignmentQuery, configurationProfileQuery,
+        configurationDeploymentSourceQuery,
+        new ConfigurationDeployments[IO, ConnectionIO](configurationAssignmentRepository,
+          configurationAssignmentQuery, configurationProfileQuery, configurationDeploymentSourceQuery,
+          configurationDeploymentRepository, integrations.configurationTransport,
+          transactionIdGenerator, transactionTimeProvider, auditRecorder,
+          readOnlySnapshotRunner, transactionRunner),
+        configurationRolloutRepository, transactionIdGenerator, transactionTimeProvider,
+        auditRecorder, readOnlySnapshotRunner, transactionRunner),
       configurationProfileManagement = new ConfigurationProfileManagement[ConnectionIO](configurationProfileRepository,
         transactionIdGenerator, transactionTimeProvider, auditRecorder),
       listIncidents = ListIncidents[ConnectionIO](incidentListQuery),

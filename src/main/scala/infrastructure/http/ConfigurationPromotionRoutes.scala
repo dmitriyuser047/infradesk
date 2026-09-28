@@ -5,7 +5,7 @@ import application.configuration.{ConfigurationPromotionError, ConfigurationProm
 import application.port.ConfigurationPromotionSelection
 import cats.effect.IO
 import domain.auth.OrganizationPermission
-import infrastructure.http.dto.ApiErrorResponse
+import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs}
 import io.circe.{Decoder, Encoder, Json}
 import org.http4s.{HttpRoutes, Request, Response}
 import org.http4s.circe.CirceEntityEncoder._
