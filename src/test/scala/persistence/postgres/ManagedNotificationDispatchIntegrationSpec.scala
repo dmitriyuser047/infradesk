@@ -230,10 +230,10 @@ final class ManagedNotificationDispatchIntegrationSpec extends FunSuite {
   }
 
   private def withFixture(body: DispatchFixture => IO[IO[Unit]]): Unit =
-    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    support.SharedNotificationQueue.exclusive { PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val fixture = new DispatchFixture(new DoobieTransactionRunner(xa))
       fixture.setUp *> body(fixture).flatten.guarantee(fixture.reset)
-    }.unsafeRunSync()
+    }.unsafeRunSync() }
 
   private final class DispatchFixture(runner: DoobieTransactionRunner) {
     private val key = Base64.getEncoder.encodeToString(Array.tabulate[Byte](32)(_.toByte))

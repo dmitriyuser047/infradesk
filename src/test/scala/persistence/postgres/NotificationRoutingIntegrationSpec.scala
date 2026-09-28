@@ -353,10 +353,10 @@ final class NotificationRoutingIntegrationSpec extends FunSuite {
   }
 
   private def withFixture(body: RoutingFixture => IO[IO[Unit]]): Unit =
-    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    support.SharedNotificationQueue.exclusive { PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val fixture = new RoutingFixture(new DoobieTransactionRunner(xa))
       fixture.setUp *> body(fixture).flatten.guarantee(fixture.reset)
-    }.unsafeRunSync()
+    }.unsafeRunSync() }
 
   /** A clock far enough ahead that nothing this spec records is ever due for a worker. */
   private object NotAnyTimeSoon extends application.port.TimeProvider[ConnectionIO] {

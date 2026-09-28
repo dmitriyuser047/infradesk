@@ -176,6 +176,11 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       withSocket(base, requestProtocol = false) { (socket, listener) =>
         assertEquals(socket.getSubprotocol, "")
+        // The shell's first output follows `ready` at once. Waiting for it keeps the server's own
+        // write of that frame from racing its automatic Pong: the client would read the two
+        // interleaved and drop the connection, which is a property of the test, not the protocol.
+        val first = listener.binary.poll(5, TimeUnit.SECONDS)
+        assertEquals(Option(first).map(new String(_, StandardCharsets.UTF_8)), Some("terminal-output"))
         socket.sendPing(ByteBuffer.wrap(Array[Byte](1))).get(5, TimeUnit.SECONDS)
         assertEquals(listener.pongs.poll(5, TimeUnit.SECONDS), java.lang.Boolean.TRUE)
         assertEquals(fixture.input.get.unsafeRunSync(), Vector.empty[Byte])
@@ -186,6 +191,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
           assertEquals(new String(fixture.input.get.unsafeRunSync().toArray, StandardCharsets.UTF_8), "firstsecond")
         }
         assertEquals(listener.closed.poll(), null)
+        assertEquals(listener.errors.poll(), null)
       }
       eventually(5.seconds) { assertEquals(fixture.released.get.unsafeRunSync(), 1) }
     }
@@ -457,7 +463,13 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
       assert(Option(ready).exists(_.contains("\"type\":\"ready\"")), clues(ready))
       val sessionId = io.circe.parser.parse(ready).toOption.get.hcursor.get[String]("sessionId").toOption.get
       assertEquals(UUID.fromString(sessionId).toString, sessionId)
-      use(socket, listener)
+      try use(socket, listener)
+      catch {
+        // A send that fails after the client gave up says only "Output closed"; the reason is here.
+        case failure: Throwable =>
+          Option(listener.errors.peek()).foreach(failure.addSuppressed)
+          throw failure
+      }
     } finally { socket.abort(); client.close() }
   }
 
@@ -534,6 +546,9 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
     val binary = new ArrayBlockingQueue[Array[Byte]](8)
     val closed = new ArrayBlockingQueue[(Int, String)](2)
     val pongs = new ArrayBlockingQueue[java.lang.Boolean](8)
+    /** What made the client give up on the connection, so a failure names its cause. */
+    val errors = new ArrayBlockingQueue[Throwable](2)
+    override def onError(webSocket: WebSocket, error: Throwable): Unit = { errors.offer(error); () }
     override def onOpen(webSocket: WebSocket): Unit = webSocket.request(1)
     override def onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage[_] = {
       text.offer(data.toString)

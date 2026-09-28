@@ -39,7 +39,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     val ids = TestIds.random()
     val config = PostgresTestDatabase.config
 
-    PostgresTestDatabase.transactor(config).use { xa =>
+    support.SharedNotificationQueue.exclusive { PostgresTestDatabase.transactor(config).use { xa =>
       val transactionRunner = new DoobieTransactionRunner(xa)
       val resourceRepository = ProductionResourceCodec.resourceRepository
       val ruleRepository = new PostgresMonitorRuleRepository
@@ -110,7 +110,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
             assertEquals(loadedState, Some(state))
           }
       }
-    }.unsafeRunSync()
+    }.unsafeRunSync() }
   }
 
   test("enforces incident lifecycle constraints and one OPEN incident per rule") {
@@ -122,7 +122,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     val ids = TestIds.random()
     val config = PostgresTestDatabase.config
 
-    PostgresTestDatabase.transactor(config).use { xa =>
+    support.SharedNotificationQueue.exclusive { PostgresTestDatabase.transactor(config).use { xa =>
       val transactionRunner = new DoobieTransactionRunner(xa)
       val resourceRepository = ProductionResourceCodec.resourceRepository
       val ruleRepository = new PostgresMonitorRuleRepository
@@ -194,7 +194,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
             assert(duplicateOpen.isLeft)
           }
       }
-    }.unsafeRunSync()
+    }.unsafeRunSync() }
   }
 
   test("loads the complete monitor projection and inserts observations in one batch") {
@@ -204,7 +204,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     )
 
     val ids = TestIds.random()
-    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    support.SharedNotificationQueue.exclusive { PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
       val resources = ProductionResourceCodec.resourceRepository
       val rules = new PostgresMonitorRuleRepository
@@ -290,7 +290,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
           "ix_monitor_rule_enabled_resource"
         ))
       }}
-    }.unsafeRunSync()
+    }.unsafeRunSync() }
   }
 
   test("evaluates a stale rule end to end and moves it from NO_DATA to FIRING when data returns") {
@@ -300,7 +300,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     )
 
     val ids = TestIds.random()
-    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    support.SharedNotificationQueue.exclusive { PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
       val resources = ProductionResourceCodec.resourceRepository
       val rules = new PostgresMonitorRuleRepository
@@ -361,7 +361,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
           assertEquals(statesOfResource.map(_.monitorRuleId), List(ids.ruleId))
         }
       }
-    }.unsafeRunSync()
+    }.unsafeRunSync() }
   }
 
   test("disabling a firing rule resolves, clears, notifies and journals in one transaction") {
@@ -371,7 +371,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     )
 
     val ids = TestIds.random()
-    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    support.SharedNotificationQueue.exclusive { PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
       val resources = ProductionResourceCodec.resourceRepository
       val rules = new PostgresMonitorRuleRepository
@@ -437,7 +437,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
           assertEquals(storedIncident.map(_.reason), Some(IncidentReason.ThresholdViolation))
         }
       }
-    }.unsafeRunSync()
+    }.unsafeRunSync() }
   }
 
   test("a failing journal write rolls the rule change back with it") {
@@ -447,7 +447,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     )
 
     val ids = TestIds.random()
-    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    support.SharedNotificationQueue.exclusive { PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
       val resources = ProductionResourceCodec.resourceRepository
       val rules = new PostgresMonitorRuleRepository
@@ -490,7 +490,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
           assertEquals(reloaded.map(_.enabled), Some(true))
         }
       }
-    }.unsafeRunSync()
+    }.unsafeRunSync() }
   }
 
   test("an evaluation running next to a rule update cannot leave state behind a disabled rule") {
@@ -500,7 +500,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
     )
 
     val ids = TestIds.random()
-    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    support.SharedNotificationQueue.exclusive { PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa)
       val resources = ProductionResourceCodec.resourceRepository
       val rules = new PostgresMonitorRuleRepository
@@ -577,7 +577,7 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
           assertEquals(ruleIncidents.map(_.status), List(IncidentStatus.Resolved))
         }
       }
-    }.unsafeRunSync()
+    }.unsafeRunSync() }
   }
 
   private def linkResourceToConnection(ids: TestIds): ConnectionIO[Unit] =

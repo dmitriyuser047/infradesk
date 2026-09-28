@@ -156,10 +156,10 @@ final class HistoryEventIntegrationSpec extends FunSuite {
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests"
     )
 
-    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    support.SharedNotificationQueue.exclusive { PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val fixture = new TimelineFixture(new DoobieTransactionRunner(xa))
       (fixture.setUp *> body(fixture).flatten).guarantee(fixture.cleanUp)
-    }.unsafeRunSync()
+    }.unsafeRunSync() }
   }
 
   private final class TimelineFixture(runner: DoobieTransactionRunner) {
