@@ -723,6 +723,21 @@ export const en = {
     cancel: 'Cancel',
   },
 
+  deployments: {
+    title: 'Deploy configuration', connection: 'SSH connection', chooseConnection: 'Choose a source connection',
+    noConnection: 'No active SSH source connection is available for this node.',
+    preview: 'Preview remote changes', previewing: 'Reading remote file…',
+    remoteMissing: 'Remote file is missing', remoteHash: 'Remote SHA-256', desiredHash: 'Desired SHA-256',
+    noChanges: 'The remote and desired file have the same hash.', truncated: 'Diff truncated to the safe display limit.',
+    activation: 'Activation', none: 'No service action', reload: 'Reload systemd unit', restart: 'Restart systemd unit',
+    unit: 'Systemd unit', validator: 'Validator executable (optional)', validatorArgs: 'Validator arguments, one per line',
+    validatorHelp: 'Use {candidate} for the temporary file and {target} for the target path.',
+    deploy: 'Deploy previewed version', deploying: 'Queueing deployment…',
+    status: 'Deployment status', phase: 'Phase', failure: 'Failure code',
+    states: { QUEUED: 'Queued', RUNNING: 'Running', SUCCEEDED: 'Succeeded', FAILED: 'Failed',
+      ROLLED_BACK: 'Rolled back', ROLLBACK_FAILED: 'Rollback failed: inspect the server', CANCELLED: 'Cancelled' },
+    stale: 'The preview no longer matches this assignment. Preview again before deployment.',
+  },
   assignments: {
     targetsTitle: 'Targets',
     targetsDescription: 'Resources this configuration is assigned to, and the exact version each one should use.',

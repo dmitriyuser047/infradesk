@@ -43,12 +43,16 @@ final class ConfigurationDeploymentWorker[Tx[_]](
     Resource.make(heartbeat.start)(_.cancel).use { _ =>
       execute(initial, token).handleErrorWith {
         case LostLease => IO.unit
-        case failure: DeploymentFailure => finish(initial, token, Failed, Some(failure.code))
+        case failure: DeploymentFailure => finish(initial, token,
+          if (mayHaveReplaced(initial.phase)) RollbackFailed else Failed, Some(failure.code))
         case _: integration.ssh.RemoteFileTooLarge =>
-          finish(initial, token, Failed, Some("CONFIGURATION_REMOTE_FILE_TOO_LARGE"))
+          finish(initial, token, if (mayHaveReplaced(initial.phase)) RollbackFailed else Failed,
+            Some("CONFIGURATION_REMOTE_FILE_TOO_LARGE"))
         case _: integration.ssh.SshTransportFailure.HostKeyMismatch =>
-          finish(initial, token, Failed, Some("CONFIGURATION_HOST_KEY_MISMATCH"))
-        case _ => finish(initial, token, Failed, Some("CONFIGURATION_SSH_UNAVAILABLE"))
+          finish(initial, token, if (mayHaveReplaced(initial.phase)) RollbackFailed else Failed,
+            Some("CONFIGURATION_HOST_KEY_MISMATCH"))
+        case _ => finish(initial, token, if (mayHaveReplaced(initial.phase)) RollbackFailed else Failed,
+          Some("CONFIGURATION_SSH_UNAVAILABLE"))
       }
     }
   }
@@ -132,9 +136,27 @@ final class ConfigurationDeploymentWorker[Tx[_]](
     def failAfterReplace(error: Throwable): IO[Unit] =
       rollback.attempt.flatMap {
         case Right(_) => finish(initial, token, RolledBack, Some(failureCode(error)))
-        case Left(LostLease) => IO.unit
+        case Left(LostLease) => IO.raiseError(LostLease)
         case Left(_) => finish(initial, token, RollbackFailed, Some("CONFIGURATION_ROLLBACK_FAILED"))
       }
+
+    def recover(error: Throwable): IO[Unit] = error match {
+      case LostLease => IO.raiseError(LostLease)
+      case _ => runner.run(deployments.find(initial.organizationId, initial.id)).flatMap {
+        case Some(current) if mayHaveReplaced(current.phase) =>
+          readTarget.attempt.flatMap {
+            case Right(target) if target.exists &&
+              ConfigurationDeployment.sha256Bytes(target.bytes) == initial.desiredSha256 => failAfterReplace(error)
+            case Right(target) if expected(target) => finish(initial, token, Failed, Some(failureCode(error)))
+            case Left(LostLease) => IO.raiseError(LostLease)
+            case _ => finish(initial, token, RollbackFailed, Some("CONFIGURATION_ROLLBACK_FAILED"))
+          }
+        case Some(_) =>
+          remote.remove(temp).attempt.void *> remote.remove(backup).attempt.void *>
+            finish(initial, token, Failed, Some(failureCode(error)))
+        case None => IO.raiseError(LostLease)
+      }
+    }
 
     def continue(phase: ConfigurationDeploymentPhase): IO[Unit] = phase match {
       case Precheck =>
@@ -173,17 +195,21 @@ final class ConfigurationDeploymentWorker[Tx[_]](
                 advance(initial, token, Replace, Activate) *> continue(Activate)
             }
         }
-      case Activate => (activate *> advance(initial, token, Activate, Verify) *> continue(Verify))
-        .handleErrorWith(failAfterReplace)
-      case Verify => (verify *> advance(initial, token, Verify, Cleanup) *> continue(Cleanup))
-        .handleErrorWith(failAfterReplace)
+      case Activate => activate *> advance(initial, token, Activate, Verify) *> continue(Verify)
+      case Verify => verify *> advance(initial, token, Verify, Cleanup) *> continue(Cleanup)
       case Cleanup =>
-        guard(initial, token) *> remote.remove(temp) *>
-          (if (initial.rolloutId.isEmpty) remote.remove(backup) else IO.unit) *>
+        guard(initial, token) *>
+          remote.remove(temp).attempt.void *>
+          (if (initial.rolloutId.isEmpty) remote.remove(backup).attempt.void else IO.unit) *>
           finish(initial, token, Succeeded, None)
     }
 
-    continue(initial.phase)
+    continue(initial.phase).handleErrorWith(recover)
+  }
+
+  private def mayHaveReplaced(phase: ConfigurationDeploymentPhase): Boolean = phase match {
+    case Replace | Activate | Verify | Cleanup => true
+    case _ => false
   }
 
   private def guard(deployment: ConfigurationDeployment, token: UUID): IO[Unit] =
@@ -211,6 +237,8 @@ final class ConfigurationDeploymentWorker[Tx[_]](
 
   private def failureCode(error: Throwable): String = error match {
     case DeploymentFailure(code) => code
-    case _ => "CONFIGURATION_ACTIVATION_FAILED"
+    case _: integration.ssh.RemoteFileTooLarge => "CONFIGURATION_REMOTE_FILE_TOO_LARGE"
+    case _: integration.ssh.SshTransportFailure.HostKeyMismatch => "CONFIGURATION_HOST_KEY_MISMATCH"
+    case _ => "CONFIGURATION_SSH_UNAVAILABLE"
   }
 }
