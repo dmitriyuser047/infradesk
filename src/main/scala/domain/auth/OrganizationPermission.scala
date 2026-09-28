@@ -69,6 +69,11 @@ object OrganizationPermission {
     override val code: String = "MANAGE_CONFIGURATIONS"
   }
 
+  /** Reading remote configuration and applying desired state over SSH. */
+  case object DeployConfigurations extends OrganizationPermission {
+    override val code: String = "DEPLOY_CONFIGURATIONS"
+  }
+
   val All: List[OrganizationPermission] = List(
     ReadOrganization,
     ManageWorkspace,
@@ -79,7 +84,8 @@ object OrganizationPermission {
     ManageNotifications,
     ExecuteOperations,
     OpenTerminal,
-    ManageConfigurations
+    ManageConfigurations,
+    DeployConfigurations
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, OrganizationPermission] =

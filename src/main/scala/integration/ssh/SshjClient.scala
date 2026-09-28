@@ -12,6 +12,7 @@ import net.schmizz.sshj.transport.TransportException
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import net.schmizz.sshj.userauth.UserAuthException
 import net.schmizz.sshj.userauth.password.{PasswordFinder, PasswordUtils}
+import net.schmizz.sshj.sftp.SFTPClient
 
 import java.io.IOException
 import java.security.PublicKey
@@ -80,6 +81,17 @@ final class SshjClient[F[_]: Async](
         override def execute(command: String): F[SshCommandResult] =
           runCommand(ssh, observedFingerprint, config, command)
       })
+    }
+
+  /** SFTP uses exactly the same credential and pinned host-key handshake as command sessions. */
+  def withSftp[A](config: SshConnectionConfig, authentication: SshAuthentication)
+                 (use: (SFTPClient, String => F[SshCommandResult]) => F[A]): F[A] =
+    Resource.makeCase(Async[F].blocking(open(config, authentication))) {
+      case ((ssh, _), exitCase) => closeClient(ssh, exitCase)
+    }.use { case (ssh, observedFingerprint) =>
+      Resource.make(Async[F].blocking(ssh.newSFTPClient()))(sftp => Async[F].blocking(sftp.close())).use { sftp =>
+        use(sftp, command => runCommand(ssh, observedFingerprint, config, command))
+      }
     }
 
   override def terminal(

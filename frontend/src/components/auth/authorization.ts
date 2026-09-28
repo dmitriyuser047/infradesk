@@ -13,6 +13,7 @@ export type OrganizationPermission =
   | 'executeOperations'
   | 'openTerminal'
   | 'manageConfigurations'
+  | 'deployConfigurations'
 
 const memberPermissions: readonly OrganizationPermission[] = ['readOrganization']
 
