@@ -7,6 +7,7 @@ import {
 } from '../api/configurations'
 import { ApiError } from '../api/httpClient'
 import { useOrganizationPermissions } from '../components/auth/authorization'
+import { ConfigurationAssignmentList } from '../components/configuration/ConfigurationAssignmentList'
 import { AppShell } from '../components/layout/AppShell'
 import {
   EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
@@ -18,7 +19,7 @@ import { configurationPath, configurationsPath } from './ConfigurationsPage'
 import { InvalidRoutePage } from './InvalidRoutePage'
 import '../styles/pages/configurations.css'
 
-const Tabs = ['template', 'variables', 'versions'] as const
+const Tabs = ['template', 'variables', 'versions', 'targets'] as const
 type Tab = typeof Tabs[number]
 
 export function ConfigurationProfilePage() {
@@ -87,10 +88,10 @@ function ProfileContent({ organizationId, profileId }: { organizationId: string;
     {editing && !profile.archived ? <DetailsForm organizationId={organizationId} profile={profile} onDone={() => setEditing(false)} /> : null}
     <WorkspaceTabs tabs={tabs} active={tab} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-      {revisionNumber !== null && tab !== 'versions' ? <InlineAlert tone="info" title={t.viewingOld(revisionNumber, profile.latestRevisionNumber)}
+      {revisionNumber !== null && tab !== 'versions' && tab !== 'targets' ? <InlineAlert tone="info" title={t.viewingOld(revisionNumber, profile.latestRevisionNumber)}
         action={<button type="button" className="secondary-button" onClick={() => setParams(params => params.delete('revision'))}>{t.showLatest}</button>} /> : null}
-      {tab !== 'versions' && revisionNumber !== null && older.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
-      {tab !== 'versions' && revisionNumber !== null && older.isError ? <InlineAlert tone="danger" title={t.revisionLoadError}>
+      {tab !== 'versions' && tab !== 'targets' && revisionNumber !== null && older.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
+      {tab !== 'versions' && tab !== 'targets' && revisionNumber !== null && older.isError ? <InlineAlert tone="danger" title={t.revisionLoadError}>
         {describeError(older.error, i18n)}</InlineAlert> : null}
       {tab === 'template' && shown ? <TemplateView revision={shown} /> : null}
       {tab === 'variables' && shown ? <VariablesView revision={shown} /> : null}
@@ -99,6 +100,9 @@ function ProfileContent({ organizationId, profileId }: { organizationId: string;
           params.delete('tab')
           if (number === profile.latestRevisionNumber) params.delete('revision'); else params.set('revision', String(number))
         })} /> : null}
+      {/* Assignments pin their own version; an archived profile keeps them but takes no new one. */}
+      {tab === 'targets' ? <ConfigurationAssignmentList organizationId={organizationId} filter={{ profileId }} view="profile"
+        canAssign={!profile.archived} /> : null}
     </div>
   </div>
 }

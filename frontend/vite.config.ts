@@ -10,6 +10,8 @@ export default defineConfig({
         // across releases.
         manualChunks: {
           framework: ['react', 'react-dom', 'react-router-dom', '@tanstack/react-query'],
+          // Every page needs the dictionaries; they change with features, not with the framework.
+          i18n: ['./src/i18n/en.ts', './src/i18n/ru.ts'],
         },
       },
     },

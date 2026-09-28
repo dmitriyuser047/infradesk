@@ -72,6 +72,16 @@ final class CompositionSpec extends FunSuite {
     assertEquals(response.status, Status.Unauthorized)
   }
 
+  test("configuration assignment routes stay behind the auth boundary") {
+    val organizationId = UUID.randomUUID()
+    List(Method.GET -> "", Method.POST -> "", Method.POST -> "/preview", Method.DELETE -> s"/${UUID.randomUUID()}")
+      .foreach { case (method, suffix) =>
+        val response = app.run(Request[IO](method,
+          Uri.unsafeFromString(s"/api/v1/organizations/$organizationId/configuration-assignments$suffix"))).unsafeRunSync()
+        assertEquals(response.status, Status.Unauthorized, s"$method $suffix")
+      }
+  }
+
   test("assembled app carries the request observability middleware") {
     val response = app.run(Request[IO](Method.GET, Uri.unsafeFromString("/health"))).unsafeRunSync()
     assert(response.headers.headers.exists(_.name == RequestIdMiddleware.HeaderName))

@@ -7,6 +7,9 @@ import { ApiError } from '../api/httpClient'
 import { useResourceContext } from '../api/infrastructure'
 import { createLastHourWindow, useResourceMetrics } from '../api/metrics'
 import { useResource } from '../api/resources'
+import { useOrganizationPermissions } from '../components/auth/authorization'
+import { ConfigurationAssignmentList } from '../components/configuration/ConfigurationAssignmentList'
+import { supportsConfigurationAssignment } from '../components/configuration/configurationTargetSupport'
 import { AppShell } from '../components/layout/AppShell'
 import {
   InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
@@ -36,7 +39,7 @@ import type { ResourceResponse } from '../types/resource'
 import { ResourceOperationsPanel } from '../components/resources/ResourceOperationsPanel'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
-const Tabs = ['overview', 'monitoring', 'incidents', 'activity', 'operations'] as const
+const Tabs = ['overview', 'monitoring', 'incidents', 'activity', 'configurations', 'operations'] as const
 type Tab = typeof Tabs[number]
 
 export function ResourcePage() {
@@ -65,6 +68,10 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
   const context = contextQuery.data
   const presentation = resourcePresentationRegistry.resolve(resourceQuery.data?.resourceTypeCode ?? '')
   const monitored = supportsResourceMonitoring(resourceQuery.data?.resourceTypeCode)
+  // Desired configuration is for nodes only for now, and for those who may manage it.
+  const permissions = useOrganizationPermissions(organizationId)
+  const configurable = supportsConfigurationAssignment(resourceQuery.data?.resourceTypeCode)
+    && permissions.can('manageConfigurations')
   // The same two reads the operations tab shows; asking them here only decides whether it exists,
   // and only once the resource itself is known to exist.
   const operations = operationsApplicability(
@@ -95,6 +102,7 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
     ...(monitored ? [{ id: 'monitoring' as const, label: t.tabs.monitoring }] : []),
     ...(monitored ? [{ id: 'incidents' as const, label: t.tabs.incidents, count: context?.openIncidentCount || undefined }] : []),
     { id: 'activity', label: t.tabs.activity },
+    ...(configurable ? [{ id: 'configurations' as const, label: t.tabs.configurations }] : []),
     ...(operations === 'applicable' ? [{ id: 'operations' as const, label: t.tabs.operations }] : []),
   ]
   // A tab that does not apply (the operations answer changed, or a stale link) falls back to the overview.
@@ -133,6 +141,8 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
         openTotal={context?.openIncidentCount} /> : null}
       {active === 'activity' ?
         <ResourceActivitySection organizationId={organizationId} resourceId={resourceId} /> : null}
+      {active === 'configurations' ? <ConfigurationAssignmentList organizationId={organizationId}
+        filter={{ resourceId }} view="resource" canAssign={resource.active} /> : null}
       {active === 'operations' ?
         <ResourceOperationsPanel organizationId={organizationId} resourceId={resourceId} resourceName={resource.name} /> : null}
     </div>

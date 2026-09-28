@@ -28,7 +28,12 @@ import application.connection.{
 }
 import application.connector.{RunConnectionSync, SyncConnection, SyncConnectionById}
 import application.discovery.{CreateDiscoveredResource, ReconcileDiscoveredResource, SyncDiscoveredSnapshot}
-import application.configuration.{ConfigurationProfileManagement, ConfigurationProfileQueries}
+import application.configuration.{
+  ConfigurationAssignmentQueries,
+  ConfigurationAssignments,
+  ConfigurationProfileManagement,
+  ConfigurationProfileQueries
+}
 import application.context.{
   GetConnectionInfrastructureSummary,
   GetResourceContext,
@@ -91,6 +96,8 @@ final case class ApplicationComponents(
   listEnvironmentResourceSources: ListEnvironmentResourceSources[ConnectionIO],
   configurationProfileQueries: ConfigurationProfileQueries[ConnectionIO],
   configurationProfileManagement: ConfigurationProfileManagement[ConnectionIO],
+  configurationAssignments: ConfigurationAssignments[IO, ConnectionIO],
+  configurationAssignmentQueries: ConfigurationAssignmentQueries[ConnectionIO],
   listIncidents: ListIncidents[ConnectionIO],
   listMonitorRules: ListMonitorRules[ConnectionIO],
   createMonitorRule: CreateMonitorRule[ConnectionIO],
@@ -317,6 +324,12 @@ object ApplicationModule {
       listResourceIncidents = ListResourceIncidents[ConnectionIO](infrastructureContextQuery, incidentListQuery),
       listEnvironmentResourceSources = ListEnvironmentResourceSources[ConnectionIO](infrastructureContextQuery),
       configurationProfileQueries = new ConfigurationProfileQueries[ConnectionIO](configurationProfileQuery),
+      // What an assignment depends on is read in one snapshot; its change is one short write.
+      configurationAssignments = new ConfigurationAssignments[IO, ConnectionIO](configurationAssignmentRepository,
+        configurationTargetQuery, configurationProfileQuery, transactionIdGenerator, transactionTimeProvider,
+        auditRecorder, readOnlySnapshotRunner, transactionRunner),
+      configurationAssignmentQueries =
+        new ConfigurationAssignmentQueries[ConnectionIO](configurationAssignmentQuery, configurationProfileQuery),
       configurationProfileManagement = new ConfigurationProfileManagement[ConnectionIO](configurationProfileRepository,
         transactionIdGenerator, transactionTimeProvider, auditRecorder),
       listIncidents = ListIncidents[ConnectionIO](incidentListQuery),

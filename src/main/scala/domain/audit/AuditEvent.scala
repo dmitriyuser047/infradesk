@@ -50,6 +50,11 @@ object AuditAction {
   case object ConfigurationProfileArchived extends AuditAction { override val code: String = "CONFIGURATION_PROFILE_ARCHIVED" }
   /** A new immutable revision of a profile. The target is the profile; the journal keeps no content. */
   case object ConfigurationRevisionCreated extends AuditAction { override val code: String = "CONFIGURATION_REVISION_CREATED" }
+  /** Desired configuration was assigned to a resource. The journal keeps identifiers, never values. */
+  case object ConfigurationAssignmentCreated extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENT_CREATED" }
+  case object ConfigurationAssignmentUpdated extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENT_UPDATED" }
+  /** Removed from InfraDesk's desired state; nothing on the server is touched. */
+  case object ConfigurationAssignmentRemoved extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENT_REMOVED" }
 
   val All: List[AuditAction] = List(
     ProjectCreated,
@@ -77,7 +82,10 @@ object AuditAction {
     ConfigurationProfileCreated,
     ConfigurationProfileUpdated,
     ConfigurationProfileArchived,
-    ConfigurationRevisionCreated
+    ConfigurationRevisionCreated,
+    ConfigurationAssignmentCreated,
+    ConfigurationAssignmentUpdated,
+    ConfigurationAssignmentRemoved
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =
@@ -102,10 +110,11 @@ object AuditTargetType {
   /** The actor's own user account: the target of a self-service account change. */
   case object Account extends AuditTargetType { override val code: String = "ACCOUNT" }
   case object ConfigurationProfile extends AuditTargetType { override val code: String = "CONFIGURATION_PROFILE" }
+  case object ConfigurationAssignment extends AuditTargetType { override val code: String = "CONFIGURATION_ASSIGNMENT" }
 
   val All: List[AuditTargetType] =
     List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Account, TerminalSession,
-      ConfigurationProfile)
+      ConfigurationProfile, ConfigurationAssignment)
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditTargetType] =
     All.find(_.code == code)

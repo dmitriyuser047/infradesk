@@ -46,7 +46,22 @@
 }
 .configuration-code:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
+/* Assignments: desired state of a file on a node. Never a claim about what the server holds. */
+.assignment-status { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); }
+.assignment-actions { display: flex; gap: var(--space-1); justify-content: flex-end; white-space: nowrap; }
+.danger-text { color: var(--danger); }
+.assignment-grid-fields, .assignment-target-fields {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4);
+}
+.assignment-target-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.assignment-grid-fields > .configuration-field:first-child { grid-column: 1 / -1; }
+.configuration-field > label, .field-label { color: var(--text-primary); font-weight: 500; }
+.configuration-field label input { display: block; width: 100%; margin-top: 6px; }
+.assignment-fixed { margin: 0; }
+.assignment-values td:nth-child(3) { text-align: left; min-width: 220px; }
+
 @media (max-width: 720px) {
   .configuration-details-grid { grid-template-columns: 1fr; }
+  .assignment-grid-fields, .assignment-target-fields { grid-template-columns: 1fr; }
   .configuration-template-input { min-height: 300px; }
 }
