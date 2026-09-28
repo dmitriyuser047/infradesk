@@ -3,6 +3,7 @@ package persistence.postgres
 
 import application.port.{ConfigurationDeploymentInsert, ConfigurationDeploymentRepository}
 import cats.syntax.all._
+import cats.data.NonEmptyList
 import domain.configuration._
 import org.typelevel.doobie.{ConnectionIO, Fragment, Fragments, Update}
 import org.typelevel.doobie.implicits._
@@ -105,7 +106,8 @@ final class PostgresConfigurationDeploymentRepository extends ConfigurationDeplo
             lease_owner = null, lease_token = null, lease_expires_at = null
         where organization_id = $organizationId and id = $id and lease_token = $token
           and state = 'RUNNING' and lease_expires_at > $now""".update.run.flatMap {
-      case 1 => event(organizationId, id, state.code, now).as(true)
+      case 1 => event(organizationId, id,
+        if (state == ConfigurationDeploymentState.RolledBack) "ROLLBACK_SUCCEEDED" else state.code, now).as(true)
       case _ => false.pure[ConnectionIO]
     }
 
@@ -132,13 +134,14 @@ final class PostgresConfigurationDeploymentRepository extends ConfigurationDeplo
         val ids = rows.map(_._1.id)
         if (ids.isEmpty) List.empty[ConfigurationDeployment].pure[ConnectionIO]
         else {
+          val nonEmptyIds = NonEmptyList.fromListUnsafe(ids)
           val values =
             (fr"select deployment_id, name, value from configuration_deployment_value where organization_id = $organizationId and" ++
-              Fragments.in(fr"deployment_id", ids))
+              Fragments.in(fr"deployment_id", nonEmptyIds))
               .query[(UUID, String, String)].to[List]
           val args =
             (fr"select deployment_id, argument from configuration_deployment_validator_arg where organization_id = $organizationId and" ++
-              Fragments.in(fr"deployment_id", ids) ++ fr"order by deployment_id, position")
+              Fragments.in(fr"deployment_id", nonEmptyIds) ++ fr"order by deployment_id, position")
               .query[(UUID, String)].to[List]
           (values, args).mapN { (allValues, allArgs) =>
             val groupedValues = allValues.groupMap(_._1)(row => ConfigurationVariableValue(row._2, row._3))
