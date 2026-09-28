@@ -12,6 +12,7 @@ const permissions: readonly OrganizationPermission[] = [
   'viewAudit',
   'executeOperations',
   'openTerminal',
+  'manageConfigurations',
 ]
 
 describe('organization authorization policy', () => {

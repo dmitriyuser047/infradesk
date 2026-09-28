@@ -1,0 +1,52 @@
+/* Configurations: profile details, the template editor, variables and read-only content. */
+
+.configuration-editor { display: grid; gap: var(--space-5); }
+.configuration-details-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.configuration-details-grid label { display: grid; gap: 6px; align-content: start; color: var(--text-primary); font-weight: 500; }
+.configuration-details-wide { grid-column: 1 / -1; }
+.configuration-field { display: grid; gap: 6px; align-content: start; }
+.configuration-details-grid textarea { min-height: 64px; }
+.configuration-details-form { display: grid; gap: var(--space-3); }
+.configuration-description { margin: calc(-1 * var(--space-2)) 0 0; color: var(--text-secondary); white-space: pre-wrap; }
+
+/* A plain textarea, set like code: no editor dependency, no spellcheck, no soft wrap. */
+.configuration-template-input {
+  width: 100%; min-height: 400px; padding: var(--space-3); font-family: var(--font-mono); font-size: var(--font-size-small);
+  line-height: 1.55; tab-size: 2; white-space: pre; overflow: auto;
+}
+.configuration-secret-hint { margin: var(--space-2) 0 0; }
+
+.configuration-variables td { vertical-align: top; }
+.configuration-variables input:not([type="checkbox"]), .configuration-variables select { width: 100%; min-width: 120px; }
+.configuration-variables td:nth-child(3) { text-align: center; }
+.technical-input { font-family: var(--font-mono); font-size: var(--font-size-small); }
+.configuration-variable-actions { display: flex; gap: var(--space-1); justify-content: flex-end; white-space: nowrap; }
+
+.configuration-editor-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; }
+
+.configuration-result {
+  display: grid; gap: var(--space-1); padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--success-border); border-radius: var(--radius-md); background: var(--success-soft);
+}
+.configuration-result p { margin: 0; }
+.configuration-result-title { display: inline-flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.configuration-result-error { border-color: var(--danger-border); background: var(--danger-soft); }
+.configuration-result-error .configuration-result-title { color: var(--danger); }
+.status-success-text { color: var(--success); }
+.configuration-diagnostics { display: grid; gap: 4px; margin: 0; padding-left: var(--space-5); }
+
+.configuration-preview { display: grid; gap: var(--space-2); }
+.configuration-preview h3 { margin: 0; font-size: var(--font-size-base); }
+
+/* Read-only content: exactly as stored, scrolled rather than wrapped. */
+.configuration-code {
+  margin: 0; max-height: 70vh; overflow: auto; padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted);
+  font-family: var(--font-mono); font-size: var(--font-size-small); line-height: 1.55; white-space: pre; tab-size: 2;
+}
+.configuration-code:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+@media (max-width: 720px) {
+  .configuration-details-grid { grid-template-columns: 1fr; }
+  .configuration-template-input { min-height: 300px; }
+}

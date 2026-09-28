@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V32 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V33 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 32)
-        assertEquals(first.currentVersion, "32")
+        assertEquals(first.migrationsApplied, 33)
+        assertEquals(first.currentVersion, "33")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "32")
+        assertEquals(second.currentVersion, "33")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -153,6 +153,31 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               // The per-resource incident path of the infrastructure read models (V31).
               assertEquals(incidentByResource.getInt(1), 1)
             } finally incidentByResource.close()
+            val configuration = statement.executeQuery(
+              "select to_regclass('public.configuration_profile'), to_regclass('public.configuration_revision'), " +
+                "to_regclass('public.configuration_revision_variable'), " +
+                "(select count(*) from information_schema.table_constraints where table_schema = current_schema() " +
+                "and constraint_name in ('uq_configuration_profile_organization_code', " +
+                "'uq_configuration_revision_profile_number', 'fk_configuration_revision_profile_tenant', " +
+                "'fk_configuration_revision_variable_revision_tenant', 'ck_configuration_revision_variable_type', " +
+                "'pk_configuration_revision_variable')), " +
+                "(select count(*) from pg_trigger where not tgisinternal and tgname in " +
+                "('tr_configuration_revision_immutable', 'tr_configuration_revision_variable_immutable')), " +
+                "(select pg_get_constraintdef(oid) like '%CONFIGURATION_REVISION_CREATED%' from pg_constraint " +
+                "where conname = 'ck_audit_event_action'), " +
+                "(select pg_get_constraintdef(oid) like '%CONFIGURATION_PROFILE%' from pg_constraint " +
+                "where conname = 'ck_audit_event_target_type')"
+            )
+            try {
+              assert(configuration.next())
+              (1 to 3).foreach(index => assert(configuration.getString(index) != null))
+              // Codes per organization, numbers per profile, tenants carried through every relation.
+              assertEquals(configuration.getInt(4), 6)
+              // Revisions are immutable in the database itself, not only by convention.
+              assertEquals(configuration.getInt(5), 2)
+              assertEquals(configuration.getBoolean(6), true)
+              assertEquals(configuration.getBoolean(7), true)
+            } finally configuration.close()
             val syncDeadline = statement.executeQuery(
               "select (select count(*) from information_schema.columns " +
                 "where table_schema = current_schema() and table_name = 'sync_session' " +

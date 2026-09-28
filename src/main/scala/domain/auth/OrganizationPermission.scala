@@ -60,6 +60,15 @@ object OrganizationPermission {
     override val code: String = "OPEN_TERMINAL"
   }
 
+  /** Reading and changing configuration profiles and their revisions.
+    *
+    * Server configuration is sensitive operational information even without secrets, so reading
+    * a profile requires the same capability as changing it.
+    */
+  case object ManageConfigurations extends OrganizationPermission {
+    override val code: String = "MANAGE_CONFIGURATIONS"
+  }
+
   val All: List[OrganizationPermission] = List(
     ReadOrganization,
     ManageWorkspace,
@@ -69,7 +78,8 @@ object OrganizationPermission {
     ViewAudit,
     ManageNotifications,
     ExecuteOperations,
-    OpenTerminal
+    OpenTerminal,
+    ManageConfigurations
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, OrganizationPermission] =

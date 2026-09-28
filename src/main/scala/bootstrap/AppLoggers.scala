@@ -23,7 +23,8 @@ final case class AppLoggers(
   authorization: Logger[IO],
   account: Logger[IO],
   terminal: Logger[IO],
-  readModels: Logger[IO]
+  readModels: Logger[IO],
+  configuration: Logger[IO]
 )
 
 object AppLoggers {
@@ -41,7 +42,8 @@ object AppLoggers {
     authorization = named("infrastructure.http.OrganizationAuthorization"),
     account = named("infrastructure.http.AccountRoutes"),
     terminal = named("infrastructure.http.TerminalRoutes"),
-    readModels = named("infrastructure.http.ReadModelRoutes")
+    readModels = named("infrastructure.http.ReadModelRoutes"),
+    configuration = named("infrastructure.http.ConfigurationProfileRoutes")
   )
 
   private def named(name: String): Logger[IO] = Slf4jLogger.getLoggerFromName[IO](name)
