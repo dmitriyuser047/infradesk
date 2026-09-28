@@ -35,7 +35,7 @@ EOF
 latest_release() {
   local tag
   tag="$(curl -fsSL --max-time 30 "https://api.github.com/repos/${INFRADESK_RELEASE_REPO}/releases/latest" 2>/dev/null |
-    sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)" || true
+    sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | awk 'NR == 1')" || true
   [ -n "${tag}" ] || die "The latest release could not be determined from github.com/${INFRADESK_RELEASE_REPO}." \
     "Name the version explicitly (infradesk update v0.1.1), or download the bundle and SHA256SUMS" \
     "yourself and use: infradesk update --from-file ARCHIVE --sha256sums SHA256SUMS"
@@ -68,10 +68,14 @@ verify_archive() {
 
 # Extracts into the work directory after checking that every entry stays inside one release folder.
 extract_archive() {
-  local archive="$1" top
-  top="$(tar -tzf "${archive}" | head -n 1 | cut -d/ -f1)"
+  local archive="$1" top listing
+  # Listed once into a variable: under pipefail, a reader that stops early (head, grep -q) would
+  # make tar fail with SIGPIPE and turn a match into a silent exit or a missed violation.
+  listing="$(tar -tzf "${archive}")" || die "The archive cannot be read."
+  top="$(printf '%s\n' "${listing}" | awk 'NR == 1' | cut -d/ -f1)"
   [[ "${top}" =~ ^infradesk-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "The archive does not contain an InfraDesk release folder."
-  if tar -tzf "${archive}" | grep -Ev "^${top}(/|$)" | grep -q . || tar -tzf "${archive}" | grep -q '\.\./'; then
+  if [ -n "$(printf '%s\n' "${listing}" | grep -Ev "^${top}(/|$)" || true)" ] ||
+    [ -n "$(printf '%s\n' "${listing}" | grep -E '(^|/)\.\.(/|$)' || true)" ]; then
     die "The archive contains paths outside its release folder; refusing to extract it."
   fi
   tar -xzf "${archive}" -C "${WORK_DIR}" --no-same-owner

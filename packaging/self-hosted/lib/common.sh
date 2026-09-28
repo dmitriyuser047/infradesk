@@ -103,7 +103,7 @@ version_ge() {
 # Reads ID and VERSION_ID from an os-release file without executing it.
 os_release_value() {
   local file="$1" key="$2"
-  sed -n "s/^${key}=//p" "${file}" | head -n 1 | tr -d '"'"'"
+  sed -n "s/^${key}=//p" "${file}" | awk 'NR == 1' | tr -d '"'"'"
 }
 
 # Prints "<id> <version> <arch>"; returns 0 only for a supported platform.
@@ -388,7 +388,7 @@ install_bundle_files() {
 # Reads a top-level string or number from a release-manifest.json written one key per line.
 manifest_value() {
   local file="$1" key="$2"
-  sed -n "s/^[[:space:]]*\"${key}\":[[:space:]]*\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}[[:space:]]*$/\1/p" "${file}" | head -n 1
+  sed -n "s/^[[:space:]]*\"${key}\":[[:space:]]*\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}[[:space:]]*$/\1/p" "${file}" | awk 'NR == 1'
 }
 
 # --- compose -----------------------------------------------------------------------------------
@@ -403,7 +403,7 @@ compose_in() {
 }
 compose() { compose_in "${INFRADESK_APP_DIR}" "$@"; }
 
-container_id() { compose ps --quiet "$1" 2>/dev/null | head -n 1; }
+container_id() { compose ps --quiet "$1" 2>/dev/null | awk 'NR == 1'; }
 
 container_health() {
   local id
@@ -462,7 +462,7 @@ smoke_test() {
   [ "$(http_status "${url}/ready")" = "200" ] || { warn "GET /ready did not answer 200."; return 1; }
   [ "$(http_status "${url}/")" = "200" ] || { warn "The application shell did not answer 200."; return 1; }
   [ "$(http_status "${url}/organizations")" = "200" ] || { warn "A client-side route did not answer 200."; return 1; }
-  asset="$(curl --silent --max-time 10 "${url}/" | sed -n 's/.*src="\([^"]*\/assets\/[^"]*\.js\)".*/\1/p' | head -n 1)"
+  asset="$(curl --silent --max-time 10 "${url}/" | sed -n 's/.*src="\([^"]*\/assets\/[^"]*\.js\)".*/\1/p' | awk 'NR == 1')"
   [ -n "${asset}" ] && [ "$(http_status "${url}${asset}")" = "200" ] || { warn "The frontend assets are not served."; return 1; }
   identity="$(running_identity "${url}")"
   if [ "${identity}" != "${version#v} ${sha}" ]; then
