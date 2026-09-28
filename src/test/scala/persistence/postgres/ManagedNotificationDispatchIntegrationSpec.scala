@@ -312,9 +312,12 @@ final class ManagedNotificationDispatchIntegrationSpec extends FunSuite {
 
     /** The managed worker, with transports that record instead of connecting.
       *
-      * A claim skips rows another suite holds at that instant, so the tick is repeated while
-      * this spec's own deliveries are still untouched. Once each has been attempted the loop
-      * stops, which is why a delivery that asks to be retried is attempted exactly once.
+      * A claim skips rows another suite holds at that instant, and a tick takes the first due
+      * rows of every organization, so the tick is repeated while this spec's own deliveries are
+      * still untouched. Once each has been attempted the loop stops, which is why a delivery that
+      * asks to be retried is attempted exactly once. The bound is generous on purpose: under a
+      * loaded parallel run other suites can hold or crowd the queue for a while, and the loop
+      * costs nothing once this spec's rows are done.
       */
     def dispatch(transports: RecordingTransports): IO[Unit] = {
       val sender = new ManagedNotificationSender[IO, ConnectionIO](dispatchQuery, cipher, runner,
@@ -330,11 +333,11 @@ final class ManagedNotificationDispatchIntegrationSpec extends FunSuite {
 
       def attempt(remaining: Int): IO[Unit] =
         dispatcher.tick(10) *> untouched.flatMap {
-          case true if remaining > 0 => IO.sleep(50.millis) *> attempt(remaining - 1)
+          case true if remaining > 0 => IO.sleep(100.millis) *> attempt(remaining - 1)
           case _ => IO.unit
         }
 
-      attempt(10)
+      attempt(100)
     }
 
     def deliveryRows: IO[List[NotificationDelivery]] =
