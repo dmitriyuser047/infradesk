@@ -109,8 +109,9 @@ final class ConfigurationRollouts[F[_]: MonadThrow, Tx[_]: MonadThrow](
     reads.run((rollouts.find(organizationId, id), rollouts.items(organizationId, id)).tupled)
       .flatMap { case (rollout, items) => rollout.liftTo[F](NotFound).map(_ -> items) }
 
-  def history(organizationId: UUID, before: Option[(Instant, UUID)], limit: Int): F[List[ConfigurationRollout]] =
-    reads.run(rollouts.history(organizationId, before, limit))
+  def history(organizationId: UUID, profileId: Option[UUID], before: Option[(Instant, UUID)],
+              limit: Int): F[List[ConfigurationRollout]] =
+    reads.run(rollouts.history(organizationId, profileId, before, limit))
 
   def cancel(actor: ActorContext, id: UUID): F[Unit] = writes.run(for {
     changed <- rollouts.cancel(actor.organizationId, id)

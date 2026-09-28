@@ -136,6 +136,7 @@ final class ConfigurationRolloutRoutes[Tx[_]](
     case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "configuration-rollouts" =>
       authorized(request) { context =>
         val params = request.uri.query.params
+        val profile = params.get("profileId").traverse(raw => Try(UUID.fromString(raw)).toOption)
         val cursor = (params.get("beforeCreatedAt"), params.get("beforeId")) match {
           case (None, None) => Some(None)
           case (Some(at), Some(id)) => (Try(Instant.parse(at)).toOption,
@@ -144,9 +145,9 @@ final class ConfigurationRolloutRoutes[Tx[_]](
         }
         val limit = params.get("limit").fold[Option[Int]](Some(50))(
           raw => Try(raw.toInt).toOption.filter(n => n >= 1 && n <= 200))
-        (cursor, limit) match {
-          case (Some(c), Some(n)) => respond(request, context, "configuration.rollout.history")(
-            rollouts.history(context.organizationId, c, n).flatMap(values => Ok(Json.arr(values.map(rolloutJson): _*))))
+        (profile, cursor, limit) match {
+          case (Some(p), Some(c), Some(n)) => respond(request, context, "configuration.rollout.history")(
+            rollouts.history(context.organizationId, p, c, n).flatMap(values => Ok(Json.arr(values.map(rolloutJson): _*))))
           case _ => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid cursor or limit"))
         }
       }

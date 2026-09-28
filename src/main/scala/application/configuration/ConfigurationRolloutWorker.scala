@@ -72,7 +72,8 @@ final class ConfigurationRolloutWorker[Tx[_]: MonadThrow](
                      items: List[ConfigurationRolloutItem]): IO[Unit] = {
     val pending = items.filter(_.state == Pending)
     val deploying = items.exists(_.state == Deploying)
-    val failed = items.exists(item => item.state == ConfigurationRolloutItemState.Failed || item.state == RolledBack)
+    val failed = items.exists(item => item.state == ConfigurationRolloutItemState.Failed ||
+      item.state == ConfigurationRolloutItemState.RolledBack)
     val rollBackAll = rollout.strategy.rollbackMode == ConfigurationRollbackMode.AllApplied &&
       (rollout.state == RollingBack || rollout.cancelRequested || (failed && rollout.strategy.stopOnFailure))
     if (deploying) release(rollout, token, if (rollout.state == RollingBack) RollingBack else Running, None, None)

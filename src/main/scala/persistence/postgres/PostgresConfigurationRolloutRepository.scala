@@ -70,10 +70,11 @@ final class PostgresConfigurationRolloutRepository extends ConfigurationRolloutR
     (select ++ fr"where organization_id = $organizationId and request_id = $requestId")
       .query[RolloutRow].option.map(_.map(_.toDomain))
 
-  override def history(organizationId: UUID, before: Option[(Instant, UUID)],
+  override def history(organizationId: UUID, profileId: Option[UUID], before: Option[(Instant, UUID)],
                        limit: Int): ConnectionIO[List[ConfigurationRollout]] = {
+    val profile = profileId.fold(fr"")(id => fr"and profile_id = $id")
     val cursor = before.fold(fr"") { case (created, id) => fr"and (created_at, id) < ($created, $id)" }
-    (select ++ fr"where organization_id = $organizationId" ++ cursor ++
+    (select ++ fr"where organization_id = $organizationId" ++ profile ++ cursor ++
       fr"order by created_at desc, id desc limit $limit").query[RolloutRow].to[List].map(_.map(_.toDomain))
   }
 

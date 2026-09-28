@@ -6,8 +6,11 @@ import {
   useUpdateConfigurationProfile,
 } from '../api/configurations'
 import { ApiError } from '../api/httpClient'
+import { useDeploymentHistory } from '../api/configurationDeployments'
+import { useRolloutHistory } from '../api/configurationRollouts'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { ConfigurationAssignmentList } from '../components/configuration/ConfigurationAssignmentList'
+import { ConfigurationRolloutPanel } from '../components/configuration/ConfigurationRolloutPanel'
 import { AppShell } from '../components/layout/AppShell'
 import {
   EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
@@ -19,7 +22,7 @@ import { configurationPath, configurationsPath } from './ConfigurationsPage'
 import { InvalidRoutePage } from './InvalidRoutePage'
 import '../styles/pages/configurations.css'
 
-const Tabs = ['template', 'variables', 'versions', 'targets'] as const
+const Tabs = ['template', 'variables', 'versions', 'targets', 'deployments', 'rollouts'] as const
 type Tab = typeof Tabs[number]
 
 export function ConfigurationProfilePage() {
@@ -88,10 +91,11 @@ function ProfileContent({ organizationId, profileId }: { organizationId: string;
     {editing && !profile.archived ? <DetailsForm organizationId={organizationId} profile={profile} onDone={() => setEditing(false)} /> : null}
     <WorkspaceTabs tabs={tabs} active={tab} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-      {revisionNumber !== null && tab !== 'versions' && tab !== 'targets' ? <InlineAlert tone="info" title={t.viewingOld(revisionNumber, profile.latestRevisionNumber)}
+      {revisionNumber !== null && tab !== 'versions' && tab !== 'targets' && tab !== 'deployments' && tab !== 'rollouts'
+        ? <InlineAlert tone="info" title={t.viewingOld(revisionNumber, profile.latestRevisionNumber)}
         action={<button type="button" className="secondary-button" onClick={() => setParams(params => params.delete('revision'))}>{t.showLatest}</button>} /> : null}
-      {tab !== 'versions' && tab !== 'targets' && revisionNumber !== null && older.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
-      {tab !== 'versions' && tab !== 'targets' && revisionNumber !== null && older.isError ? <InlineAlert tone="danger" title={t.revisionLoadError}>
+      {tab !== 'versions' && tab !== 'targets' && tab !== 'deployments' && tab !== 'rollouts' && revisionNumber !== null && older.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
+      {tab !== 'versions' && tab !== 'targets' && tab !== 'deployments' && tab !== 'rollouts' && revisionNumber !== null && older.isError ? <InlineAlert tone="danger" title={t.revisionLoadError}>
         {describeError(older.error, i18n)}</InlineAlert> : null}
       {tab === 'template' && shown ? <TemplateView revision={shown} /> : null}
       {tab === 'variables' && shown ? <VariablesView revision={shown} /> : null}
@@ -103,8 +107,49 @@ function ProfileContent({ organizationId, profileId }: { organizationId: string;
       {/* Assignments pin their own version; an archived profile keeps them but takes no new one. */}
       {tab === 'targets' ? <ConfigurationAssignmentList organizationId={organizationId} filter={{ profileId }} view="profile"
         canAssign={!profile.archived} /> : null}
+      {tab === 'targets' && permissions.can('deployConfigurations') && !profile.archived
+        ? <ConfigurationRolloutPanel organizationId={organizationId} profileId={profileId}
+          latestRevisionNumber={profile.latestRevisionNumber} /> : null}
+      {tab === 'deployments' && permissions.can('deployConfigurations')
+        ? <DeploymentHistory organizationId={organizationId} profileId={profileId} /> : null}
+      {tab === 'rollouts' && permissions.can('deployConfigurations')
+        ? <RolloutHistory organizationId={organizationId} profileId={profileId} /> : null}
     </div>
   </div>
+}
+
+function DeploymentHistory({ organizationId, profileId }: { organizationId: string; profileId: string }) {
+  const i18n = useI18n()
+  const query = useDeploymentHistory(organizationId, profileId)
+  const rows = query.data?.pages.flat() ?? []
+  return <WorkspaceSection title={i18n.t.configurations.tabs.deployments}>
+    {query.isError ? <InlineAlert tone="danger" title={describeError(query.error, i18n)} /> : null}
+    <div className="table-scroll"><table className="data-grid"><thead><tr>
+      <th scope="col">{i18n.t.assignments.columns.resource}</th><th scope="col">{i18n.t.assignments.columns.path}</th>
+      <th scope="col">{i18n.t.assignments.columns.desired}</th><th scope="col">{i18n.t.deployments.status}</th>
+      <th scope="col">{i18n.t.configurations.versionsColumns.created}</th></tr></thead><tbody>
+      {rows.map(row => <tr key={row.id}><td>{row.resourceId}</td><td>{row.targetPath}</td>
+        <td>v{row.profileRevisionNumber}</td><td>{i18n.t.deployments.states[row.state]}</td>
+        <td>{i18n.format.dateTime(row.createdAt)}</td></tr>)}</tbody></table></div>
+    {query.hasNextPage ? <button type="button" className="secondary-button" onClick={() => void query.fetchNextPage()}>
+      {i18n.t.assignments.showMore}</button> : null}
+  </WorkspaceSection>
+}
+
+function RolloutHistory({ organizationId, profileId }: { organizationId: string; profileId: string }) {
+  const i18n = useI18n()
+  const query = useRolloutHistory(organizationId, profileId)
+  const rows = query.data?.pages.flat() ?? []
+  return <WorkspaceSection title={i18n.t.configurations.tabs.rollouts}>
+    {query.isError ? <InlineAlert tone="danger" title={describeError(query.error, i18n)} /> : null}
+    <div className="table-scroll"><table className="data-grid"><thead><tr>
+      <th scope="col">{i18n.t.assignments.columns.desired}</th><th scope="col">{i18n.t.rollouts.status}</th>
+      <th scope="col">{i18n.t.configurations.versionsColumns.created}</th></tr></thead><tbody>
+      {rows.map(row => <tr key={row.id}><td>v{row.profileRevisionNumber}</td><td>{i18n.t.rollouts.state[row.state]}</td>
+        <td>{i18n.format.dateTime(row.createdAt)}</td></tr>)}</tbody></table></div>
+    {query.hasNextPage ? <button type="button" className="secondary-button" onClick={() => void query.fetchNextPage()}>
+      {i18n.t.assignments.showMore}</button> : null}
+  </WorkspaceSection>
 }
 
 function TemplateView({ revision }: { revision: ConfigurationRevision }) {

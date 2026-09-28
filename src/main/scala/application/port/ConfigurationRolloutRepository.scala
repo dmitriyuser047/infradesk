@@ -17,7 +17,8 @@ trait ConfigurationRolloutRepository[F[_]] {
   def find(organizationId: UUID, id: UUID): F[Option[ConfigurationRollout]]
   def findRequest(organizationId: UUID, requestId: UUID): F[Option[ConfigurationRollout]]
   def items(organizationId: UUID, rolloutId: UUID): F[List[ConfigurationRolloutItem]]
-  def history(organizationId: UUID, before: Option[(Instant, UUID)], limit: Int): F[List[ConfigurationRollout]]
+  def history(organizationId: UUID, profileId: Option[UUID], before: Option[(Instant, UUID)],
+              limit: Int): F[List[ConfigurationRollout]]
   def claim(owner: UUID, token: UUID, now: Instant, until: Instant): F[Option[ConfigurationRollout]]
   def renew(organizationId: UUID, id: UUID, token: UUID, now: Instant, until: Instant): F[Boolean]
   def setItem(organizationId: UUID, rolloutId: UUID, token: UUID, itemId: UUID,

@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query'
 
 import { requestJson } from './httpClient'
 import type { DeploymentDetail, DeploymentExecution, DeploymentPreview } from '../types/configurationDeployment'
@@ -34,12 +34,15 @@ export function useDeployment(organizationId: string, id: string | null) {
 }
 
 export function useDeploymentHistory(organizationId: string, profileId: string | null) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['configurationDeploymentHistory', organizationId, profileId],
-    queryFn: () => {
+    queryFn: ({ pageParam }) => {
       const params = new URLSearchParams({ limit: '50' })
       if (profileId) params.set('profileId', profileId)
+      if (pageParam) { params.set('beforeCreatedAt', pageParam.createdAt); params.set('beforeId', pageParam.id) }
       return requestJson<DeploymentDetail[]>(`${base(organizationId)}/configuration-deployments?${params}`)
     },
+    initialPageParam: undefined as { createdAt: string; id: string } | undefined,
+    getNextPageParam: page => page.length < 50 ? undefined : page[page.length - 1],
   })
 }

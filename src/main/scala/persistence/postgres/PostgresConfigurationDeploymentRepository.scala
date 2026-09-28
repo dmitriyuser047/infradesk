@@ -189,6 +189,7 @@ final class PostgresConfigurationDeploymentRepository extends ConfigurationDeplo
     case ConfigurationDeploymentPhase.Verify => "ACTIVATED"
     case ConfigurationDeploymentPhase.Cleanup => "VERIFIED"
     case ConfigurationDeploymentPhase.Precheck => "CLAIMED"
+    case ConfigurationDeploymentPhase.Rollback => "ROLLBACK_STARTED"
   }
 }
 

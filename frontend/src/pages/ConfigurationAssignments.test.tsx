@@ -64,6 +64,7 @@ interface State {
   assignments: ConfigurationAssignment[]
   detail: ConfigurationAssignmentDetail
   conflictOnce?: boolean
+  incompatible?: boolean
 }
 
 /** A small in-memory backend for the assignment endpoints and what the pages around them read. */
@@ -122,6 +123,26 @@ function backend(initial: Partial<State> = {}) {
       state.assignments = state.assignments.filter(item => item.id !== 'a1')
       return json({ ...state.detail, removedAt: '2026-09-28T10:00:00Z' })
     }
+    if (path === '/configuration-profiles/p1/assignment-promotions/preview') return json({
+      revisionNumber: body.revisionNumber, compatible: !state.incompatible,
+      items: body.assignments.map((item: { assignmentId: string; expectedVersion: number }) => ({ ...item,
+        compatible: !state.incompatible, errorCode: state.incompatible ? 'INCOMPATIBLE_OVERRIDE' : null,
+        variableName: state.incompatible ? 'legacy' : null })) })
+    if (path === '/configuration-profiles/p1/assignment-promotions') return json({ revisionNumber: body.revisionNumber,
+      assignments: body.assignments.map((item: { assignmentId: string; expectedVersion: number }) =>
+        ({ assignmentId: item.assignmentId, version: item.expectedVersion + 1 })) })
+    if (path === '/configuration-rollouts/preflight') return json(body.targets.map((target: { assignmentId: string;
+      expectedVersion: number; connectionId: string }) => ({ ...target, ready: true, desiredSha256: 'b'.repeat(64),
+      connectionUpdatedAt: '2026-09-28T10:00:00Z', remote: { exists: true, sha256: 'a'.repeat(64) },
+      addedLines: 6, removedLines: 2, errorCode: null })))
+    if (path === '/configuration-rollouts' && method === 'POST') return json({ rolloutId: 'r1', state: 'QUEUED' }, 202)
+    const rolloutSummary = { id: 'r1', profileId: 'p1', profileRevisionNumber: 2, state: 'SUCCEEDED', canaryCount: 1,
+      batchSize: 1, pauseSeconds: 0, stopOnFailure: true, rollbackMode: 'FAILED_TARGET_ONLY',
+      createdAt: '2026-09-28T10:00:00Z', startedAt: '2026-09-28T10:00:01Z', finishedAt: '2026-09-28T10:02:00Z' }
+    if (path === '/configuration-rollouts' && method === 'GET') return json([rolloutSummary])
+    if (path === '/configuration-rollouts/r1') return json({ rollout: rolloutSummary, items: [{ id: 'i1', position: 0,
+      assignmentId: 'a1', assignmentVersion: 4, resourceId: 'node', targetPath: '/etc/nginx/nginx.conf',
+      state: 'SUCCEEDED', deploymentId: 'deployment-1' }] })
     if (path === '/environments/env/resources') return json([node, retired, container])
     if (path === '/resources/node') return json(node)
     if (path === '/resources/node/context') return json({ project: { id: 'project', name: 'App' },
@@ -175,7 +196,7 @@ describe('configuration assignments', () => {
     const inactive = screen.getByRole('link', { name: 'retired-node' }).closest('tr')!
     expect(within(inactive).getByText('Target inactive')).toBeTruthy()
     expect(within(inactive).queryByText('Newer version available')).toBeNull()
-    expect(screen.getAllByRole('columnheader').map(cell => cell.textContent))
+    expect(within(row.closest('table')!).getAllByRole('columnheader').map(cell => cell.textContent))
       .toEqual(['Resource', 'Environment', 'Target path', 'Assigned version', 'Status', 'Actions'])
     expect(screen.getByText(/InfraDesk has not applied this configuration to the server yet\./)).toBeTruthy()
     expect(document.body.textContent).not.toMatch(/\b(Applied|Synced|Up to date|Deployed)\b/)
@@ -277,6 +298,60 @@ describe('configuration assignments', () => {
       .toMatchObject({ expectedAssignmentVersion: 3, connectionId: 'ssh-source',
         expectedRemoteSha256: 'a'.repeat(64), expectedRemoteMissing: false,
         execution: { activation: 'SYSTEMD_RELOAD', unitName: 'nginx.service', validator: null, newFileMode: 420 } })
+  })
+
+  it('rolls out a new version: compatibility, promotion, remote preflight, then the approved hashes', async () => {
+    const { requests } = backend({ assignments: [assignment()] })
+    renderApp('/organizations/org/configurations/p1?tab=targets')
+    const start = await screen.findByRole('button', { name: 'Start rollout' })
+    expect(start.hasAttribute('disabled')).toBe(true)
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select prod-vps-01' }))
+    // The node still pins v1: its desired state must be promoted before anything is checked remotely.
+    expect(screen.getByRole('button', { name: 'Check remote files' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Check compatibility' }))
+    expect(await screen.findByText('All selected assignments are compatible.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Promote desired versions' }))
+    const preflight = screen.getByRole('button', { name: 'Check remote files' })
+    await waitFor(() => expect(preflight.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(preflight)
+    expect(await screen.findByText(/prod-vps-01: Ready/)).toBeTruthy()
+    expect(screen.getByText(/\+6\/-2/)).toBeTruthy()
+    fireEvent.change(input('Canary nodes'), { target: { value: '1' } })
+    fireEvent.click(start)
+    expect(await screen.findByText('Rollout status')).toBeTruthy()
+
+    expect(requests.find(item => item.path === '/configuration-profiles/p1/assignment-promotions')?.body)
+      .toEqual({ revisionNumber: 2, assignments: [{ assignmentId: 'a1', expectedVersion: 3 }] })
+    expect(requests.find(item => item.path === '/configuration-rollouts/preflight')?.body).toEqual({ targets: [
+      { assignmentId: 'a1', expectedVersion: 4, connectionId: 'ssh-source',
+        execution: { activation: 'NONE', unitName: null, validator: null, newFileMode: 420 } }] })
+    const created = requests.find(item => item.method === 'POST' && item.path === '/configuration-rollouts')?.body
+    expect(created).toMatchObject({ profileId: 'p1', revisionNumber: 2, canaryCount: 1, batchSize: 1, pauseSeconds: 0,
+      stopOnFailure: true, rollbackMode: 'FAILED_TARGET_ONLY', targets: [{ assignmentId: 'a1', expectedVersion: 4,
+        connectionId: 'ssh-source', connectionUpdatedAt: '2026-09-28T10:00:00Z', desiredSha256: 'b'.repeat(64),
+        expectedRemoteSha256: 'a'.repeat(64), expectedRemoteMissing: false }] })
+    expect((created as { requestId: string }).requestId).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('blocks promotion while an old override is incompatible with the target version', async () => {
+    const { requests } = backend({ assignments: [assignment()], incompatible: true })
+    renderApp('/organizations/org/configurations/p1?tab=targets')
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select prod-vps-01' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Check compatibility' }))
+    expect(await screen.findByText('Resolve incompatible values before continuing.')).toBeTruthy()
+    expect(screen.getByText(/INCOMPATIBLE_OVERRIDE legacy/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Promote desired versions' }).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Check remote files' }).hasAttribute('disabled')).toBe(true)
+    expect(requests.some(item => item.path === '/configuration-profiles/p1/assignment-promotions')).toBe(false)
+  })
+
+  it('lists the rollouts of the profile with a bounded, profile-scoped page', async () => {
+    const { requests } = backend()
+    renderApp('/organizations/org/configurations/p1?tab=rollouts')
+    const table = (await screen.findByText('Succeeded')).closest('table')!
+    expect(within(table).getByText('v2')).toBeTruthy()
+    expect(requests.filter(item => item.path.startsWith('/configuration-rollouts')).map(item => item.path))
+      .toEqual(['/configuration-rollouts?limit=50&profileId=p1'])
   })
 
   it('removes an assignment only after a confirmation that says the server file is untouched', async () => {

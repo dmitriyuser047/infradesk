@@ -136,17 +136,20 @@ final class ConfigurationDeploymentWorker[Tx[_]](
 
     def rollback: IO[Unit] = for {
       target <- readTarget
-      _ <- IO.raiseUnless(target.exists && ConfigurationDeployment.sha256Bytes(target.bytes) == initial.desiredSha256)(
-        DeploymentFailure("CONFIGURATION_ROLLBACK_FAILED"))
-      _ <- initial.expectedRemoteState match {
-        case ExpectedRemoteState.Missing => guard(initial, token) *> remote.remove(initial.targetPath)
-        case ExpectedRemoteState.Sha256(hash) =>
-          remote.read(backup, maxRemoteBytes).flatMap { previous =>
-            IO.raiseUnless(previous.exists && ConfigurationDeployment.sha256Bytes(previous.bytes) == hash)(
-              DeploymentFailure("CONFIGURATION_ROLLBACK_FAILED")) *>
-              guard(initial, token) *> remote.atomicReplace(backup, initial.targetPath)
-          }
-      }
+      _ <- if (expected(target)) IO.unit
+        else {
+          IO.raiseUnless(target.exists && ConfigurationDeployment.sha256Bytes(target.bytes) == initial.desiredSha256)(
+            DeploymentFailure("CONFIGURATION_ROLLBACK_FAILED")) *>
+            (initial.expectedRemoteState match {
+              case ExpectedRemoteState.Missing => guard(initial, token) *> remote.remove(initial.targetPath)
+              case ExpectedRemoteState.Sha256(hash) =>
+                remote.read(backup, maxRemoteBytes).flatMap { previous =>
+                  IO.raiseUnless(previous.exists && ConfigurationDeployment.sha256Bytes(previous.bytes) == hash)(
+                    DeploymentFailure("CONFIGURATION_ROLLBACK_FAILED")) *>
+                    guard(initial, token) *> remote.atomicReplace(backup, initial.targetPath)
+                }
+            })
+        }
       restored <- readTarget
       _ <- IO.raiseUnless(expected(restored))(DeploymentFailure("CONFIGURATION_ROLLBACK_FAILED"))
       _ <- activate *> verifyService
@@ -166,7 +169,9 @@ final class ConfigurationDeploymentWorker[Tx[_]](
           readTarget.attempt.flatMap {
             case Right(target) if target.exists &&
               ConfigurationDeployment.sha256Bytes(target.bytes) == initial.desiredSha256 => failAfterReplace(error)
-            case Right(target) if expected(target) => finish(initial, token, Failed, Some(failureCode(error)))
+            case Right(target) if expected(target) =>
+              if (current.phase == Rollback) finish(initial, token, RolledBack, None)
+              else finish(initial, token, Failed, Some(failureCode(error)))
             case Left(LostLease) => IO.raiseError(LostLease)
             case _ => finish(initial, token, RollbackFailed, Some("CONFIGURATION_ROLLBACK_FAILED"))
           }
