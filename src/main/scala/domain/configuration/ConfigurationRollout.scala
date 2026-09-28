@@ -57,7 +57,8 @@ final case class ConfigurationRollout(
   state: ConfigurationRolloutState, strategy: ConfigurationRolloutStrategy,
   leaseOwner: Option[UUID], leaseToken: Option[UUID], leaseExpiresAt: Option[Instant],
   cancelRequested: Boolean, actorUserId: UUID, createdAt: Instant,
-  startedAt: Option[Instant], finishedAt: Option[Instant], nextActionAt: Option[Instant]
+  startedAt: Option[Instant], finishedAt: Option[Instant], nextActionAt: Option[Instant],
+  lastPausedPosition: Int
 )
 
 final case class ConfigurationRolloutItem(

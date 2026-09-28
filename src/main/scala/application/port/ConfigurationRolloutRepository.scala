@@ -24,6 +24,6 @@ trait ConfigurationRolloutRepository[F[_]] {
               expected: ConfigurationRolloutItemState, next: ConfigurationRolloutItemState,
               deploymentId: Option[UUID], now: Instant): F[Boolean]
   def setState(organizationId: UUID, id: UUID, token: UUID, state: ConfigurationRolloutState,
-               now: Instant, nextActionAt: Option[Instant]): F[Boolean]
+               now: Instant, nextActionAt: Option[Instant], lastPausedPosition: Option[Int]): F[Boolean]
   def cancel(organizationId: UUID, id: UUID): F[Boolean]
 }

@@ -101,7 +101,7 @@ final class PostgresConfigurationRolloutRepository extends ConfigurationRolloutR
     sql"""with next as (
       select id from configuration_rollout where
         state = 'QUEUED' or
-        (state in ('RUNNING','ROLLING_BACK') and lease_expires_at <= $now) or
+        (state in ('RUNNING','ROLLING_BACK') and (lease_expires_at is null or lease_expires_at <= $now)) or
         (state = 'PAUSED' and next_action_at <= $now and (lease_expires_at is null or lease_expires_at <= $now))
       order by created_at, id limit 1 for update skip locked
     ) update configuration_rollout r set
@@ -130,10 +130,11 @@ final class PostgresConfigurationRolloutRepository extends ConfigurationRolloutR
         and r.lease_token = $token and r.lease_expires_at > $now""".update.run.map(_ == 1)
 
   override def setState(organizationId: UUID, id: UUID, token: UUID, state: ConfigurationRolloutState,
-                        now: Instant, nextActionAt: Option[Instant]): ConnectionIO[Boolean] =
+                        now: Instant, nextActionAt: Option[Instant], lastPausedPosition: Option[Int]): ConnectionIO[Boolean] =
     sql"""update configuration_rollout set state = ${state.code},
       finished_at = case when ${state.terminal} then $now else finished_at end,
       next_action_at = $nextActionAt,
+      last_paused_position = coalesce($lastPausedPosition, last_paused_position),
       lease_owner = null, lease_token = null, lease_expires_at = null
       where organization_id = $organizationId and id = $id and lease_token = $token
         and lease_expires_at > $now and state in ('RUNNING','ROLLING_BACK')""".update.run.map(_ == 1)
@@ -148,19 +149,22 @@ object PostgresConfigurationRolloutRepository {
   private val select: Fragment = fr"""select id, organization_id, request_id, profile_id,
     profile_revision_number, state, canary_count, batch_size, pause_seconds, stop_on_failure,
     rollback_mode, lease_owner, lease_token, lease_expires_at, cancel_requested,
-    created_by_user_id, created_at, started_at, finished_at, next_action_at from configuration_rollout"""
+    created_by_user_id, created_at, started_at, finished_at, next_action_at,
+    last_paused_position from configuration_rollout"""
 
   private final case class RolloutRow(
     id: UUID, organizationId: UUID, requestId: UUID, profileId: UUID, revision: Int,
     state: String, canaryCount: Int, batchSize: Int, pauseSeconds: Int, stopOnFailure: Boolean,
     rollbackMode: String, leaseOwner: Option[UUID], leaseToken: Option[UUID], leaseExpiresAt: Option[Instant],
     cancelRequested: Boolean, actorUserId: UUID, createdAt: Instant,
-    startedAt: Option[Instant], finishedAt: Option[Instant], nextActionAt: Option[Instant]
+    startedAt: Option[Instant], finishedAt: Option[Instant], nextActionAt: Option[Instant],
+    lastPausedPosition: Int
   ) {
     def toDomain: ConfigurationRollout = ConfigurationRollout(id, organizationId, requestId, profileId, revision,
       ConfigurationRolloutState.fromCode(state), ConfigurationRolloutStrategy(canaryCount, batchSize, pauseSeconds,
         stopOnFailure, ConfigurationRollbackMode.fromCode(rollbackMode)), leaseOwner, leaseToken,
-      leaseExpiresAt, cancelRequested, actorUserId, createdAt, startedAt, finishedAt, nextActionAt)
+      leaseExpiresAt, cancelRequested, actorUserId, createdAt, startedAt, finishedAt,
+      nextActionAt, lastPausedPosition)
   }
 
   private val itemSelect: Fragment = fr"""select

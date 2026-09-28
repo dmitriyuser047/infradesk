@@ -92,7 +92,7 @@ final class ConfigurationRollouts[F[_]: MonadThrow, Tx[_]: MonadThrow](
           }
           rollout = ConfigurationRollout(rolloutId, actor.organizationId, requestId, profileId,
             revisionNumber, ConfigurationRolloutState.Queued, strategy, None, None, None,
-            false, actor.userId, now, None, None, None)
+            false, actor.userId, now, None, None, None, -1)
           inserted <- rollouts.insert(rollout, items)
           id <- inserted match {
             case ConfigurationRolloutInsert.Written =>
