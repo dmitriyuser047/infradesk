@@ -108,6 +108,9 @@ final case class ApplicationComponents(
   configurationPromotions: ConfigurationPromotions[IO, ConnectionIO],
   configurationRollouts: ConfigurationRollouts[IO, ConnectionIO],
   configurationRolloutWorker: ConfigurationRolloutWorker[ConnectionIO],
+  configurationAssignmentRules: application.configuration.ConfigurationAssignmentRules[IO, ConnectionIO],
+  configurationAssignmentRuleWorker: application.configuration.ConfigurationAssignmentRuleWorker[ConnectionIO],
+  resourceLabels: application.configuration.ResourceLabels[IO, ConnectionIO],
   listIncidents: ListIncidents[ConnectionIO],
   listMonitorRules: ListMonitorRules[ConnectionIO],
   createMonitorRule: CreateMonitorRule[ConnectionIO],
@@ -360,6 +363,16 @@ object ApplicationModule {
         configurationDeploymentSourceQuery, configurationDeployments,
         configurationRolloutRepository, transactionIdGenerator, transactionTimeProvider,
         auditRecorder, readOnlySnapshotRunner, transactionRunner, config.configurationDeployment),
+      // Rules manage desired state only: the rule worker gets no transport and no credential.
+      configurationAssignmentRules = new application.configuration.ConfigurationAssignmentRules[IO, ConnectionIO](
+        configurationAssignmentRuleRepository, configurationAssignmentRuleRepository, configurationAssignmentRepository,
+        configurationAssignmentQuery, configurationProfileQuery, transactionIdGenerator, transactionTimeProvider,
+        auditRecorder, readOnlySnapshotRunner, transactionRunner),
+      configurationAssignmentRuleWorker = new application.configuration.ConfigurationAssignmentRuleWorker[ConnectionIO](
+        configurationAssignmentRuleRepository, configurationProfileQuery, transactionIdGenerator, transactionRunner,
+        schedulerInstanceId, config.configurationRules, loggers.configuration),
+      resourceLabels = new application.configuration.ResourceLabels[IO, ConnectionIO](resourceLabelRepository,
+        transactionTimeProvider, auditRecorder, readOnlySnapshotRunner, transactionRunner),
       configurationRolloutWorker = new ConfigurationRolloutWorker[ConnectionIO](
         configurationRolloutRepository, configurationDeploymentRepository,
         transactionIdGenerator, transactionRunner, schedulerInstanceId, loggers.configuration),

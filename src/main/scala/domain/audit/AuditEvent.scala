@@ -60,6 +60,19 @@ object AuditAction {
   case object ConfigurationAssignmentsPromoted extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENTS_PROMOTED" }
   case object ConfigurationRolloutRequested extends AuditAction { override val code: String = "CONFIGURATION_ROLLOUT_REQUESTED" }
   case object ConfigurationRolloutCancelled extends AuditAction { override val code: String = "CONFIGURATION_ROLLOUT_CANCELLED" }
+  /** Stage 22E: rules that keep assignments present on matching nodes, and the labels they select by. */
+  case object ConfigurationRuleCreated extends AuditAction { override val code: String = "CONFIGURATION_RULE_CREATED" }
+  case object ConfigurationRuleUpdated extends AuditAction { override val code: String = "CONFIGURATION_RULE_UPDATED" }
+  case object ConfigurationRuleEnabled extends AuditAction { override val code: String = "CONFIGURATION_RULE_ENABLED" }
+  case object ConfigurationRuleDisabled extends AuditAction { override val code: String = "CONFIGURATION_RULE_DISABLED" }
+  case object ConfigurationRuleArchived extends AuditAction { override val code: String = "CONFIGURATION_RULE_ARCHIVED" }
+  case object ConfigurationRuleRevisionPromoted extends AuditAction { override val code: String = "CONFIGURATION_RULE_REVISION_PROMOTED" }
+  case object ConfigurationRuleResourceExcluded extends AuditAction { override val code: String = "CONFIGURATION_RULE_RESOURCE_EXCLUDED" }
+  case object ConfigurationRuleResourceIncluded extends AuditAction { override val code: String = "CONFIGURATION_RULE_RESOURCE_INCLUDED" }
+  case object ConfigurationRuleReconcileRequested extends AuditAction { override val code: String = "CONFIGURATION_RULE_RECONCILE_REQUESTED" }
+  case object ConfigurationAssignmentAdopted extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENT_ADOPTED" }
+  case object ConfigurationAssignmentDetached extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENT_DETACHED" }
+  case object ResourceLabelsUpdated extends AuditAction { override val code: String = "RESOURCE_LABELS_UPDATED" }
 
   val All: List[AuditAction] = List(
     ProjectCreated,
@@ -95,7 +108,19 @@ object AuditAction {
     ConfigurationDeploymentCancelled,
     ConfigurationAssignmentsPromoted,
     ConfigurationRolloutRequested,
-    ConfigurationRolloutCancelled
+    ConfigurationRolloutCancelled,
+    ConfigurationRuleCreated,
+    ConfigurationRuleUpdated,
+    ConfigurationRuleEnabled,
+    ConfigurationRuleDisabled,
+    ConfigurationRuleArchived,
+    ConfigurationRuleRevisionPromoted,
+    ConfigurationRuleResourceExcluded,
+    ConfigurationRuleResourceIncluded,
+    ConfigurationRuleReconcileRequested,
+    ConfigurationAssignmentAdopted,
+    ConfigurationAssignmentDetached,
+    ResourceLabelsUpdated
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =
@@ -123,10 +148,12 @@ object AuditTargetType {
   case object ConfigurationAssignment extends AuditTargetType { override val code: String = "CONFIGURATION_ASSIGNMENT" }
   case object ConfigurationDeployment extends AuditTargetType { override val code: String = "CONFIGURATION_DEPLOYMENT" }
   case object ConfigurationRollout extends AuditTargetType { override val code: String = "CONFIGURATION_ROLLOUT" }
+  case object ConfigurationAssignmentRule extends AuditTargetType { override val code: String = "CONFIGURATION_ASSIGNMENT_RULE" }
 
   val All: List[AuditTargetType] =
     List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Account, TerminalSession,
-      ConfigurationProfile, ConfigurationAssignment, ConfigurationDeployment, ConfigurationRollout)
+      ConfigurationProfile, ConfigurationAssignment, ConfigurationDeployment, ConfigurationRollout,
+      ConfigurationAssignmentRule)
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditTargetType] =
     All.find(_.code == code)

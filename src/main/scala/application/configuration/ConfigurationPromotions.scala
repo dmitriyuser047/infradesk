@@ -94,10 +94,14 @@ final class ConfigurationPromotions[F[_]: MonadThrow, Tx[_]: MonadThrow](
     val byId = candidates.map(candidate => candidate.assignment.id -> candidate).toMap
     selected.map { selection =>
       byId.get(selection.assignmentId) match {
+        case Some(candidate) if candidate.assignment.managed =>
+          ConfigurationPromotionItem(selection.assignmentId, selection.expectedVersion, Some(candidate.resourceName),
+            Some(candidate.assignment.profileRevisionNumber),
+            List(ConfigurationPromotionIssue(ConfigurationAssignmentError.ManagedCode, None)))
         case Some(candidate) if candidate.assignment.active && candidate.assignment.profileId == profileId &&
           candidate.assignment.version == selection.expectedVersion =>
           ConfigurationPromotionItem(selection.assignmentId, selection.expectedVersion, Some(candidate.resourceName),
-            Some(candidate.assignment.profileRevisionNumber), issues(revision, candidate.values))
+            Some(candidate.assignment.profileRevisionNumber), ConfigurationPromotions.issues(revision, candidate.values))
         case other =>
           ConfigurationPromotionItem(selection.assignmentId, selection.expectedVersion, other.map(_.resourceName),
             other.map(_.assignment.profileRevisionNumber), List(ConfigurationPromotionIssue(Conflict.code, None)))
@@ -105,14 +109,23 @@ final class ConfigurationPromotions[F[_]: MonadThrow, Tx[_]: MonadThrow](
     }
   }
 
+  private def validate(revisionNumber: Int, selected: List[ConfigurationPromotionSelection]): F[Unit] =
+    MonadThrow[F].raiseUnless(revisionNumber >= 1 && selected.nonEmpty && selected.size <= MaxSelection &&
+      selected.forall(_.expectedVersion >= 1) && selected.map(_.assignmentId).distinct.size == selected.size)(Invalid)
+}
+
+object ConfigurationPromotions {
+  /** An explicit value for a variable the target revision no longer declares. */
+  val IncompatibleOverride = "CONFIGURATION_INCOMPATIBLE_OVERRIDE"
+
   /** Every incompatibility, not only the first one the renderer would stop at. */
-  private def issues(revision: ConfigurationRevision,
+  def issues(revision: ConfigurationRevision,
                      values: List[ConfigurationVariableValue]): List[ConfigurationPromotionIssue] = {
     val definitions = revision.variables.map(variable => variable.name -> variable).toMap
     val given = values.map(_.name).toSet
     val overrides = values.flatMap { value =>
       definitions.get(value.name) match {
-        case None => Some(ConfigurationPromotionIssue(ConfigurationPromotions.IncompatibleOverride, Some(value.name)))
+        case None => Some(ConfigurationPromotionIssue(IncompatibleOverride, Some(value.name)))
         case Some(definition) if value.value.length > ConfigurationLimits.MaxValueLength ||
           !definition.valueType.accepts(value.value) =>
           Some(ConfigurationPromotionIssue("CONFIGURATION_VALUE_INVALID", Some(value.name)))
@@ -130,12 +143,4 @@ final class ConfigurationPromotions[F[_]: MonadThrow, Tx[_]: MonadThrow](
       error => List(ConfigurationPromotionIssue(error.code, Option(error.variableName).filter(_.nonEmpty))), _ => Nil)
   }
 
-  private def validate(revisionNumber: Int, selected: List[ConfigurationPromotionSelection]): F[Unit] =
-    MonadThrow[F].raiseUnless(revisionNumber >= 1 && selected.nonEmpty && selected.size <= MaxSelection &&
-      selected.forall(_.expectedVersion >= 1) && selected.map(_.assignmentId).distinct.size == selected.size)(Invalid)
-}
-
-object ConfigurationPromotions {
-  /** An explicit value for a variable the target revision no longer declares. */
-  val IncompatibleOverride = "CONFIGURATION_INCOMPATIBLE_OVERRIDE"
 }

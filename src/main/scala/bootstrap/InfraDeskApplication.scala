@@ -69,7 +69,10 @@ object InfraDeskApplication {
           if (config.configurationDeployment.enabled)
             List(application.configurationDeploymentWorker.run, application.configurationRolloutWorker.run)
           else Nil
-        val workers = schedulerWorkers ++ notificationWorkers ++ configurationWorkers ++ List(
+        // Rule reconciliation only creates desired assignments; it is independent of deployments.
+        val ruleWorkers =
+          if (config.configurationRules.enabled) List(application.configurationAssignmentRuleWorker.run) else Nil
+        val workers = schedulerWorkers ++ notificationWorkers ++ configurationWorkers ++ ruleWorkers ++ List(
           application.cleanupLoginThrottle.run,
           application.cleanupSecurityEvents.run, application.terminalSessionLifecycle.reap)
 

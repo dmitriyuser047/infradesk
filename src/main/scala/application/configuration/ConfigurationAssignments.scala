@@ -46,6 +46,7 @@ object ConfigurationAssignmentError {
   val PathConflictCode = "CONFIGURATION_ASSIGNMENT_PATH_CONFLICT"
   val ChangedCode = "CONFIGURATION_ASSIGNMENT_CHANGED"
   val InvalidCode = "INVALID_CONFIGURATION_ASSIGNMENT"
+  val ManagedCode = "CONFIGURATION_ASSIGNMENT_MANAGED_BY_RULE"
 
   val notFound: ConfigurationAssignmentError = ConfigurationAssignmentError(NotFoundCode, "Configuration assignment was not found")
   val targetNotFound: ConfigurationAssignmentError = ConfigurationAssignmentError(TargetNotFoundCode, "Target resource was not found")
@@ -63,6 +64,9 @@ object ConfigurationAssignmentError {
   val profileArchived: ConfigurationAssignmentError =
     ConfigurationAssignmentError(ConfigurationError.ArchivedCode, "The configuration profile is archived")
   def invalid(field: String): ConfigurationAssignmentError = ConfigurationAssignmentError(InvalidCode, s"Invalid $field")
+  /** A rule owns this assignment's profile, revision and path; detach it or change the rule instead. */
+  val managed: ConfigurationAssignmentError =
+    ConfigurationAssignmentError(ManagedCode, "This assignment is managed by an automation rule")
 
   /** A value problem, by its code and the variable it concerns; the value itself is never echoed. */
   def values(error: ConfigurationRenderError): ConfigurationAssignmentError =
@@ -160,6 +164,9 @@ final class ConfigurationAssignments[F[_]: MonadThrow, Tx[_]: MonadThrow](
     for {
       current <- reads.run(assignments.find(actor.organizationId, id)).flatMap(_.filter(_.active).liftTo[F](notFound))
       _ <- MonadThrow[F].raiseUnless(current.version == expectedVersion)(changed)
+      // Per-node values stay editable; what the rule manages does not change here.
+      _ <- MonadThrow[F].raiseWhen(current.managed && (draft.profileRevisionNumber != current.profileRevisionNumber ||
+        draft.targetPath != current.targetPath))(managed)
       loaded <- reads.run(revisionOf(actor.organizationId, current.profileId, draft.profileRevisionNumber))
       _ <- ConfigurationDesiredState.render(loaded._2, draft.values).leftMap(values).liftTo[F]
       _ <- writes.run(for {
@@ -174,6 +181,9 @@ final class ConfigurationAssignments[F[_]: MonadThrow, Tx[_]: MonadThrow](
   /** Removes the assignment from the desired state. The file on the server is not touched. */
   def remove(actor: ActorContext, id: UUID, expectedVersion: Int): F[Unit] =
     writes.run(for {
+      current <- assignments.find(actor.organizationId, id)
+      // The rule would create it again: a managed assignment leaves by detach or by exclusion.
+      _ <- MonadThrow[Tx].raiseWhen(current.exists(a => a.active && a.managed))(managed)
       now <- time.now
       outcome <- assignments.remove(actor.organizationId, id, expectedVersion, now)
       _ <- written(outcome)

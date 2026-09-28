@@ -220,11 +220,20 @@ jobs:
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
           # Build a representative production V29 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V30 through V36 to the restored database before the backend reports itself ready.
+          # V30 through V37 to the restored database before the backend reports itself ready.
           # Remove the additive tables and Stage 21 index; earlier schema stays as in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          alter table configuration_assignment drop column source_rule_id;
+          drop table configuration_assignment_rule_issue;
+          drop table configuration_assignment_rule_exclusion;
+          drop table configuration_assignment_rule_label;
+          drop table configuration_assignment_rule_environment;
+          drop table configuration_assignment_rule_project;
+          drop table configuration_assignment_rule;
+          drop table resource_label_state;
+          drop table resource_label;
           drop table configuration_rollout_item_validator_arg;
           drop table configuration_rollout_item_value;
           drop table configuration_deployment_event;
@@ -242,14 +251,14 @@ jobs:
           drop table terminal_session;
           drop table account_security_event;
           drop index ix_incident_resource_opened;
-          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36');
+          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V30 through V36.
+          # recover the marker and let Flyway apply V30 through V37.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -326,6 +335,9 @@ jobs:
           # deployment/rollout references in both directions.
           deployment_invariants="$(docker compose -f compose.prod.yml exec -T postgres             psql --username infradesk --dbname infradesk --tuples-only --no-align             --command "select (select count(*) from pg_indexes where schemaname = current_schema() and indexname = 'ux_configuration_deployment_active_resource') + (select count(*) from pg_constraint where conname in ('fk_configuration_deployment_rollout', 'fk_configuration_deployment_rollout_item', 'fk_configuration_rollout_item_deployment', 'ck_configuration_deployment_lease_state'))")"
           test "${deployment_invariants}" = "5"
+          # V37: rules and labels exist after the upgrade, and assignments carry their rule.
+          rule_schema="$(docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --tuples-only --no-align --command "select (select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('resource_label', 'resource_label_state', 'configuration_assignment_rule', 'configuration_assignment_rule_project', 'configuration_assignment_rule_environment', 'configuration_assignment_rule_label', 'configuration_assignment_rule_exclusion', 'configuration_assignment_rule_issue')) + (select count(*) from pg_constraint where conname = 'fk_configuration_assignment_source_rule')")"
+          test "${rule_schema}" = "9"
           credential_kind="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where conname = 'ck_connection_secret_kind' and pg_get_constraintdef(oid) like '%SSH_CREDENTIAL%'")"

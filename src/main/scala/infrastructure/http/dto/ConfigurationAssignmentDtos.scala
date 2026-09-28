@@ -74,7 +74,10 @@ object ConfigurationAssignmentDtos {
           "code" -> Json.fromString(profile.code),
           "name" -> Json.fromString(profile.name),
           "archived" -> Json.fromBoolean(profile.archived),
-          "latestRevisionNumber" -> Json.fromInt(profile.latestRevisionNumber))
+          "latestRevisionNumber" -> Json.fromInt(profile.latestRevisionNumber)),
+        // A managed assignment names its rule: profile, revision and path belong to that rule.
+        "rule" -> value.rule.fold(Json.Null)(rule => Json.obj("id" -> uuidEncoder(rule.id),
+          "code" -> Json.fromString(rule.code), "name" -> Json.fromString(rule.name)))
       )
     }
 

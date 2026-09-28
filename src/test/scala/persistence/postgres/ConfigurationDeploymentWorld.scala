@@ -83,6 +83,27 @@ private[postgres] final class ConfigurationDeploymentWorld(val runner: DoobieTra
   type Node = ConfigurationDeploymentWorld.Node
   private val Node = ConfigurationDeploymentWorld.Node
 
+  /** Another project with one environment in the organization: (project, environment). */
+  def environment(name: String, organization: UUID = org): IO[(UUID, UUID)] = {
+    val project = UUID.randomUUID()
+    val environment = UUID.randomUUID()
+    run(sql"insert into project (id, organization_id, code, name) values ($project, $organization, $name, $name)".update.run *>
+      sql"""insert into environment (id, organization_id, project_id, code, name, kind)
+            values ($environment, $organization, $project, $name, $name, 'PROD')""".update.run).as(project -> environment)
+  }
+
+  def defaultEnvironment(organization: UUID = org): UUID = environments(organization)
+
+  /** A resource without a connection, for selector and rule tests that never deploy. */
+  def resource(name: String, environment: UUID = environments(org), organization: UUID = org, active: Boolean = true,
+               typeId: UUID = NodeType): IO[UUID] = {
+    val id = UUID.randomUUID()
+    run(sql"""insert into resource (id, organization_id, environment_id, resource_type_id, code, name, is_active)
+              values ($id, $organization, $environment, $typeId, $name, $name, $active)""".update.run).as(id)
+  }
+
+  val ContainerType: UUID = UUID.fromString("10000000-0000-0000-0000-000000000002")
+
   def node(name: String, organization: UUID = org): IO[Node] = {
     val resource = UUID.randomUUID()
     val connection = UUID.randomUUID()
@@ -172,6 +193,15 @@ private[postgres] final class ConfigurationDeploymentWorld(val runner: DoobieTra
 
   def cleanUp: IO[Unit] = run(List(org, foreignOrg).traverse_ { id =>
     for {
+      _ <- sql"update configuration_assignment set source_rule_id = null where organization_id = $id".update.run
+      _ <- sql"delete from configuration_assignment_rule_issue where organization_id = $id".update.run
+      _ <- sql"delete from configuration_assignment_rule_exclusion where organization_id = $id".update.run
+      _ <- sql"delete from configuration_assignment_rule_label where organization_id = $id".update.run
+      _ <- sql"delete from configuration_assignment_rule_environment where organization_id = $id".update.run
+      _ <- sql"delete from configuration_assignment_rule_project where organization_id = $id".update.run
+      _ <- sql"delete from configuration_assignment_rule where organization_id = $id".update.run
+      _ <- sql"delete from resource_label where organization_id = $id".update.run
+      _ <- sql"delete from resource_label_state where organization_id = $id".update.run
       _ <- sql"update configuration_deployment set rollout_id = null, rollout_item_id = null, backup_retained = false where organization_id = $id".update.run
       _ <- sql"delete from configuration_rollout_item_value where organization_id = $id".update.run
       _ <- sql"delete from configuration_rollout_item_validator_arg where organization_id = $id".update.run

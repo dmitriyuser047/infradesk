@@ -121,6 +121,8 @@ object HttpModule {
           loggers.configuration).routes <+>
         new ConfigurationRolloutRoutes(application.configurationRollouts, authorization,
           loggers.configuration).routes <+>
+        new infrastructure.http.ConfigurationAssignmentRuleRoutes(application.configurationAssignmentRules,
+          application.resourceLabels, authorization, loggers.configuration).routes <+>
         new MonitorRuleRoutes(
           application.listMonitorRules,
           application.createMonitorRule,

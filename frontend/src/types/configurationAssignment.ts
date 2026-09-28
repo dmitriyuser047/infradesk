@@ -23,6 +23,8 @@ export interface ConfigurationAssignment {
     environment: { id: string; name: string; kind: string }
   }
   profile: { id: string; code: string; name: string; archived: boolean; latestRevisionNumber: number }
+  /** The automation rule that manages this assignment's profile, revision and path; null when manual. */
+  rule?: { id: string; code: string; name: string } | null
 }
 
 export interface ConfigurationValue {

@@ -23,9 +23,12 @@ final case class ConfigurationAssignment(
   version: Int,
   removedAt: Option[Instant],
   createdAt: Instant,
-  updatedAt: Instant
+  updatedAt: Instant,
+  /** The rule that created or adopted this assignment and now manages its profile, revision and path. */
+  sourceRuleId: Option[UUID] = None
 ) {
   def active: Boolean = removedAt.isEmpty
+  def managed: Boolean = sourceRuleId.isDefined
 }
 
 /** Where the desired file belongs: a normalized absolute POSIX path, checked as text only.

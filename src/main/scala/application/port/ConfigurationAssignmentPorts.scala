@@ -86,17 +86,21 @@ final case class AssignmentResourceView(
 /** The profile of an assignment: enough to say whether a newer revision exists or it is archived. */
 final case class AssignmentProfileView(id: UUID, code: String, name: String, archived: Boolean, latestRevisionNumber: Int)
 
+/** The rule that manages an assignment, when one does. */
+final case class AssignmentRuleView(id: UUID, code: String, name: String)
+
 /** An assignment as a list shows it. No template, no values, no rendered text. */
 final case class ConfigurationAssignmentListItem(
   assignment: ConfigurationAssignment,
   resource: AssignmentResourceView,
-  profile: AssignmentProfileView
+  profile: AssignmentProfileView,
+  rule: Option[AssignmentRuleView] = None
 )
 
 /** Where a page continues: the exact row the previous page ended on. */
 final case class ConfigurationAssignmentCursor(createdAt: Instant, id: UUID)
 
-final case class ConfigurationAssignmentFilter(resourceId: Option[UUID], profileId: Option[UUID])
+final case class ConfigurationAssignmentFilter(resourceId: Option[UUID], profileId: Option[UUID], ruleId: Option[UUID] = None)
 
 /** Reads assignments. A list is one statement, whatever resources, environments and profiles its
   * rows mention.

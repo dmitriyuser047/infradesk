@@ -189,7 +189,7 @@ final class ConfigurationAssignmentRoutes[Tx[_]](
              application.configuration.ConfigurationError.NotFoundCode |
              application.configuration.ConfigurationError.RevisionNotFoundCode => NotFound(errorBody(error))
         case ConfigurationAssignmentError.PathConflictCode | ConfigurationAssignmentError.ChangedCode |
-             ConfigurationAssignmentError.TargetInactiveCode |
+             ConfigurationAssignmentError.TargetInactiveCode | ConfigurationAssignmentError.ManagedCode |
              application.configuration.ConfigurationError.ArchivedCode => Conflict(errorBody(error))
         case _ => BadRequest(errorBody(error))
       }

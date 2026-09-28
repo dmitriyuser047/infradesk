@@ -4,6 +4,7 @@ package persistence.postgres
 import application.port.{
   AssignmentProfileView,
   AssignmentResourceView,
+  AssignmentRuleView,
   ConfigurationAssignmentCursor,
   ConfigurationAssignmentFilter,
   ConfigurationAssignmentListItem,
@@ -69,11 +70,11 @@ final class PostgresConfigurationAssignmentRepository extends ConfigurationAssig
     sql"""
       insert into configuration_assignment (
         id, organization_id, resource_id, profile_id, profile_revision_number, target_path, version,
-        removed_at, created_at, updated_at
+        removed_at, created_at, updated_at, source_rule_id
       ) values (
         ${assignment.id}, ${assignment.organizationId}, ${assignment.resourceId}, ${assignment.profileId},
         ${assignment.profileRevisionNumber}, ${assignment.targetPath}, ${assignment.version},
-        ${assignment.removedAt}, ${assignment.createdAt}, ${assignment.updatedAt}
+        ${assignment.removedAt}, ${assignment.createdAt}, ${assignment.updatedAt}, ${assignment.sourceRuleId}
       )
       on conflict (organization_id, resource_id, target_path) where removed_at is null do nothing
     """.update.run.flatMap[ConfigurationAssignmentWrite] {
@@ -169,6 +170,7 @@ final class PostgresConfigurationAssignmentQuery extends ConfigurationAssignment
       Some(fr"a.removed_at is null"),
       filter.resourceId.map(id => fr"a.resource_id = $id"),
       filter.profileId.map(id => fr"a.profile_id = $id"),
+      filter.ruleId.map(id => fr"a.source_rule_id = $id"),
       before.map(cursor => fr"(a.created_at, a.id) < (${cursor.createdAt}, ${cursor.id})")
     ).flatten.foldLeft(fr"")((all, next) => all ++ fr"and" ++ next)
     (select(organizationId) ++ filters ++ fr"order by a.created_at desc, a.id desc limit $limit")
@@ -192,13 +194,15 @@ final class PostgresConfigurationAssignmentQuery extends ConfigurationAssignment
     fr"select" ++ assignmentColumns ++ fr""",
         r.name, r.code, rt.code, r.is_active,
         p.id, p.name, e.id, e.name, e.kind,
-        cp.code, cp.name, cp.archived, cp.latest_revision_number
+        cp.code, cp.name, cp.archived, cp.latest_revision_number,
+        sr.code, sr.name
       from configuration_assignment a
       join resource r on r.id = a.resource_id and r.organization_id = a.organization_id
       join resource_type rt on rt.id = r.resource_type_id
       join environment e on e.id = r.environment_id and e.organization_id = r.organization_id
       join project p on p.id = e.project_id and p.organization_id = e.organization_id
       join configuration_profile cp on cp.id = a.profile_id and cp.organization_id = a.organization_id
+      left join configuration_assignment_rule sr on sr.id = a.source_rule_id and sr.organization_id = a.organization_id
       where a.organization_id = $organizationId
     """
 }
@@ -207,7 +211,7 @@ object PostgresConfigurationAssignmentRepository {
 
   private[postgres] val assignmentColumns: Fragment = fr"""
     a.id, a.organization_id, a.resource_id, a.profile_id, a.profile_revision_number, a.target_path,
-    a.version, a.removed_at, a.created_at, a.updated_at
+    a.version, a.removed_at, a.created_at, a.updated_at, a.source_rule_id
   """
 
   private[postgres] final case class AssignmentRow(
@@ -220,11 +224,12 @@ object PostgresConfigurationAssignmentRepository {
     version: Int,
     removedAt: Option[Instant],
     createdAt: Instant,
-    updatedAt: Instant
+    updatedAt: Instant,
+    sourceRuleId: Option[UUID]
   ) {
     def toDomain: ConfigurationAssignment =
       ConfigurationAssignment(id, organizationId, resourceId, profileId, profileRevisionNumber, targetPath, version,
-        removedAt, createdAt, updatedAt)
+        removedAt, createdAt, updatedAt, sourceRuleId)
   }
 
   private[postgres] final case class ContextRow(
@@ -240,14 +245,17 @@ object PostgresConfigurationAssignmentRepository {
     profileCode: String,
     profileName: String,
     profileArchived: Boolean,
-    latestRevisionNumber: Int
+    latestRevisionNumber: Int,
+    ruleCode: Option[String],
+    ruleName: Option[String]
   ) {
     def toItem(assignment: ConfigurationAssignment): ConfigurationAssignmentListItem =
       ConfigurationAssignmentListItem(
         assignment,
         AssignmentResourceView(assignment.resourceId, resourceName, resourceCode, resourceTypeCode, resourceActive,
           ProjectReference(projectId, projectName), EnvironmentReference(environmentId, environmentName, environmentKind)),
-        AssignmentProfileView(assignment.profileId, profileCode, profileName, profileArchived, latestRevisionNumber)
+        AssignmentProfileView(assignment.profileId, profileCode, profileName, profileArchived, latestRevisionNumber),
+        (assignment.sourceRuleId, ruleCode, ruleName).mapN(AssignmentRuleView.apply)
       )
   }
 

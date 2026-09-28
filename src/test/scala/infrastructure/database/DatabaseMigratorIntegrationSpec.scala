@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V36 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V37 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 36)
-        assertEquals(first.currentVersion, "36")
+        assertEquals(first.migrationsApplied, 37)
+        assertEquals(first.currentVersion, "37")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "36")
+        assertEquals(second.currentVersion, "37")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -144,6 +144,32 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               assertEquals(history.getInt(3), 11)
               assertEquals(history.getInt(4), 3)
             } finally history.close()
+            // V37: labels, rules, normalized selectors, exclusions, issues and assignment provenance.
+            val rules = statement.executeQuery(
+              "select (select count(*) from information_schema.tables where table_schema = current_schema() and table_name in (" +
+                "'resource_label', 'resource_label_state', 'configuration_assignment_rule', " +
+                "'configuration_assignment_rule_project', 'configuration_assignment_rule_environment', " +
+                "'configuration_assignment_rule_label', 'configuration_assignment_rule_exclusion', " +
+                "'configuration_assignment_rule_issue')), " +
+                "(select count(*) from information_schema.columns where table_schema = current_schema() " +
+                "and table_name = 'configuration_assignment' and column_name = 'source_rule_id'), " +
+                "(select count(*) from pg_constraint where conname in ('fk_configuration_assignment_source_rule', " +
+                "'uq_configuration_assignment_rule_code', 'ck_configuration_assignment_rule_lease', " +
+                "'fk_resource_label_resource_tenant', 'fk_configuration_assignment_rule_profile_tenant')), " +
+                "(select count(*) from pg_indexes where schemaname = current_schema() and indexname in (" +
+                "'ix_resource_label_selector', 'ix_configuration_assignment_rule_claim', " +
+                "'ix_configuration_assignment_source_rule', 'ix_configuration_assignment_rule_issue_rule')), " +
+                "(select count(*) from pg_constraint where conname = 'ck_audit_event_action' " +
+                "and pg_get_constraintdef(oid) like '%CONFIGURATION_RULE_REVISION_PROMOTED%')"
+            )
+            try {
+              assert(rules.next())
+              assertEquals(rules.getInt(1), 8)
+              assertEquals(rules.getInt(2), 1)
+              assertEquals(rules.getInt(3), 5)
+              assertEquals(rules.getInt(4), 4)
+              assertEquals(rules.getInt(5), 1)
+            } finally rules.close()
             val incidentByResource = statement.executeQuery(
               "select count(*) from pg_indexes where schemaname = current_schema() " +
                 "and indexname = 'ix_incident_resource_opened'"

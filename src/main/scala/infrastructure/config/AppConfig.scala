@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package infrastructure.config
 
 import application.auth.{AuthRateLimitSettings, BootstrapConfig, SecurityEventSettings}
-import application.configuration.ConfigurationDeploymentSettings
+import application.configuration.{ConfigurationDeploymentSettings, ConfigurationRuleSettings}
 import cats.effect.IO
 import com.comcast.ip4s.{Host, Port}
 import infrastructure.database.DatabaseConfig
@@ -67,7 +67,8 @@ final case class AppConfig(
   notification: NotificationConfig,
   sshEnvironmentSecrets: EnvironmentSecrets,
   terminal: TerminalConfig,
-  configurationDeployment: ConfigurationDeploymentSettings = ConfigurationDeploymentSettings.Default
+  configurationDeployment: ConfigurationDeploymentSettings = ConfigurationDeploymentSettings.Default,
+  configurationRules: ConfigurationRuleSettings = ConfigurationRuleSettings()
 )
 
 object AppConfig {
@@ -86,8 +87,11 @@ object AppConfig {
       notification <- parseNotification(values)
       terminal <- TerminalConfig.fromEnvironment(values)
       configurationDeployment <- parseConfigurationDeployment(values)
+      ruleEnabled <- parseBoolean(values, "INFRADESK_CONFIGURATION_RULES_ENABLED", default = true)
+      ruleInterval <- bounded(values, "INFRADESK_CONFIGURATION_RULE_RECONCILE_SECONDS", 45, 5, 3600)
     } yield AppConfig(database, http, auth, loginRateLimit, SecurityEventSettings(securityEvents.seconds), bootstrap, secretEncryption, scheduler,
-      notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment)
+      notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment,
+      ConfigurationRuleSettings(enabled = ruleEnabled, reconcileInterval = ruleInterval.seconds))
 
   private def parseLoginRateLimit(
     values: Map[String, String]
