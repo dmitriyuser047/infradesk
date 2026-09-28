@@ -11,11 +11,14 @@ set -Eeuo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SOURCE_DIR}/../.." && pwd)"
+# Global, so the exit trap still sees it after main returns.
+STAGING=""
+trap 'if [ -n "${STAGING}" ]; then rm -rf "${STAGING}"; fi' EXIT
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 main() {
-  local version="" sha="" backend="" frontend="" postgres="" output="" schema name staging bundle
+  local version="" sha="" backend="" frontend="" postgres="" output="" schema name bundle
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --version) version="${2:-}"; shift 2 ;;
@@ -40,9 +43,8 @@ main() {
   [ -n "${schema}" ] || die "no Flyway migrations found"
 
   name="infradesk-${version}"
-  staging="$(mktemp -d)"
-  trap 'rm -rf "${staging}"' EXIT
-  bundle="${staging}/${name}"
+  STAGING="$(mktemp -d)"
+  bundle="${STAGING}/${name}"
   mkdir -p "${bundle}/lib"
 
   for file in install.sh update.sh backup.sh restore.sh uninstall.sh infradesk; do
@@ -71,7 +73,7 @@ EOF
   mkdir -p "${output}"
   output="$(cd "${output}" && pwd)"
   # Reproducible metadata: fixed owner and ordering, so the archive depends only on its content.
-  tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -C "${staging}" -czf "${output}/${name}-linux-amd64.tar.gz" "${name}"
+  tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -C "${STAGING}" -czf "${output}/${name}-linux-amd64.tar.gz" "${name}"
   (cd "${output}" && sha256sum "${name}-linux-amd64.tar.gz" > "${name}-linux-amd64.tar.gz.sha256" &&
     sha256sum "${name}-linux-amd64.tar.gz" > SHA256SUMS)
   printf 'Built %s/%s-linux-amd64.tar.gz (schema V%s)\n' "${output}" "${name}" "${schema}"
