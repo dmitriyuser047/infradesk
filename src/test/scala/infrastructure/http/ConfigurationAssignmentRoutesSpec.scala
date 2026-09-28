@@ -117,7 +117,9 @@ final class ConfigurationAssignmentRoutesSpec extends FunSuite {
     assertEquals(stale, Status.Conflict)
     assertEquals(staleBody.hcursor.get[String]("code"), Right("CONFIGURATION_ASSIGNMENT_CHANGED"))
     assertEquals(f.call(Method.DELETE, s"$base/$id?expectedVersion=1")._1, Status.Conflict)
+    assertEquals(f.call(Method.DELETE, s"$base/$id")._2.hcursor.get[String]("code"), Right("INVALID_REQUEST"))
     assertEquals(f.call(Method.DELETE, s"$base/$id?expectedVersion=zero")._1, Status.BadRequest)
+    assertEquals(f.call(Method.DELETE, s"$base/$id?expectedVersion=0")._1, Status.BadRequest)
   }
 
   test("removal is soft and says so; a removed assignment is kept, listed no more, and takes no change") {
@@ -129,7 +131,7 @@ final class ConfigurationAssignmentRoutesSpec extends FunSuite {
     assertEquals(f.store.assignments.size, 1)
     assertEquals(f.call(Method.GET, base)._2.asArray.map(_.size), Some(0))
     assertEquals(f.call(Method.GET, s"$base/$id")._1, Status.Ok)
-    assertEquals(f.call(Method.DELETE, s"$base/$id")._1, Status.NotFound)
+    assertEquals(f.call(Method.DELETE, s"$base/$id?expectedVersion=2")._1, Status.NotFound)
     // The path is free again.
     assertEquals(f.call(Method.POST, base, Some(createBody()))._1, Status.Created)
     assertEquals(f.audit.recorded.map(_.action.code),
@@ -143,7 +145,7 @@ final class ConfigurationAssignmentRoutesSpec extends FunSuite {
     val (status, body) = f.call(Method.GET, s"$foreign/$id")
     assertEquals(status, Status.NotFound)
     assertEquals(body.hcursor.get[String]("code"), Right("CONFIGURATION_ASSIGNMENT_NOT_FOUND"))
-    assertEquals(f.call(Method.DELETE, s"$foreign/$id")._1, Status.NotFound)
+    assertEquals(f.call(Method.DELETE, s"$foreign/$id?expectedVersion=1")._1, Status.NotFound)
     assertEquals(f.call(Method.GET, foreign)._2.asArray.map(_.size), Some(0))
     val (target, targetBody) = f.call(Method.POST, foreign, Some(createBody()))
     assertEquals(target, Status.NotFound)
@@ -206,6 +208,8 @@ final class ConfigurationAssignmentRoutesSpec extends FunSuite {
     private def guard[A](value: => A): IO[A] = if (failReads) IO.raiseError(new IllegalStateException("sql secret")) else IO(value)
 
     private val repository = new ConfigurationAssignmentRepository[IO] {
+      def createEligibility(organizationId: UUID, resourceId: UUID, profileId: UUID,
+                            revisionNumber: Int): IO[ConfigurationAssignmentEligibility] = IO.pure(ConfigurationAssignmentEligibility.Eligible)
       private def taken(a: ConfigurationAssignment, path: String) = store.assignments.values.exists(other =>
         other.id != a.id && other.active && other.organizationId == a.organizationId && other.resourceId == a.resourceId && other.targetPath == path)
       def insert(assignment: ConfigurationAssignment, values: List[ConfigurationVariableValue]): IO[ConfigurationAssignmentWrite] = IO {
@@ -228,10 +232,10 @@ final class ConfigurationAssignmentRoutesSpec extends FunSuite {
             ConfigurationAssignmentWrite.Written
         }
       }
-      def remove(organizationId: UUID, id: UUID, expectedVersion: Option[Int], at: Instant): IO[ConfigurationAssignmentWrite] = IO {
+      def remove(organizationId: UUID, id: UUID, expectedVersion: Int, at: Instant): IO[ConfigurationAssignmentWrite] = IO {
         store.assignments.get(id).filter(a => a.organizationId == organizationId && a.active) match {
           case None => ConfigurationAssignmentWrite.Missing
-          case Some(a) if expectedVersion.exists(_ != a.version) => ConfigurationAssignmentWrite.Stale
+          case Some(a) if expectedVersion != a.version => ConfigurationAssignmentWrite.Stale
           case Some(a) =>
             store.assignments += id -> a.copy(removedAt = Some(at), version = a.version + 1, updatedAt = at)
             ConfigurationAssignmentWrite.Written

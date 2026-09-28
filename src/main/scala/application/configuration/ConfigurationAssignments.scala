@@ -9,6 +9,7 @@ import application.port.{
   ConfigurationAssignmentListItem,
   ConfigurationAssignmentQuery,
   ConfigurationAssignmentRepository,
+  ConfigurationAssignmentEligibility,
   ConfigurationAssignmentWrite,
   ConfigurationProfileQuery,
   ConfigurationRevisionView,
@@ -99,6 +100,7 @@ final case class ConfigurationAssignmentPreview(revisionNumber: Int, rendered: E
   * transaction — the work is pure and may be large — and only then opens one short write transaction
   * whose journal entry commits with it. The database, not this class, settles races: the partial
   * unique index on an active target path and a compare-and-set on the assignment's version.
+  * Creation also locks and rechecks mutable prerequisites in the write transaction.
   *
   * Nothing here connects to a server, writes a file or runs a command.
   */
@@ -139,6 +141,8 @@ final class ConfigurationAssignments[F[_]: MonadThrow, Tx[_]: MonadThrow](
       _ <- MonadThrow[F].raiseWhen(profile.archived)(profileArchived)
       _ <- ConfigurationDesiredState.render(revision, draft.values).leftMap(values).liftTo[F]
       id <- writes.run(for {
+        eligibility <- assignments.createEligibility(actor.organizationId, resourceId, profileId, draft.profileRevisionNumber)
+        _ <- eligible(eligibility)
         id <- ids.nextId
         now <- time.now
         assignment = ConfigurationAssignment(id, actor.organizationId, resourceId, profileId, draft.profileRevisionNumber,
@@ -168,13 +172,23 @@ final class ConfigurationAssignments[F[_]: MonadThrow, Tx[_]: MonadThrow](
     } yield ()
 
   /** Removes the assignment from the desired state. The file on the server is not touched. */
-  def remove(actor: ActorContext, id: UUID, expectedVersion: Option[Int]): F[Unit] =
+  def remove(actor: ActorContext, id: UUID, expectedVersion: Int): F[Unit] =
     writes.run(for {
       now <- time.now
       outcome <- assignments.remove(actor.organizationId, id, expectedVersion, now)
       _ <- written(outcome)
       _ <- audit.record(actor, AuditAction.ConfigurationAssignmentRemoved, AuditTargetType.ConfigurationAssignment, Some(id))
     } yield ())
+
+  private def eligible(outcome: ConfigurationAssignmentEligibility): Tx[Unit] = outcome match {
+    case ConfigurationAssignmentEligibility.Eligible => ().pure[Tx]
+    case ConfigurationAssignmentEligibility.TargetMissing => MonadThrow[Tx].raiseError(targetNotFound)
+    case ConfigurationAssignmentEligibility.TargetUnsupported => MonadThrow[Tx].raiseError(targetUnsupported)
+    case ConfigurationAssignmentEligibility.TargetInactive => MonadThrow[Tx].raiseError(targetInactive)
+    case ConfigurationAssignmentEligibility.ProfileMissing => MonadThrow[Tx].raiseError(profileNotFound)
+    case ConfigurationAssignmentEligibility.ProfileArchived => MonadThrow[Tx].raiseError(profileArchived)
+    case ConfigurationAssignmentEligibility.RevisionMissing => MonadThrow[Tx].raiseError(revisionNotFound)
+  }
 
   private def revisionOf(organizationId: UUID, profileId: UUID, revisionNumber: Int): Tx[(ConfigurationProfile, ConfigurationRevision)] =
     for {

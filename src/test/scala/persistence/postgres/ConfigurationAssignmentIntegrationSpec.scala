@@ -12,8 +12,8 @@ import application.configuration.{
   ConfigurationProfileMetadata,
   CreateConfigurationProfileCommand
 }
-import application.port.{ConfigurationAssignmentCursor, ConfigurationAssignmentFilter}
-import cats.effect.{IO, Ref}
+import application.port.{ConfigurationAssignmentCursor, ConfigurationAssignmentFilter, TransactionRunner}
+import cats.effect.{Deferred, IO, Ref}
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.audit.{AuditCursor, AuditEvent}
@@ -155,7 +155,7 @@ final class ConfigurationAssignmentIntegrationSpec extends FunSuite {
         mineId <- w.assign(w.node, mine, 1, NginxPath, "domain" -> "example.com")
         foreignRead <- w.run(w.queries.detail(w.foreignOrg, mineId))
         foreignUpdate <- w.service.update(w.foreignActor, mineId, 1, draft(1, NginxPath, "domain" -> "x")).attempt
-        foreignRemove <- w.service.remove(w.foreignActor, mineId, None).attempt
+        foreignRemove <- w.service.remove(w.foreignActor, mineId, 1).attempt
         after <- w.run(w.queries.detail(w.org, mineId))
       } yield {
         assertEquals(code(foreignTarget), Some("CONFIGURATION_TARGET_NOT_FOUND"))
@@ -315,13 +315,13 @@ final class ConfigurationAssignmentIntegrationSpec extends FunSuite {
       for {
         profile <- w.profile("nginx-main")
         id <- w.assign(w.node, profile, 1, NginxPath, "domain" -> "example.com")
-        staleRemove <- w.service.remove(w.actor, id, Some(7)).attempt
-        _ <- w.service.remove(w.actor, id, Some(1))
+        staleRemove <- w.service.remove(w.actor, id, 7).attempt
+        _ <- w.service.remove(w.actor, id, 1)
         removed <- w.run(w.queries.detail(w.org, id))
         values <- w.count("configuration_assignment_value")
         listed <- w.run(w.queries.list(w.org, ConfigurationAssignmentFilter(None, None), None, 50))
         update <- w.service.update(w.actor, id, 2, draft(1, NginxPath, "domain" -> "x")).attempt
-        again <- w.service.remove(w.actor, id, None).attempt
+        again <- w.service.remove(w.actor, id, 2).attempt
         replacement <- w.assign(w.node, profile, 1, NginxPath, "domain" -> "new.example.com")
         journal <- w.journal
       } yield {
@@ -336,6 +336,74 @@ final class ConfigurationAssignmentIntegrationSpec extends FunSuite {
         assertNotEquals(replacement, id)
         assertEquals(journal.map(_._1), List("CONFIGURATION_ASSIGNMENT_CREATED", "CONFIGURATION_ASSIGNMENT_REMOVED",
           "CONFIGURATION_ASSIGNMENT_CREATED"))
+      }
+    }
+  }
+
+  test("stale removal preserves the newer assignment and writes no removal audit") {
+    withWorld { w =>
+      for {
+        profile <- w.profile("nginx-main")
+        id <- w.assign(w.node, profile, 1, NginxPath, "domain" -> "example.com")
+        _ <- w.service.update(w.actor, id, 1, draft(1, NginxPath, "domain" -> "new.example.com"))
+        stale <- w.service.remove(w.actor, id, 1).attempt
+        before <- w.run(w.queries.detail(w.org, id))
+        journalBefore <- w.journal
+        _ <- w.service.remove(w.actor, id, 2)
+        after <- w.run(w.queries.detail(w.org, id))
+        journalAfter <- w.journal
+      } yield {
+        assertEquals(code(stale), Some("CONFIGURATION_ASSIGNMENT_CHANGED"))
+        assertEquals(before.map(d => (d.item.assignment.version, d.item.assignment.removedAt)), Some((2, None)))
+        assertEquals(journalBefore.count(_._1 == "CONFIGURATION_ASSIGNMENT_REMOVED"), 0)
+        assertEquals(after.map(_.item.assignment.version), Some(3))
+        assert(after.exists(_.item.assignment.removedAt.isDefined))
+        assertEquals(journalAfter.count(_._1 == "CONFIGURATION_ASSIGNMENT_REMOVED"), 1)
+      }
+    }
+  }
+
+  test("resource deactivation after preliminary read prevents create and audit") {
+    withWorld { w =>
+      for {
+        profile <- w.profile("nginx-main")
+        reached <- Deferred[IO, Unit]
+        proceed <- Deferred[IO, Unit]
+        create <- w.serviceWith(new PostgresAuditEventRepository, Some(w.gatedWrites(reached, proceed)))
+          .create(w.actor, w.node, profile, draft(1, NginxPath, "domain" -> "example.com")).attempt.start
+        _ <- reached.get
+        _ <- w.run(sql"update resource set is_active = false where organization_id = ${w.org} and id = ${w.node}".update.run)
+        _ <- proceed.complete(())
+        outcome <- create.joinWithNever
+        rows <- w.count("configuration_assignment")
+        journal <- w.journal
+      } yield {
+        assertEquals(code(outcome), Some("CONFIGURATION_TARGET_INACTIVE"))
+        assertEquals(rows, 0L)
+        assertEquals(journal.count(_._1 == "CONFIGURATION_ASSIGNMENT_CREATED"), 0)
+      }
+    }
+  }
+
+  test("profile archive after preliminary read prevents create and audit") {
+    withWorld { w =>
+      for {
+        profile <- w.profile("nginx-main")
+        reached <- Deferred[IO, Unit]
+        proceed <- Deferred[IO, Unit]
+        create <- w.serviceWith(new PostgresAuditEventRepository, Some(w.gatedWrites(reached, proceed)))
+          .create(w.actor, w.node, profile, draft(1, NginxPath, "domain" -> "example.com")).attempt.start
+        _ <- reached.get
+        _ <- w.run(w.profiles.archive(w.actor, profile))
+        _ <- proceed.complete(())
+        outcome <- create.joinWithNever
+        rows <- w.count("configuration_assignment")
+        values <- w.count("configuration_assignment_value")
+        journal <- w.journal
+      } yield {
+        assertEquals(code(outcome), Some("CONFIGURATION_PROFILE_ARCHIVED"))
+        assertEquals((rows, values), (0L, 0L))
+        assertEquals(journal.count(_._1 == "CONFIGURATION_ASSIGNMENT_CREATED"), 0)
       }
     }
   }
@@ -369,7 +437,7 @@ final class ConfigurationAssignmentIntegrationSpec extends FunSuite {
         values <- w.count("configuration_assignment_value")
         id <- w.assign(w.node, profile, 1, NginxPath, "domain" -> "example.com")
         updated <- failing.update(w.actor, id, 1, draft(1, "/etc/nginx/moved.conf", "domain" -> "changed.example.com")).attempt
-        removed <- failing.remove(w.actor, id, Some(1)).attempt
+        removed <- failing.remove(w.actor, id, 1).attempt
         after <- w.run(w.queries.detail(w.org, id))
       } yield {
         assert(created.isLeft && updated.isLeft && removed.isLeft, "the journal failed but a change went through")
@@ -457,9 +525,15 @@ final class ConfigurationAssignmentIntegrationSpec extends FunSuite {
       new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, recorder(new PostgresAuditEventRepository))
     val service: ConfigurationAssignments[IO, ConnectionIO] = serviceWith(new PostgresAuditEventRepository)
 
-    def serviceWith(events: application.port.AuditEventRepository[ConnectionIO]): ConfigurationAssignments[IO, ConnectionIO] =
+    def gatedWrites(reached: Deferred[IO, Unit], proceed: Deferred[IO, Unit]): TransactionRunner[IO, ConnectionIO] =
+      new TransactionRunner[IO, ConnectionIO] {
+        def run[A](program: ConnectionIO[A]): IO[A] = reached.complete(()) *> proceed.get *> runner.run(program)
+      }
+
+    def serviceWith(events: application.port.AuditEventRepository[ConnectionIO],
+                    writeRunner: Option[TransactionRunner[IO, ConnectionIO]] = None): ConfigurationAssignments[IO, ConnectionIO] =
       new ConfigurationAssignments[IO, ConnectionIO](repository, new PostgresConfigurationTargetQuery, profileQuery,
-        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, recorder(events), runner, runner)
+        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, recorder(events), runner, writeRunner.getOrElse(runner))
 
     private def recorder(events: application.port.AuditEventRepository[ConnectionIO]) =
       new AuditRecorder[ConnectionIO](events, new ConnectionIOIdGenerator, new ConnectionIOTimeProvider)

@@ -150,10 +150,8 @@ final class ConfigurationAssignmentRoutes[Tx[_]](
       (ConfigurationAssignmentFilter(resourceId, profileId), before, size))
   }
 
-  private def expectedVersion(raw: Option[String]): Option[Option[Int]] = raw match {
-    case None => Some(None)
-    case Some(value) => Try(value.toInt).toOption.filter(_ >= 1).map(Some(_))
-  }
+  private def expectedVersion(raw: Option[String]): Option[Int] =
+    raw.flatMap(value => Try(value.toInt).toOption.filter(_ >= 1))
 
   private def errorBody(error: ConfigurationAssignmentError): Json =
     Json.obj(

@@ -19,10 +19,25 @@ object ConfigurationAssignmentWrite {
   case object PathTaken extends ConfigurationAssignmentWrite
 }
 
+sealed trait ConfigurationAssignmentEligibility
+object ConfigurationAssignmentEligibility {
+  case object Eligible extends ConfigurationAssignmentEligibility
+  case object TargetMissing extends ConfigurationAssignmentEligibility
+  case object TargetUnsupported extends ConfigurationAssignmentEligibility
+  case object TargetInactive extends ConfigurationAssignmentEligibility
+  case object ProfileMissing extends ConfigurationAssignmentEligibility
+  case object ProfileArchived extends ConfigurationAssignmentEligibility
+  case object RevisionMissing extends ConfigurationAssignmentEligibility
+}
+
 /** Writes assignments. Every method is scoped by organization, and every change is conditional:
   * the database decides who wins a race, never a lock held in this process.
   */
 trait ConfigurationAssignmentRepository[F[_]] {
+
+  /** Recheck create prerequisites while locking the mutable rows until the insert and audit commit. */
+  def createEligibility(organizationId: UUID, resourceId: UUID, profileId: UUID,
+                        revisionNumber: Int): F[ConfigurationAssignmentEligibility]
 
   /** Inserts an active assignment with its explicit values. `PathTaken` when an active assignment
     * of the resource already claims the path; nothing is written then.
@@ -43,8 +58,8 @@ trait ConfigurationAssignmentRepository[F[_]] {
     at: Instant
   ): F[ConfigurationAssignmentWrite]
 
-  /** Soft removal: the row and its values stay, the path is freed. At `expectedVersion` when given. */
-  def remove(organizationId: UUID, id: UUID, expectedVersion: Option[Int], at: Instant): F[ConfigurationAssignmentWrite]
+  /** Soft removal at the required version: the row and its values stay, the path is freed. */
+  def remove(organizationId: UUID, id: UUID, expectedVersion: Int, at: Instant): F[ConfigurationAssignmentWrite]
 
   /** The assignment as stored, removed or not. */
   def find(organizationId: UUID, id: UUID): F[Option[ConfigurationAssignment]]
