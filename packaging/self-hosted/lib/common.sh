@@ -509,7 +509,18 @@ backup_database() {
     die "The dump could not be read back; no backup was written."
   fi
   schema="$(db_schema_version)"
-  mv -f "${temporary}" "${target}"
+  # Two backups in the same second must never overwrite each other: take the next free name, and
+  # let the no-clobber rename fail rather than replace an existing dump.
+  local attempt=1
+  while [ -e "${target}" ] || [ -e "${target}.meta" ]; do
+    attempt=$((attempt + 1))
+    target="${INFRADESK_BACKUP_DIR}/${prefix}-${stamp}-${attempt}.dump"
+  done
+  mv -n "${temporary}" "${target}"
+  if [ -e "${temporary}" ]; then
+    rm -f "${temporary}"
+    die "A backup named ${target} appeared concurrently; no backup was written. Try again."
+  fi
   write_private_file "${target}.meta" "FORMAT=pg_dump-custom
 VERSION=$(state_value VERSION)
 GIT_SHA=$(state_value GIT_SHA)
