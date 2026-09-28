@@ -78,7 +78,8 @@ final class ConfigurationDeploymentRoutes[Tx[_]](
           } yield Some((time, uuid))
           case _ => None
         }
-        val limit = params.get("limit").fold(Some(50))(value => Try(value.toInt).toOption.filter(n => n >= 1 && n <= 200))
+        val limit: Option[Int] = params.get("limit").fold[Option[Int]](Some(50))(
+          value => Try(value.toInt).toOption.filter(n => n >= 1 && n <= 200))
         (profile, cursor, limit) match {
           case (Some(p), Some(c), Some(n)) => respond(request, context, "configuration.deployment.history")(
             deployments.history(context.organizationId, p, c, n).flatMap(values => Ok(values)))
