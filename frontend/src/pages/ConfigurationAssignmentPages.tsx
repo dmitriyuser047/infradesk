@@ -11,6 +11,7 @@ import { useEnvironments, useProjects } from '../api/navigation'
 import { useEnvironmentResources, useResource } from '../api/resources'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AssignmentStatus, resourcePagePath } from '../components/configuration/ConfigurationAssignmentList'
+import { ConfigurationDeploymentPanel } from '../components/configuration/ConfigurationDeploymentPanel'
 import { supportsConfigurationAssignment } from '../components/configuration/configurationTargetSupport'
 import { AppShell } from '../components/layout/AppShell'
 import { InlineAlert, PageLoading, PageUnavailable, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
@@ -209,6 +210,8 @@ function EditContent({ organizationId, assignmentId }: { organizationId: string;
       pending={update.isPending} error={changed ? null : update.error} disabled={false}
       submitLabel={t.save} pendingLabel={t.saving} validate={() => null}
       onSubmit={draft => update.mutate({ expectedVersion: detail.version, ...draft }, { onSuccess: () => navigate(back.to, { replace: true }) })} />}
+    {!removed && detail.resource.active && permissions.can('deployConfigurations')
+      ? <ConfigurationDeploymentPanel key={`deployment-${detail.version}`} organizationId={organizationId} assignment={detail} /> : null}
   </div>
 }
 

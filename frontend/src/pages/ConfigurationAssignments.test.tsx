@@ -64,6 +64,9 @@ interface State {
   assignments: ConfigurationAssignment[]
   detail: ConfigurationAssignmentDetail
   conflictOnce?: boolean
+  incompatible?: boolean
+  deploymentState?: string
+  rolloutFailed?: boolean
 }
 
 /** A small in-memory backend for the assignment endpoints and what the pages around them read. */
@@ -95,6 +98,37 @@ function backend(initial: Partial<State> = {}) {
     }
     if (path === '/configuration-assignments' && method === 'POST') return json(detail(assignment({ id: 'created' })), 201)
     if (path === '/configuration-assignments/a1' && method === 'GET') return json(state.detail)
+    if (path === '/configuration-assignments/a1/deployment-preview') return json({
+      assignmentId: 'a1', profileId: 'p1', resourceId: 'node',
+      assignmentVersion: state.detail.version, profileRevisionNumber: 1, targetPath: state.detail.targetPath,
+      remote: { exists: true, sha256: 'a'.repeat(64), text: true }, desired: { sha256: 'b'.repeat(64) }, changed: true,
+      atomicReplaceSupported: true,
+      diff: { text: '--- remote\n+++ desired\n@@ -1,1 +1,1 @@\n-old <b>bold</b>\n+new\n', truncated: false, approximate: false,
+        addedLines: 1, removedLines: 1 },
+      connection: { id: 'ssh-source', name: 'Production SSH', updatedAt: '2026-09-28T10:00:00Z' },
+    })
+    if (path === '/configuration-assignments/a1/deployments' && method === 'POST')
+      return json({ deploymentId: 'deployment-1', state: 'QUEUED' }, 202)
+    const deployment = {
+      id: 'deployment-1', assignmentId: 'a1', assignmentVersion: state.detail.version, resource: { id: 'node', name: 'prod-vps-01' },
+      profileId: 'p1', profileRevisionNumber: 1, targetPath: state.detail.targetPath,
+      connection: { id: 'ssh-source', name: 'Production SSH' }, desiredSha256: 'b'.repeat(64),
+      expectedRemoteSha256: 'a'.repeat(64), expectedRemoteMissing: false,
+      execution: { activation: 'SYSTEMD_RELOAD', unitName: 'nginx.service', validator: null, newFileMode: 420 },
+      state: state.deploymentState ?? 'SUCCEEDED', phase: 'CLEANUP', rollbackFromPhase: null,
+      failureCode: state.deploymentState === 'ROLLBACK_FAILED' ? 'CONFIGURATION_HEALTH_CHECK_FAILED' : null,
+      cancelRequested: false, backupRetained: false, actor: { id: 'user', name: 'Dmitriy' },
+      createdAt: '2026-09-28T10:00:00Z', startedAt: '2026-09-28T10:00:01Z', finishedAt: '2026-09-28T10:00:02Z',
+      rolloutId: null, retryOfDeploymentId: null,
+    }
+    if (path === '/configuration-deployments/deployment-1') return json({ ...deployment, events: [
+      { sequence: 1, type: 'QUEUED', occurredAt: '2026-09-28T10:00:00Z' }] })
+    if (path === '/configuration-deployments') return json({ items: [deployment], nextCursor: null })
+    if (path === '/configuration-deployment-summaries') return json(url.searchParams.getAll('assignmentId').map(id => ({
+      assignmentId: id,
+      lastSuccessfulDeployment: id === 'a1' ? { deploymentId: 'd0', revision: 1, desiredSha256: 'c'.repeat(64),
+        finishedAt: '2026-09-27T10:00:00Z' } : null,
+      activeDeployment: null })))
     if (path === '/configuration-assignments/a1' && method === 'PATCH') {
       if (state.conflictOnce) {
         state.conflictOnce = false
@@ -107,10 +141,38 @@ function backend(initial: Partial<State> = {}) {
       state.assignments = state.assignments.filter(item => item.id !== 'a1')
       return json({ ...state.detail, removedAt: '2026-09-28T10:00:00Z' })
     }
+    if (path === '/configuration-profiles/p1/assignment-promotions/preview') return json({
+      revisionNumber: body.revisionNumber, compatible: !state.incompatible,
+      items: body.assignments.map((item: { assignmentId: string; expectedVersion: number }) => ({ ...item,
+        resourceName: 'prod-vps-01', currentRevisionNumber: 1, compatible: !state.incompatible,
+        issues: state.incompatible ? [{ code: 'CONFIGURATION_INCOMPATIBLE_OVERRIDE', variableName: 'legacy' }] : [] })) })
+    if (path === '/configuration-profiles/p1/assignment-promotions') return json({ revisionNumber: body.revisionNumber,
+      assignments: body.assignments.map((item: { assignmentId: string; expectedVersion: number }) =>
+        ({ assignmentId: item.assignmentId, version: item.expectedVersion + 1 })) })
+    if (path === '/configuration-rollouts/preflight') return json({ ready: true, items: body.targets.map((target: {
+      assignmentId: string; expectedVersion: number; connectionId: string }) => ({ ...target, connectionName: 'Production SSH',
+      ready: true, desiredSha256: 'b'.repeat(64), connectionUpdatedAt: '2026-09-28T10:00:00Z',
+      remote: { exists: true, sha256: 'a'.repeat(64) }, changed: true, addedLines: 6, removedLines: 2, errorCode: null })) })
+    if (path === '/configuration-rollouts' && method === 'POST') return json({ rolloutId: 'r1', state: 'QUEUED' }, 202)
+    const rollout = { id: 'r1', profileId: 'p1', profileRevisionNumber: 2, state: state.rolloutFailed ? 'FAILED' : 'SUCCEEDED',
+      strategy: { canaryCount: 1, batchSize: 1, pauseSeconds: 0, stopOnFailure: true, rollbackMode: 'FAILED_TARGET_ONLY' },
+      cancelRequested: false, rollbackRequested: false, actor: { id: 'user', name: 'Dmitriy' },
+      counts: { items: 2, succeeded: state.rolloutFailed ? 1 : 2, failed: state.rolloutFailed ? 1 : 0 },
+      createdAt: '2026-09-28T10:00:00Z', startedAt: '2026-09-28T10:00:01Z', finishedAt: '2026-09-28T10:02:00Z', nextActionAt: null }
+    if (path === '/configuration-rollouts' && method === 'GET') return json({ items: [rollout], nextCursor: null })
+    if (path === '/configuration-rollouts/r1') return json({ ...rollout, items: [
+      { id: 'i1', position: 0, assignmentId: 'a1', assignmentVersion: 4, resource: { id: 'node', name: 'prod-vps-01' },
+        targetPath: '/etc/nginx/nginx.conf', state: 'SUCCEEDED', deployment: { id: 'deployment-1', state: 'SUCCEEDED',
+          phase: 'CLEANUP', failureCode: null, startedAt: null, finishedAt: null } },
+      { id: 'i2', position: 1, assignmentId: 'a2', assignmentVersion: 2, resource: { id: 'other', name: 'prod-vps-02' },
+        targetPath: '/etc/nginx/nginx.conf', state: state.rolloutFailed ? 'ROLLED_BACK' : 'SUCCEEDED',
+        deployment: { id: 'deployment-2', state: state.rolloutFailed ? 'ROLLED_BACK' : 'SUCCEEDED', phase: 'ROLLBACK',
+          failureCode: state.rolloutFailed ? 'CONFIGURATION_VALIDATION_FAILED' : null, startedAt: null, finishedAt: null } }] })
     if (path === '/environments/env/resources') return json([node, retired, container])
     if (path === '/resources/node') return json(node)
     if (path === '/resources/node/context') return json({ project: { id: 'project', name: 'App' },
-      environment: { id: 'env', name: 'Production', kind: 'PROD' }, parentResource: null, sourceConnections: [],
+      environment: { id: 'env', name: 'Production', kind: 'PROD' }, parentResource: null,
+      sourceConnections: [{ id: 'ssh-source', name: 'Production SSH', connectorType: 'SSH', active: true }],
       children: [], activeChildCount: 0, openIncidentCount: 0 })
     if (path === '/resources/node/operations') return json({ operations: [], unavailableReason: null })
     if (path.startsWith('/resources/node/')) return json([])
@@ -159,14 +221,20 @@ describe('configuration assignments', () => {
     const inactive = screen.getByRole('link', { name: 'retired-node' }).closest('tr')!
     expect(within(inactive).getByText('Target inactive')).toBeTruthy()
     expect(within(inactive).queryByText('Newer version available')).toBeNull()
-    expect(screen.getAllByRole('columnheader').map(cell => cell.textContent))
-      .toEqual(['Resource', 'Environment', 'Target path', 'Assigned version', 'Status', 'Actions'])
-    expect(screen.getByText(/InfraDesk has not applied this configuration to the server yet\./)).toBeTruthy()
-    expect(document.body.textContent).not.toMatch(/\b(Applied|Synced|Up to date|Deployed)\b/)
+    expect(within(row.closest('table')!).getAllByRole('columnheader').map(cell => cell.textContent))
+      .toEqual(['Resource', 'Environment', 'Target path', 'Assigned version', 'Status', 'Deployment', 'Actions'])
+    expect(await within(row).findByText('Last deployed desired version: v1')).toBeTruthy()
+    expect(within(inactive).getByText('Not deployed by InfraDesk yet')).toBeTruthy()
+    expect(screen.getByText(/does not detect later manual changes/)).toBeTruthy()
+    // What InfraDesk deployed is history, never a claim that the server is in sync.
+    expect(document.body.textContent).not.toMatch(/\b(Synced|In sync|Up to date)\b/)
     expect(screen.getByRole('link', { name: 'Assign to resource' }).getAttribute('href'))
       .toBe('/organizations/org/configuration-assignments/new?profileId=p1')
     expect(requests.filter(item => item.path.startsWith('/configuration-assignments')).map(item => item.path))
       .toEqual(['/configuration-assignments?limit=50&profileId=p1'])
+    // One batched summary request for the whole page, never one per assignment.
+    expect(requests.filter(item => item.path.startsWith('/configuration-deployment-summaries')).map(item => item.path))
+      .toEqual(['/configuration-deployment-summaries?assignmentId=a1&assignmentId=a2'])
   })
 
   it('creates an assignment on an active node: defaults are shown, never sent, and the exact version is saved', async () => {
@@ -242,6 +310,157 @@ describe('configuration assignments', () => {
     expect(screen.queryByText(/Someone else changed this assignment/)).toBeNull()
   })
 
+  it('previews a remote diff before deploying the exact hashes through the selected SSH source', async () => {
+    const { requests } = backend()
+    renderApp('/organizations/org/configuration-assignments/a1')
+    const preview = await screen.findByRole('button', { name: 'Preview remote changes' })
+    await waitFor(() => expect(preview.hasAttribute('disabled')).toBe(false))
+    expect(screen.getByRole('button', { name: 'Deploy this version' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.click(preview)
+    expect(await screen.findByText('b'.repeat(64))).toBeTruthy()
+    expect(screen.getByText('a'.repeat(64))).toBeTruthy()
+    const diff = screen.getByLabelText('Changes from the server file to the desired file')
+    expect(diff.tagName).toBe('PRE')
+    // Remote content is text, never markup.
+    expect(within(diff).getByText('-old <b>bold</b>').className).toContain('diff-removed')
+    expect(diff.querySelector('b')).toBeNull()
+    expect(within(diff).getByText('+new').className).toContain('diff-added')
+    expect(screen.getByText('+1 / −1 lines')).toBeTruthy()
+    fireEvent.change(select('Service action'), { target: { value: 'SYSTEMD_RELOAD' } })
+    fireEvent.change(input('Systemd unit'), { target: { value: 'nginx.service; reboot' } })
+    expect(screen.getByText('Enter a unit name ending in .service.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Deploy this version' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.change(input('Systemd unit'), { target: { value: 'nginx.service' } })
+    fireEvent.change(input('Validator executable (optional)'), { target: { value: '/usr/sbin/nginx' } })
+    fireEvent.change(screen.getByLabelText('Validator arguments, one per line'), { target: { value: '-t\n-c\n{candidate}' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy this version' }))
+    expect(await screen.findByText('Succeeded')).toBeTruthy()
+    expect(screen.getByText('The file on the server is the desired version and the service is active.')).toBeTruthy()
+    expect(requests.find(item => item.path === '/configuration-assignments/a1/deployment-preview')?.body)
+      .toEqual({ expectedAssignmentVersion: 3, connectionId: 'ssh-source' })
+    const created = requests.find(item => item.path === '/configuration-assignments/a1/deployments')?.body
+    expect(created).toMatchObject({ expectedAssignmentVersion: 3, connectionId: 'ssh-source',
+      expectedRemoteSha256: 'a'.repeat(64), expectedRemoteMissing: false, retryOfDeploymentId: null,
+      execution: { activation: 'SYSTEMD_RELOAD', unitName: 'nginx.service',
+        validator: { executable: '/usr/sbin/nginx', args: ['-t', '-c', '{candidate}'] }, newFileMode: 420 } })
+    expect((created as { requestId: string }).requestId).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('shows a failed rollback as an emergency, and a retry starts from a new preview', async () => {
+    const { requests } = backend({ deploymentState: 'ROLLBACK_FAILED' })
+    renderApp('/organizations/org/configuration-assignments/a1')
+    const preview = await screen.findByRole('button', { name: 'Preview remote changes' })
+    await waitFor(() => expect(preview.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(preview)
+    fireEvent.click(await screen.findByRole('button', { name: 'Deploy this version' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Rollback failed')
+    expect(alert.textContent).toContain('Inspect the server now.')
+    expect(alert.textContent).toContain('The service was not active after the change.')
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    // The old precondition is never reused: a new preview is required before deploying again.
+    expect(await screen.findByText('A retry is a new deployment: preview the server again first.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Deploy this version' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Preview remote changes' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Deploy this version' }))
+    await waitFor(() => expect(requests.filter(item => item.path === '/configuration-assignments/a1/deployments')).toHaveLength(2))
+    expect(requests.filter(item => item.path === '/configuration-assignments/a1/deployment-preview')).toHaveLength(2)
+    expect(requests.filter(item => item.path === '/configuration-assignments/a1/deployments')[1].body)
+      .toMatchObject({ retryOfDeploymentId: 'deployment-1' })
+  })
+
+  it('hides deployment from a member, and the editor refuses the member anyway', async () => {
+    backend()
+    renderApp('/organizations/org/configurations/p1?tab=targets', { role: 'MEMBER' })
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Start rollout' })).toBeNull())
+    expect(screen.queryByRole('tab', { name: 'Rollouts' })).toBeNull()
+  })
+
+  it('rolls out a new version step by step: nodes, compatibility, promotion, server check, strategy', async () => {
+    const { requests } = backend({ assignments: [assignment()] })
+    renderApp('/organizations/org/configurations/p1?tab=targets')
+    const next = () => screen.getByRole('button', { name: 'Next' })
+    expect(await screen.findByText('Step 1 of 5')).toBeTruthy()
+    expect(next().hasAttribute('disabled')).toBe(true)
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select prod-vps-01' }))
+    await waitFor(() => expect(next().hasAttribute('disabled')).toBe(false))
+    fireEvent.click(next())
+    // The node still pins v1: compatibility must be checked before the desired state moves.
+    expect(next().hasAttribute('disabled')).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Check compatibility' }))
+    expect(await screen.findByText('Ready')).toBeTruthy()
+    fireEvent.click(next())
+    expect(screen.getByText('1 assignments → v2')).toBeTruthy()
+    expect(next().hasAttribute('disabled')).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Promote desired state' }))
+    await waitFor(() => expect(next().hasAttribute('disabled')).toBe(false))
+    fireEvent.click(next())
+    fireEvent.click(screen.getByRole('button', { name: 'Check servers' }))
+    const matrix = (await screen.findByText('+6 / −2 lines')).closest('table')!
+    expect(within(matrix).getByText('Ready')).toBeTruthy()
+    expect(within(matrix).getByText('Production SSH')).toBeTruthy()
+    fireEvent.click(next())
+    fireEvent.change(input('Canary nodes'), { target: { value: '2' } })
+    expect(screen.getByText(/Canary 0–20 and not more than the nodes/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start rollout' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.change(input('Canary nodes'), { target: { value: '1' } })
+    fireEvent.change(input('Pause between batches, seconds'), { target: { value: '30' } })
+    fireEvent.change(select('On failure, roll back'), { target: { value: 'ALL_APPLIED' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start rollout' }))
+    expect(await screen.findByText('2 / 2 succeeded')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Canary' })).toBeTruthy()
+
+    expect(requests.find(item => item.path === '/configuration-profiles/p1/assignment-promotions')?.body)
+      .toEqual({ revisionNumber: 2, assignments: [{ assignmentId: 'a1', expectedVersion: 3 }] })
+    expect(requests.find(item => item.path === '/configuration-rollouts/preflight')?.body).toEqual({ profileId: 'p1',
+      revisionNumber: 2, targets: [{ assignmentId: 'a1', expectedVersion: 4, connectionId: 'ssh-source',
+        execution: { activation: 'NONE', unitName: null, validator: null, newFileMode: 420 } }] })
+    const created = requests.find(item => item.method === 'POST' && item.path === '/configuration-rollouts')?.body
+    expect(created).toMatchObject({ profileId: 'p1', revisionNumber: 2,
+      strategy: { canaryCount: 1, batchSize: 1, pauseSeconds: 30, stopOnFailure: true, rollbackMode: 'ALL_APPLIED' },
+      targets: [{ assignmentId: 'a1', expectedVersion: 4, connectionId: 'ssh-source',
+        connectionUpdatedAt: '2026-09-28T10:00:00Z', desiredSha256: 'b'.repeat(64),
+        expectedRemoteSha256: 'a'.repeat(64), expectedRemoteMissing: false }] })
+    expect((created as { requestId: string }).requestId).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('blocks promotion while an old override is incompatible with the target version', async () => {
+    const { requests } = backend({ assignments: [assignment()], incompatible: true })
+    renderApp('/organizations/org/configurations/p1?tab=targets')
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select prod-vps-01' }))
+    const next = screen.getByRole('button', { name: 'Next' })
+    await waitFor(() => expect(next.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(next)
+    fireEvent.click(screen.getByRole('button', { name: 'Check compatibility' }))
+    expect(await screen.findByText('Value for a removed variable: legacy')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Next' }).hasAttribute('disabled')).toBe(true)
+    expect(requests.some(item => item.path === '/configuration-profiles/p1/assignment-promotions')).toBe(false)
+  })
+
+  it('lists rollouts by page and shows why a node failed and that it was rolled back', async () => {
+    const { requests } = backend({ rolloutFailed: true })
+    renderApp('/organizations/org/configurations/p1?tab=rollouts')
+    const table = (await screen.findByText('2 nodes')).closest('table')!
+    const row = within(table).getByText('v2').closest('tr')!
+    expect(within(row).getByText('Failed')).toBeTruthy()
+    expect(within(row).getByText('Dmitriy')).toBeTruthy()
+    fireEvent.click(within(row).getByRole('button', { name: 'Details' }))
+    expect(await screen.findByText('1 / 2 succeeded')).toBeTruthy()
+    expect(screen.getByText('The validator rejected the new file. The server file was not changed.')).toBeTruthy()
+    expect(screen.getAllByText('Rolled back').length).toBeGreaterThan(0)
+    expect(requests.filter(item => item.path.startsWith('/configuration-rollouts?')).map(item => item.path))
+      .toEqual(['/configuration-rollouts?limit=25&profileId=p1'])
+  })
+
+  it('lists deployments with node, version, state and author', async () => {
+    backend()
+    renderApp('/organizations/org/configurations/p1?tab=deployments')
+    const row = (await screen.findByText('/etc/nginx/nginx.conf')).closest('tr')!
+    expect(within(row).getByText('prod-vps-01')).toBeTruthy()
+    expect(within(row).getByText('Succeeded')).toBeTruthy()
+    expect(within(row).getByText('Dmitriy')).toBeTruthy()
+  })
+
   it('removes an assignment only after a confirmation that says the server file is untouched', async () => {
     const { requests } = backend()
     const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
@@ -279,7 +498,7 @@ describe('configuration assignments', () => {
     const row = (await screen.findByRole('link', { name: 'Nginx main' })).closest('tr')!
     expect(within(row).getByText('/etc/nginx/nginx.conf')).toBeTruthy()
     expect(screen.getAllByRole('columnheader').map(cell => cell.textContent))
-      .toEqual(['Configuration', 'Target path', 'Desired version', 'Status', 'Actions'])
+      .toEqual(['Configuration', 'Target path', 'Desired version', 'Status', 'Deployment', 'Actions'])
     expect(screen.getByRole('link', { name: 'Assign configuration' }).getAttribute('href'))
       .toBe('/organizations/org/configuration-assignments/new?resourceId=node')
     expect(requests.filter(item => item.path.startsWith('/configuration-assignments')).map(item => item.path))
@@ -307,7 +526,8 @@ describe('configuration assignments', () => {
     const row = (await screen.findByRole('link', { name: 'prod-vps-01' })).closest('tr')!
     expect(within(row).getByText('Назначена')).toBeTruthy()
     expect(within(row).getByText('Доступна новая версия')).toBeTruthy()
-    expect(screen.getByText(/InfraDesk ещё не применял эту конфигурацию на сервере\./)).toBeTruthy()
+    expect(await within(row).findByText('Последняя развёрнутая желаемая версия: v1')).toBeTruthy()
+    expect(screen.getByText(/не отслеживает последующие ручные изменения/)).toBeTruthy()
     cleanup()
     backend()
     renderApp('/organizations/org/configuration-assignments/a1', { locale: 'ru' })

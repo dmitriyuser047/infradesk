@@ -1,9 +1,11 @@
 import { Link } from 'react-router-dom'
 
 import { useConfigurationAssignmentPages, useRemoveConfigurationAssignment } from '../../api/configurationAssignments'
+import { useDeploymentSummaries } from '../../api/configurationDeployments'
 import { useI18n } from '../../i18n'
 import { describeError } from '../../i18n/errors'
 import type { ConfigurationAssignment, ConfigurationAssignmentFilter } from '../../types/configurationAssignment'
+import type { DeploymentSummary } from '../../types/configurationDeployment'
 import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import '../../styles/pages/configurations.css'
 
@@ -39,6 +41,25 @@ export function AssignmentStatus({ assignment }: { assignment: ConfigurationAssi
 }
 
 /**
+ * What InfraDesk last deployed for an assignment: a historical fact compared with the desired
+ * version. It never says "in sync": later manual changes on the server are not detected.
+ */
+export function DeploymentSummaryStatus({ assignment, summary }: {
+  assignment: ConfigurationAssignment; summary: DeploymentSummary | undefined
+}) {
+  const t = useI18n().t.deployments
+  if (!summary) return <span className="cell-secondary">—</span>
+  if (summary.activeDeployment) return <StatusIndicator label={t.active} tone="info" />
+  const last = summary.lastSuccessfulDeployment
+  if (!last) return <StatusIndicator label={t.neverDeployed} tone="neutral" />
+  if (last.revision === assignment.profileRevisionNumber) return <span>{t.lastDeployedCurrent(last.revision)}</span>
+  return <span className="assignment-status">
+    <StatusIndicator label={t.deploymentRequired} tone="warning" />
+    <small className="cell-secondary">{t.lastDeployed(last.revision)}</small>
+  </span>
+}
+
+/**
  * The active assignments of a profile (its targets) or of a node (its configurations), a page at a
  * time. One read per page, whatever the rows mention; the full values are never listed.
  */
@@ -53,12 +74,15 @@ export function ConfigurationAssignmentList({ organizationId, filter, view, canA
   const pages = useConfigurationAssignmentPages(organizationId, filter, true)
   const remove = useRemoveConfigurationAssignment(organizationId)
   const rows = pages.data?.pages.flat() ?? []
+  // One request for every loaded row, never one per assignment.
+  const summaries = useDeploymentSummaries(organizationId, rows.slice(0, 100).map(row => row.id))
+  const summaryOf = (id: string) => summaries.data?.find(summary => summary.assignmentId === id)
   const title = view === 'profile' ? t.targetsTitle : t.resourceTitle
   const confirmRemove = (assignment: ConfigurationAssignment) => {
     if (window.confirm(t.removeConfirm)) remove.mutate(assignment)
   }
 
-  return <WorkspaceSection title={title} description={<>{view === 'profile' ? t.targetsDescription : t.resourceDescription} {t.notApplied}</>}
+  return <WorkspaceSection title={title} description={<>{view === 'profile' ? t.targetsDescription : t.resourceDescription} {t.notApplied} {i18n.t.deployments.driftNote}</>}
     actions={canAssign ? <Link className="secondary-button" to={newAssignmentPath(organizationId, filter)}>
       {view === 'profile' ? t.assign : t.assignConfiguration}</Link> : undefined}>
     {pages.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
@@ -77,6 +101,7 @@ export function ConfigurationAssignmentList({ organizationId, filter, view, canA
         <th scope="col">{t.columns.path}</th>
         <th scope="col">{view === 'profile' ? t.columns.assigned : t.columns.desired}</th>
         <th scope="col">{t.columns.status}</th>
+        <th scope="col">{i18n.t.deployments.status}</th>
         <th scope="col"><span className="visually-hidden">{t.columns.actions}</span></th>
       </tr></thead>
       <tbody>{rows.map(assignment => <tr key={assignment.id}>
@@ -90,6 +115,7 @@ export function ConfigurationAssignmentList({ organizationId, filter, view, canA
           {assignment.profile.latestRevisionNumber !== assignment.profileRevisionNumber
             ? <small className="cell-secondary">{t.latestVersion(assignment.profile.latestRevisionNumber)}</small> : null}</td>
         <td><AssignmentStatus assignment={assignment} /></td>
+        <td><DeploymentSummaryStatus assignment={assignment} summary={summaryOf(assignment.id)} /></td>
         <td className="assignment-actions">
           <Link className="text-button" to={`${assignmentPath(organizationId, assignment.id)}?from=${view}`}
             aria-label={t.editLabel(assignment.targetPath)}>{t.edit}</Link>

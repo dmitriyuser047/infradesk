@@ -12,6 +12,7 @@ import net.schmizz.sshj.transport.TransportException
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import net.schmizz.sshj.userauth.UserAuthException
 import net.schmizz.sshj.userauth.password.{PasswordFinder, PasswordUtils}
+import net.schmizz.sshj.sftp.SFTPClient
 
 import java.io.IOException
 import java.security.PublicKey
@@ -80,6 +81,24 @@ final class SshjClient[F[_]: Async](
         override def execute(command: String): F[SshCommandResult] =
           runCommand(ssh, observedFingerprint, config, command)
       })
+    }
+
+  /** SFTP uses exactly the same credential and pinned host-key handshake as command sessions.
+    * Every SFTP request waits at most `sftpTimeoutMillis`; every command at most its own timeout.
+    */
+  def withSftp[A](config: SshConnectionConfig, authentication: SshAuthentication, sftpTimeoutMillis: Int)
+                 (use: (SFTPClient, (String, Int) => F[SshCommandResult]) => F[A]): F[A] =
+    Resource.makeCase(Async[F].blocking(open(config, authentication))) {
+      case ((ssh, _), exitCase) => closeClient(ssh, exitCase)
+    }.use { case (ssh, observedFingerprint) =>
+      Resource.make(Async[F].blocking {
+        val sftp = ssh.newSFTPClient()
+        sftp.getSFTPEngine.setTimeoutMs(sftpTimeoutMillis)
+        sftp
+      })(sftp => Async[F].blocking(sftp.close()).attempt.void).use { sftp =>
+        use(sftp, (command, timeoutSeconds) =>
+          runCommand(ssh, observedFingerprint, config.copy(commandTimeoutSeconds = timeoutSeconds), command))
+      }
     }
 
   override def terminal(

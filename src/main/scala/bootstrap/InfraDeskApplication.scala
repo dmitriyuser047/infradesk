@@ -63,7 +63,14 @@ object InfraDeskApplication {
             .map(_.run(config.notification.pollInterval, limit = config.notification.batchSize))
         // A light periodic sweep keeps the login-throttle table bounded; it runs beside the other
         // background workers and never on the login path itself.
-        val workers = schedulerWorkers ++ notificationWorkers ++ List(application.cleanupLoginThrottle.run,
+        // Remote configuration work: the deployment worker owns every SSH action, the rollout
+        // orchestrator only moves durable state. Both are lease-fenced, so any instance may run them.
+        val configurationWorkers =
+          if (config.configurationDeployment.enabled)
+            List(application.configurationDeploymentWorker.run, application.configurationRolloutWorker.run)
+          else Nil
+        val workers = schedulerWorkers ++ notificationWorkers ++ configurationWorkers ++ List(
+          application.cleanupLoginThrottle.run,
           application.cleanupSecurityEvents.run, application.terminalSessionLifecycle.reap)
 
         application.bootstrapAdmin.run(config.bootstrap) *>

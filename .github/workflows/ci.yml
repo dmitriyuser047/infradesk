@@ -220,11 +220,19 @@ jobs:
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
           # Build a representative production V29 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V30 through V34 to the restored database before the backend reports itself ready.
+          # V30 through V36 to the restored database before the backend reports itself ready.
           # Remove the additive tables and Stage 21 index; earlier schema stays as in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          drop table configuration_rollout_item_validator_arg;
+          drop table configuration_rollout_item_value;
+          drop table configuration_deployment_event;
+          drop table configuration_deployment_validator_arg;
+          drop table configuration_deployment_value;
+          drop table configuration_rollout_item cascade;
+          drop table configuration_deployment;
+          drop table configuration_rollout;
           drop table configuration_assignment_value;
           drop table configuration_assignment;
           drop table configuration_revision_variable;
@@ -234,14 +242,14 @@ jobs:
           drop table terminal_session;
           drop table account_security_event;
           drop index ix_incident_resource_opened;
-          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34');
+          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V30 through V34.
+          # recover the marker and let Flyway apply V30 through V36.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -262,7 +270,7 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "34"
+          test "${migrated}" = "36"
           # What V26 built survives the upgrade: the notification_delivery.context column was in the
           # dump and is still there after Flyway ran V29 on the restored database.
           delivery_context="$(docker compose -f compose.prod.yml exec -T postgres \
@@ -306,6 +314,18 @@ jobs:
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_indexes where schemaname = current_schema() and indexname = 'ux_configuration_assignment_active_target'")"
           test "${assignment_target}" = "1"
+          deployment_tables="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('configuration_deployment', 'configuration_deployment_value', 'configuration_deployment_event', 'configuration_deployment_validator_arg')")"
+          test "${deployment_tables}" = "4"
+          rollout_tables="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('configuration_rollout', 'configuration_rollout_item', 'configuration_rollout_item_value', 'configuration_rollout_item_validator_arg')")"
+          test "${rollout_tables}" = "4"
+          # What V35 and V36 must enforce after the upgrade: one active deployment per node, and the
+          # deployment/rollout references in both directions.
+          deployment_invariants="$(docker compose -f compose.prod.yml exec -T postgres             psql --username infradesk --dbname infradesk --tuples-only --no-align             --command "select (select count(*) from pg_indexes where schemaname = current_schema() and indexname = 'ux_configuration_deployment_active_resource') + (select count(*) from pg_constraint where conname in ('fk_configuration_deployment_rollout', 'fk_configuration_deployment_rollout_item', 'fk_configuration_rollout_item_deployment', 'ck_configuration_deployment_lease_state'))")"
+          test "${deployment_invariants}" = "5"
           credential_kind="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where conname = 'ck_connection_secret_kind' and pg_get_constraintdef(oid) like '%SSH_CREDENTIAL%'")"

@@ -65,3 +65,37 @@
   .assignment-grid-fields, .assignment-target-fields { grid-template-columns: 1fr; }
   .configuration-template-input { min-height: 300px; }
 }
+
+/* Deployments: what the server has, what is desired, and how far a deployment got. */
+.deployment-diff { display: grid; gap: var(--space-2); }
+.deployment-diff-counts { margin: 0; color: var(--text-secondary); font-size: var(--font-size-small); }
+.diff-code { white-space: pre; }
+.diff-line { display: block; }
+.diff-added { background: var(--success-soft); color: var(--success); }
+.diff-removed { background: var(--danger-soft); color: var(--danger); }
+.diff-hunk, .diff-header, .diff-note { color: var(--text-secondary); }
+.deployment-execution { display: grid; gap: var(--space-3); margin: 0; padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-md); }
+.deployment-execution legend { padding: 0 var(--space-1); font-weight: 600; }
+.deployment-status, .rollout-status { display: grid; gap: var(--space-2); }
+.deployment-status-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.deployment-heading { margin: 0; font-size: var(--font-size-base); }
+.deployment-events { margin: var(--space-2) 0 0; padding-left: var(--space-5); font-size: var(--font-size-small); }
+.field-error { color: var(--danger); }
+.history-detail-row > td { background: var(--surface-muted); }
+
+/* Rollouts: a wizard, then nodes grouped as the orchestrator launches them. */
+.rollout-wizard { display: grid; gap: var(--space-3); }
+.rollout-steps { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none;
+  counter-reset: rollout-step; }
+.rollout-steps li { counter-increment: rollout-step; color: var(--text-secondary); font-size: var(--font-size-small); }
+.rollout-steps li::before { content: counter(rollout-step) ". "; }
+.rollout-steps .rollout-step-current { color: var(--text-primary); font-weight: 600; }
+.rollout-matrix, .rollout-items { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.rollout-matrix li, .rollout-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.rollout-node { min-width: 12ch; font-weight: 500; }
+.rollout-issues { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); }
+.rollout-group h4 { margin: var(--space-2) 0 var(--space-1); font-size: var(--font-size-small); color: var(--text-secondary); }
+.rollout-mark { display: inline-grid; place-items: center; width: 1.5em; height: 1.5em; border-radius: 50%; }
+.rollout-failure { color: var(--danger); }
+.checkbox-field { display: inline-flex; align-items: center; gap: var(--space-2); }

@@ -55,6 +55,11 @@ object AuditAction {
   case object ConfigurationAssignmentUpdated extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENT_UPDATED" }
   /** Removed from InfraDesk's desired state; nothing on the server is touched. */
   case object ConfigurationAssignmentRemoved extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENT_REMOVED" }
+  case object ConfigurationDeploymentRequested extends AuditAction { override val code: String = "CONFIGURATION_DEPLOYMENT_REQUESTED" }
+  case object ConfigurationDeploymentCancelled extends AuditAction { override val code: String = "CONFIGURATION_DEPLOYMENT_CANCELLED" }
+  case object ConfigurationAssignmentsPromoted extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENTS_PROMOTED" }
+  case object ConfigurationRolloutRequested extends AuditAction { override val code: String = "CONFIGURATION_ROLLOUT_REQUESTED" }
+  case object ConfigurationRolloutCancelled extends AuditAction { override val code: String = "CONFIGURATION_ROLLOUT_CANCELLED" }
 
   val All: List[AuditAction] = List(
     ProjectCreated,
@@ -85,7 +90,12 @@ object AuditAction {
     ConfigurationRevisionCreated,
     ConfigurationAssignmentCreated,
     ConfigurationAssignmentUpdated,
-    ConfigurationAssignmentRemoved
+    ConfigurationAssignmentRemoved,
+    ConfigurationDeploymentRequested,
+    ConfigurationDeploymentCancelled,
+    ConfigurationAssignmentsPromoted,
+    ConfigurationRolloutRequested,
+    ConfigurationRolloutCancelled
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =
@@ -111,10 +121,12 @@ object AuditTargetType {
   case object Account extends AuditTargetType { override val code: String = "ACCOUNT" }
   case object ConfigurationProfile extends AuditTargetType { override val code: String = "CONFIGURATION_PROFILE" }
   case object ConfigurationAssignment extends AuditTargetType { override val code: String = "CONFIGURATION_ASSIGNMENT" }
+  case object ConfigurationDeployment extends AuditTargetType { override val code: String = "CONFIGURATION_DEPLOYMENT" }
+  case object ConfigurationRollout extends AuditTargetType { override val code: String = "CONFIGURATION_ROLLOUT" }
 
   val All: List[AuditTargetType] =
     List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Account, TerminalSession,
-      ConfigurationProfile, ConfigurationAssignment)
+      ConfigurationProfile, ConfigurationAssignment, ConfigurationDeployment, ConfigurationRollout)
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditTargetType] =
     All.find(_.code == code)

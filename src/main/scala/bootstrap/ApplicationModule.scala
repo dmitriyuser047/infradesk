@@ -31,6 +31,11 @@ import application.discovery.{CreateDiscoveredResource, ReconcileDiscoveredResou
 import application.configuration.{
   ConfigurationAssignmentQueries,
   ConfigurationAssignments,
+  ConfigurationDeployments,
+  ConfigurationDeploymentWorker,
+  ConfigurationPromotions,
+  ConfigurationRollouts,
+  ConfigurationRolloutWorker,
   ConfigurationProfileManagement,
   ConfigurationProfileQueries
 }
@@ -98,6 +103,11 @@ final case class ApplicationComponents(
   configurationProfileManagement: ConfigurationProfileManagement[ConnectionIO],
   configurationAssignments: ConfigurationAssignments[IO, ConnectionIO],
   configurationAssignmentQueries: ConfigurationAssignmentQueries[ConnectionIO],
+  configurationDeployments: ConfigurationDeployments[IO, ConnectionIO],
+  configurationDeploymentWorker: ConfigurationDeploymentWorker[ConnectionIO],
+  configurationPromotions: ConfigurationPromotions[IO, ConnectionIO],
+  configurationRollouts: ConfigurationRollouts[IO, ConnectionIO],
+  configurationRolloutWorker: ConfigurationRolloutWorker[ConnectionIO],
   listIncidents: ListIncidents[ConnectionIO],
   listMonitorRules: ListMonitorRules[ConnectionIO],
   createMonitorRule: CreateMonitorRule[ConnectionIO],
@@ -309,6 +319,13 @@ object ApplicationModule {
       transactionTimeProvider, auditRecorder, historyRecorder,
       integrations.resourceOperationBudget)
 
+    // One deployment service: rollouts preflight through exactly the same remote read path.
+    val configurationDeployments = new ConfigurationDeployments[IO, ConnectionIO](
+      configurationAssignmentRepository, configurationAssignmentQuery, configurationProfileQuery,
+      configurationDeploymentSourceQuery, configurationDeploymentRepository,
+      integrations.configurationTransport, transactionIdGenerator, transactionTimeProvider,
+      auditRecorder, readOnlySnapshotRunner, transactionRunner, config.configurationDeployment)
+
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
       listEnvironmentResources = ListEnvironmentResources[ConnectionIO](resourceRepository),
@@ -330,6 +347,22 @@ object ApplicationModule {
         auditRecorder, readOnlySnapshotRunner, transactionRunner),
       configurationAssignmentQueries =
         new ConfigurationAssignmentQueries[ConnectionIO](configurationAssignmentQuery, configurationProfileQuery),
+      configurationDeployments = configurationDeployments,
+      configurationDeploymentWorker = new ConfigurationDeploymentWorker[ConnectionIO](
+        configurationDeploymentRepository, configurationAssignmentRepository,
+        configurationProfileQuery, configurationDeploymentSourceQuery, integrations.configurationTransport,
+        transactionRunner, schedulerInstanceId, config.configurationDeployment, loggers.configuration),
+      configurationPromotions = new ConfigurationPromotions[IO, ConnectionIO](
+        configurationPromotionRepository, configurationProfileQuery, transactionTimeProvider, auditRecorder,
+        readOnlySnapshotRunner, transactionRunner),
+      configurationRollouts = new ConfigurationRollouts[IO, ConnectionIO](
+        configurationAssignmentRepository, configurationAssignmentQuery, configurationProfileQuery,
+        configurationDeploymentSourceQuery, configurationDeployments,
+        configurationRolloutRepository, transactionIdGenerator, transactionTimeProvider,
+        auditRecorder, readOnlySnapshotRunner, transactionRunner, config.configurationDeployment),
+      configurationRolloutWorker = new ConfigurationRolloutWorker[ConnectionIO](
+        configurationRolloutRepository, configurationDeploymentRepository,
+        transactionIdGenerator, transactionRunner, schedulerInstanceId, loggers.configuration),
       configurationProfileManagement = new ConfigurationProfileManagement[ConnectionIO](configurationProfileRepository,
         transactionIdGenerator, transactionTimeProvider, auditRecorder),
       listIncidents = ListIncidents[ConnectionIO](incidentListQuery),

@@ -13,6 +13,7 @@ const permissions: readonly OrganizationPermission[] = [
   'executeOperations',
   'openTerminal',
   'manageConfigurations',
+  'deployConfigurations',
 ]
 
 describe('organization authorization policy', () => {
