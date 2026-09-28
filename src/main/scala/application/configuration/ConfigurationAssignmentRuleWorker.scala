@@ -90,7 +90,10 @@ final class ConfigurationAssignmentRuleWorker[Tx[_]](
       page <- runner.run(rules.candidates(claimed.rule.organizationId, claimed.rule.selector, Some(claimed.rule.id),
         claimed.rule.targetPath, after, settings.batchSize))
       results <- page.traverse(candidate => handle(claimed, missing, candidate))
-      _ <- runner.run(rules.clearIssues(claimed, page.filter(_.occupantSourceRuleId.contains(claimed.rule.id)).map(_.resourceId)))
+      // Fenced like every other write: a stale worker never clears what a current one recorded.
+      cleared <- clock.flatMap(now => runner.run(rules.clearIssues(claimed,
+        page.filter(_.occupantSourceRuleId.contains(claimed.rule.id)).map(_.resourceId), now)))
+      _ <- IO.raiseUnless(cleared)(Fenced)
       now <- clock
       alive <- runner.run(rules.renew(claimed, now, now.plusMillis(settings.leaseDuration.toMillis)))
       _ <- IO.raiseUnless(alive)(Fenced)

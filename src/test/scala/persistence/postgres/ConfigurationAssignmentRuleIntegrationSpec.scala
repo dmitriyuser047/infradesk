@@ -4,18 +4,19 @@ package persistence.postgres
 import application.audit.AuditRecorder
 import application.configuration._
 import application.port._
-import cats.effect.{IO, Ref}
+import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all._
 import domain.audit.{AuditCursor, AuditEvent}
 import domain.configuration._
 import infrastructure.database.DoobieTransactionRunner
 import munit.FunSuite
 import org.typelevel.doobie.util.log.{LogEvent, LogHandler}
-import org.typelevel.doobie.{ConnectionIO, Transactor}
+import org.typelevel.doobie.{ConnectionIO, Transactor, WeakAsync}
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 
 import java.util.UUID
+import scala.concurrent.duration._
 
 /** Resource labels, selectors and rules that keep assignments present, against a real database.
   * Nothing here has a transport: rules create desired state and never touch a server.
@@ -409,6 +410,49 @@ final class ConfigurationAssignmentRuleIntegrationSpec extends FunSuite {
     }
   }
 
+  test("a stale worker cannot clear an issue a current reconciliation recorded, after a rule change or a lease takeover") {
+    world { h =>
+      val w = h.w
+      for {
+        profile <- h.profile()
+        node <- w.resource("fi")
+        quiet <- w.resource("de")
+        _ <- h.label(node, "role" -> "vpn")
+        ruleId <- h.rule(profile)
+        now <- IO.realTimeInstant.map(_.plusSeconds(1))
+        claim = (at: java.time.Instant, until: java.time.Instant) =>
+          w.run(h.rules.claim(UUID.randomUUID(), UUID.randomUUID(), at, until, Some(w.org))).map(_.get)
+        // Worker A claims; the rule changes (new version, lease dropped); worker B works on the new version.
+        a <- claim(now, now.plusSeconds(30))
+        rule <- h.ruleOf(ruleId)
+        _ <- h.service.update(w.actor, ruleId, rule.version, "Renamed", None, h.selector(required = List("role" -> "vpn")))
+        b <- claim(now, now.plusSeconds(30))
+        recorded <- w.run(h.rules.recordIssue(b, node, ConfigurationRuleIssueCode.NeedsValues, Some("domain"), None, now))
+        staleAfterChange <- w.run(h.rules.clearIssues(a, List(node), now))
+        keptAfterChange <- h.issue(ruleId, node)
+        // Same version, lease taken over: B's lease expired, C holds the rule now.
+        later = now.plusSeconds(60)
+        c <- claim(later, later.plusSeconds(30))
+        _ <- w.run(h.rules.recordIssue(c, node, ConfigurationRuleIssueCode.TargetPathConflict, None, None, later))
+        staleAfterTakeover <- w.run(h.rules.clearIssues(b, List(node), later))
+        keptAfterTakeover <- h.issue(ruleId, node)
+        // The current holder: true whether or not a row was there, and its issues are gone.
+        nothingThere <- w.run(h.rules.clearIssues(c, List(quiet), later))
+        current <- w.run(h.rules.clearIssues(c, List(node), later))
+        cleared <- h.issue(ruleId, node)
+      } yield {
+        assertEquals((b.rule.version, c.rule.version), (a.rule.version + 1, a.rule.version + 1))
+        assert(recorded)
+        assertEquals(staleAfterChange, false)
+        assertEquals(keptAfterChange, Some("NEEDS_VALUES" -> Some("domain")))
+        assertEquals(staleAfterTakeover, false)
+        assertEquals(keptAfterTakeover, Some("TARGET_PATH_CONFLICT" -> None))
+        assertEquals((nothingThere, current), (true, true))
+        assertEquals(cleared, None)
+      }
+    }
+  }
+
   test("two rule updates at the same version: one wins, the other is told the rule changed") {
     world { h =>
       val w = h.w
@@ -498,6 +542,85 @@ final class ConfigurationAssignmentRuleIntegrationSpec extends FunSuite {
         assertEquals((adopted.sourceRuleId, adopted.version), (Some(ruleId), 2))
         assertEquals(code(again), Some("CONFIGURATION_ASSIGNMENT_ALREADY_MANAGED"))
         assert(removed.removedAt.isDefined)
+        assertEquals(excluded, 1L)
+      }
+    }
+  }
+
+  test("adopt takes only a resource the selector matches right now and the rule does not exclude") {
+    world { h =>
+      val w = h.w
+      for {
+        profile <- h.profile()
+        database <- w.resource("db")
+        excluded <- w.resource("nl")
+        matching <- w.resource("fi")
+        stale <- w.resource("se")
+        _ <- h.label(database, "role" -> "db")
+        _ <- List(excluded, matching, stale).traverse_(node => h.label(node, "role" -> "vpn"))
+        // Disabled: a rule that creates nothing may still take over a compatible assignment.
+        ruleId <- h.rule(profile, enabled = false)
+        _ <- h.service.exclude(w.actor, ruleId, excluded)
+        manual = (node: UUID) => w.assignments.create(w.actor, node, profile, ConfigurationAssignmentDraft(1, Path, Nil))
+        onDatabase <- manual(database)
+        onExcluded <- manual(excluded)
+        onMatching <- manual(matching)
+        onStale <- manual(stale)
+        notMatched <- h.service.adopt(w.actor, ruleId, onDatabase, 1).attempt
+        notIncluded <- h.service.adopt(w.actor, ruleId, onExcluded, 1).attempt
+        staleVersion <- h.service.adopt(w.actor, ruleId, onStale, 7).attempt
+        _ <- h.service.adopt(w.actor, ruleId, onMatching, 1)
+        after <- List(onDatabase, onExcluded, onStale, onMatching).traverse(w.assignment)
+        exclusions <- w.run(sql"select resource_id from configuration_assignment_rule_exclusion where rule_id = $ruleId"
+          .query[UUID].to[List])
+      } yield {
+        assertEquals(code(notMatched), Some("CONFIGURATION_RULE_RESOURCE_NOT_ELIGIBLE"))
+        assertEquals(code(notIncluded), Some("CONFIGURATION_RULE_RESOURCE_NOT_ELIGIBLE"))
+        assertEquals(code(staleVersion), Some("CONFIGURATION_ASSIGNMENT_CHANGED"))
+        assertEquals(after.map(a => (a.sourceRuleId, a.version)),
+          List((None, 1), (None, 1), (None, 1), (Some(ruleId), 2)))
+        assertEquals(exclusions, List(excluded))
+      }
+    }
+  }
+
+  test("an exclusion committed while an adoption waits leaves the assignment manual, never managed and excluded") {
+    world { h =>
+      val w = h.w
+      val config = PostgresTestDatabase.config
+      val xa = Transactor.fromDriverManager[IO]("org.postgresql.Driver", config.url, config.user, config.password, None)
+      // Whether another session waits on a row lock of a rule: the adoption reached the lock.
+      val adoptionWaits = w.run(sql"""select exists (select 1 from pg_stat_activity where wait_event_type = 'Lock'
+                                      and datname = current_database() and pid <> pg_backend_pid()
+                                      and query ilike '%from configuration_assignment_rule%for update%')""".query[Boolean].unique)
+      def untilWaiting(left: Int): IO[Boolean] =
+        adoptionWaits.flatMap(waiting => if (waiting || left == 0) IO.pure(waiting) else IO.sleep(20.millis) *> untilWaiting(left - 1))
+      for {
+        profile <- h.profile()
+        node <- w.resource("fi")
+        _ <- h.label(node, "role" -> "vpn")
+        ruleId <- h.rule(profile, enabled = false)
+        assignment <- w.assignments.create(w.actor, node, profile, ConfigurationAssignmentDraft(1, Path, Nil))
+        holding <- Deferred[IO, Unit]
+        release <- Deferred[IO, Unit]
+        now <- IO.realTimeInstant
+        // The exclusion's transaction takes the rule lock and stays open until released.
+        exclusion <- WeakAsync.liftK[IO, ConnectionIO].use { lift =>
+          (h.rules.exclude(w.org, ruleId, node, w.actor.userId, now) <* lift(holding.complete(()) *> release.get)).transact(xa)
+        }.start
+        _ <- holding.get
+        adoption <- h.service.adopt(w.actor, ruleId, assignment, 1).attempt.start
+        waited <- untilWaiting(250)
+        _ <- release.complete(())
+        _ <- exclusion.joinWithNever
+        adopted <- adoption.joinWithNever
+        after <- w.assignment(assignment)
+        excluded <- w.run(sql"""select count(*) from configuration_assignment_rule_exclusion
+                                where rule_id = $ruleId and resource_id = $node""".query[Long].unique)
+      } yield {
+        assert(waited, "the adoption should wait for the rule lock held by the exclusion")
+        assertEquals(code(adopted), Some("CONFIGURATION_RULE_RESOURCE_NOT_ELIGIBLE"))
+        assertEquals((after.sourceRuleId, after.version), (None, 1))
         assertEquals(excluded, 1L)
       }
     }

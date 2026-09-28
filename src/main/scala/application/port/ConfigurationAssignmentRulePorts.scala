@@ -133,7 +133,10 @@ trait ConfigurationAssignmentRuleRepository[F[_]] {
   def autoCreate(claimed: ClaimedRule, resourceId: UUID, assignment: ConfigurationAssignment, now: Instant): F[RuleAutoCreate]
   def recordIssue(claimed: ClaimedRule, resourceId: UUID, code: ConfigurationRuleIssueCode, variable: Option[String],
                   conflicting: Option[UUID], now: Instant): F[Boolean]
-  def clearIssues(claimed: ClaimedRule, resourceIds: List[UUID]): F[Boolean]
+  /** Drops the issues of resources the rule now manages. `true` while the lease is still this worker's,
+    * whether or not any issue was there; `false` once fenced, and then nothing is deleted.
+    */
+  def clearIssues(claimed: ClaimedRule, resourceIds: List[UUID], now: Instant): F[Boolean]
   /** Ends a sweep: issues not observed since it began are dropped, the next sweep is scheduled. */
   def finishSweep(claimed: ClaimedRule, sweepStartedAt: Instant, now: Instant, next: Instant): F[Boolean]
 }
@@ -149,6 +152,8 @@ object ManagedAssignmentWrite {
   case object AlreadyManaged extends ManagedAssignmentWrite
   /** Resource, path, profile or revision differ from the rule's. */
   case object Incompatible extends ManagedAssignmentWrite
+  /** The resource does not match the rule's selector right now, or is excluded from the rule. */
+  case object NotEligible extends ManagedAssignmentWrite
 }
 
 /** Operations on the assignments a rule manages. Each is one short transaction with the rule locked. */
@@ -159,7 +164,9 @@ trait ConfigurationRuleAssignmentRepository[F[_]] {
   /** Excludes the resource and soft-removes the desired assignment; the server file is untouched. */
   def excludeAndRemove(organizationId: UUID, ruleId: UUID, assignmentId: UUID, expectedVersion: Int, actor: UUID,
                        at: Instant): F[ManagedAssignmentWrite]
-  /** Puts a compatible manual assignment under the rule. */
+  /** Puts a compatible manual assignment under the rule, only if its resource is eligible for it at
+    * this moment: matched by the selector and not excluded, checked under the same locks as the write.
+    */
   def adopt(organizationId: UUID, rule: ConfigurationAssignmentRule, assignmentId: UUID, expectedVersion: Int,
             at: Instant): F[ManagedAssignmentWrite]
 

@@ -166,6 +166,10 @@ final class ConfigurationAssignmentRuleRoutesIntegrationSpec extends FunSuite {
           Some(Json.obj("expectedVersion" -> Json.fromInt(9))))
         detached <- a.call(Method.POST, s"/configuration-assignment-rules/$id/assignments/${managed.id}/detach",
           Some(Json.obj("expectedVersion" -> Json.fromInt(1))))
+        // Detach excluded the node: it cannot be adopted back until it is included again.
+        adoptExcluded <- a.call(Method.POST, s"/configuration-assignment-rules/$id/assignments/${managed.id}/adopt",
+          Some(Json.obj("expectedVersion" -> Json.fromInt(2))))
+        _ <- a.call(Method.DELETE, s"/configuration-assignment-rules/$id/exclude/$node")
         adopted <- a.call(Method.POST, s"/configuration-assignment-rules/$id/assignments/${managed.id}/adopt",
           Some(Json.obj("expectedVersion" -> Json.fromInt(2))))
         _ <- a.w.revision(profile, "# v2\nserver_name {{ domain }};\n", Defaults)
@@ -185,6 +189,7 @@ final class ConfigurationAssignmentRuleRoutesIntegrationSpec extends FunSuite {
         assertEquals(List(excluded._1, included._1), List(Status.NoContent, Status.NoContent))
         assertEquals((staleDetach._1, code(staleDetach._2)), (Status.Conflict, Some("CONFIGURATION_ASSIGNMENT_CHANGED")))
         assertEquals(detached._1, Status.NoContent)
+        assertEquals((adoptExcluded._1, code(adoptExcluded._2)), (Status.Conflict, Some("CONFIGURATION_RULE_RESOURCE_NOT_ELIGIBLE")))
         assertEquals(adopted._1, Status.NoContent)
         assertEquals(preview._2.hcursor.get[Boolean]("compatible"), Right(true))
         assertEquals(preview._2.hcursor.get[Int]("assignmentCount"), Right(1))

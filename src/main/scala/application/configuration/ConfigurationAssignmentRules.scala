@@ -317,6 +317,7 @@ final class ConfigurationAssignmentRules[F[_]: MonadThrow, Tx[_]: MonadThrow](
       case ManagedAssignmentWrite.NotManaged => MonadThrow[Tx].raiseError[Unit](NotManaged)
       case ManagedAssignmentWrite.AlreadyManaged => MonadThrow[Tx].raiseError[Unit](AlreadyManaged)
       case ManagedAssignmentWrite.Incompatible => MonadThrow[Tx].raiseError[Unit](Incompatible)
+      case ManagedAssignmentWrite.NotEligible => MonadThrow[Tx].raiseError[Unit](NotEligible)
     }
     _ <- audit.record(actor, action, AuditTargetType.ConfigurationAssignment, Some(assignmentId))
   } yield ())

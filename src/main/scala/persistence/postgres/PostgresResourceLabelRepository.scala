@@ -28,10 +28,12 @@ final class PostgresResourceLabelRepository extends ResourceLabelRepository[Conn
 
   override def replace(organizationId: UUID, resourceId: UUID, expectedVersion: Int, labels: List[ResourceLabel],
                        at: Instant): ConnectionIO[ResourceLabelWrite] =
-    // The resource row is locked first, so the version check and the replacement are one step.
+    // The resource row is locked first, so the version check and the replacement are one step. NO KEY
+    // UPDATE: it excludes other label writers and adoptions (which share-lock the row), but not the
+    // foreign-key checks of inserts that reference the resource.
     sql"""select coalesce(s.version, 0) from resource r
           left join resource_label_state s on s.resource_id = r.id and s.organization_id = r.organization_id
-          where r.organization_id = $organizationId and r.id = $resourceId for update of r"""
+          where r.organization_id = $organizationId and r.id = $resourceId for no key update of r"""
       .query[Int].option.flatMap {
         case None => (ResourceLabelWrite.ResourceMissing: ResourceLabelWrite).pure[ConnectionIO]
         case Some(current) if current != expectedVersion => (ResourceLabelWrite.Stale: ResourceLabelWrite).pure[ConnectionIO]

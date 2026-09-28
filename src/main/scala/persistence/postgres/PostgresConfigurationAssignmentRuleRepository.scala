@@ -134,7 +134,9 @@ final class PostgresConfigurationAssignmentRuleRepository
           }
       }
 
+  // Exclusions change under the rule's lock, so an adoption (which holds it) never races one.
   override def exclude(organizationId: UUID, ruleId: UUID, resourceId: UUID, actor: UUID, at: Instant): ConnectionIO[Boolean] =
+    lockRule(organizationId, ruleId) *>
     sql"""insert into configuration_assignment_rule_exclusion (rule_id, organization_id, resource_id, created_by_user_id, created_at)
           values ($ruleId, $organizationId, $resourceId, $actor, $at) on conflict do nothing""".update.run.flatMap { count =>
       sql"""delete from configuration_assignment_rule_issue
@@ -142,6 +144,7 @@ final class PostgresConfigurationAssignmentRuleRepository
     }
 
   override def include(organizationId: UUID, ruleId: UUID, resourceId: UUID, at: Instant): ConnectionIO[Boolean] =
+    lockRule(organizationId, ruleId) *>
     sql"""delete from configuration_assignment_rule_exclusion
           where organization_id = $organizationId and rule_id = $ruleId and resource_id = $resourceId""".update.run.flatMap {
       case 0 => false.pure[ConnectionIO]
@@ -287,11 +290,19 @@ final class PostgresConfigurationAssignmentRuleRepository
             variable_name = excluded.variable_name, conflicting_assignment_id = excluded.conflicting_assignment_id,
             observed_at = excluded.observed_at""").update.run.map(_ == 1)
 
-  override def clearIssues(claimed: ClaimedRule, resourceIds: List[UUID]): ConnectionIO[Boolean] =
+  override def clearIssues(claimed: ClaimedRule, resourceIds: List[UUID], now: Instant): ConnectionIO[Boolean] =
+    // Nothing to delete: nothing can be stale, and the renewal that follows checks the fence anyway.
     if (resourceIds.isEmpty) true.pure[ConnectionIO]
-    else sql"""delete from configuration_assignment_rule_issue
-               where rule_id = ${claimed.rule.id} and resource_id = any(${resourceIds.toArray[UUID]})"""
-      .update.run.as(true)
+    // One statement: the delete happens only while the fence holds, and the answer is whether it held,
+    // not whether a row was there. FOR SHARE waits out a concurrent rule change and then re-checks it.
+    else (fr"with guard as (select 1 from configuration_assignment_rule ru where" ++ fence(claimed, now) ++
+      fr"""for share),
+          deleted as (
+            delete from configuration_assignment_rule_issue i
+            where i.organization_id = ${claimed.rule.organizationId} and i.rule_id = ${claimed.rule.id}
+              and i.resource_id = any(${resourceIds.toArray[UUID]}) and exists (select 1 from guard)
+            returning 1)
+          select exists (select 1 from guard)""").query[Boolean].unique
 
   override def finishSweep(claimed: ClaimedRule, sweepStartedAt: Instant, now: Instant,
                            next: Instant): ConnectionIO[Boolean] =
@@ -330,6 +341,19 @@ final class PostgresConfigurationAssignmentRuleRepository
 
   override def adopt(organizationId: UUID, rule: ConfigurationAssignmentRule, assignmentId: UUID, expectedVersion: Int,
                      at: Instant): ConnectionIO[ManagedAssignmentWrite] =
+    // Locks in the order a label change takes them, resource then rule, so the two never deadlock.
+    // The resource is share-locked: its labels and environment cannot change until this commits, and
+    // the rule lock keeps exclusions still, so eligibility is checked against what is written.
+    sql"""select r.id from configuration_assignment a
+          join resource r on r.id = a.resource_id and r.organization_id = a.organization_id
+          where a.organization_id = $organizationId and a.id = $assignmentId for share of r""".query[UUID].option.flatMap {
+      case None => (ManagedAssignmentWrite.Missing: ManagedAssignmentWrite).pure[ConnectionIO]
+      case Some(_) => adoptLocked(organizationId, rule, assignmentId, expectedVersion, at)
+    }
+
+  private def adoptLocked(organizationId: UUID, rule: ConfigurationAssignmentRule, assignmentId: UUID, expectedVersion: Int,
+                          at: Instant): ConnectionIO[ManagedAssignmentWrite] =
+    // The rule at the version it was read at: its selector is the one eligibility is checked against.
     lockRule(organizationId, rule.id).flatMap {
       case Some((version, _, false)) if version == rule.version => lockAssignment(organizationId, assignmentId).flatMap {
         case None => (ManagedAssignmentWrite.Missing: ManagedAssignmentWrite).pure[ConnectionIO]
@@ -339,14 +363,16 @@ final class PostgresConfigurationAssignmentRuleRepository
         case Some(a) if a.targetPath != rule.targetPath || a.profileId != rule.profileId ||
           a.profileRevisionNumber != rule.profileRevisionNumber =>
           (ManagedAssignmentWrite.Incompatible: ManagedAssignmentWrite).pure[ConnectionIO]
-        case Some(a) => for {
-          _ <- sql"""update configuration_assignment set source_rule_id = ${rule.id}, version = version + 1, updated_at = $at
-                     where organization_id = $organizationId and id = $assignmentId""".update.run
-          _ <- sql"""delete from configuration_assignment_rule_exclusion where rule_id = ${rule.id} and resource_id = ${a.resourceId}"""
-            .update.run
-          _ <- sql"""delete from configuration_assignment_rule_issue where rule_id = ${rule.id} and resource_id = ${a.resourceId}"""
-            .update.run
-        } yield ManagedAssignmentWrite.Written: ManagedAssignmentWrite
+        case Some(a) => eligible(organizationId, rule, a.resourceId).flatMap {
+          // Not matched by the selector, or excluded by an operator: the rule does not take it.
+          case false => (ManagedAssignmentWrite.NotEligible: ManagedAssignmentWrite).pure[ConnectionIO]
+          case true => for {
+            _ <- sql"""update configuration_assignment set source_rule_id = ${rule.id}, version = version + 1, updated_at = $at
+                       where organization_id = $organizationId and id = $assignmentId""".update.run
+            _ <- sql"""delete from configuration_assignment_rule_issue where rule_id = ${rule.id} and resource_id = ${a.resourceId}"""
+              .update.run
+          } yield ManagedAssignmentWrite.Written: ManagedAssignmentWrite
+        }
       }
       case Some(_) => (ManagedAssignmentWrite.Stale: ManagedAssignmentWrite).pure[ConnectionIO]
       case None => (ManagedAssignmentWrite.Missing: ManagedAssignmentWrite).pure[ConnectionIO]
