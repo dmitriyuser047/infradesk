@@ -485,6 +485,12 @@ jobs:
             packaging/self-hosted/lib/common.sh packaging/self-hosted/build-bundle.sh packaging/self-hosted/tests/*.sh
       - name: Installer unit tests
         run: bash packaging/self-hosted/tests/unit.sh
+      - name: Free disk space for the installer's 10 GiB requirement
+        run: |
+          # Hosted runners ship toolchains this job never uses; the installer rightly refuses a host
+          # with less than 10 GiB free once the images are built.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h / /var/lib/docker
       - name: Build two releases' images into a local registry
         run: |
           docker run --detach --name ci-registry --publish 127.0.0.1:5000:5000 registry:2
