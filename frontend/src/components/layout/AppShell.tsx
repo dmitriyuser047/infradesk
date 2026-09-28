@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Bell, Cable, LayoutDashboard, Layers, Menu, Server, TriangleAlert, X, type LucideIcon } from 'lucide-react'
+import { Bell, Cable, FileCog, LayoutDashboard, Layers, Menu, Server, TriangleAlert, X, type LucideIcon } from 'lucide-react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 
 import { useI18n, type Messages } from '../../i18n'
@@ -39,6 +39,7 @@ const navigation: NavigationGroup[] = [
   { label: t => t.shell.groups.monitoring, items: [{ module: 'incidents', icon: TriangleAlert, label: t => t.shell.nav.incidents }] },
   { label: t => t.shell.groups.management, items: [
     { module: 'notifications', icon: Bell, label: t => t.shell.nav.notifications, permission: 'manageNotifications' },
+    { module: 'configurations', icon: FileCog, label: t => t.shell.nav.configurations, permission: 'manageConfigurations' },
     { module: 'workspace', icon: Layers, label: t => t.shell.nav.workspace },
   ] },
 ]

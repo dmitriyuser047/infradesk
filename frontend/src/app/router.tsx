@@ -44,6 +44,23 @@ export const router = createBrowserRouter([
       { path: '/organizations/:organizationId/notifications/:channelId/edit', element: <NotificationChannelFormPage /> },
       { path: '/organizations/:organizationId/notifications/new', element: <NotificationChannelFormPage /> },
       { path: '/organizations/:organizationId/notifications', element: <NotificationChannelsPage /> },
+      // Owner-only and rarely opened: loaded on first visit, not with every page.
+      { path: '/organizations/:organizationId/configurations', lazy: async () => {
+        const { ConfigurationsPage } = await import('../pages/ConfigurationsPage')
+        return { Component: ConfigurationsPage }
+      } },
+      { path: '/organizations/:organizationId/configurations/new', lazy: async () => {
+        const { ConfigurationCreatePage } = await import('../pages/ConfigurationEditorPages')
+        return { Component: ConfigurationCreatePage }
+      } },
+      { path: '/organizations/:organizationId/configurations/:profileId', lazy: async () => {
+        const { ConfigurationProfilePage } = await import('../pages/ConfigurationProfilePage')
+        return { Component: ConfigurationProfilePage }
+      } },
+      { path: '/organizations/:organizationId/configurations/:profileId/versions/new', lazy: async () => {
+        const { ConfigurationVersionPage } = await import('../pages/ConfigurationEditorPages')
+        return { Component: ConfigurationVersionPage }
+      } },
       { path: '/organizations/:organizationId/incidents/:incidentId', element: <IncidentPage /> },
       { path: '/organizations/:organizationId/incidents', element: <IncidentsPage /> },
       {

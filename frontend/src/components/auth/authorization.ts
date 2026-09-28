@@ -12,6 +12,7 @@ export type OrganizationPermission =
   | 'viewAudit'
   | 'executeOperations'
   | 'openTerminal'
+  | 'manageConfigurations'
 
 const memberPermissions: readonly OrganizationPermission[] = ['readOrganization']
 

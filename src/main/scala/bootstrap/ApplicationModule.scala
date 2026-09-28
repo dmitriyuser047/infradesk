@@ -28,6 +28,7 @@ import application.connection.{
 }
 import application.connector.{RunConnectionSync, SyncConnection, SyncConnectionById}
 import application.discovery.{CreateDiscoveredResource, ReconcileDiscoveredResource, SyncDiscoveredSnapshot}
+import application.configuration.{ConfigurationProfileManagement, ConfigurationProfileQueries}
 import application.context.{
   GetConnectionInfrastructureSummary,
   GetResourceContext,
@@ -88,6 +89,8 @@ final case class ApplicationComponents(
   getResourceContext: GetResourceContext[ConnectionIO],
   listResourceIncidents: ListResourceIncidents[ConnectionIO],
   listEnvironmentResourceSources: ListEnvironmentResourceSources[ConnectionIO],
+  configurationProfileQueries: ConfigurationProfileQueries[ConnectionIO],
+  configurationProfileManagement: ConfigurationProfileManagement[ConnectionIO],
   listIncidents: ListIncidents[ConnectionIO],
   listMonitorRules: ListMonitorRules[ConnectionIO],
   createMonitorRule: CreateMonitorRule[ConnectionIO],
@@ -313,6 +316,9 @@ object ApplicationModule {
       getResourceContext = GetResourceContext[ConnectionIO](infrastructureContextQuery),
       listResourceIncidents = ListResourceIncidents[ConnectionIO](infrastructureContextQuery, incidentListQuery),
       listEnvironmentResourceSources = ListEnvironmentResourceSources[ConnectionIO](infrastructureContextQuery),
+      configurationProfileQueries = new ConfigurationProfileQueries[ConnectionIO](configurationProfileQuery),
+      configurationProfileManagement = new ConfigurationProfileManagement[ConnectionIO](configurationProfileRepository,
+        transactionIdGenerator, transactionTimeProvider, auditRecorder),
       listIncidents = ListIncidents[ConnectionIO](incidentListQuery),
       listMonitorRules = ListMonitorRules[ConnectionIO](
         resourceRepository,

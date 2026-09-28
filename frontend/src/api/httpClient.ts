@@ -8,6 +8,8 @@ export class ApiError extends Error {
     public readonly status: number,
     public readonly code: string,
     message: string,
+    /** The whole error body, for the few errors that carry more than a code (validation findings). */
+    public readonly body?: unknown,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -42,7 +44,7 @@ async function request(url: string, init: RequestInit): Promise<Response> {
     if (error.code === 'UNAUTHENTICATED' && url !== '/api/v1/me') {
       window.dispatchEvent(new Event('infradesk:unauthenticated'))
     }
-    throw new ApiError(response.status, error.code, error.message)
+    throw new ApiError(response.status, error.code, error.message, error)
   }
 
   return response

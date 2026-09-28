@@ -14,6 +14,7 @@ import infrastructure.http.{
   ConnectionSyncRoutes,
   HealthRoutes,
   HistoryRoutes,
+  ConfigurationProfileRoutes,
   IncidentRoutes,
   InfrastructureContextRoutes,
   MonitorRuleRoutes,
@@ -92,6 +93,15 @@ object HttpModule {
           persistence.readOnlySnapshotRunner,
           authorization,
           loggers.readModels
+        ).routes <+>
+        // Writes are short transactions; a profile page is two reads that must agree.
+        new ConfigurationProfileRoutes(
+          application.configurationProfileQueries,
+          application.configurationProfileManagement,
+          transactionRunner,
+          persistence.readOnlySnapshotRunner,
+          authorization,
+          loggers.configuration
         ).routes <+>
         new MonitorRuleRoutes(
           application.listMonitorRules,

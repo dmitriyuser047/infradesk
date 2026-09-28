@@ -50,13 +50,19 @@ object ReadModelHttp {
   /** An unexpected read failure: logged with its cause and safe identifiers, answered generically.
     * The client never sees the exception; the log never sees request bodies or credentials.
     */
-  def failed(logger: Logger[IO], request: Request[IO], operation: String, context: (String, Any)*)(error: Throwable): IO[Response[IO]] = {
+  def failed(logger: Logger[IO], request: Request[IO], operation: String, context: (String, Any)*)(error: Throwable): IO[Response[IO]] =
+    failedAs(logger, "read.failed", request, operation, context: _*)(error)
+
+  /** The same, under an event name of the caller's: `configuration.request.failed`, for one. */
+  def failedAs(logger: Logger[IO], event: String, request: Request[IO], operation: String, context: (String, Any)*)(
+    error: Throwable
+  ): IO[Response[IO]] = {
     // A client may supply the id; only a plain token reaches the log, never a crafted line.
     val requestId = request.headers.headers.find(_.name == RequestIdMiddleware.HeaderName).map(_.value)
       .filter(_.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}"))
     val fields = (context.map { case (key, value) => s"$key=$value" } ++
       requestId.map(value => s"requestId=$value") :+ s"errorType=${error.getClass.getSimpleName}").mkString(" ")
-    logger.error(error)(s"read.failed operation=$operation $fields").attempt *> InternalServerError(internalError)
+    logger.error(error)(s"$event operation=$operation $fields").attempt *> InternalServerError(internalError)
   }
 
   def invalid(name: String): ApiErrorResponse = ApiErrorResponse("INVALID_REQUEST", s"Invalid $name")

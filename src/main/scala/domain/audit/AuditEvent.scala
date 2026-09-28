@@ -43,6 +43,14 @@ object AuditAction {
   /** A user revoked every session, the current one included. */
   case object AccountAllSessionsRevoked extends AuditAction { override val code: String = "ACCOUNT_ALL_SESSIONS_REVOKED" }
 
+  /** A profile was created; its first revision is journalled as its own event in the same commit. */
+  case object ConfigurationProfileCreated extends AuditAction { override val code: String = "CONFIGURATION_PROFILE_CREATED" }
+  /** Name or description changed. Content changes are revisions, never this. */
+  case object ConfigurationProfileUpdated extends AuditAction { override val code: String = "CONFIGURATION_PROFILE_UPDATED" }
+  case object ConfigurationProfileArchived extends AuditAction { override val code: String = "CONFIGURATION_PROFILE_ARCHIVED" }
+  /** A new immutable revision of a profile. The target is the profile; the journal keeps no content. */
+  case object ConfigurationRevisionCreated extends AuditAction { override val code: String = "CONFIGURATION_REVISION_CREATED" }
+
   val All: List[AuditAction] = List(
     ProjectCreated,
     EnvironmentCreated,
@@ -65,7 +73,11 @@ object AuditAction {
     AccountOtherSessionsRevoked,
     AccountAllSessionsRevoked,
     TerminalSessionOpened,
-    TerminalSessionClosed
+    TerminalSessionClosed,
+    ConfigurationProfileCreated,
+    ConfigurationProfileUpdated,
+    ConfigurationProfileArchived,
+    ConfigurationRevisionCreated
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =
@@ -89,9 +101,11 @@ object AuditTargetType {
   case object NotificationChannel extends AuditTargetType { override val code: String = "NOTIFICATION_CHANNEL" }
   /** The actor's own user account: the target of a self-service account change. */
   case object Account extends AuditTargetType { override val code: String = "ACCOUNT" }
+  case object ConfigurationProfile extends AuditTargetType { override val code: String = "CONFIGURATION_PROFILE" }
 
   val All: List[AuditTargetType] =
-    List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Account, TerminalSession)
+    List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Account, TerminalSession,
+      ConfigurationProfile)
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditTargetType] =
     All.find(_.code == code)
