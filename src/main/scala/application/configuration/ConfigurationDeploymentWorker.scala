@@ -57,7 +57,19 @@ final class ConfigurationDeploymentWorker[Tx[_]](
     }
   }
 
-  private def execute(initial: ConfigurationDeployment, token: UUID): IO[Unit] = for {
+  private def execute(initial: ConfigurationDeployment, token: UUID): IO[Unit] =
+    if (initial.phase == Rollback) for {
+      _ <- guard(initial, token)
+      source <- runner.run(sources.resolve(initial.organizationId, initial.resourceId, initial.connectionId))
+      connection <- source match {
+        case ConfigurationDeploymentSource.Ready(value) if value.updatedAt == initial.connectionUpdatedAt => IO.pure(value)
+        case _ => IO.raiseError[domain.connection.Connection](DeploymentFailure("CONFIGURATION_DEPLOYMENT_CONNECTION_CHANGED"))
+      }
+      _ <- remote.withSession(connection)(session => phases(initial, token, session, ""))
+    } yield ()
+    else deploy(initial, token)
+
+  private def deploy(initial: ConfigurationDeployment, token: UUID): IO[Unit] = for {
     _ <- guard(initial, token)
     current <- runner.run(assignments.find(initial.organizationId, initial.assignmentId))
     _ <- IO.raiseUnless(current.exists(a => a.active && a.version == initial.assignmentVersion &&
@@ -109,16 +121,17 @@ final class ConfigurationDeploymentWorker[Tx[_]](
         }
     }
 
-    def verify: IO[Unit] = readTarget.flatMap { target =>
-      IO.raiseUnless(target.exists && ConfigurationDeployment.sha256Bytes(target.bytes) == initial.desiredSha256)(
-        DeploymentFailure("CONFIGURATION_REMOTE_CHANGED")) *>
-        (initial.policy.activation match {
+    def verifyService: IO[Unit] = initial.policy.activation match {
           case ConfigurationActivation.None => IO.unit
           case _ =>
             val unit = initial.policy.unitName.getOrElse(throw DeploymentFailure("CONFIGURATION_HEALTH_CHECK_FAILED"))
             guard(initial, token) *> remote.execute("/usr/bin/systemctl", List("is-active", unit), 30)
               .flatMap(status => IO.raiseUnless(status == 0)(DeploymentFailure("CONFIGURATION_HEALTH_CHECK_FAILED")))
-        })
+    }
+
+    def verify: IO[Unit] = readTarget.flatMap { target =>
+      IO.raiseUnless(target.exists && ConfigurationDeployment.sha256Bytes(target.bytes) == initial.desiredSha256)(
+        DeploymentFailure("CONFIGURATION_REMOTE_CHANGED")) *> verifyService
     }
 
     def rollback: IO[Unit] = for {
@@ -134,7 +147,9 @@ final class ConfigurationDeploymentWorker[Tx[_]](
               guard(initial, token) *> remote.atomicReplace(backup, initial.targetPath)
           }
       }
-      _ <- activate *> verify
+      restored <- readTarget
+      _ <- IO.raiseUnless(expected(restored))(DeploymentFailure("CONFIGURATION_ROLLBACK_FAILED"))
+      _ <- activate *> verifyService
     } yield ()
 
     def failAfterReplace(error: Throwable): IO[Unit] =
@@ -216,6 +231,13 @@ final class ConfigurationDeploymentWorker[Tx[_]](
           remote.remove(temp).attempt.void *>
           (if (initial.rolloutId.isEmpty) remote.remove(backup).attempt.void else IO.unit) *>
           finish(initial, token, Succeeded, None)
+      case Rollback => rollback.attempt.flatMap {
+        case Right(_) =>
+          remote.remove(temp).attempt.void *> remote.remove(backup).attempt.void *>
+            finish(initial, token, RolledBack, None)
+        case Left(LostLease) => IO.raiseError(LostLease)
+        case Left(_) => finish(initial, token, RollbackFailed, Some("CONFIGURATION_ROLLBACK_FAILED"))
+      }
     }
 
     def continue(phase: ConfigurationDeploymentPhase): IO[Unit] = phase match {
@@ -230,7 +252,7 @@ final class ConfigurationDeploymentWorker[Tx[_]](
   }
 
   private def mayHaveReplaced(phase: ConfigurationDeploymentPhase): Boolean = phase match {
-    case Replace | Activate | Verify | Cleanup => true
+    case Replace | Activate | Verify | Cleanup | Rollback => true
     case _ => false
   }
 

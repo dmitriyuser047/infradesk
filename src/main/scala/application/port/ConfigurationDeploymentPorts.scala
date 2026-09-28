@@ -41,6 +41,7 @@ trait ConfigurationDeploymentRepository[F[_]] {
   def finish(organizationId: UUID, id: UUID, token: UUID, state: ConfigurationDeploymentState,
              failureCode: Option[String], now: Instant): F[Boolean]
   def cancel(organizationId: UUID, id: UUID, now: Instant): F[Boolean]
+  def queueRollback(organizationId: UUID, id: UUID, rolloutId: UUID, now: Instant): F[Boolean]
   def history(organizationId: UUID, profileId: Option[UUID], before: Option[(Instant, UUID)],
               limit: Int): F[List[ConfigurationDeployment]]
 }

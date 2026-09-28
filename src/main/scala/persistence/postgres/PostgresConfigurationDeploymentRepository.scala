@@ -123,6 +123,19 @@ final class PostgresConfigurationDeploymentRepository extends ConfigurationDeplo
         case None => false.pure[ConnectionIO]
       }
 
+  override def queueRollback(organizationId: UUID, id: UUID, rolloutId: UUID,
+                             now: Instant): ConnectionIO[Boolean] =
+    sql"""update configuration_deployment set state = 'QUEUED', phase = 'ROLLBACK',
+      finished_at = null, failure_code = null, cancel_requested = false
+      where organization_id = $organizationId and id = $id and rollout_id = $rolloutId
+        and state = 'SUCCEEDED'""".update.run.attemptSql.map {
+      case Right(1) => true
+      case Right(_) => false
+      case Left(error: org.postgresql.util.PSQLException)
+        if error.getSQLState == "23505" => false
+      case Left(error) => throw error
+    }
+
   override def history(organizationId: UUID, profileId: Option[UUID], before: Option[(Instant, UUID)],
                        limit: Int): ConnectionIO[List[ConfigurationDeployment]] = {
     val profile = profileId.fold(fr"")(id => fr"and d.profile_id = $id")

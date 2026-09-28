@@ -21,7 +21,7 @@ final class ConfigurationRolloutWorker[Tx[_]: MonadThrow](
   leaseDuration: FiniteDuration = 2.minutes
 ) {
   import ConfigurationRolloutItemState._
-  import ConfigurationRolloutState.{Cancelled, Failed, Paused, Running, Succeeded}
+  import ConfigurationRolloutState.{Cancelled, Failed, Paused, RolledBack, RollingBack, Running, Succeeded}
 
   private case object LostLease extends RuntimeException("Rollout lease lost")
 
@@ -73,7 +73,19 @@ final class ConfigurationRolloutWorker[Tx[_]: MonadThrow](
     val pending = items.filter(_.state == Pending)
     val deploying = items.exists(_.state == Deploying)
     val failed = items.exists(item => item.state == ConfigurationRolloutItemState.Failed || item.state == RolledBack)
-    if (deploying) release(rollout, token, Running, None, None)
+    val rollBackAll = rollout.strategy.rollbackMode == ConfigurationRollbackMode.AllApplied &&
+      (rollout.state == RollingBack || rollout.cancelRequested || (failed && rollout.strategy.stopOnFailure))
+    if (deploying) release(rollout, token, if (rollout.state == RollingBack) RollingBack else Running, None, None)
+    else if (rollBackAll) {
+      pending.traverse_(item => setItem(rollout, token, item, Pending, Skipped, None)) *>
+        items.reverse.find(_.state == ConfigurationRolloutItemState.Succeeded).fold[IO[Unit]] {
+          release(rollout, token,
+            if (items.exists(_.state == ConfigurationRolloutItemState.Failed)) Failed else RolledBack,
+            None, None)
+        } { item => queueRollback(rollout, token, item) *>
+          release(rollout, token, RollingBack, None, None)
+        }
+    }
     else if (rollout.cancelRequested || (failed && rollout.strategy.stopOnFailure)) {
       pending.traverse_(item => setItem(rollout, token, item, Pending, Skipped, None)) *>
         release(rollout, token, if (rollout.cancelRequested) Cancelled else Failed, None, None)
@@ -93,6 +105,23 @@ final class ConfigurationRolloutWorker[Tx[_]: MonadThrow](
           release(rollout, token, Running, None, None)
       }
     }
+  }
+
+  private def queueRollback(rollout: ConfigurationRollout, token: UUID,
+                            item: ConfigurationRolloutItem): IO[Unit] = item.deploymentId match {
+    case None => IO.raiseError(new IllegalStateException("Successful rollout item has no deployment"))
+    case Some(id) => for {
+      now <- IO(Instant.now())
+      _ <- runner.run(for {
+        queued <- deployments.queueRollback(rollout.organizationId, id, rollout.id, now)
+        _ <- if (!queued) ().pure[Tx]
+          else rollouts.setItem(rollout.organizationId, rollout.id, token, item.id,
+            ConfigurationRolloutItemState.Succeeded, Deploying, None, now).flatMap {
+            case true => ().pure[Tx]
+            case false => new IllegalStateException("Lost rollout lease while queueing rollback").raiseError[Tx, Unit]
+          }
+      } yield ())
+    } yield ()
   }
 
   private def launch(rollout: ConfigurationRollout, token: UUID,

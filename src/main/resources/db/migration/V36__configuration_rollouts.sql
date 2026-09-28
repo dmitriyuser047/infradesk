@@ -1,5 +1,9 @@
 -- A rollout orchestrates immutable per-node deployment snapshots. Remote file bytes and credentials
 -- never enter these tables. Pending items do not occupy a resource deployment slot.
+ALTER TABLE configuration_deployment DROP CONSTRAINT configuration_deployment_phase_check;
+ALTER TABLE configuration_deployment ADD CONSTRAINT configuration_deployment_phase_check CHECK
+  (phase IN ('PRECHECK','UPLOAD','VALIDATE','REPLACE','ACTIVATE','VERIFY','CLEANUP','ROLLBACK'));
+
 CREATE TABLE configuration_rollout (
   id uuid PRIMARY KEY,
   organization_id uuid NOT NULL REFERENCES organization(id),

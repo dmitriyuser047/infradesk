@@ -30,8 +30,9 @@ object ConfigurationDeploymentPhase {
   case object Activate extends ConfigurationDeploymentPhase { val code = "ACTIVATE" }
   case object Verify extends ConfigurationDeploymentPhase { val code = "VERIFY" }
   case object Cleanup extends ConfigurationDeploymentPhase { val code = "CLEANUP" }
+  case object Rollback extends ConfigurationDeploymentPhase { val code = "ROLLBACK" }
   val all: List[ConfigurationDeploymentPhase] =
-    List(Precheck, Upload, Validate, Replace, Activate, Verify, Cleanup)
+    List(Precheck, Upload, Validate, Replace, Activate, Verify, Cleanup, Rollback)
   def fromCode(code: String): Either[IllegalArgumentException, ConfigurationDeploymentPhase] =
     all.find(_.code == code).toRight(new IllegalArgumentException("Invalid deployment phase"))
 }
