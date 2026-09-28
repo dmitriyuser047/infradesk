@@ -3,10 +3,19 @@ name: CI
 on:
   push:
   pull_request:
+  # Manual run of one job group on a chosen commit, e.g. `gh workflow run CI -f only=self-hosted`.
+  # Acceptance still needs the full run that a push starts.
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Run only this job group (self-hosted); empty runs everything"
+        required: false
+        default: ""
 
 jobs:
   backend:
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || inputs.only == ''
     services:
       postgres:
         image: postgres:17
@@ -47,6 +56,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || inputs.only == ''
     defaults:
       run:
         working-directory: frontend
@@ -64,6 +74,7 @@ jobs:
   images:
     runs-on: ubuntu-latest
     needs: [backend, frontend]
+    if: github.event_name != 'workflow_dispatch' || inputs.only == ''
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -467,6 +478,11 @@ jobs:
   self-hosted:
     runs-on: ${{ matrix.os }}
     needs: [backend, frontend]
+    # After green backend and frontend jobs, or alone when dispatched with only=self-hosted.
+    if: >-
+      always() && (
+        (github.event_name == 'workflow_dispatch' && inputs.only == 'self-hosted') ||
+        (needs.backend.result == 'success' && needs.frontend.result == 'success'))
     strategy:
       fail-fast: false
       matrix:
