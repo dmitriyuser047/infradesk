@@ -253,18 +253,18 @@ final class ConfigurationProfileIntegrationSpec extends FunSuite {
 
   // -------------------------------------------------------------------------------------------
 
-  private def withFixture(body: Fixture => IO[IO[Unit]]): Unit = {
+  private def withFixture(body: ProfileFixture => IO[IO[Unit]]): Unit = {
     assume(
       sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests"
     )
     PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
-      val fixture = new Fixture(new DoobieTransactionRunner(xa))
+      val fixture = new ProfileFixture(new DoobieTransactionRunner(xa))
       fixture.reset *> body(fixture).flatten.guarantee(fixture.reset)
     }.unsafeRunSync()
   }
 
-  private final class Fixture(runner: DoobieTransactionRunner) {
+  private final class ProfileFixture(runner: DoobieTransactionRunner) {
     val actor: ActorContext = ActorContext(AuthorizationFixtures.ActorUserId, OrganizationId)
     val otherActor: ActorContext = ActorContext(AuthorizationFixtures.ActorUserId, OtherOrganizationId)
     val repository = new PostgresConfigurationProfileRepository

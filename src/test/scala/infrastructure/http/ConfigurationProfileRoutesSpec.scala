@@ -34,7 +34,7 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
         "defaultValue" -> Json.fromString("vless"), "description" -> Json.fromString("Inbound protocol"))))
 
   test("an owner creates a profile with revision 1 and reads it back; the list carries no content") {
-    val f = new Fixture
+    val f = new RouteFixture
     val (created, body) = f.call(Method.POST, base, Some(createBody))
     assertEquals(created, Status.Created)
     val id = body.hcursor.downField("profile").get[String]("id").toOption.getOrElse(fail("no id"))
@@ -54,7 +54,7 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
   }
 
   test("a member is refused every configuration route, reads included") {
-    val f = new Fixture
+    val f = new RouteFixture
     List(
       (Method.GET, base, None), (Method.POST, base, Some(createBody)), (Method.POST, s"$base/validate", Some(createBody)),
       (Method.GET, s"$base/${UUID.randomUUID()}", None), (Method.DELETE, s"$base/${UUID.randomUUID()}", None)
@@ -65,7 +65,7 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
   }
 
   test("invalid content is refused with its diagnostics, and nothing is stored") {
-    val f = new Fixture
+    val f = new RouteFixture
     val invalid = createBody.deepMerge(Json.obj("template" -> Json.fromString("port={{ vpn_port }}")))
     val (status, body) = f.call(Method.POST, base, Some(invalid))
     assertEquals(status, Status.BadRequest)
@@ -81,7 +81,7 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
   }
 
   test("a duplicate code is a conflict") {
-    val f = new Fixture
+    val f = new RouteFixture
     assertEquals(f.call(Method.POST, base, Some(createBody))._1, Status.Created)
     val (status, body) = f.call(Method.POST, base, Some(createBody))
     assertEquals(status, Status.Conflict)
@@ -89,7 +89,7 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
   }
 
   test("metadata, revisions, history, archive: the lifecycle, with the server numbering versions") {
-    val f = new Fixture
+    val f = new RouteFixture
     val id = f.call(Method.POST, base, Some(createBody))._2.hcursor.downField("profile").get[String]("id").toOption.get
     val (patched, profile) = f.call(Method.PATCH, s"$base/$id",
       Some(Json.obj("name" -> Json.fromString("Renamed"), "description" -> Json.fromString("All nodes"))))
@@ -123,7 +123,7 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
   }
 
   test("another organization's profile, a malformed id and an unknown one") {
-    val f = new Fixture
+    val f = new RouteFixture
     val id = f.call(Method.POST, base, Some(createBody))._2.hcursor.downField("profile").get[String]("id").toOption.get
     val foreign = s"/api/v1/organizations/$Other/configuration-profiles/$id"
     val (status, body) = f.call(Method.GET, foreign)
@@ -138,7 +138,7 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
   }
 
   test("validation reports errors and warnings, renders a preview when it can, and stores nothing") {
-    val f = new Fixture
+    val f = new RouteFixture
     val (status, body) = f.call(Method.POST, s"$base/validate", Some(Json.obj(
       "template" -> Json.fromString("port={{ port }}"),
       "variables" -> Json.arr(Json.obj("name" -> Json.fromString("port"), "type" -> Json.fromString("INTEGER")),
@@ -165,10 +165,10 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
   }
 
   test("an oversized body is refused unread, and an unexpected failure answers without detail") {
-    val f = new Fixture
+    val f = new RouteFixture
     val huge = Json.obj("template" -> Json.fromString("x" * (3 * 1024 * 1024)), "variables" -> Json.arr())
     assertEquals(f.call(Method.POST, s"$base/validate", Some(huge))._1, Status.PayloadTooLarge)
-    val failing = new Fixture(failReads = true)
+    val failing = new RouteFixture(failReads = true)
     val (status, body) = failing.call(Method.GET, base)
     assertEquals(status, Status.InternalServerError)
     assertEquals(body.hcursor.get[String]("code"), Right("INTERNAL_ERROR"))
@@ -182,7 +182,7 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
     var revisions: List[ConfigurationRevision] = List.empty
   }
 
-  private final class Fixture(failReads: Boolean = false) {
+  private final class RouteFixture(failReads: Boolean = false) {
     val store = new Store
     val (audit, recorder) = support.TestAuditRecorder.recording
     private val now = Instant.parse("2026-09-28T10:00:00Z")
@@ -214,7 +214,7 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
     }
 
     private val ids = new IdGenerator[IO] { def nextId: IO[UUID] = IO(UUID.randomUUID()) }
-    private val time = new TimeProvider[IO] { def now: IO[Instant] = IO.pure(Fixture.this.now) }
+    private val time = new TimeProvider[IO] { def now: IO[Instant] = IO.pure(RouteFixture.this.now) }
     private val runner = new TransactionRunner[IO, IO] { def run[A](program: IO[A]): IO[A] = program }
 
     private val routes = new ConfigurationProfileRoutes[IO](
