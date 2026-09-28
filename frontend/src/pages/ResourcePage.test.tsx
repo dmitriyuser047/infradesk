@@ -99,7 +99,7 @@ describe('resource detail page', () => {
   it('opens monitoring on a server, in Russian, and loads metrics only then', async () => {
     const requests = renderPage({ resource: server }, { locale: 'ru' })
     await screen.findByText('Время работы')
-    expect(tabNames()).toEqual(['Обзор', 'Мониторинг', 'Инциденты', 'События'])
+    expect(tabNames()).toEqual(['Обзор', 'Мониторинг', 'Инциденты', 'События', 'Конфигурации'])
     expect(requests.some(path => path.includes('/metrics'))).toBe(false)
 
     fireEvent.click(screen.getByRole('tab', { name: 'Мониторинг' }))

@@ -220,11 +220,13 @@ jobs:
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
           # Build a representative production V29 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V30 through V33 to the restored database before the backend reports itself ready.
+          # V30 through V34 to the restored database before the backend reports itself ready.
           # Remove the additive tables and Stage 21 index; earlier schema stays as in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          drop table configuration_assignment_value;
+          drop table configuration_assignment;
           drop table configuration_revision_variable;
           drop table configuration_revision;
           drop table configuration_profile;
@@ -232,14 +234,14 @@ jobs:
           drop table terminal_session;
           drop table account_security_event;
           drop index ix_incident_resource_opened;
-          delete from flyway_schema_history where version in ('30', '31', '32', '33');
+          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V30 through V33.
+          # recover the marker and let Flyway apply V30 through V34.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -260,7 +262,7 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "33"
+          test "${migrated}" = "34"
           # What V26 built survives the upgrade: the notification_delivery.context column was in the
           # dump and is still there after Flyway ran V29 on the restored database.
           delivery_context="$(docker compose -f compose.prod.yml exec -T postgres \
@@ -295,6 +297,15 @@ jobs:
           test "${configuration_tables}" = "3"
           configuration_immutable="$(docker compose -f compose.prod.yml exec -T postgres             psql --username infradesk --dbname infradesk --tuples-only --no-align             --command "select count(*) from pg_trigger where not tgisinternal and tgname in ('tr_configuration_revision_immutable', 'tr_configuration_revision_variable_immutable')")"
           test "${configuration_immutable}" = "2"
+          # And what V34 adds: configuration assignments, with one active owner per target file.
+          assignment_tables="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('configuration_assignment', 'configuration_assignment_value')")"
+          test "${assignment_tables}" = "2"
+          assignment_target="$(docker compose -f compose.prod.yml exec -T postgres \
+            psql --username infradesk --dbname infradesk --tuples-only --no-align \
+            --command "select count(*) from pg_indexes where schemaname = current_schema() and indexname = 'ux_configuration_assignment_active_target'")"
+          test "${assignment_target}" = "1"
           credential_kind="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where conname = 'ck_connection_secret_kind' and pg_get_constraintdef(oid) like '%SSH_CREDENTIAL%'")"

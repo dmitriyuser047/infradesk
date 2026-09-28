@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V33 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V34 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +39,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 33)
-        assertEquals(first.currentVersion, "33")
+        assertEquals(first.migrationsApplied, 34)
+        assertEquals(first.currentVersion, "34")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "33")
+        assertEquals(second.currentVersion, "34")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -178,6 +178,39 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               assertEquals(configuration.getBoolean(6), true)
               assertEquals(configuration.getBoolean(7), true)
             } finally configuration.close()
+            val assignments = statement.executeQuery(
+              "select to_regclass('public.configuration_assignment'), to_regclass('public.configuration_assignment_value'), " +
+                "(select count(*) from information_schema.table_constraints where table_schema = current_schema() " +
+                "and constraint_name in ('fk_configuration_assignment_resource_tenant', " +
+                "'fk_configuration_assignment_profile_tenant', 'fk_configuration_assignment_revision', " +
+                "'fk_configuration_assignment_value_assignment_tenant', 'pk_configuration_assignment_value', " +
+                "'ck_configuration_assignment_version', 'ck_configuration_assignment_target_path')), " +
+                "(select indexdef like '%UNIQUE%' and indexdef like '%(organization_id, resource_id, target_path)%' " +
+                "and indexdef like '%WHERE (removed_at IS NULL)%' from pg_indexes " +
+                "where schemaname = current_schema() and indexname = 'ux_configuration_assignment_active_target'), " +
+                "(select count(*) from information_schema.columns where table_schema = current_schema() " +
+                "and table_name = 'configuration_assignment' and column_name in ('removed_at', 'version') " +
+                "and ((column_name = 'removed_at' and is_nullable = 'YES') or (column_name = 'version' and is_nullable = 'NO'))), " +
+                "(select count(*) from information_schema.columns where table_schema = current_schema() " +
+                "and table_name = 'configuration_assignment' and column_name like '%connection%'), " +
+                "(select pg_get_constraintdef(oid) like '%CONFIGURATION_ASSIGNMENT_REMOVED%' from pg_constraint " +
+                "where conname = 'ck_audit_event_action'), " +
+                "(select pg_get_constraintdef(oid) like '%CONFIGURATION_ASSIGNMENT%' from pg_constraint " +
+                "where conname = 'ck_audit_event_target_type')"
+            )
+            try {
+              assert(assignments.next())
+              (1 to 2).foreach(index => assert(assignments.getString(index) != null))
+              // Tenants carried through the resource, the profile, the exact revision and every value.
+              assertEquals(assignments.getInt(3), 7)
+              // One active owner per file on a resource; a removed assignment frees the path.
+              assertEquals(assignments.getBoolean(4), true)
+              assertEquals(assignments.getInt(5), 2)
+              // Desired state, not transport: no connection column.
+              assertEquals(assignments.getInt(6), 0)
+              assertEquals(assignments.getBoolean(7), true)
+              assertEquals(assignments.getBoolean(8), true)
+            } finally assignments.close()
             val syncDeadline = statement.executeQuery(
               "select (select count(*) from information_schema.columns " +
                 "where table_schema = current_schema() and table_name = 'sync_session' " +

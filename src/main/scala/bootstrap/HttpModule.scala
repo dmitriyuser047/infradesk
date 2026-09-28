@@ -14,6 +14,7 @@ import infrastructure.http.{
   ConnectionSyncRoutes,
   HealthRoutes,
   HistoryRoutes,
+  ConfigurationAssignmentRoutes,
   ConfigurationProfileRoutes,
   IncidentRoutes,
   InfrastructureContextRoutes,
@@ -99,6 +100,14 @@ object HttpModule {
           application.configurationProfileQueries,
           application.configurationProfileManagement,
           transactionRunner,
+          persistence.readOnlySnapshotRunner,
+          authorization,
+          loggers.configuration
+        ).routes <+>
+        // Desired state only: an assignment page is a few reads that must agree.
+        new ConfigurationAssignmentRoutes(
+          application.configurationAssignments,
+          application.configurationAssignmentQueries,
           persistence.readOnlySnapshotRunner,
           authorization,
           loggers.configuration
