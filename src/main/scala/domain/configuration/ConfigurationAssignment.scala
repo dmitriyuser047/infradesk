@@ -69,7 +69,7 @@ object ConfigurationDesiredState {
     val definitions = revision.variables.map(variable => variable.name -> variable).toMap
     val names = values.map(_.name)
     val given = names.toSet
-    names.diff(names.distinct).headOption.map(DuplicateValue(_))
+    names.diff(names.distinct).headOption.map[ConfigurationRenderError](DuplicateValue(_))
       .orElse(values.collectFirst { case value if !definitions.contains(value.name) => UnknownVariable(value.name) })
       .orElse(values.collectFirst {
         case value if value.value.length > ConfigurationLimits.MaxValueLength || !definitions(value.name).valueType.accepts(value.value) =>

@@ -44,8 +44,8 @@ final class PostgresConfigurationAssignmentRepository extends ConfigurationAssig
         ${assignment.removedAt}, ${assignment.createdAt}, ${assignment.updatedAt}
       )
       on conflict (organization_id, resource_id, target_path) where removed_at is null do nothing
-    """.update.run.flatMap {
-      case 1 => insertValues(assignment.organizationId, assignment.id, values).as(ConfigurationAssignmentWrite.Written)
+    """.update.run.flatMap[ConfigurationAssignmentWrite] {
+      case 1 => insertValues(assignment.organizationId, assignment.id, values).as[ConfigurationAssignmentWrite](ConfigurationAssignmentWrite.Written)
       case _ => (ConfigurationAssignmentWrite.PathTaken: ConfigurationAssignmentWrite).pure[ConnectionIO]
     }
 
@@ -66,12 +66,12 @@ final class PostgresConfigurationAssignmentRepository extends ConfigurationAssig
              updated_at = $at
        where organization_id = $organizationId and id = $id
          and removed_at is null and version = $expectedVersion
-    """.update.run.attemptSql.flatMap {
+    """.update.run.attemptSql.flatMap[ConfigurationAssignmentWrite] {
       case Right(1) =>
         for {
           _ <- sql"delete from configuration_assignment_value where organization_id = $organizationId and assignment_id = $id".update.run
           _ <- insertValues(organizationId, id, values)
-        } yield ConfigurationAssignmentWrite.Written
+        } yield (ConfigurationAssignmentWrite.Written: ConfigurationAssignmentWrite)
       case Right(_) => lost(organizationId, id)
       // Moving to a path another active assignment claims; the transaction is failed and rolls back.
       case Left(error: PSQLException) if isActiveTargetConflict(error) =>
@@ -97,7 +97,7 @@ final class PostgresConfigurationAssignmentRepository extends ConfigurationAssig
 
   /** Why a conditional change matched nothing: gone (or removed) is "missing", otherwise "stale". */
   private def lost(organizationId: UUID, id: UUID): ConnectionIO[ConfigurationAssignmentWrite] =
-    find(organizationId, id).map {
+    find(organizationId, id).map[ConfigurationAssignmentWrite] {
       case Some(assignment) if assignment.active => ConfigurationAssignmentWrite.Stale
       case _ => ConfigurationAssignmentWrite.Missing
     }

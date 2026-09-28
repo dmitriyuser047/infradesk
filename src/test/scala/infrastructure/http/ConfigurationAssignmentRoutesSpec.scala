@@ -208,7 +208,7 @@ final class ConfigurationAssignmentRoutesSpec extends FunSuite {
     private val repository = new ConfigurationAssignmentRepository[IO] {
       private def taken(a: ConfigurationAssignment, path: String) = store.assignments.values.exists(other =>
         other.id != a.id && other.active && other.organizationId == a.organizationId && other.resourceId == a.resourceId && other.targetPath == path)
-      def insert(assignment: ConfigurationAssignment, values: List[ConfigurationVariableValue]) = IO {
+      def insert(assignment: ConfigurationAssignment, values: List[ConfigurationVariableValue]): IO[ConfigurationAssignmentWrite] = IO {
         if (taken(assignment, assignment.targetPath)) ConfigurationAssignmentWrite.PathTaken
         else {
           store.assignments += assignment.id -> assignment
@@ -217,7 +217,7 @@ final class ConfigurationAssignmentRoutesSpec extends FunSuite {
         }
       }
       def update(organizationId: UUID, id: UUID, expectedVersion: Int, revision: Int, path: String,
-                 values: List[ConfigurationVariableValue], at: Instant) = IO {
+                 values: List[ConfigurationVariableValue], at: Instant): IO[ConfigurationAssignmentWrite] = IO {
         store.assignments.get(id).filter(a => a.organizationId == organizationId && a.active) match {
           case None => ConfigurationAssignmentWrite.Missing
           case Some(a) if a.version != expectedVersion => ConfigurationAssignmentWrite.Stale
@@ -228,7 +228,7 @@ final class ConfigurationAssignmentRoutesSpec extends FunSuite {
             ConfigurationAssignmentWrite.Written
         }
       }
-      def remove(organizationId: UUID, id: UUID, expectedVersion: Option[Int], at: Instant) = IO {
+      def remove(organizationId: UUID, id: UUID, expectedVersion: Option[Int], at: Instant): IO[ConfigurationAssignmentWrite] = IO {
         store.assignments.get(id).filter(a => a.organizationId == organizationId && a.active) match {
           case None => ConfigurationAssignmentWrite.Missing
           case Some(a) if expectedVersion.exists(_ != a.version) => ConfigurationAssignmentWrite.Stale
