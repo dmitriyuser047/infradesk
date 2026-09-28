@@ -175,6 +175,7 @@ function backend(initial: Partial<State> = {}) {
       sourceConnections: [{ id: 'ssh-source', name: 'Production SSH', connectorType: 'SSH', active: true }],
       children: [], activeChildCount: 0, openIncidentCount: 0 })
     if (path === '/resources/node/operations') return json({ operations: [], unavailableReason: null })
+    if (path === '/resources/node/labels') return json({ version: 0, labels: [] })
     if (path.startsWith('/resources/node/')) return json([])
     return json({ code: 'NOT_FOUND', message: 'x' }, 404)
   }))

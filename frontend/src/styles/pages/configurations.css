@@ -99,3 +99,19 @@
 .rollout-mark { display: inline-grid; place-items: center; width: 1.5em; height: 1.5em; border-radius: 50%; }
 .rollout-failure { color: var(--danger); }
 .checkbox-field { display: inline-flex; align-items: center; gap: var(--space-2); }
+
+/* Automation rules: structured selectors, key=value labels and the targets they select. */
+.selector-editor { display: grid; gap: var(--space-3); }
+.selector-choices, .label-editor { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: 0; padding: 0;
+  border: 0; min-width: 0; }
+.selector-choices legend, .label-editor legend { width: 100%; margin-bottom: var(--space-1); font-weight: 600; }
+.label-editor { flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
+.label-editor-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 2fr) auto; align-items: center;
+  gap: var(--space-2); }
+.label-editor > .text-button { justify-self: start; align-self: flex-start; }
+.label-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.label-chip { padding: 2px var(--space-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  overflow-wrap: anywhere; }
+.selector-summary { overflow-wrap: anywhere; }
+.selector-preview { display: grid; gap: var(--space-3); }
+.managed-remove, .rule-complete-form { display: grid; gap: var(--space-2); margin-top: var(--space-3); }

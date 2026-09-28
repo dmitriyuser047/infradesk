@@ -154,10 +154,11 @@ final class PostgresConfigurationAssignmentRuleRepository
     (fr"""select r.id,
             exists (select 1 from configuration_assignment_rule_exclusion x
                     where x.rule_id = ${ruleId}::uuid and x.resource_id = r.id),
-            a.id, a.source_rule_id, a.profile_id, a.profile_revision_number
+            a.id, a.source_rule_id, a.profile_id, a.profile_revision_number, r.name, e.name, p.name
           from resource r
           join resource_type rt on rt.id = r.resource_type_id
           join environment e on e.id = r.environment_id and e.organization_id = r.organization_id
+          join project p on p.id = e.project_id and p.organization_id = e.organization_id
           left join configuration_assignment a on a.organization_id = r.organization_id and a.resource_id = r.id
             and a.target_path = $targetPath and a.removed_at is null
           where """ ++ predicate(organizationId, selector) ++

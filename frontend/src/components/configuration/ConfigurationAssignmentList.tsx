@@ -1,13 +1,56 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { useConfigurationAssignmentPages, useRemoveConfigurationAssignment } from '../../api/configurationAssignments'
 import { useDeploymentSummaries } from '../../api/configurationDeployments'
+import { useManagedAssignmentAction } from '../../api/configurationRules'
 import { useI18n } from '../../i18n'
 import { describeError } from '../../i18n/errors'
 import type { ConfigurationAssignment, ConfigurationAssignmentFilter } from '../../types/configurationAssignment'
 import type { DeploymentSummary } from '../../types/configurationDeployment'
 import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import '../../styles/pages/configurations.css'
+
+const rulePagePath = (organizationId: string, ruleId: string) =>
+  `/organizations/${encodeURIComponent(organizationId)}/configuration-rules/${encodeURIComponent(ruleId)}`
+
+/** Who owns an assignment's version and path: an automation rule, or the user. */
+export function AssignmentOwner({ organizationId, assignment }: { organizationId: string; assignment: ConfigurationAssignment }) {
+  const t = useI18n().t.rules
+  if (!assignment.rule) return <small className="cell-secondary">{t.manual}</small>
+  return <small className="cell-secondary">{t.managedBy(assignment.rule.name)}{' '}
+    <Link className="text-button" to={rulePagePath(organizationId, assignment.rule.id)}>{t.openRule}</Link></small>
+}
+
+/**
+ * Removing an assignment a rule manages: a plain delete would be undone by the next reconciliation,
+ * so the choices are to detach it and keep it, or to exclude the node and remove the desired state.
+ * Neither touches the file on the server.
+ */
+export function ManagedRemovePanel({ organizationId, assignment, onCancel, onDone }: {
+  organizationId: string
+  assignment: ConfigurationAssignment & { rule: NonNullable<ConfigurationAssignment['rule']> }
+  onCancel: () => void
+  onDone: () => void
+}) {
+  const i18n = useI18n()
+  const t = i18n.t.rules
+  const action = useManagedAssignmentAction(organizationId)
+  const run = (name: 'detach' | 'exclude-and-remove') =>
+    action.mutate({ ruleId: assignment.rule.id, assignmentId: assignment.id, action: name, expectedVersion: assignment.version },
+      { onSuccess: onDone })
+  return <div className="managed-remove" role="alertdialog" aria-label={t.managedRemoveTitle(assignment.rule.name)}>
+    <InlineAlert tone="warning" title={t.managedRemoveTitle(assignment.rule.name)}>
+      {t.managedRemoveDetail} {i18n.t.assignments.notApplied}</InlineAlert>
+    {action.isError ? <InlineAlert tone="danger" title={describeError(action.error, i18n)} /> : null}
+    <div className="configuration-editor-actions">
+      <button type="button" className="secondary-button" onClick={onCancel}>{t.cancel}</button>
+      <button type="button" className="secondary-button" disabled={action.isPending} onClick={() => run('detach')}>{t.detachKeep}</button>
+      <button type="button" className="danger-button" disabled={action.isPending} onClick={() => run('exclude-and-remove')}>
+        {t.excludeAndRemove}</button>
+    </div>
+  </div>
+}
 
 export const assignmentPath = (organizationId: string, assignmentId: string) =>
   `/organizations/${encodeURIComponent(organizationId)}/configuration-assignments/${encodeURIComponent(assignmentId)}`
@@ -78,9 +121,12 @@ export function ConfigurationAssignmentList({ organizationId, filter, view, canA
   const summaries = useDeploymentSummaries(organizationId, rows.slice(0, 100).map(row => row.id))
   const summaryOf = (id: string) => summaries.data?.find(summary => summary.assignmentId === id)
   const title = view === 'profile' ? t.targetsTitle : t.resourceTitle
+  const [removingManaged, setRemovingManaged] = useState<string | null>(null)
   const confirmRemove = (assignment: ConfigurationAssignment) => {
-    if (window.confirm(t.removeConfirm)) remove.mutate(assignment)
+    if (assignment.rule) setRemovingManaged(assignment.id)
+    else if (window.confirm(t.removeConfirm)) remove.mutate(assignment)
   }
+  const managedRow = rows.find(row => row.id === removingManaged && row.rule)
 
   return <WorkspaceSection title={title} description={<>{view === 'profile' ? t.targetsDescription : t.resourceDescription} {t.notApplied} {i18n.t.deployments.driftNote}</>}
     actions={canAssign ? <Link className="secondary-button" to={newAssignmentPath(organizationId, filter)}>
@@ -110,7 +156,8 @@ export function ConfigurationAssignmentList({ organizationId, filter, view, canA
           <td>{assignment.resource.environment.name}</td>
         </> : <td><Link className="grid-link" to={`/organizations/${encodeURIComponent(organizationId)}/configurations/${encodeURIComponent(assignment.profile.id)}`}>
           {assignment.profile.name}</Link><small className="cell-secondary technical-value">{assignment.profile.code}</small></td>}
-        <td><code className="technical-value">{assignment.targetPath}</code></td>
+        <td><code className="technical-value">{assignment.targetPath}</code>
+          <AssignmentOwner organizationId={organizationId} assignment={assignment} /></td>
         <td>{i18n.t.configurations.version(assignment.profileRevisionNumber)}
           {assignment.profile.latestRevisionNumber !== assignment.profileRevisionNumber
             ? <small className="cell-secondary">{t.latestVersion(assignment.profile.latestRevisionNumber)}</small> : null}</td>
@@ -124,6 +171,8 @@ export function ConfigurationAssignmentList({ organizationId, filter, view, canA
         </td>
       </tr>)}</tbody>
     </table></div> : null}
+    {managedRow?.rule ? <ManagedRemovePanel organizationId={organizationId} assignment={{ ...managedRow, rule: managedRow.rule }}
+      onCancel={() => setRemovingManaged(null)} onDone={() => setRemovingManaged(null)} /> : null}
     {pages.hasNextPage ? <button type="button" className="secondary-button" disabled={pages.isFetchingNextPage}
       onClick={() => pages.fetchNextPage()}>{t.showMore}</button> : null}
   </WorkspaceSection>

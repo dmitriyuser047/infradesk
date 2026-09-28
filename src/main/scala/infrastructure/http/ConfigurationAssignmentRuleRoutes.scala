@@ -89,6 +89,9 @@ final class ConfigurationAssignmentRuleRoutes[Tx[_]](
           "missingVariable" -> preview.missingVariable.fold(Json.Null)(Json.fromString),
           "items" -> Json.arr(preview.items.map { case (candidate, state) => Json.obj(
             "resourceId" -> Json.fromString(candidate.resourceId.toString),
+            "resourceName" -> Json.fromString(candidate.resourceName),
+            "environmentName" -> Json.fromString(candidate.environmentName),
+            "projectName" -> Json.fromString(candidate.projectName),
             "state" -> Json.fromString(state),
             "assignmentId" -> candidate.occupantAssignmentId.fold(Json.Null)(id => Json.fromString(id.toString))) }: _*)))))
       } }

@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { requestJson } from './httpClient'
+import { requestJson, requestVoid } from './httpClient'
 import type {
   ConfigurationRule, LabelSet, RuleDraft, RulePromotionPreview, RuleSelector, RuleTarget, SelectorPreview,
 } from '../types/configurationRule'
@@ -86,13 +86,14 @@ export function useSelectorPreview(organizationId: string) {
 
 export function useRuleExclusion(organizationId: string, id: string) {
   return useRuleMutation(organizationId, ({ resourceId, exclude }: { resourceId: string; exclude: boolean }) =>
-    requestJson<unknown>(`${rule(organizationId, id)}/exclude/${encodeURIComponent(resourceId)}`, { method: exclude ? 'POST' : 'DELETE' }))
+    // 204 No Content: nothing to parse.
+    requestVoid(`${rule(organizationId, id)}/exclude/${encodeURIComponent(resourceId)}`, { method: exclude ? 'POST' : 'DELETE' }))
 }
 
 export function useManagedAssignmentAction(organizationId: string) {
   return useRuleMutation(organizationId, ({ ruleId, assignmentId, action, expectedVersion }: {
     ruleId: string; assignmentId: string; action: 'detach' | 'adopt' | 'exclude-and-remove'; expectedVersion: number }) =>
-    requestJson<unknown>(`${rule(organizationId, ruleId)}/assignments/${encodeURIComponent(assignmentId)}/${action}`,
+    requestVoid(`${rule(organizationId, ruleId)}/assignments/${encodeURIComponent(assignmentId)}/${action}`,
       { method: 'POST', body: JSON.stringify({ expectedVersion }) }))
 }
 
@@ -126,5 +127,10 @@ export function useReplaceResourceLabels(organizationId: string, resourceId: str
   return useMutation({ mutationFn: (body: { expectedVersion: number; labels: LabelSet['labels'] }) =>
     requestJson<LabelSet>(`${base(organizationId)}/resources/${encodeURIComponent(resourceId)}/labels`,
       { method: 'PUT', body: JSON.stringify(body) }),
-  onSuccess: value => client.setQueryData(['resourceLabels', organizationId, resourceId], value) })
+  onSuccess: value => {
+    client.setQueryData(['resourceLabels', organizationId, resourceId], value)
+    // Matches may have changed; rules reconcile soon, so their views are read again.
+    void client.invalidateQueries({ queryKey: ['configurationRules', organizationId] })
+    void client.invalidateQueries({ queryKey: ['configurationRuleTargets', organizationId] })
+  } })
 }

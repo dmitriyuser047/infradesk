@@ -61,6 +61,10 @@ export const router = createBrowserRouter([
         const { ConfigurationVersionPage } = await import('../pages/ConfigurationEditorPages')
         return { Component: ConfigurationVersionPage }
       } },
+      { path: '/organizations/:organizationId/configuration-rules/:ruleId', lazy: async () => {
+        const { ConfigurationRulePage } = await import('../pages/ConfigurationRulePage')
+        return { Component: ConfigurationRulePage }
+      } },
       { path: '/organizations/:organizationId/configuration-assignments/new', lazy: async () => {
         const { ConfigurationAssignmentCreatePage } = await import('../pages/ConfigurationAssignmentPages')
         return { Component: ConfigurationAssignmentCreatePage }

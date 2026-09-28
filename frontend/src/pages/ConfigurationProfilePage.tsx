@@ -10,6 +10,7 @@ import { useOrganizationPermissions } from '../components/auth/authorization'
 import { ConfigurationAssignmentList } from '../components/configuration/ConfigurationAssignmentList'
 import { DeploymentHistory, RolloutHistory } from '../components/configuration/ConfigurationHistory'
 import { ConfigurationRolloutPanel } from '../components/configuration/ConfigurationRolloutPanel'
+import { AutomationPanel } from '../components/configuration/ConfigurationRules'
 import { AppShell } from '../components/layout/AppShell'
 import {
   EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
@@ -21,7 +22,7 @@ import { configurationPath, configurationsPath } from './ConfigurationsPage'
 import { InvalidRoutePage } from './InvalidRoutePage'
 import '../styles/pages/configurations.css'
 
-const Tabs = ['template', 'variables', 'versions', 'targets', 'deployments', 'rollouts'] as const
+const Tabs = ['template', 'variables', 'versions', 'targets', 'deployments', 'rollouts', 'automation'] as const
 type Tab = typeof Tabs[number]
 
 export function ConfigurationProfilePage() {
@@ -71,6 +72,10 @@ function ProfileContent({ organizationId, profileId }: { organizationId: string;
   const tabs = Tabs.filter(id => id !== 'rollouts' || permissions.can('deployConfigurations'))
     .map(id => ({ id, label: t.tabs[id] }))
   const newVersionPath = `${configurationPath(organizationId, profileId)}/versions/new`
+  const showsRevision = tab === 'template' || tab === 'variables'
+  // Opened from a promoted rule: its nodes and version are preselected in the rollout wizard.
+  const rolloutRule = searchParams.get('rolloutRule')
+  const rolloutRevision = Number(searchParams.get('rolloutRevision'))
 
   return <div className="workspace-page">
     <WorkspaceHeader title={profile.name} back={back}
@@ -91,11 +96,11 @@ function ProfileContent({ organizationId, profileId }: { organizationId: string;
     {editing && !profile.archived ? <DetailsForm organizationId={organizationId} profile={profile} onDone={() => setEditing(false)} /> : null}
     <WorkspaceTabs tabs={tabs} active={tab} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-      {revisionNumber !== null && tab !== 'versions' && tab !== 'targets' && tab !== 'deployments' && tab !== 'rollouts'
+      {revisionNumber !== null && showsRevision
         ? <InlineAlert tone="info" title={t.viewingOld(revisionNumber, profile.latestRevisionNumber)}
         action={<button type="button" className="secondary-button" onClick={() => setParams(params => params.delete('revision'))}>{t.showLatest}</button>} /> : null}
-      {tab !== 'versions' && tab !== 'targets' && tab !== 'deployments' && tab !== 'rollouts' && revisionNumber !== null && older.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
-      {tab !== 'versions' && tab !== 'targets' && tab !== 'deployments' && tab !== 'rollouts' && revisionNumber !== null && older.isError ? <InlineAlert tone="danger" title={t.revisionLoadError}>
+      {showsRevision && revisionNumber !== null && older.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
+      {showsRevision && revisionNumber !== null && older.isError ? <InlineAlert tone="danger" title={t.revisionLoadError}>
         {describeError(older.error, i18n)}</InlineAlert> : null}
       {tab === 'template' && shown ? <TemplateView revision={shown} /> : null}
       {tab === 'variables' && shown ? <VariablesView revision={shown} /> : null}
@@ -109,11 +114,13 @@ function ProfileContent({ organizationId, profileId }: { organizationId: string;
         canAssign={!profile.archived} /> : null}
       {tab === 'targets' && permissions.can('deployConfigurations') && !profile.archived
         ? <ConfigurationRolloutPanel organizationId={organizationId} profileId={profileId}
-          latestRevisionNumber={profile.latestRevisionNumber} /> : null}
+          latestRevisionNumber={profile.latestRevisionNumber} preselectRuleId={rolloutRule}
+          initialRevisionNumber={Number.isInteger(rolloutRevision) && rolloutRevision >= 1 ? rolloutRevision : undefined} /> : null}
       {tab === 'deployments' && canManage
         ? <DeploymentHistory organizationId={organizationId} profileId={profileId} /> : null}
       {tab === 'rollouts' && permissions.can('deployConfigurations')
         ? <RolloutHistory organizationId={organizationId} profileId={profileId} /> : null}
+      {tab === 'automation' ? <AutomationPanel organizationId={organizationId} profile={profile} /> : null}
     </div>
   </div>
 }

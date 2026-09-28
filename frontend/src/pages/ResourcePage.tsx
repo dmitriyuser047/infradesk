@@ -9,6 +9,7 @@ import { createLastHourWindow, useResourceMetrics } from '../api/metrics'
 import { useResource } from '../api/resources'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { ConfigurationAssignmentList } from '../components/configuration/ConfigurationAssignmentList'
+import { ResourceLabelsSection } from '../components/configuration/ResourceLabelsSection'
 import { supportsConfigurationAssignment } from '../components/configuration/configurationTargetSupport'
 import { AppShell } from '../components/layout/AppShell'
 import {
@@ -141,8 +142,10 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
         openTotal={context?.openIncidentCount} /> : null}
       {active === 'activity' ?
         <ResourceActivitySection organizationId={organizationId} resourceId={resourceId} /> : null}
-      {active === 'configurations' ? <ConfigurationAssignmentList organizationId={organizationId}
-        filter={{ resourceId }} view="resource" canAssign={resource.active} /> : null}
+      {active === 'configurations' ? <>
+        <ResourceLabelsSection organizationId={organizationId} resourceId={resourceId} canEdit />
+        <ConfigurationAssignmentList organizationId={organizationId} filter={{ resourceId }} view="resource" canAssign={resource.active} />
+      </> : null}
       {active === 'operations' ?
         <ResourceOperationsPanel organizationId={organizationId} resourceId={resourceId} resourceName={resource.name} /> : null}
     </div>

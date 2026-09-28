@@ -33,7 +33,10 @@ final case class RuleCandidate(
   occupantAssignmentId: Option[UUID],
   occupantSourceRuleId: Option[UUID],
   occupantProfileId: Option[UUID],
-  occupantRevision: Option[Int]
+  occupantRevision: Option[Int],
+  resourceName: String,
+  environmentName: String,
+  projectName: String
 )
 
 /** A rule's listing: counts come from the same statement, never one query per rule. */

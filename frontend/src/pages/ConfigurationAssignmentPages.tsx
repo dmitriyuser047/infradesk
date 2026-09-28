@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent, type ReactNode } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import {
   useConfigurationAssignment, useCreateConfigurationAssignment, usePreviewConfigurationAssignment,
@@ -10,9 +10,9 @@ import { ApiError } from '../api/httpClient'
 import { useEnvironments, useProjects } from '../api/navigation'
 import { useEnvironmentResources, useResource } from '../api/resources'
 import { useOrganizationPermissions } from '../components/auth/authorization'
-import { AssignmentStatus, resourcePagePath } from '../components/configuration/ConfigurationAssignmentList'
+import { AssignmentStatus, ManagedRemovePanel, resourcePagePath } from '../components/configuration/ConfigurationAssignmentList'
 import { ConfigurationDeploymentPanel } from '../components/configuration/ConfigurationDeploymentPanel'
-import { supportsConfigurationAssignment } from '../components/configuration/configurationTargetSupport'
+import { isTargetPath, supportsConfigurationAssignment } from '../components/configuration/configurationTargetSupport'
 import { AppShell } from '../components/layout/AppShell'
 import { InlineAlert, PageLoading, PageUnavailable, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
@@ -23,13 +23,7 @@ import { configurationPath, configurationsPath } from './ConfigurationsPage'
 import { InvalidRoutePage } from './InvalidRoutePage'
 import '../styles/pages/configurations.css'
 
-/** The same rule the backend enforces, mirrored only to answer early: a normalized absolute path. */
-export function isTargetPath(path: string): boolean {
-  if (path.length === 0 || path.length > 4096 || !path.startsWith('/') || path.endsWith('/')) return false
-  // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(path)) return false
-  return path.slice(1).split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..')
-}
+export { isTargetPath }
 
 const profileTargetsPath = (organizationId: string, profileId: string) => `${configurationPath(organizationId, profileId)}?tab=targets`
 
@@ -170,6 +164,7 @@ function EditContent({ organizationId, assignmentId }: { organizationId: string;
   const query = useConfigurationAssignment(organizationId, assignmentId, canManage)
   const update = useUpdateConfigurationAssignment(organizationId, assignmentId)
   const remove = useRemoveConfigurationAssignment(organizationId)
+  const [removingManaged, setRemovingManaged] = useState(false)
   const detail = query.data
   const fromProfile = searchParams.get('from') === 'profile'
   const back = !detail ? { label: i18n.t.configurations.back, to: configurationsPath(organizationId) }
@@ -187,14 +182,22 @@ function EditContent({ organizationId, assignmentId }: { organizationId: string;
   }
   const changed = update.error instanceof ApiError && update.error.code === 'CONFIGURATION_ASSIGNMENT_CHANGED'
   const removed = detail.removedAt !== null
+  // A rule owns the version and the path; only the per-node values are edited here.
+  const rule = removed ? null : detail.rule ?? null
 
   return <div className="workspace-page">
     <WorkspaceHeader title={`${detail.profile.name} → ${detail.resource.name}`} back={back}
       subtitle={<span className="technical-value">{detail.targetPath}</span>}
       status={removed ? null : <AssignmentStatus assignment={detail} />}
       actions={removed ? null : <button type="button" className="secondary-button danger-action" disabled={remove.isPending} onClick={() => {
-        if (window.confirm(t.removeConfirm)) remove.mutate(detail, { onSuccess: () => navigate(back.to, { replace: true }) })
+        if (rule) setRemovingManaged(true)
+        else if (window.confirm(t.removeConfirm)) remove.mutate(detail, { onSuccess: () => navigate(back.to, { replace: true }) })
       }}>{remove.isPending ? t.removing : t.remove}</button>} />
+    {rule ? <InlineAlert tone="info" title={i18n.t.rules.managedNotice(rule.name)}
+      action={<Link className="secondary-button" to={`/organizations/${encodeURIComponent(organizationId)}/configuration-rules/${
+        encodeURIComponent(rule.id)}`}>{i18n.t.rules.openRule}</Link>} /> : null}
+    {rule && removingManaged ? <ManagedRemovePanel organizationId={organizationId} assignment={{ ...detail, rule }}
+      onCancel={() => setRemovingManaged(false)} onDone={() => navigate(back.to, { replace: true })} /> : null}
     {removed ? <InlineAlert tone="info" title={t.removedNotice} /> : <InlineAlert tone="info" title={t.notApplied} />}
     {!removed && !detail.resource.active ? <InlineAlert tone="warning" title={t.inactiveNotice} /> : null}
     {detail.profile.archived ? <InlineAlert tone="info" title={t.archivedNotice} /> : null}
@@ -207,7 +210,7 @@ function EditContent({ organizationId, assignmentId }: { organizationId: string;
       target={<p className="assignment-fixed"><strong>{detail.resource.name}</strong> · {detail.resource.environment.name}</p>}
       profileField={<p className="assignment-fixed"><strong>{detail.profile.name}</strong>{' '}
         <span className="technical-value">{detail.profile.code}</span></p>}
-      pending={update.isPending} error={changed ? null : update.error} disabled={false}
+      pending={update.isPending} error={changed ? null : update.error} disabled={false} locked={rule !== null}
       submitLabel={t.save} pendingLabel={t.saving} validate={() => null}
       onSubmit={draft => update.mutate({ expectedVersion: detail.version, ...draft }, { onSuccess: () => navigate(back.to, { replace: true }) })} />}
     {!removed && detail.resource.active && permissions.can('deployConfigurations')
@@ -226,7 +229,7 @@ function EditContent({ organizationId, assignmentId }: { organizationId: string;
  * others are left out of what is saved, and the backend decides what is valid.
  */
 function AssignmentForm({ organizationId, profileId, assignedRevision, initial, target, profileField, pending, error, disabled,
-  submitLabel, pendingLabel, validate, onSubmit }: {
+  locked = false, submitLabel, pendingLabel, validate, onSubmit }: {
   organizationId: string
   profileId: string | null
   assignedRevision: ConfigurationAssignmentDetail | null
@@ -236,6 +239,8 @@ function AssignmentForm({ organizationId, profileId, assignedRevision, initial, 
   pending: boolean
   error: unknown
   disabled: boolean
+  /** The version and the path belong to an automation rule and cannot be changed here. */
+  locked?: boolean
   submitLabel: string
   pendingLabel: string
   validate: () => string | null
@@ -300,7 +305,7 @@ function AssignmentForm({ organizationId, profileId, assignedRevision, initial, 
         <div className="configuration-field"><span className="field-label">{t.profile}</span>{profileField}</div>
         <div className="configuration-field">
           <label htmlFor={ids.version}>{t.version}</label>
-          <select id={ids.version} value={revisionNumber ?? ''} disabled={!revisions.data}
+          <select id={ids.version} value={revisionNumber ?? ''} disabled={!revisions.data || locked}
             onChange={event => { changed(); setChosenRevision(Number(event.target.value)) }}>
             {revisionNumber === null ? <option value="">{t.chooseVersion}</option> : null}
             {versionOptions.map(number => <option key={number} value={number}>
@@ -309,13 +314,14 @@ function AssignmentForm({ organizationId, profileId, assignedRevision, initial, 
           </select>
           {assignedRevision ? <p className="field-hint">
             {t.assignedVersion(assignedRevision.profileRevisionNumber)} · {t.latestAvailable(assignedRevision.profile.latestRevisionNumber)}
-            {assignedRevision.profile.latestRevisionNumber !== revisionNumber
+            {assignedRevision.profile.latestRevisionNumber !== revisionNumber && !locked
               ? <> <button type="button" className="text-button" onClick={() => { changed(); setChosenRevision(assignedRevision.profile.latestRevisionNumber) }}>
                 {t.useVersion(assignedRevision.profile.latestRevisionNumber)}</button></> : null}
           </p> : null}
         </div>
         <div className="configuration-field">
           <label htmlFor={ids.path}>{t.targetPath}<input id={ids.path} className="technical-input" value={targetPath} maxLength={4096}
+            readOnly={locked}
             autoComplete="off" spellCheck={false} placeholder="/etc/nginx/nginx.conf" aria-describedby={ids.pathHelp}
             onChange={event => { changed(); setTargetPath(event.target.value) }} /></label>
           <span id={ids.pathHelp} className="field-hint">{t.targetPathHelp}</span>

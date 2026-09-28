@@ -50,7 +50,8 @@ export interface SelectorPreview {
   manualConflictCount: number
   ruleConflictCount: number
   missingVariable: string | null
-  items: Array<{ resourceId: string; state: string; assignmentId: string | null }>
+  items: Array<{ resourceId: string; resourceName: string; environmentName: string; projectName: string
+    state: 'ELIGIBLE' | 'ADOPTABLE' | 'NEEDS_VALUES' | 'TARGET_PATH_CONFLICT' | 'OTHER_RULE_CONFLICT'; assignmentId: string | null }>
 }
 
 export interface RulePromotionPreview {

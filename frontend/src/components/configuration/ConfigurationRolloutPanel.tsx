@@ -129,22 +129,30 @@ type Step = 1 | 2 | 3 | 4 | 5
  * Explicit nodes, a compatibility check, one all-or-nothing promotion of the desired state, a
  * read-only check of every server, then a rollout that applies exactly what was checked.
  */
-function RolloutWizard({ organizationId, profileId, latestRevisionNumber, initialSelection, onStarted }: {
-  organizationId: string; profileId: string; latestRevisionNumber: number
-  initialSelection: string[]; onStarted: (rolloutId: string) => void
+function RolloutWizard({ organizationId, profileId, latestRevisionNumber, initialRevisionNumber, initialSelection, preselectRuleId,
+  onStarted }: {
+  organizationId: string; profileId: string; latestRevisionNumber: number; initialRevisionNumber?: number
+  initialSelection: string[]; preselectRuleId?: string | null; onStarted: (rolloutId: string) => void
 }) {
   const i18n = useI18n()
   const t = i18n.t.rollouts
   const assignments = useConfigurationAssignmentPages(organizationId, { profileId }, true)
   const rows = assignments.data?.pages.flat() ?? []
   const [step, setStep] = useState<Step>(1)
-  const [revisionNumber, setRevisionNumber] = useState(latestRevisionNumber)
+  const [revisionNumber, setRevisionNumber] = useState(Math.min(initialRevisionNumber ?? latestRevisionNumber, latestRevisionNumber))
   const [selectedIds, setSelectedIds] = useState<string[]>(initialSelection)
   const [sources, setSources] = useState<Record<string, string>>({})
   const [promotedVersions, setPromotedVersions] = useState<Record<string, number>>({})
   const [execution, setExecution] = useState(EmptyExecution)
   const [strategy, setStrategy] = useState<RolloutStrategy>({ canaryCount: 1, batchSize: 1, pauseSeconds: 0,
     stopOnFailure: true, rollbackMode: 'FAILED_TARGET_ONLY' })
+  // A rule's nodes, preselected once they load: the rule was promoted, now it is rolled out.
+  const [preselected, setPreselected] = useState(false)
+  useEffect(() => {
+    if (preselected || !preselectRuleId || !assignments.isSuccess) return
+    setPreselected(true)
+    setSelectedIds(old => old.length > 0 ? old : rows.filter(row => row.rule?.id === preselectRuleId).map(row => row.id))
+  }, [preselected, preselectRuleId, assignments.isSuccess, rows])
   const promotionPreview = usePromotionPreview(organizationId, profileId)
   const promote = usePromoteAssignments(organizationId, profileId)
   const preflight = useRolloutPreflight(organizationId)
@@ -317,8 +325,9 @@ function RolloutWizard({ organizationId, profileId, latestRevisionNumber, initia
 }
 
 /** Rolling out a profile version: a wizard, then the rollout's live status. */
-export function ConfigurationRolloutPanel({ organizationId, profileId, latestRevisionNumber }: {
+export function ConfigurationRolloutPanel({ organizationId, profileId, latestRevisionNumber, initialRevisionNumber, preselectRuleId }: {
   organizationId: string; profileId: string; latestRevisionNumber: number
+  initialRevisionNumber?: number; preselectRuleId?: string | null
 }) {
   const t = useI18n().t.rollouts
   const [rolloutId, setRolloutId] = useState<string | null>(null)
@@ -328,6 +337,7 @@ export function ConfigurationRolloutPanel({ organizationId, profileId, latestRev
       ? <RolloutStatusView organizationId={organizationId} rolloutId={rolloutId}
         onRetryFailed={ids => { setRetry(old => ({ attempt: old.attempt + 1, ids })); setRolloutId(null) }} />
       : <RolloutWizard key={retry.attempt} organizationId={organizationId} profileId={profileId}
-        latestRevisionNumber={latestRevisionNumber} initialSelection={retry.ids} onStarted={setRolloutId} />}
+        latestRevisionNumber={latestRevisionNumber} initialRevisionNumber={initialRevisionNumber}
+        initialSelection={retry.ids} preselectRuleId={retry.attempt === 0 ? preselectRuleId : null} onStarted={setRolloutId} />}
   </WorkspaceSection>
 }
