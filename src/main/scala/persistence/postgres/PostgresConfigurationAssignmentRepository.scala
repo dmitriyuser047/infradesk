@@ -9,6 +9,7 @@ import application.port.{
   ConfigurationAssignmentListItem,
   ConfigurationAssignmentQuery,
   ConfigurationAssignmentRepository,
+  ConfigurationAssignmentEligibility,
   ConfigurationAssignmentWrite,
   ConfigurationTarget,
   ConfigurationTargetQuery,
@@ -32,6 +33,37 @@ import PostgresConfigurationAssignmentRepository.{AssignmentRow, ContextRow, Val
   * that loses is told so and writes nothing else.
   */
 final class PostgresConfigurationAssignmentRepository extends ConfigurationAssignmentRepository[ConnectionIO] {
+
+  override def createEligibility(organizationId: UUID, resourceId: UUID, profileId: UUID,
+                                 revisionNumber: Int): ConnectionIO[ConfigurationAssignmentEligibility] = {
+    import ConfigurationAssignmentEligibility._
+    // FOR UPDATE conflicts with the resource deactivation/upsert and profile archive UPDATE paths.
+    // Lock the resource first, then the profile, for the remainder of this write transaction.
+    sql"""
+      select rt.code, r.is_active from resource r
+      join resource_type rt on rt.id = r.resource_type_id
+      where r.organization_id = $organizationId and r.id = $resourceId
+      for update of r
+    """.query[(String, Boolean)].option.flatMap {
+      case None => (TargetMissing: ConfigurationAssignmentEligibility).pure[ConnectionIO]
+      case Some((code, _)) if code != "NODE" => (TargetUnsupported: ConfigurationAssignmentEligibility).pure[ConnectionIO]
+      case Some((_, false)) => (TargetInactive: ConfigurationAssignmentEligibility).pure[ConnectionIO]
+      case Some(_) =>
+        sql"""select archived from configuration_profile
+               where organization_id = $organizationId and id = $profileId for update"""
+          .query[Boolean].option.flatMap {
+            case None => (ProfileMissing: ConfigurationAssignmentEligibility).pure[ConnectionIO]
+            case Some(true) => (ProfileArchived: ConfigurationAssignmentEligibility).pure[ConnectionIO]
+            case Some(false) =>
+              sql"""select 1 from configuration_revision
+                     where organization_id = $organizationId and profile_id = $profileId
+                       and revision_number = $revisionNumber""".query[Int].option.map {
+                case Some(_) => Eligible: ConfigurationAssignmentEligibility
+                case None => RevisionMissing: ConfigurationAssignmentEligibility
+              }
+          }
+    }
+  }
 
   override def insert(assignment: ConfigurationAssignment, values: List[ConfigurationVariableValue]): ConnectionIO[ConfigurationAssignmentWrite] =
     sql"""
@@ -79,17 +111,15 @@ final class PostgresConfigurationAssignmentRepository extends ConfigurationAssig
       case Left(error) => error.raiseError[ConnectionIO, ConfigurationAssignmentWrite]
     }
 
-  override def remove(organizationId: UUID, id: UUID, expectedVersion: Option[Int], at: Instant): ConnectionIO[ConfigurationAssignmentWrite] = {
-    val versionFilter = expectedVersion.fold(fr"")(version => fr"and version = $version")
-    (fr"""
+  override def remove(organizationId: UUID, id: UUID, expectedVersion: Int, at: Instant): ConnectionIO[ConfigurationAssignmentWrite] =
+    sql"""
       update configuration_assignment
          set removed_at = $at, version = version + 1, updated_at = $at
-       where organization_id = $organizationId and id = $id and removed_at is null
-    """ ++ versionFilter).update.run.flatMap {
+       where organization_id = $organizationId and id = $id and removed_at is null and version = $expectedVersion
+    """.update.run.flatMap {
       case 1 => (ConfigurationAssignmentWrite.Written: ConfigurationAssignmentWrite).pure[ConnectionIO]
       case _ => lost(organizationId, id)
     }
-  }
 
   override def find(organizationId: UUID, id: UUID): ConnectionIO[Option[ConfigurationAssignment]] =
     (fr"select" ++ assignmentColumns ++ fr"from configuration_assignment a where a.organization_id = $organizationId and a.id = $id")
