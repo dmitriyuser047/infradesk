@@ -17,59 +17,47 @@ import java.util.UUID
 sealed abstract class ConfigurationDeploymentError(val code: String, message: String) extends RuntimeException(message)
 object ConfigurationDeploymentError {
   case object NotFound extends ConfigurationDeploymentError("CONFIGURATION_DEPLOYMENT_NOT_FOUND", "Deployment was not found")
+  case object AssignmentNotFound extends ConfigurationDeploymentError("CONFIGURATION_ASSIGNMENT_NOT_FOUND", "Assignment was not found")
   case object AssignmentChanged extends ConfigurationDeploymentError("CONFIGURATION_ASSIGNMENT_CHANGED", "Assignment changed")
   case object ConnectionMissing extends ConfigurationDeploymentError("CONFIGURATION_DEPLOYMENT_CONNECTION_NOT_FOUND", "SSH connection was not found")
   case object ConnectionNotSource extends ConfigurationDeploymentError("CONFIGURATION_DEPLOYMENT_CONNECTION_NOT_SOURCE", "Connection is not a source of this resource")
   case object ConnectionChanged extends ConfigurationDeploymentError("CONFIGURATION_DEPLOYMENT_CONNECTION_CHANGED", "Connection changed")
   case object AlreadyActive extends ConfigurationDeploymentError("CONFIGURATION_DEPLOYMENT_ALREADY_ACTIVE", "Another deployment is active on this resource")
-  case object RemoteTooLarge extends ConfigurationDeploymentError("CONFIGURATION_REMOTE_FILE_TOO_LARGE", "Remote file is too large")
+  case object DesiredInvalid extends ConfigurationDeploymentError("CONFIGURATION_DESIRED_STATE_INVALID", "Desired state cannot be rendered")
+  case object RenderedTooLarge extends ConfigurationDeploymentError("CONFIGURATION_RENDERED_TOO_LARGE", "Desired file is larger than the remote file limit")
   case object InvalidExecution extends ConfigurationDeploymentError("INVALID_REQUEST", "Invalid execution policy")
   case object InvalidExpectedRemote extends ConfigurationDeploymentError("INVALID_REQUEST", "Invalid expected remote state")
-  case object InvalidRemoteEncoding extends ConfigurationDeploymentError("CONFIGURATION_REMOTE_FILE_UNSUPPORTED", "Remote file is not UTF-8 text")
+  case object RequestReused extends ConfigurationDeploymentError("INVALID_REQUEST", "Request ID belongs to another deployment")
+  case object InvalidRetry extends ConfigurationDeploymentError("INVALID_REQUEST", "Only a finished, unsuccessful deployment of this assignment can be retried")
+  case object NotCancellable extends ConfigurationDeploymentError("CONFIGURATION_DEPLOYMENT_NOT_CANCELLABLE", "Deployment has already finished")
+  final case class Remote(failure: RemoteConfigurationFailure)
+    extends ConfigurationDeploymentError(failure.code, "Remote configuration is unavailable")
 }
 
-final case class ConfigurationDeploymentDiff(text: String, truncated: Boolean, addedLines: Int, removedLines: Int)
 final case class ConfigurationDeploymentPreview(
+  assignmentId: UUID,
+  profileId: UUID,
+  resourceId: UUID,
   assignmentVersion: Int,
   profileRevisionNumber: Int,
   targetPath: String,
   remoteExists: Boolean,
   remoteSha256: Option[String],
+  /** Remote bytes that are not UTF-8 text are hashed and replaced, but not diffed. */
+  remoteText: Boolean,
   desiredSha256: String,
   changed: Boolean,
-  diff: ConfigurationDeploymentDiff,
+  atomicReplaceSupported: Boolean,
+  diff: ConfigurationDiff,
   connectionId: UUID,
   connectionName: String,
   connectionUpdatedAt: Instant
 )
 
-/** Deterministic bounded line diff; omitted middle lines never enter logs or durable storage. */
-object ConfigurationLineDiff {
-  val MaxBytes = 65536
-  val MaxLines = 200
-
-  def between(before: String, after: String): ConfigurationDeploymentDiff = {
-    val oldLines = before.split("\n", -1).toVector
-    val newLines = after.split("\n", -1).toVector
-    var prefix = 0
-    while (prefix < oldLines.size && prefix < newLines.size && oldLines(prefix) == newLines(prefix)) prefix += 1
-    var suffix = 0
-    while (suffix < oldLines.size - prefix && suffix < newLines.size - prefix &&
-      oldLines(oldLines.size - 1 - suffix) == newLines(newLines.size - 1 - suffix)) suffix += 1
-    val removed = oldLines.slice(prefix, oldLines.size - suffix)
-    val added = newLines.slice(prefix, newLines.size - suffix)
-    val lines = (removed.map("-" + _) ++ added.map("+" + _)).iterator
-    val output = new StringBuilder("--- remote\n+++ desired\n")
-    var count = 0
-    var truncated = false
-    while (lines.hasNext) {
-      val line = lines.next()
-      if (count >= MaxLines || output.length + line.length + 1 > MaxBytes) truncated = true
-      else { output.append(line).append('\n'); count += 1 }
-    }
-    ConfigurationDeploymentDiff(output.toString, truncated, added.size, removed.size)
-  }
-}
+final case class ConfigurationDeploymentDetail(
+  item: ConfigurationDeploymentListItem,
+  events: List[ConfigurationDeploymentEvent]
+)
 
 /** Network work in preview is outside any transaction; a request only inserts a QUEUED snapshot. */
 final class ConfigurationDeployments[F[_]: MonadThrow, Tx[_]: MonadThrow](
@@ -83,19 +71,27 @@ final class ConfigurationDeployments[F[_]: MonadThrow, Tx[_]: MonadThrow](
   time: TimeProvider[Tx],
   audit: AuditRecorder[Tx],
   reads: TransactionRunner[F, Tx],
-  writes: TransactionRunner[F, Tx]
+  writes: TransactionRunner[F, Tx],
+  settings: ConfigurationDeploymentSettings = ConfigurationDeploymentSettings.Default
 ) {
   import ConfigurationDeploymentError._
 
-  private final case class Prepared(assignment: ConfigurationAssignment, values: List[ConfigurationVariableValue],
-                                    rendered: String, connection: domain.connection.Connection)
+  private[configuration] final case class Prepared(
+    assignment: ConfigurationAssignment,
+    values: List[ConfigurationVariableValue],
+    rendered: Array[Byte],
+    connection: domain.connection.Connection
+  ) {
+    lazy val desiredSha256: String = ConfigurationDeployment.sha256Bytes(rendered)
+  }
 
-  private def prepare(organizationId: UUID, assignmentId: UUID, expectedVersion: Int,
-                      connectionId: UUID): F[Prepared] =
+  /** Exact assignment version, its explicit values, its immutable revision and an eligible connection. */
+  private[configuration] def prepare(organizationId: UUID, assignmentId: UUID, expectedVersion: Int,
+                                     connectionId: UUID): F[Prepared] =
     for {
       loaded <- reads.run(for {
         assignment <- assignments.find(organizationId, assignmentId)
-          .flatMap(_.filter(_.active).liftTo[Tx](AssignmentChanged))
+          .flatMap(_.filter(_.active).liftTo[Tx](AssignmentNotFound))
         _ <- MonadThrow[Tx].raiseUnless(assignment.version == expectedVersion)(AssignmentChanged)
         values <- assignmentQuery.values(organizationId, assignmentId)
         revision <- profiles.findRevision(organizationId, assignment.profileId, assignment.profileRevisionNumber)
@@ -108,33 +104,49 @@ final class ConfigurationDeployments[F[_]: MonadThrow, Tx[_]: MonadThrow](
         case ConfigurationDeploymentSource.Missing => MonadThrow[F].raiseError[domain.connection.Connection](ConnectionMissing)
         case ConfigurationDeploymentSource.NotSource => MonadThrow[F].raiseError[domain.connection.Connection](ConnectionNotSource)
       }
-      rendered <- ConfigurationDesiredState.render(revision, values)
-        .leftMap(_ => AssignmentChanged).liftTo[F]
-    } yield Prepared(assignment, values, rendered, connection)
+      rendered <- ConfigurationDesiredState.render(revision, values).leftMap(_ => DesiredInvalid).liftTo[F]
+      bytes = rendered.getBytes(StandardCharsets.UTF_8)
+      _ <- MonadThrow[F].raiseUnless(bytes.length <= settings.maxRemoteFileBytes)(RenderedTooLarge)
+    } yield Prepared(assignment, values, bytes, connection)
 
+  /** Reads the remote target once, bounded, and returns hashes and a diff. Nothing is written or kept. */
   def preview(organizationId: UUID, assignmentId: UUID, expectedVersion: Int,
               connectionId: UUID): F[ConfigurationDeploymentPreview] =
     for {
       prepared <- prepare(organizationId, assignmentId, expectedVersion, connectionId)
-      file <- remote.withSession(prepared.connection)(_.read(prepared.assignment.targetPath, ConfigurationTemplateRenderer.MaxRenderedLength))
-      desiredHash = ConfigurationDeployment.sha256(prepared.rendered)
-      remoteHash = Option.when(file.exists)(ConfigurationDeployment.sha256Bytes(file.bytes))
-      remoteText <- if (!file.exists) "".pure[F] else decode(file.bytes)
-    } yield ConfigurationDeploymentPreview(prepared.assignment.version, prepared.assignment.profileRevisionNumber,
-      prepared.assignment.targetPath, file.exists, remoteHash, desiredHash,
-      remoteHash != Some(desiredHash), ConfigurationLineDiff.between(remoteText, prepared.rendered),
+      observed <- remote.withSession(prepared.connection) { session =>
+        (session.read(prepared.assignment.targetPath, settings.maxRemoteFileBytes), session.supportsAtomicReplace).tupled
+      }.adaptError { case failure: RemoteConfigurationFailure => Remote(failure) }
+      (file, atomic) = observed
+      desired = new String(prepared.rendered, StandardCharsets.UTF_8)
+      remoteText = if (file.exists) decode(file.bytes) else Some("")
+      diff = remoteText match {
+        case Some(text) => ConfigurationLineDiff.between(text, desired)
+        case None => ConfigurationDiff("", truncated = true, approximate = true, desired.linesIterator.size, 0)
+      }
+    } yield ConfigurationDeploymentPreview(prepared.assignment.id, prepared.assignment.profileId,
+      prepared.assignment.resourceId, prepared.assignment.version, prepared.assignment.profileRevisionNumber,
+      prepared.assignment.targetPath, file.exists, file.sha256, remoteText.isDefined, prepared.desiredSha256,
+      !file.sha256.contains(prepared.desiredSha256), atomic, diff,
       prepared.connection.id, prepared.connection.name, prepared.connection.updatedAt)
 
+  /** Accepts one deployment snapshot. The same request ID always answers with the same deployment. */
   def request(actor: ActorContext, assignmentId: UUID, expectedVersion: Int, connectionId: UUID,
               expectedRemote: ExpectedRemoteState, policy: ConfigurationExecutionPolicy,
-              requestId: UUID): F[UUID] =
+              requestId: UUID, retryOf: Option[UUID] = None): F[UUID] =
     for {
       _ <- ExpectedRemoteState.validate(expectedRemote).leftMap(_ => InvalidExpectedRemote).liftTo[F]
       _ <- ConfigurationExecutionPolicy.validate(policy).leftMap(_ => InvalidExecution).liftTo[F]
       existing <- reads.run(deployments.findRequest(actor.organizationId, requestId))
       id <- existing match {
-        case Some(deployment) => deployment.id.pure[F]
+        case Some(deployment) if deployment.assignmentId == assignmentId => deployment.id.pure[F]
+        case Some(_) => MonadThrow[F].raiseError[UUID](RequestReused)
         case None => for {
+          _ <- retryOf.traverse_(previous => reads.run(deployments.find(actor.organizationId, previous)).flatMap {
+            case Some(old) if old.assignmentId == assignmentId && old.state.terminal &&
+              old.state != ConfigurationDeploymentState.Succeeded => MonadThrow[F].unit
+            case _ => MonadThrow[F].raiseError[Unit](InvalidRetry)
+          })
           prepared <- prepare(actor.organizationId, assignmentId, expectedVersion, connectionId)
           result <- writes.run(for {
             id <- ids.nextId
@@ -142,13 +154,14 @@ final class ConfigurationDeployments[F[_]: MonadThrow, Tx[_]: MonadThrow](
             deployment = ConfigurationDeployment(id, actor.organizationId, requestId, assignmentId,
               prepared.assignment.version, prepared.assignment.resourceId, prepared.assignment.profileId,
               prepared.assignment.profileRevisionNumber, prepared.assignment.targetPath, prepared.values,
-              ConfigurationDeployment.sha256(prepared.rendered), connectionId, prepared.connection.updatedAt,
+              prepared.desiredSha256, connectionId, prepared.connection.updatedAt,
               expectedRemote, policy, actor.userId, now, ConfigurationDeploymentState.Queued,
               ConfigurationDeploymentPhase.Precheck, None, None, None, None, None, None,
-              cancelRequested = false, None, None)
+              cancelRequested = false, None, None, retryOf)
             inserted <- deployments.insert(deployment)
             answer <- inserted match {
               case ConfigurationDeploymentInsert.Written =>
+                // The audit record commits with the snapshot or neither exists.
                 audit.record(actor, AuditAction.ConfigurationDeploymentRequested,
                   AuditTargetType.ConfigurationDeployment, Some(id)).as(id)
               case ConfigurationDeploymentInsert.Repeated(existingId) => existingId.pure[Tx]
@@ -160,24 +173,33 @@ final class ConfigurationDeployments[F[_]: MonadThrow, Tx[_]: MonadThrow](
       }
     } yield id
 
-  def detail(organizationId: UUID, id: UUID): F[ConfigurationDeployment] =
-    reads.run(deployments.find(organizationId, id)).flatMap(_.liftTo[F](NotFound))
+  def detail(organizationId: UUID, id: UUID): F[ConfigurationDeploymentDetail] =
+    reads.run((deployments.view(organizationId, id), deployments.events(organizationId, id)).tupled).flatMap {
+      case (Some(item), events) => ConfigurationDeploymentDetail(item, events).pure[F]
+      case (None, _) => MonadThrow[F].raiseError(NotFound)
+    }
 
-  def history(organizationId: UUID, profileId: Option[UUID], before: Option[(Instant, UUID)],
-              limit: Int): F[List[ConfigurationDeployment]] =
-    reads.run(deployments.history(organizationId, profileId, before, limit))
+  def history(organizationId: UUID, profileId: Option[UUID], resourceId: Option[UUID],
+              before: Option[(Instant, UUID)], limit: Int): F[List[ConfigurationDeploymentListItem]] =
+    reads.run(deployments.history(organizationId, profileId, resourceId, before, limit))
 
+  def summaries(organizationId: UUID, assignmentIds: List[UUID]): F[List[ConfigurationDeploymentSummary]] =
+    reads.run(deployments.summaries(organizationId, assignmentIds))
+
+  /** Cancels a queued deployment at once; a running one stops at its next safe phase boundary. */
   def cancel(actor: ActorContext, id: UUID): F[Unit] =
     writes.run(for {
       now <- time.now
+      found <- deployments.find(actor.organizationId, id)
+      _ <- MonadThrow[Tx].raiseWhen(found.isEmpty)(NotFound)
       changed <- deployments.cancel(actor.organizationId, id, now)
-      _ <- MonadThrow[Tx].raiseUnless(changed)(NotFound)
+      _ <- MonadThrow[Tx].raiseUnless(changed)(NotCancellable)
       _ <- audit.record(actor, AuditAction.ConfigurationDeploymentCancelled,
         AuditTargetType.ConfigurationDeployment, Some(id))
     } yield ())
 
-  private def decode(bytes: Array[Byte]): F[String] =
-    MonadThrow[F].catchNonFatal(StandardCharsets.UTF_8.newDecoder()
+  private def decode(bytes: Array[Byte]): Option[String] =
+    scala.util.Try(StandardCharsets.UTF_8.newDecoder()
       .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
-      .decode(ByteBuffer.wrap(bytes)).toString).adaptError { case _ => InvalidRemoteEncoding }
+      .decode(ByteBuffer.wrap(bytes)).toString).toOption
 }

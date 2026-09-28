@@ -319,6 +319,13 @@ object ApplicationModule {
       transactionTimeProvider, auditRecorder, historyRecorder,
       integrations.resourceOperationBudget)
 
+    // One deployment service: rollouts preflight through exactly the same remote read path.
+    val configurationDeployments = new ConfigurationDeployments[IO, ConnectionIO](
+      configurationAssignmentRepository, configurationAssignmentQuery, configurationProfileQuery,
+      configurationDeploymentSourceQuery, configurationDeploymentRepository,
+      integrations.configurationTransport, transactionIdGenerator, transactionTimeProvider,
+      auditRecorder, readOnlySnapshotRunner, transactionRunner, config.configurationDeployment)
+
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
       listEnvironmentResources = ListEnvironmentResources[ConnectionIO](resourceRepository),
@@ -340,32 +347,22 @@ object ApplicationModule {
         auditRecorder, readOnlySnapshotRunner, transactionRunner),
       configurationAssignmentQueries =
         new ConfigurationAssignmentQueries[ConnectionIO](configurationAssignmentQuery, configurationProfileQuery),
-      configurationDeployments = new ConfigurationDeployments[IO, ConnectionIO](
-        configurationAssignmentRepository, configurationAssignmentQuery, configurationProfileQuery,
-        configurationDeploymentSourceQuery, configurationDeploymentRepository,
-        integrations.configurationTransport, transactionIdGenerator, transactionTimeProvider,
-        auditRecorder, readOnlySnapshotRunner, transactionRunner),
+      configurationDeployments = configurationDeployments,
       configurationDeploymentWorker = new ConfigurationDeploymentWorker[ConnectionIO](
-        configurationDeploymentRepository, configurationAssignmentRepository, configurationAssignmentQuery,
+        configurationDeploymentRepository, configurationAssignmentRepository,
         configurationProfileQuery, configurationDeploymentSourceQuery, integrations.configurationTransport,
-        transactionRunner, schedulerInstanceId),
+        transactionRunner, schedulerInstanceId, config.configurationDeployment, loggers.configuration),
       configurationPromotions = new ConfigurationPromotions[IO, ConnectionIO](
-        configurationAssignmentRepository, configurationAssignmentQuery, configurationProfileQuery,
-        configurationPromotionRepository, transactionTimeProvider, auditRecorder,
+        configurationPromotionRepository, configurationProfileQuery, transactionTimeProvider, auditRecorder,
         readOnlySnapshotRunner, transactionRunner),
       configurationRollouts = new ConfigurationRollouts[IO, ConnectionIO](
         configurationAssignmentRepository, configurationAssignmentQuery, configurationProfileQuery,
-        configurationDeploymentSourceQuery,
-        new ConfigurationDeployments[IO, ConnectionIO](configurationAssignmentRepository,
-          configurationAssignmentQuery, configurationProfileQuery, configurationDeploymentSourceQuery,
-          configurationDeploymentRepository, integrations.configurationTransport,
-          transactionIdGenerator, transactionTimeProvider, auditRecorder,
-          readOnlySnapshotRunner, transactionRunner),
+        configurationDeploymentSourceQuery, configurationDeployments,
         configurationRolloutRepository, transactionIdGenerator, transactionTimeProvider,
-        auditRecorder, readOnlySnapshotRunner, transactionRunner),
+        auditRecorder, readOnlySnapshotRunner, transactionRunner, config.configurationDeployment),
       configurationRolloutWorker = new ConfigurationRolloutWorker[ConnectionIO](
         configurationRolloutRepository, configurationDeploymentRepository,
-        transactionIdGenerator, transactionRunner, schedulerInstanceId),
+        transactionIdGenerator, transactionRunner, schedulerInstanceId, loggers.configuration),
       configurationProfileManagement = new ConfigurationProfileManagement[ConnectionIO](configurationProfileRepository,
         transactionIdGenerator, transactionTimeProvider, auditRecorder),
       listIncidents = ListIncidents[ConnectionIO](incidentListQuery),

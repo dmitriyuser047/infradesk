@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package infrastructure.config
 
 import application.auth.{AuthRateLimitSettings, BootstrapConfig, SecurityEventSettings}
+import application.configuration.ConfigurationDeploymentSettings
 import cats.effect.IO
 import com.comcast.ip4s.{Host, Port}
 import infrastructure.database.DatabaseConfig
@@ -65,7 +66,8 @@ final case class AppConfig(
   scheduler: SchedulerConfig,
   notification: NotificationConfig,
   sshEnvironmentSecrets: EnvironmentSecrets,
-  terminal: TerminalConfig
+  terminal: TerminalConfig,
+  configurationDeployment: ConfigurationDeploymentSettings = ConfigurationDeploymentSettings.Default
 )
 
 object AppConfig {
@@ -83,8 +85,9 @@ object AppConfig {
       scheduler <- parseScheduler(values)
       notification <- parseNotification(values)
       terminal <- TerminalConfig.fromEnvironment(values)
+      configurationDeployment <- parseConfigurationDeployment(values)
     } yield AppConfig(database, http, auth, loginRateLimit, SecurityEventSettings(securityEvents.seconds), bootstrap, secretEncryption, scheduler,
-      notification, EnvironmentSecrets.fromEnvironment(values), terminal)
+      notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment)
 
   private def parseLoginRateLimit(
     values: Map[String, String]
@@ -155,6 +158,38 @@ object AppConfig {
   /** Absent means no, and anything that is not plainly yes or no is a configuration error
     * rather than a default: this one decides what the product is allowed to connect to.
     */
+  /** Remote configuration work: every limit typed, bounded and overridable per deployment. */
+  private def parseConfigurationDeployment(
+    values: Map[String, String]
+  ): Either[IllegalArgumentException, ConfigurationDeploymentSettings] = {
+    val d = ConfigurationDeploymentSettings.Default
+    def seconds(key: String, default: FiniteDuration, max: Int): Either[IllegalArgumentException, FiniteDuration] =
+      bounded(values, key, default.toSeconds.toInt, 1, max).map(_.seconds)
+    for {
+      enabled <- parseBoolean(values, "INFRADESK_CONFIGURATION_DEPLOYMENT_ENABLED", d.enabled)
+      concurrency <- bounded(values, "INFRADESK_CONFIGURATION_DEPLOYMENT_MAX_CONCURRENCY", d.maxConcurrency, 1, 64)
+      perOrganization <- bounded(values, "INFRADESK_CONFIGURATION_DEPLOYMENT_PER_ORGANIZATION_LIMIT", d.perOrganizationLimit, 1, 64)
+      maxFileBytes <- bounded(values, "INFRADESK_CONFIGURATION_MAX_REMOTE_FILE_BYTES", d.maxRemoteFileBytes, 1024, 8 * 1024 * 1024)
+      sftp <- seconds("INFRADESK_CONFIGURATION_SFTP_TIMEOUT_SECONDS", d.sftpTimeout, 600)
+      validator <- seconds("INFRADESK_CONFIGURATION_VALIDATOR_TIMEOUT_SECONDS", d.validatorTimeout, 600)
+      activation <- seconds("INFRADESK_CONFIGURATION_ACTIVATION_TIMEOUT_SECONDS", d.activationTimeout, 600)
+      health <- seconds("INFRADESK_CONFIGURATION_HEALTH_TIMEOUT_SECONDS", d.healthTimeout, 600)
+      overall <- seconds("INFRADESK_CONFIGURATION_DEPLOYMENT_TIMEOUT_SECONDS", d.overallTimeout, 24 * 3600)
+      attempts <- bounded(values, "INFRADESK_CONFIGURATION_TRANSIENT_ATTEMPTS", d.maxTransientAttempts, 0, 20)
+    } yield d.copy(enabled = enabled, maxConcurrency = concurrency, perOrganizationLimit = perOrganization,
+      maxRemoteFileBytes = maxFileBytes, sftpTimeout = sftp, validatorTimeout = validator,
+      activationTimeout = activation, healthTimeout = health, overallTimeout = overall,
+      maxTransientAttempts = attempts)
+  }
+
+  private def bounded(values: Map[String, String], key: String, default: Int, min: Int,
+                      max: Int): Either[IllegalArgumentException, Int] =
+    values.get(key) match {
+      case None => Right(default)
+      case Some(value) => Try(value.trim.toInt).toOption.filter(n => n >= min && n <= max).toRight(
+        new IllegalArgumentException(s"Invalid $key: expected an integer from $min to $max"))
+    }
+
   private def parseBoolean(
     values: Map[String, String],
     key: String

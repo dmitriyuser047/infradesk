@@ -107,7 +107,8 @@ object IntegrationModule {
       resourceOperationBudget = sshContainerOperations,
       connectionSyncBudget = new SshConnectionSyncBudget,
       openSshTerminal = openSshTerminal,
-      configurationTransport = new SshjConfigurationTransport(sshClient, sshAuthenticationProvider),
+      configurationTransport = new SshjConfigurationTransport(sshClient, sshAuthenticationProvider,
+        config.configurationDeployment.sftpTimeout),
       connectorRegistry = connectorRegistry
     ) }
   }

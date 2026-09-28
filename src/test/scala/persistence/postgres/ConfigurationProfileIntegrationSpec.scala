@@ -289,10 +289,13 @@ final class ConfigurationProfileIntegrationSpec extends FunSuite {
 
     def create(code: String, by: ActorContext = actor) = run(managementWith(new PostgresAuditEventRepository).create(by, command(code)))
 
+    // Configuration entries only: suites running in parallel journal other actions in the shared
+    // fixture organization.
     def journal(organizationId: UUID): IO[List[(String, String, Option[UUID])]] =
       run(sql"""
         select action, target_type, target_id from audit_event
-         where organization_id = $organizationId order by occurred_at, created_at, action
+         where organization_id = $organizationId and action like 'CONFIGURATION_%'
+         order by occurred_at, created_at, action
       """.query[(String, String, Option[UUID])].to[List])
 
     def reset: IO[Unit] = run(for {

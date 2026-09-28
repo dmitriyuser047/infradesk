@@ -227,12 +227,12 @@ jobs:
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
           drop table configuration_rollout_item_validator_arg;
           drop table configuration_rollout_item_value;
-          drop table configuration_rollout_item cascade;
-          drop table configuration_rollout;
           drop table configuration_deployment_event;
           drop table configuration_deployment_validator_arg;
           drop table configuration_deployment_value;
+          drop table configuration_rollout_item cascade;
           drop table configuration_deployment;
+          drop table configuration_rollout;
           drop table configuration_assignment_value;
           drop table configuration_assignment;
           drop table configuration_revision_variable;
@@ -322,6 +322,10 @@ jobs:
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('configuration_rollout', 'configuration_rollout_item', 'configuration_rollout_item_value', 'configuration_rollout_item_validator_arg')")"
           test "${rollout_tables}" = "4"
+          # What V35 and V36 must enforce after the upgrade: one active deployment per node, and the
+          # deployment/rollout references in both directions.
+          deployment_invariants="$(docker compose -f compose.prod.yml exec -T postgres             psql --username infradesk --dbname infradesk --tuples-only --no-align             --command "select (select count(*) from pg_indexes where schemaname = current_schema() and indexname = 'ux_configuration_deployment_active_resource') + (select count(*) from pg_constraint where conname in ('fk_configuration_deployment_rollout', 'fk_configuration_deployment_rollout_item', 'fk_configuration_rollout_item_deployment', 'ck_configuration_deployment_lease_state'))")"
+          test "${deployment_invariants}" = "5"
           credential_kind="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_constraint where conname = 'ck_connection_secret_kind' and pg_get_constraintdef(oid) like '%SSH_CREDENTIAL%'")"

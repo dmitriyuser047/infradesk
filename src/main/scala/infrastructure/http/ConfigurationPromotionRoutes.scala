@@ -35,9 +35,12 @@ final class ConfigurationPromotionRoutes[Tx[_]](
       "items" -> Json.arr(preview.items.map { item => Json.obj(
         "assignmentId" -> Json.fromString(item.assignmentId.toString),
         "expectedVersion" -> Json.fromInt(item.expectedVersion),
+        "resourceName" -> item.resourceName.fold(Json.Null)(Json.fromString),
+        "currentRevisionNumber" -> item.currentRevisionNumber.fold(Json.Null)(Json.fromInt),
         "compatible" -> Json.fromBoolean(item.compatible),
-        "errorCode" -> item.errorCode.fold(Json.Null)(Json.fromString),
-        "variableName" -> item.variableName.fold(Json.Null)(Json.fromString)) }: _*))
+        "issues" -> Json.arr(item.issues.map(issue => Json.obj(
+          "code" -> Json.fromString(issue.code),
+          "variableName" -> issue.variableName.fold(Json.Null)(Json.fromString))): _*)) }: _*))
   }
   private implicit val resultEncoder: Encoder[ConfigurationPromotionResult] = Encoder.instance { result =>
     Json.obj("revisionNumber" -> Json.fromInt(result.revisionNumber),

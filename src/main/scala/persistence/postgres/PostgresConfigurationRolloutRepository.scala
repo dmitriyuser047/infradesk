@@ -12,6 +12,7 @@ import org.typelevel.doobie.postgres.implicits._
 import java.time.Instant
 import java.util.UUID
 
+/** Rollouts are orchestration state only: no remote bytes, credentials or command output. */
 final class PostgresConfigurationRolloutRepository extends ConfigurationRolloutRepository[ConnectionIO] {
   import PostgresConfigurationRolloutRepository._
 
@@ -25,13 +26,12 @@ final class PostgresConfigurationRolloutRepository extends ConfigurationRolloutR
         ${rollout.profileRevisionNumber}, 'QUEUED', ${rollout.strategy.canaryCount},
         ${rollout.strategy.batchSize}, ${rollout.strategy.pauseSeconds},
         ${rollout.strategy.stopOnFailure}, ${rollout.strategy.rollbackMode.code},
-        ${rollout.actorUserId}, ${rollout.createdAt}) on conflict do nothing""".update.run.flatMap {
+        ${rollout.actorUserId}, ${rollout.createdAt})
+      on conflict (organization_id, request_id) do nothing""".update.run.flatMap {
       case 1 => items.traverse_(insertItem).as(ConfigurationRolloutInsert.Written: ConfigurationRolloutInsert)
       case _ => sql"""select id from configuration_rollout where organization_id = ${rollout.organizationId}
-        and request_id = ${rollout.requestId}""".query[UUID].option.map {
-        case Some(id) => ConfigurationRolloutInsert.Repeated(id): ConfigurationRolloutInsert
-        case None => throw new IllegalStateException("Rollout insert conflict without request match")
-      }
+        and request_id = ${rollout.requestId}""".query[UUID].unique
+        .map(id => ConfigurationRolloutInsert.Repeated(id): ConfigurationRolloutInsert)
     }
 
   private def insertItem(item: ConfigurationRolloutItem): ConnectionIO[Unit] = {
@@ -71,12 +71,39 @@ final class PostgresConfigurationRolloutRepository extends ConfigurationRolloutR
       .query[RolloutRow].option.map(_.map(_.toDomain))
 
   override def history(organizationId: UUID, profileId: Option[UUID], before: Option[(Instant, UUID)],
-                       limit: Int): ConnectionIO[List[ConfigurationRollout]] = {
-    val profile = profileId.fold(fr"")(id => fr"and profile_id = $id")
-    val cursor = before.fold(fr"") { case (created, id) => fr"and (created_at, id) < ($created, $id)" }
-    (select ++ fr"where organization_id = $organizationId" ++ profile ++ cursor ++
-      fr"order by created_at desc, id desc limit $limit").query[RolloutRow].to[List].map(_.map(_.toDomain))
+                       limit: Int): ConnectionIO[List[ConfigurationRolloutListItem]] = {
+    val profile = profileId.fold(fr"")(id => fr"and r.profile_id = $id")
+    val cursor = before.fold(fr"") { case (created, id) => fr"and (r.created_at, r.id) < ($created, $id)" }
+    (listSelect ++ fr"where r.organization_id = $organizationId" ++ profile ++ cursor ++
+      fr"order by r.created_at desc, r.id desc limit $limit")
+      .query[(RolloutRow, Counts)].to[List].map(_.map { case (row, counts) => counts.toItem(row.toDomain) })
   }
+
+  override def view(organizationId: UUID, rolloutId: UUID)
+    : ConnectionIO[Option[(ConfigurationRolloutListItem, List[ConfigurationRolloutItemView])]] =
+    (listSelect ++ fr"where r.organization_id = $organizationId and r.id = $rolloutId")
+      .query[(RolloutRow, Counts)].option.flatMap {
+        case None => Option.empty[(ConfigurationRolloutListItem, List[ConfigurationRolloutItemView])].pure[ConnectionIO]
+        case Some((row, counts)) =>
+          // Items, child deployments and resource names in a fixed number of statements, never per item.
+          val children = sql"""select i.id, res.name, d.state, d.phase, d.failure_code, d.started_at, d.finished_at
+            from configuration_rollout_item i
+            join resource res on res.id = i.resource_id and res.organization_id = i.organization_id
+            left join configuration_deployment d on d.id = i.deployment_id and d.organization_id = i.organization_id
+            where i.organization_id = $organizationId and i.rollout_id = $rolloutId"""
+            .query[(UUID, String, Option[String], Option[String], Option[String], Option[Instant], Option[Instant])]
+            .to[List]
+          (items(organizationId, rolloutId), children).mapN { (loaded, extra) =>
+            val byItem = extra.map(row => row._1 -> row).toMap
+            Some(counts.toItem(row.toDomain) -> loaded.map { item =>
+              val (_, name, state, phase, failure, started, finished) = byItem(item.id)
+              ConfigurationRolloutItemView(item, name,
+                state.map(code => ConfigurationDeploymentState.fromCode(code).fold(throw _, identity)),
+                phase.map(code => ConfigurationDeploymentPhase.fromCode(code).fold(throw _, identity)),
+                failure, started, finished)
+            })
+          }
+      }
 
   override def items(organizationId: UUID, rolloutId: UUID): ConnectionIO[List[ConfigurationRolloutItem]] =
     (itemSelect ++ fr"where organization_id = $organizationId and rollout_id = $rolloutId order by position")
@@ -85,7 +112,7 @@ final class PostgresConfigurationRolloutRepository extends ConfigurationRolloutR
           case None => List.empty[ConfigurationRolloutItem].pure[ConnectionIO]
           case Some(ids) =>
             val values = (fr"select item_id, name, value from configuration_rollout_item_value where organization_id = $organizationId and" ++
-              Fragments.in(fr"item_id", ids)).query[(UUID, String, String)].to[List]
+              Fragments.in(fr"item_id", ids) ++ fr"order by item_id, name").query[(UUID, String, String)].to[List]
             val args = (fr"select item_id, argument from configuration_rollout_item_validator_arg where organization_id = $organizationId and" ++
               Fragments.in(fr"item_id", ids) ++ fr"order by item_id, position").query[(UUID, String)].to[List]
             (values, args).mapN { (allValues, allArgs) =>
@@ -97,14 +124,15 @@ final class PostgresConfigurationRolloutRepository extends ConfigurationRolloutR
         }
       }
 
-  override def claim(owner: UUID, token: UUID, now: Instant,
-                     until: Instant): ConnectionIO[Option[ConfigurationRollout]] =
+  override def claim(owner: UUID, token: UUID, now: Instant, until: Instant, exclude: List[UUID],
+                     scope: Option[UUID]): ConnectionIO[Option[ConfigurationRollout]] =
     sql"""with next as (
-      select id from configuration_rollout where
+      select id from configuration_rollout where id <> all(${exclude.toArray[UUID]})
+        and ($scope::uuid is null or organization_id = $scope) and (
         state = 'QUEUED' or
         (state in ('RUNNING','ROLLING_BACK') and (lease_expires_at is null or lease_expires_at <= $now)) or
-        (state = 'PAUSED' and next_action_at <= $now and (lease_expires_at is null or lease_expires_at <= $now))
-      order by created_at, id limit 1 for update skip locked
+        (state = 'PAUSED' and next_action_at <= $now and (lease_expires_at is null or lease_expires_at <= $now)))
+      order by coalesce(lease_expires_at, created_at), id limit 1 for update skip locked
     ) update configuration_rollout r set
       state = case when r.state in ('QUEUED','PAUSED') then 'RUNNING' else r.state end,
       lease_owner = $owner, lease_token = $token, lease_expires_at = $until,
@@ -140,18 +168,38 @@ final class PostgresConfigurationRolloutRepository extends ConfigurationRolloutR
       where organization_id = $organizationId and id = $id and lease_token = $token
         and lease_expires_at > $now and state in ('RUNNING','ROLLING_BACK')""".update.run.map(_ == 1)
 
-  override def cancel(organizationId: UUID, id: UUID): ConnectionIO[Boolean] =
-    sql"""update configuration_rollout set cancel_requested = true
+  override def cancel(organizationId: UUID, id: UUID, rollback: Boolean, now: Instant): ConnectionIO[Boolean] =
+    // A paused rollout is woken so the cancel takes effect now rather than after its pause.
+    sql"""update configuration_rollout set cancel_requested = true,
+        rollback_requested = rollback_requested or $rollback,
+        next_action_at = case when state = 'PAUSED' then $now else next_action_at end
       where organization_id = $organizationId and id = $id
         and state in ('QUEUED','RUNNING','PAUSED','ROLLING_BACK')""".update.run.map(_ == 1)
 }
 
 object PostgresConfigurationRolloutRepository {
-  private val select: Fragment = fr"""select id, organization_id, request_id, profile_id,
+  private val columns: String = """id, organization_id, request_id, profile_id,
     profile_revision_number, state, canary_count, batch_size, pause_seconds, stop_on_failure,
     rollback_mode, lease_owner, lease_token, lease_expires_at, cancel_requested,
     created_by_user_id, created_at, started_at, finished_at, next_action_at,
-    last_paused_position from configuration_rollout"""
+    last_paused_position, rollback_requested"""
+
+  private val select: Fragment = Fragment.const(s"select $columns from configuration_rollout")
+
+  /** Rollouts with their author and item counts, one statement for a whole page. */
+  private val listSelect: Fragment = Fragment.const(s"""select ${columns.split(",").map(c => "r." + c.trim).mkString(", ")},
+    u.display_name,
+    (select count(*) from configuration_rollout_item i where i.rollout_id = r.id and i.organization_id = r.organization_id)::int,
+    (select count(*) from configuration_rollout_item i where i.rollout_id = r.id and i.organization_id = r.organization_id
+       and i.state = 'SUCCEEDED')::int,
+    (select count(*) from configuration_rollout_item i where i.rollout_id = r.id and i.organization_id = r.organization_id
+       and i.state in ('FAILED','ROLLED_BACK'))::int
+    from configuration_rollout r join user_account u on u.id = r.created_by_user_id""")
+
+  private final case class Counts(actor: String, items: Int, succeeded: Int, failed: Int) {
+    def toItem(rollout: ConfigurationRollout): ConfigurationRolloutListItem =
+      ConfigurationRolloutListItem(rollout, actor, items, succeeded, failed)
+  }
 
   private final case class RolloutRow(
     id: UUID, organizationId: UUID, requestId: UUID, profileId: UUID, revision: Int,
@@ -159,13 +207,13 @@ object PostgresConfigurationRolloutRepository {
     rollbackMode: String, leaseOwner: Option[UUID], leaseToken: Option[UUID], leaseExpiresAt: Option[Instant],
     cancelRequested: Boolean, actorUserId: UUID, createdAt: Instant,
     startedAt: Option[Instant], finishedAt: Option[Instant], nextActionAt: Option[Instant],
-    lastPausedPosition: Int
+    lastPausedPosition: Int, rollbackRequested: Boolean
   ) {
     def toDomain: ConfigurationRollout = ConfigurationRollout(id, organizationId, requestId, profileId, revision,
       ConfigurationRolloutState.fromCode(state), ConfigurationRolloutStrategy(canaryCount, batchSize, pauseSeconds,
         stopOnFailure, ConfigurationRollbackMode.fromCode(rollbackMode)), leaseOwner, leaseToken,
       leaseExpiresAt, cancelRequested, actorUserId, createdAt, startedAt, finishedAt,
-      nextActionAt, lastPausedPosition)
+      nextActionAt, lastPausedPosition, rollbackRequested)
   }
 
   private val itemSelect: Fragment = fr"""select
@@ -185,7 +233,7 @@ object PostgresConfigurationRolloutRepository {
     def toDomain(state: ItemStateRow, values: List[ConfigurationVariableValue], args: List[String]): ConfigurationRolloutItem =
       ConfigurationRolloutItem(id, organizationId, rolloutId, position, assignmentId, assignmentVersion,
         resourceId, targetPath, connectionId, connectionUpdatedAt, desiredSha256,
-        expectedRemoteSha256.fold[ExpectedRemoteState](ExpectedRemoteState.Missing)(ExpectedRemoteState.Sha256.apply),
+        ExpectedRemoteState.of(expectedRemoteSha256),
         ConfigurationExecutionPolicy(ConfigurationActivation.fromCode(activation).fold(throw _, identity),
           unitName, validatorExecutable.map(ConfigurationValidator(_, args)), newFileMode),
         values, ConfigurationRolloutItemState.fromCode(state.state), state.deploymentId, createdAt, state.updatedAt)

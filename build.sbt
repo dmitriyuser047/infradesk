@@ -67,6 +67,8 @@ lazy val root = rootProject
       // whole-attempt deadline as the connection that follows it.
       "dnsjava" % "dnsjava" % "3.6.5",
       "org.apache.sshd" % "sshd-core" % "2.19.0" % Test,
+      // A real SFTP subsystem (with the OpenSSH posix-rename extension) for configuration deployment tests.
+      "org.apache.sshd" % "sshd-sftp" % "2.19.0" % Test,
       // A real SMTP server for the tests, so mail is exercised against a protocol rather than
       // against a mock of one.
       "com.icegreen" % "greenmail" % "2.1.3" % Test,

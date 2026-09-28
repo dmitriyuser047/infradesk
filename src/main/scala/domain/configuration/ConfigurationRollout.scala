@@ -47,9 +47,15 @@ final case class ConfigurationRolloutStrategy(canaryCount: Int, batchSize: Int, 
 object ConfigurationRolloutStrategy {
   val Default: ConfigurationRolloutStrategy =
     ConfigurationRolloutStrategy(1, 1, 0, stopOnFailure = true, ConfigurationRollbackMode.FailedTargetOnly)
+  val MaxCanary = 20
+  val MaxBatch = 20
+  val MaxPauseSeconds = 3600
+  val MaxTargets = 100
+
   def valid(value: ConfigurationRolloutStrategy): Boolean =
-    value.canaryCount >= 0 && value.canaryCount <= 20 &&
-      value.batchSize >= 1 && value.batchSize <= 20 && value.pauseSeconds >= 0 && value.pauseSeconds <= 3600
+    value.canaryCount >= 0 && value.canaryCount <= MaxCanary &&
+      value.batchSize >= 1 && value.batchSize <= MaxBatch &&
+      value.pauseSeconds >= 0 && value.pauseSeconds <= MaxPauseSeconds
 }
 
 final case class ConfigurationRollout(
@@ -58,7 +64,7 @@ final case class ConfigurationRollout(
   leaseOwner: Option[UUID], leaseToken: Option[UUID], leaseExpiresAt: Option[Instant],
   cancelRequested: Boolean, actorUserId: UUID, createdAt: Instant,
   startedAt: Option[Instant], finishedAt: Option[Instant], nextActionAt: Option[Instant],
-  lastPausedPosition: Int
+  lastPausedPosition: Int, rollbackRequested: Boolean = false
 )
 
 final case class ConfigurationRolloutItem(
@@ -69,4 +75,24 @@ final case class ConfigurationRolloutItem(
   policy: ConfigurationExecutionPolicy, values: List[ConfigurationVariableValue],
   state: ConfigurationRolloutItemState, deploymentId: Option[UUID],
   createdAt: Instant, updatedAt: Instant
+)
+
+/** A rollout item with what its child deployment says, read in one statement for a whole rollout. */
+final case class ConfigurationRolloutItemView(
+  item: ConfigurationRolloutItem,
+  resourceName: String,
+  deploymentState: Option[ConfigurationDeploymentState],
+  deploymentPhase: Option[ConfigurationDeploymentPhase],
+  failureCode: Option[String],
+  startedAt: Option[Instant],
+  finishedAt: Option[Instant]
+)
+
+/** A rollout as history lists it, with item counts and its author's name. */
+final case class ConfigurationRolloutListItem(
+  rollout: ConfigurationRollout,
+  actorName: String,
+  items: Int,
+  succeeded: Int,
+  failed: Int
 )

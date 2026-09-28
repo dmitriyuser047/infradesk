@@ -1,8 +1,5 @@
 -- A rollout orchestrates immutable per-node deployment snapshots. Remote file bytes and credentials
 -- never enter these tables. Pending items do not occupy a resource deployment slot.
-ALTER TABLE configuration_deployment DROP CONSTRAINT configuration_deployment_phase_check;
-ALTER TABLE configuration_deployment ADD CONSTRAINT configuration_deployment_phase_check CHECK
-  (phase IN ('PRECHECK','UPLOAD','VALIDATE','REPLACE','ACTIVATE','VERIFY','CLEANUP','ROLLBACK'));
 
 CREATE TABLE configuration_rollout (
   id uuid PRIMARY KEY,
@@ -21,6 +18,8 @@ CREATE TABLE configuration_rollout (
   lease_token uuid,
   lease_expires_at timestamptz,
   cancel_requested boolean NOT NULL DEFAULT false,
+  -- An operator asked to roll back every node this rollout applied, whatever its rollback mode.
+  rollback_requested boolean NOT NULL DEFAULT false,
   created_by_user_id uuid NOT NULL REFERENCES user_account(id),
   created_at timestamptz NOT NULL,
   started_at timestamptz,
@@ -57,7 +56,7 @@ CREATE TABLE configuration_rollout_item (
   remote_expected_missing boolean NOT NULL,
   activation varchar(24) NOT NULL CHECK (activation IN ('NONE','SYSTEMD_RELOAD','SYSTEMD_RESTART')),
   unit_name varchar(255),
-  validator_executable varchar(4096),
+  validator_executable varchar(1024),
   new_file_mode integer NOT NULL CHECK (new_file_mode BETWEEN 0 AND 511),
   state varchar(16) NOT NULL CHECK (state IN ('PENDING','DEPLOYING','SUCCEEDED','FAILED','ROLLED_BACK','SKIPPED')),
   deployment_id uuid,
@@ -65,7 +64,6 @@ CREATE TABLE configuration_rollout_item (
   updated_at timestamptz NOT NULL,
   CONSTRAINT uq_configuration_rollout_item_order UNIQUE (rollout_id, position),
   CONSTRAINT uq_configuration_rollout_item_assignment UNIQUE (rollout_id, assignment_id),
-  CONSTRAINT uq_configuration_rollout_item_resource UNIQUE (rollout_id, resource_id),
   CONSTRAINT uq_configuration_rollout_item_id_organization UNIQUE (id, organization_id),
   CONSTRAINT fk_configuration_rollout_item_rollout FOREIGN KEY (rollout_id, organization_id)
     REFERENCES configuration_rollout(id, organization_id),
@@ -97,7 +95,7 @@ CREATE TABLE configuration_rollout_item_validator_arg (
   item_id uuid NOT NULL,
   organization_id uuid NOT NULL,
   position integer NOT NULL CHECK (position BETWEEN 0 AND 31),
-  argument varchar(4096) NOT NULL,
+  argument varchar(1024) NOT NULL,
   PRIMARY KEY(item_id, position),
   FOREIGN KEY(item_id, organization_id) REFERENCES configuration_rollout_item(id, organization_id)
 );
