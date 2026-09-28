@@ -33,6 +33,7 @@ import application.configuration.{
   ConfigurationAssignments,
   ConfigurationDeployments,
   ConfigurationDeploymentWorker,
+  ConfigurationPromotions,
   ConfigurationProfileManagement,
   ConfigurationProfileQueries
 }
@@ -102,6 +103,7 @@ final case class ApplicationComponents(
   configurationAssignmentQueries: ConfigurationAssignmentQueries[ConnectionIO],
   configurationDeployments: ConfigurationDeployments[IO, ConnectionIO],
   configurationDeploymentWorker: ConfigurationDeploymentWorker[ConnectionIO],
+  configurationPromotions: ConfigurationPromotions[IO, ConnectionIO],
   listIncidents: ListIncidents[ConnectionIO],
   listMonitorRules: ListMonitorRules[ConnectionIO],
   createMonitorRule: CreateMonitorRule[ConnectionIO],
@@ -343,6 +345,10 @@ object ApplicationModule {
         configurationDeploymentRepository, configurationAssignmentRepository, configurationAssignmentQuery,
         configurationProfileQuery, configurationDeploymentSourceQuery, integrations.configurationTransport,
         transactionRunner, schedulerInstanceId),
+      configurationPromotions = new ConfigurationPromotions[IO, ConnectionIO](
+        configurationAssignmentRepository, configurationAssignmentQuery, configurationProfileQuery,
+        configurationPromotionRepository, transactionTimeProvider, auditRecorder,
+        readOnlySnapshotRunner, transactionRunner),
       configurationProfileManagement = new ConfigurationProfileManagement[ConnectionIO](configurationProfileRepository,
         transactionIdGenerator, transactionTimeProvider, auditRecorder),
       listIncidents = ListIncidents[ConnectionIO](incidentListQuery),

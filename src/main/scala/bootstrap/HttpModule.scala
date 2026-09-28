@@ -17,6 +17,7 @@ import infrastructure.http.{
   ConfigurationAssignmentRoutes,
   ConfigurationDeploymentRoutes,
   ConfigurationProfileRoutes,
+  ConfigurationPromotionRoutes,
   IncidentRoutes,
   InfrastructureContextRoutes,
   MonitorRuleRoutes,
@@ -114,6 +115,8 @@ object HttpModule {
           loggers.configuration
         ).routes <+>
         new ConfigurationDeploymentRoutes(application.configurationDeployments, authorization,
+          loggers.configuration).routes <+>
+        new ConfigurationPromotionRoutes(application.configurationPromotions, authorization,
           loggers.configuration).routes <+>
         new MonitorRuleRoutes(
           application.listMonitorRules,
