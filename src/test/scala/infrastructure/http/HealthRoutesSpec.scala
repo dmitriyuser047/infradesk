@@ -19,10 +19,13 @@ final class HealthRoutesSpec extends FunSuite {
   test("health is public and does not query readiness") {
     var calls = 0
     val check = new ReadinessCheck[IO] { def check: IO[Unit] = IO { calls += 1 } }
-    val response = new HealthRoutes(check, logger).routes.orNotFound
+    val response = new HealthRoutes(check, logger, build = HealthRoutes.Build("0.1.0", "abc123")).routes.orNotFound
       .run(Request[IO](Method.GET, Uri.unsafeFromString("/health"))).unsafeRunSync()
     assertEquals(response.status, Status.Ok)
-    assertEquals(response.as[Json].unsafeRunSync().hcursor.get[String]("status"), Right("UP"))
+    val body = response.as[Json].unsafeRunSync().hcursor
+    assertEquals(body.get[String]("status"), Right("UP"))
+    // The baked build identity, so an installer can check the release it started.
+    assertEquals((body.get[String]("version"), body.get[String]("gitSha")), (Right("0.1.0"), Right("abc123")))
     assertEquals(calls, 0)
   }
 

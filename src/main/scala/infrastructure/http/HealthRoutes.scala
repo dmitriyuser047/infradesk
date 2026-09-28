@@ -22,11 +22,15 @@ import scala.concurrent.duration._
 final class HealthRoutes(
   readiness: ReadinessCheck[IO],
   logger: Logger[IO],
-  readinessTimeout: FiniteDuration = HealthRoutes.DefaultReadinessTimeout
+  readinessTimeout: FiniteDuration = HealthRoutes.DefaultReadinessTimeout,
+  build: HealthRoutes.Build = HealthRoutes.Build("unknown", "unknown")
 ) {
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
+    // The build identity baked into the artifact, so an operator (or an installer) can check that
+    // what runs is the release it installed. It names a public release, never configuration.
     case GET -> Root / "health" =>
-      Ok(Json.obj("status" -> Json.fromString("UP")))
+      Ok(Json.obj("status" -> Json.fromString("UP"), "version" -> Json.fromString(build.version),
+        "gitSha" -> Json.fromString(build.gitSha)))
 
     case GET -> Root / "ready" =>
       // The probe runs on its own fiber and the deadline applies to waiting for it, not to
@@ -51,6 +55,8 @@ final class HealthRoutes(
 }
 
 object HealthRoutes {
+
+  final case class Build(version: String, gitSha: String)
 
   /** One bounded attempt. It is deliberately shorter than the pool's connection timeout, which a
     * deployment may raise to minutes for ordinary work without making readiness wait that long.

@@ -3,6 +3,10 @@
 This is what one person needs to deploy InfraDesk on a clean Linux host and keep it running. It
 assumes Docker with the Compose plugin, a domain name, and a TLS terminator in front of the host.
 
+> Installing a released version without the source tree? Use the self-hosted release bundle and
+> its installer instead: see [`packaging/self-hosted/README.md`](../packaging/self-hosted/README.md).
+> This document describes the source-based deployment used for development and CI.
+
 ## Topology
 
 ```

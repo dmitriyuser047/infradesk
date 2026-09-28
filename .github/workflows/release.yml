@@ -1,0 +1,155 @@
+name: Release
+
+# A release is a pushed tag vMAJOR.MINOR.PATCH on a commit whose CI is green. The tag is the only
+# source of the version: the backend reports it, the images are tagged with it, the bundle is
+# named after it. Nothing here runs on an ordinary push, and nothing creates a tag.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the version and the commit it names
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! [[ "${tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::'${tag}' is not a release version (vMAJOR.MINOR.PATCH)"; exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain)"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          {
+            echo "RELEASE_TAG=${tag}"
+            echo "RELEASE_VERSION=${tag#v}"
+            echo "BACKEND_REPO=ghcr.io/${owner}/infradesk-backend"
+            echo "FRONTEND_REPO=ghcr.io/${owner}/infradesk-frontend"
+          } >> "${GITHUB_ENV}"
+
+      - name: Require green CI for this exact commit
+        run: |
+          # The tag may be pushed together with its commit: wait for that commit's CI to finish.
+          for _ in $(seq 1 90); do
+            status="$(gh run list --workflow CI --commit "${GITHUB_SHA}" --event push --limit 20 \
+              --json status,conclusion --jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length')"
+            if [ "${status}" -gt 0 ]; then echo "CI is green for ${GITHUB_SHA}"; exit 0; fi
+            pending="$(gh run list --workflow CI --commit "${GITHUB_SHA}" --limit 20 \
+              --json status --jq '[.[] | select(.status != "completed")] | length')"
+            if [ "${pending}" -eq 0 ] && [ "$(gh run list --workflow CI --commit "${GITHUB_SHA}" --limit 1 --json status --jq length)" -gt 0 ]; then
+              echo "::error::CI finished without success for ${GITHUB_SHA}"; exit 1
+            fi
+            sleep 60
+          done
+          echo "::error::No successful CI run for ${GITHUB_SHA}"; exit 1
+
+      - name: Refuse to publish a release or an image tag twice
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "::error::Release ${RELEASE_TAG} already exists"; exit 1
+          fi
+          echo "${GH_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          for repo in "${BACKEND_REPO}" "${FRONTEND_REPO}"; do
+            if docker manifest inspect "${repo}:${RELEASE_TAG}" >/dev/null 2>&1; then
+              echo "::error::${repo}:${RELEASE_TAG} already exists; release tags are immutable"; exit 1
+            fi
+          done
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push the backend image
+        run: |
+          docker buildx build --file deploy/backend.Dockerfile --platform linux/amd64 \
+            --build-arg INFRADESK_BUILD_VERSION="${RELEASE_VERSION}" --build-arg INFRADESK_GIT_SHA="${GITHUB_SHA}" \
+            --tag "${BACKEND_REPO}:${RELEASE_TAG}" --tag "${BACKEND_REPO}:sha-${GITHUB_SHA}" \
+            --provenance=true --sbom=true --metadata-file backend-metadata.json --push .
+          echo "BACKEND_DIGEST=$(jq -r '."containerimage.digest"' backend-metadata.json)" >> "${GITHUB_ENV}"
+
+      - name: Build and push the frontend image
+        run: |
+          docker buildx build --file deploy/frontend.Dockerfile --platform linux/amd64 \
+            --build-arg INFRADESK_BUILD_VERSION="${RELEASE_VERSION}" --build-arg INFRADESK_GIT_SHA="${GITHUB_SHA}" \
+            --tag "${FRONTEND_REPO}:${RELEASE_TAG}" --tag "${FRONTEND_REPO}:sha-${GITHUB_SHA}" \
+            --provenance=true --sbom=true --metadata-file frontend-metadata.json --push .
+          echo "FRONTEND_DIGEST=$(jq -r '."containerimage.digest"' frontend-metadata.json)" >> "${GITHUB_ENV}"
+
+      - name: Verify the pushed backend reports this release
+        run: |
+          image="${BACKEND_REPO}@${BACKEND_DIGEST}"
+          set +e
+          logs="$(docker run --rm --network none -e INFRADESK_DB_URL=jdbc:postgresql://127.0.0.1:1/x \
+            -e INFRADESK_DB_USER=x -e INFRADESK_DB_PASSWORD=x \
+            -e INFRADESK_SECRET_MASTER_KEY_BASE64=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= "${image}" 2>&1)"
+          set -e
+          grep "application.starting" <<< "${logs}" | grep "version=${RELEASE_VERSION} gitSha=${GITHUB_SHA}"
+
+      - name: Build the self-hosted bundle
+        run: |
+          docker pull --quiet postgres:17
+          postgres="$(docker inspect --format '{{index .RepoDigests 0}}' postgres:17)"
+          packaging/self-hosted/build-bundle.sh --version "${RELEASE_TAG}" --git-sha "${GITHUB_SHA}" \
+            --backend-image "${BACKEND_REPO}@${BACKEND_DIGEST}" \
+            --frontend-image "${FRONTEND_REPO}@${FRONTEND_DIGEST}" \
+            --postgres-image "${postgres}" --output dist
+          (cd dist && sha256sum -c SHA256SUMS)
+          schema="$(tar -xzOf "dist/infradesk-${RELEASE_TAG}-linux-amd64.tar.gz" "infradesk-${RELEASE_TAG}/release-manifest.json" \
+            | sed -n 's/.*"schemaVersion": \([0-9]*\).*/\1/p')"
+          echo "SCHEMA_VERSION=${schema}" >> "${GITHUB_ENV}"
+
+      - name: Write the release notes
+        run: |
+          previous="$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)"
+          {
+            echo "InfraDesk ${RELEASE_TAG} — commit \`${GITHUB_SHA}\`, database schema V${SCHEMA_VERSION}."
+            echo
+            echo "## Supported platforms"
+            echo "Ubuntu 22.04 / 24.04 LTS and Debian 12, linux/amd64, Docker Engine 24+ with Compose v2.20+."
+            echo
+            echo "## Install"
+            echo '```bash'
+            echo "curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/infradesk-${RELEASE_TAG}-linux-amd64.tar.gz"
+            echo "curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/SHA256SUMS"
+            echo "sha256sum -c SHA256SUMS --ignore-missing"
+            echo "tar -xzf infradesk-${RELEASE_TAG}-linux-amd64.tar.gz"
+            echo "cd infradesk-${RELEASE_TAG}"
+            echo "sudo ./install.sh"
+            echo '```'
+            echo
+            echo "## Upgrade"
+            echo '```bash'
+            echo "sudo infradesk backup"
+            echo "sudo infradesk update ${RELEASE_TAG}"
+            echo '```'
+            echo "The update takes its own pre-update backup; there is no automatic downgrade after a migration."
+            echo
+            echo "## Images"
+            echo "- \`${BACKEND_REPO}@${BACKEND_DIGEST}\` (\`${RELEASE_TAG}\`, \`sha-${GITHUB_SHA}\`)"
+            echo "- \`${FRONTEND_REPO}@${FRONTEND_DIGEST}\` (\`${RELEASE_TAG}\`, \`sha-${GITHUB_SHA}\`)"
+            echo
+            echo "## Backups"
+            echo "Keep a copy of \`/etc/infradesk/infradesk.env\` somewhere safe: it holds the encryption key without which restored SSH credentials cannot be used."
+            echo
+            echo "## Changes"
+            if [ -n "${previous}" ]; then git log --no-merges --format='- %s' "${previous}..${GITHUB_SHA}"
+            else git log --no-merges --format='- %s' -n 30 "${GITHUB_SHA}"; fi
+          } > release-notes.md
+
+      - name: Publish the GitHub Release
+        run: |
+          gh release create "${RELEASE_TAG}" --verify-tag --title "InfraDesk ${RELEASE_TAG}" --notes-file release-notes.md \
+            "dist/infradesk-${RELEASE_TAG}-linux-amd64.tar.gz" \
+            "dist/infradesk-${RELEASE_TAG}-linux-amd64.tar.gz.sha256" \
+            dist/SHA256SUMS

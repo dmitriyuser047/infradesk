@@ -38,6 +38,7 @@ import application.port.{
   NavigationQueryRepository,
   OperationsOverviewQuery,
   OrganizationMembershipRepository,
+  OrganizationProvisioning,
   OrganizationRepository,
   OperationExecutionRepository,
   ProjectRepository,
@@ -116,6 +117,7 @@ final case class PersistenceComponents(
   resourceRepository: ResourceRepository[ConnectionIO],
   resourceTypeRepository: ResourceTypeRepository[ConnectionIO],
   organizationRepository: OrganizationRepository[ConnectionIO],
+  organizationProvisioning: OrganizationProvisioning[ConnectionIO],
   projectRepository: ProjectRepository[ConnectionIO],
   environmentRepository: EnvironmentRepository[ConnectionIO],
   connectionRepository: ConnectionRepository[ConnectionIO],
@@ -177,7 +179,8 @@ object PersistenceModule {
   def resourceDefinitionRegistry: Either[IllegalArgumentException, ResourceDefinitionRegistry] =
     ResourceDefinitionRegistry.build(resourceTypeCodecs)
 
-  def build(xa: Transactor[IO], resourceTypes: ResourceDefinitionRegistry): PersistenceComponents =
+  def build(xa: Transactor[IO], resourceTypes: ResourceDefinitionRegistry): PersistenceComponents = {
+    val organizations = new PostgresOrganizationRepository
     PersistenceComponents(
       terminalSessionRepository = new persistence.postgres.PostgresTerminalSessionRepository(new PostgresAuditEventRepository),
       transactionRunner = new DoobieTransactionRunner(xa),
@@ -197,7 +200,8 @@ object PersistenceModule {
       configurationAssignmentRuleRepository = new persistence.postgres.PostgresConfigurationAssignmentRuleRepository,
       resourceLabelRepository = new persistence.postgres.PostgresResourceLabelRepository,
       resourceTypeRepository = new PostgresResourceTypeRepository,
-      organizationRepository = new PostgresOrganizationRepository,
+      organizationRepository = organizations,
+      organizationProvisioning = organizations,
       projectRepository = new PostgresProjectRepository,
       environmentRepository = new PostgresEnvironmentRepository,
       connectionRepository = new PostgresConnectionRepository,
@@ -230,4 +234,5 @@ object PersistenceModule {
       operationExecutionRepository = new PostgresOperationExecutionRepository,
       resourceOperationTargetQuery = new PostgresResourceOperationTargetQuery
     )
+  }
 }

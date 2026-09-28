@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package application.auth
 
-import application.port.{OrganizationMembershipRepository, OrganizationRepository, TransactionRunner, UserAccountRepository}
+import application.port.{OrganizationMembershipRepository, OrganizationProvisioning, OrganizationRepository, TransactionRunner, UserAccountRepository}
 import cats.effect.IO
 import cats.syntax.all._
 import domain.auth.{OrganizationMembership, OrganizationRole, UserAccount}
@@ -9,8 +9,14 @@ import domain.auth.{OrganizationMembership, OrganizationRole, UserAccount}
 import java.time.Instant
 import java.util.UUID
 
-final case class BootstrapConfig(email: String, password: String, organizationId: UUID, displayName: String) {
-  override def toString: String = s"BootstrapConfig(email=$email, password=<redacted>, organizationId=$organizationId, displayName=$displayName)"
+/** The first administrator. `organizationName`, when given, lets bootstrap create that organization
+  * itself (an installer has no other way to), under the fixed code `default`; without it the
+  * organization must already exist.
+  */
+final case class BootstrapConfig(email: String, password: String, organizationId: UUID, displayName: String,
+                                 organizationName: Option[String] = None) {
+  override def toString: String = s"BootstrapConfig(email=$email, password=<redacted>, organizationId=$organizationId, " +
+    s"displayName=$displayName, organizationName=${organizationName.getOrElse("")})"
 }
 
 object BootstrapConfig {
@@ -31,7 +37,8 @@ object BootstrapConfig {
         .map(id => Some(BootstrapConfig(
           UserAccount.normalizeEmail(values("INFRADESK_BOOTSTRAP_EMAIL")),
           values("INFRADESK_BOOTSTRAP_PASSWORD"), id,
-          values("INFRADESK_BOOTSTRAP_DISPLAY_NAME").trim
+          values("INFRADESK_BOOTSTRAP_DISPLAY_NAME").trim,
+          values.get("INFRADESK_BOOTSTRAP_ORGANIZATION_NAME").map(_.trim).filter(_.nonEmpty)
         )))
     }
   }
@@ -41,6 +48,7 @@ final class BootstrapAdmin[Tx[_]](
   users: UserAccountRepository[Tx],
   memberships: OrganizationMembershipRepository[Tx],
   organizations: OrganizationRepository[Tx],
+  provisioning: OrganizationProvisioning[Tx],
   runner: TransactionRunner[IO, Tx],
   passwords: PasswordHasher
 ) {
@@ -48,6 +56,8 @@ final class BootstrapAdmin[Tx[_]](
     case None => IO.unit
     case Some(value) =>
       for {
+        _ <- value.organizationName.traverse_(name => IO(Instant.now()).flatMap(now =>
+          runner.run(provisioning.createIfMissing(value.organizationId, BootstrapAdmin.OrganizationCode, name, now))))
         organization <- runner.run(organizations.findActiveById(value.organizationId))
         _ <- IO.raiseWhen(organization.isEmpty)(new IllegalStateException("Bootstrap organization was not found or is inactive"))
         existing <- runner.run(users.findByEmail(value.email))
@@ -71,4 +81,8 @@ final class BootstrapAdmin[Tx[_]](
         ))
       } yield ()
   }
+}
+
+object BootstrapAdmin {
+  val OrganizationCode = "default"
 }

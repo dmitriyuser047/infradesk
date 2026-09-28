@@ -1,8 +1,9 @@
 package ru.bitec.app.ops
 package persistence.postgres
 
-import application.port.OrganizationRepository
+import application.port.{OrganizationProvisioning, OrganizationRepository}
 import domain.organization.Organization
+import cats.syntax.functor._
 import org.typelevel.doobie.ConnectionIO
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
@@ -10,7 +11,8 @@ import org.typelevel.doobie.postgres.implicits._
 import java.time.Instant
 import java.util.UUID
 
-final class PostgresOrganizationRepository extends OrganizationRepository[ConnectionIO] {
+final class PostgresOrganizationRepository extends OrganizationRepository[ConnectionIO]
+  with OrganizationProvisioning[ConnectionIO] {
 
   private final case class OrganizationRow(
     id: UUID,
@@ -34,4 +36,11 @@ final class PostgresOrganizationRepository extends OrganizationRepository[Connec
       .query[OrganizationRow]
       .option
       .map(_.map(_.toDomain))
+
+  override def createIfMissing(id: UUID, code: String, name: String, at: Instant): ConnectionIO[Unit] =
+    sql"""
+      insert into organization (id, code, name, is_active, created_at, updated_at)
+      values ($id, $code, $name, true, $at, $at)
+      on conflict do nothing
+    """.update.run.void
 }

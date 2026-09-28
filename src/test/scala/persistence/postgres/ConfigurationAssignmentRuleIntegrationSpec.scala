@@ -90,6 +90,16 @@ final class ConfigurationAssignmentRuleIntegrationSpec extends FunSuite {
     case e: ConfigurationAssignmentError => e.code
   }
 
+  private def waitsFor(w: ConfigurationDeploymentWorld, blockerPid: Int): IO[Boolean] = {
+    val blocked = w.run(sql"""select exists (select 1 from pg_stat_activity
+                                where datname = current_database() and wait_event_type = 'Lock'
+                                  and $blockerPid = any(pg_blocking_pids(pid))
+                                  and query ilike '%resource%')""".query[Boolean].unique)
+    def poll(left: Int): IO[Boolean] =
+      blocked.flatMap(waiting => if (waiting || left == 0) IO.pure(waiting) else IO.sleep(20.millis) *> poll(left - 1))
+    poll(250)
+  }
+
   // Labels
 
   test("labels replace as a whole by compare-and-set, canonical, bounded, per resource and per tenant") {
@@ -622,6 +632,89 @@ final class ConfigurationAssignmentRuleIntegrationSpec extends FunSuite {
         assertEquals(code(adopted), Some("CONFIGURATION_RULE_RESOURCE_NOT_ELIGIBLE"))
         assertEquals((after.sourceRuleId, after.version), (None, 1))
         assertEquals(excluded, 1L)
+      }
+    }
+  }
+
+  test("label replacement and completion wait in resource-then-rule order without deadlock") {
+    world { h =>
+      val w = h.w
+      val config = PostgresTestDatabase.config
+      val xa = Transactor.fromDriverManager[IO]("org.postgresql.Driver", config.url, config.user, config.password, None)
+      for {
+        profile <- h.profile()
+        node <- w.resource("fi")
+        _ <- h.label(node, "role" -> "vpn")
+        ruleId <- h.rule(profile)
+        // Ensure replacement's scheduling UPDATE actually locks this rule.
+        _ <- w.run(sql"""update configuration_assignment_rule set next_reconcile_at = now() + interval '1 hour'
+                         where id = $ruleId""".update.run)
+        holding <- Deferred[IO, Int]
+        release <- Deferred[IO, Unit]
+        now <- IO.realTimeInstant
+        replacement <- WeakAsync.liftK[IO, ConnectionIO].use { lift =>
+          (for {
+            _ <- sql"""select 1 from resource where organization_id = ${w.org} and id = $node
+                       for no key update""".query[Int].unique
+            pid <- sql"select pg_backend_pid()".query[Int].unique
+            _ <- lift(holding.complete(pid) *> release.get)
+            result <- new PostgresResourceLabelRepository().replace(w.org, node, 1,
+              List(ResourceLabel("role", "db")), now)
+          } yield result).transact(xa)
+        }.start
+        pid <- holding.get
+        completion <- h.service.completeAssignment(w.actor, ruleId, node, Nil).attempt.start
+        waited <- waitsFor(w, pid)
+        _ <- release.complete(())
+        replaced <- replacement.joinWithNever.timeout(10.seconds)
+        completed <- completion.joinWithNever.timeout(10.seconds)
+        assignments <- h.assigned(node)
+      } yield {
+        assert(waited, "completion should wait on the resource held by label replacement")
+        assertEquals(replaced, ResourceLabelWrite.Written(2))
+        assertEquals(code(completed), Some("CONFIGURATION_RULE_RESOURCE_NOT_ELIGIBLE"))
+        assertEquals(assignments, Nil)
+      }
+    }
+  }
+
+  test("adoption and completion wait in resource-then-rule order without deadlock") {
+    world { h =>
+      val w = h.w
+      val config = PostgresTestDatabase.config
+      val xa = Transactor.fromDriverManager[IO]("org.postgresql.Driver", config.url, config.user, config.password, None)
+      for {
+        profile <- h.profile()
+        node <- w.resource("fi")
+        _ <- h.label(node, "role" -> "vpn")
+        ruleId <- h.rule(profile)
+        rule <- h.ruleOf(ruleId)
+        assignment <- w.assignments.create(w.actor, node, profile, ConfigurationAssignmentDraft(1, Path, Nil))
+        holding <- Deferred[IO, Int]
+        release <- Deferred[IO, Unit]
+        now <- IO.realTimeInstant
+        adoption <- WeakAsync.liftK[IO, ConnectionIO].use { lift =>
+          (for {
+            _ <- sql"""select r.id from configuration_assignment a
+                       join resource r on r.id = a.resource_id and r.organization_id = a.organization_id
+                       where a.organization_id = ${w.org} and a.id = $assignment for share of r""".query[UUID].unique
+            pid <- sql"select pg_backend_pid()".query[Int].unique
+            _ <- lift(holding.complete(pid) *> release.get)
+            result <- h.rules.adopt(w.org, rule, assignment, 1, now)
+          } yield result).transact(xa)
+        }.start
+        pid <- holding.get
+        completion <- h.service.completeAssignment(w.actor, ruleId, node, Nil).attempt.start
+        waited <- waitsFor(w, pid)
+        _ <- release.complete(())
+        adopted <- adoption.joinWithNever.timeout(10.seconds)
+        completed <- completion.joinWithNever.timeout(10.seconds)
+        after <- w.assignment(assignment)
+      } yield {
+        assert(waited, "completion should wait on the resource held by adoption")
+        assertEquals(adopted, ManagedAssignmentWrite.Written)
+        assertEquals(code(completed), Some("CONFIGURATION_RULE_TARGET_CONFLICT"))
+        assertEquals(after.sourceRuleId, Some(ruleId))
       }
     }
   }

@@ -12,7 +12,8 @@ RUN npm run build
 FROM nginx:1.29-alpine
 
 ARG INFRADESK_GIT_SHA=unknown
-LABEL org.opencontainers.image.revision=${INFRADESK_GIT_SHA}
+ARG INFRADESK_BUILD_VERSION=0.1.0-SNAPSHOT
+LABEL org.opencontainers.image.version=${INFRADESK_BUILD_VERSION} org.opencontainers.image.revision=${INFRADESK_GIT_SHA}
 ENV INFRADESK_TRUSTED_PROXY_CIDR=172.28.0.1/32 \
     TZ=UTC
 

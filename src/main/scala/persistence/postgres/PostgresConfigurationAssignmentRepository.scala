@@ -35,6 +35,10 @@ import PostgresConfigurationAssignmentRepository.{AssignmentRow, ContextRow, Val
   */
 final class PostgresConfigurationAssignmentRepository extends ConfigurationAssignmentRepository[ConnectionIO] {
 
+  override def lockResource(organizationId: UUID, resourceId: UUID): ConnectionIO[Boolean] =
+    sql"""select 1 from resource where organization_id = $organizationId and id = $resourceId for update"""
+      .query[Int].option.map(_.isDefined)
+
   override def createEligibility(organizationId: UUID, resourceId: UUID, profileId: UUID,
                                  revisionNumber: Int): ConnectionIO[ConfigurationAssignmentEligibility] = {
     import ConfigurationAssignmentEligibility._

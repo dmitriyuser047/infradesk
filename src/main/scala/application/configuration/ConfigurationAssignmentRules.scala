@@ -224,6 +224,9 @@ final class ConfigurationAssignmentRules[F[_]: MonadThrow, Tx[_]: MonadThrow](
                          values: List[ConfigurationVariableValue]): F[UUID] = for {
     _ <- ConfigurationAssignmentValidation.values(values).leftMap(error => invalid(error.getMessage)).liftTo[F]
     id <- writes.run(for {
+      // Label replacement and adoption lock the resource before the rule. Keep that order here.
+      resourceExists <- assignments.lockResource(actor.organizationId, resourceId)
+      _ <- MonadThrow[Tx].raiseUnless(resourceExists)(NotEligible)
       locked <- managed.lockRule(actor.organizationId, ruleId).flatMap(_.liftTo[Tx](NotFound))
       _ <- MonadThrow[Tx].raiseWhen(locked._3)(Archived)
       rule <- rules.find(actor.organizationId, ruleId).flatMap(_.liftTo[Tx](NotFound))

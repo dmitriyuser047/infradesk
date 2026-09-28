@@ -184,7 +184,8 @@ object HttpModule {
       loggers.account)
     val protectedApp =
       new AuthBoundary(authRoutes, accountRoutes, application.authentication, businessApp).app
-    val platformApp = new HealthRoutes(persistence.readinessCheck, loggers.health).routes.orNotFound
+    val platformApp = new HealthRoutes(persistence.readinessCheck, loggers.health,
+      build = HealthRoutes.Build(BuildInfo.version, BuildInfo.gitSha)).routes.orNotFound
 
     val routed: HttpApp[IO] = Kleisli { request: Request[IO] =>
       val path = request.uri.path.renderString

@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package application.auth
 
-import application.port.{MyOrganization, OrganizationMembershipRepository, OrganizationRepository, TransactionRunner, UserAccountRepository}
+import application.port.{MyOrganization, OrganizationMembershipRepository, OrganizationProvisioning, OrganizationRepository, TransactionRunner, UserAccountRepository}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.auth.{OrganizationMembership, UserAccount}
@@ -30,7 +30,7 @@ final class BootstrapAdminSpec extends FunSuite {
   test("bootstrap creates one owner without overwriting an existing password") {
     val users = new Users
     val memberships = new Memberships
-    val service = new BootstrapAdmin[IO](users, memberships, new Organizations(true), runner, new BCryptPasswordHasher)
+    val service = new BootstrapAdmin[IO](users, memberships, new Organizations(true), new Provisioning, runner, new BCryptPasswordHasher)
 
     service.run(Some(config)).unsafeRunSync()
     assertEquals(users.values.length, 1)
@@ -47,10 +47,39 @@ final class BootstrapAdminSpec extends FunSuite {
   test("bootstrap rejects a missing organization before creating a user") {
     val users = new Users
     val memberships = new Memberships
-    val service = new BootstrapAdmin[IO](users, memberships, new Organizations(false), runner, new BCryptPasswordHasher)
+    val service = new BootstrapAdmin[IO](users, memberships, new Organizations(false), new Provisioning, runner, new BCryptPasswordHasher)
     intercept[IllegalStateException](service.run(Some(config)).unsafeRunSync())
     assertEquals(users.values.length, 0)
     assertEquals(memberships.values.length, 0)
+  }
+
+  test("bootstrap creates the named organization once, then the owner inside it") {
+    val users = new Users
+    val memberships = new Memberships
+    val provisioning = new Provisioning
+    val organizations = new OrganizationRepository[IO] {
+      override def findActiveById(id: UUID): IO[Option[Organization]] =
+        IO(provisioning.values.find(_._1 == id).map { case (_, code, name) => Organization(id, code, name, true, now, now) })
+    }
+    val service = new BootstrapAdmin[IO](users, memberships, organizations, provisioning, runner, new BCryptPasswordHasher)
+    val named = config.copy(organizationName = Some("Default organization"))
+    service.run(Some(named)).unsafeRunSync()
+    service.run(Some(named)).unsafeRunSync()
+    assertEquals(provisioning.values, List((orgId, "default", "Default organization")))
+    assertEquals((users.values.length, memberships.values.map(_.organizationId)), (1, List(orgId)))
+    assertEquals(BootstrapConfig.fromEnvironment(Map(
+      "INFRADESK_BOOTSTRAP_EMAIL" -> "admin@example.com", "INFRADESK_BOOTSTRAP_PASSWORD" -> "initial-password",
+      "INFRADESK_BOOTSTRAP_ORGANIZATION_ID" -> orgId.toString, "INFRADESK_BOOTSTRAP_DISPLAY_NAME" -> "Admin",
+      "INFRADESK_BOOTSTRAP_ORGANIZATION_NAME" -> " Default organization ")).map(_.flatMap(_.organizationName)),
+      Right(Some("Default organization")))
+    assert(!named.toString.contains("initial-password"))
+  }
+
+  private final class Provisioning extends OrganizationProvisioning[IO] {
+    var values: List[(UUID, String, String)] = Nil
+    override def createIfMissing(id: UUID, code: String, name: String, at: Instant): IO[Unit] = IO {
+      if (!values.exists(value => value._1 == id || value._2 == code)) values = values :+ ((id, code, name))
+    }
   }
 
   private val runner = new TransactionRunner[IO, IO] {

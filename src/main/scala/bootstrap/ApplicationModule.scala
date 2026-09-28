@@ -514,6 +514,7 @@ object ApplicationModule {
         userAccountRepository,
         membershipRepository,
         organizationRepository,
+        organizationProvisioning,
         transactionRunner,
         passwordHasher
       ),

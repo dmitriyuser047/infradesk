@@ -208,6 +208,7 @@ final class ConfigurationAssignmentRoutesSpec extends FunSuite {
     private def guard[A](value: => A): IO[A] = if (failReads) IO.raiseError(new IllegalStateException("sql secret")) else IO(value)
 
     private val repository = new ConfigurationAssignmentRepository[IO] {
+      def lockResource(organizationId: UUID, resourceId: UUID): IO[Boolean] = IO.pure(true)
       def createEligibility(organizationId: UUID, resourceId: UUID, profileId: UUID,
                             revisionNumber: Int): IO[ConfigurationAssignmentEligibility] = IO.pure(ConfigurationAssignmentEligibility.Eligible)
       private def taken(a: ConfigurationAssignment, path: String) = store.assignments.values.exists(other =>

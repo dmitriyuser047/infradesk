@@ -460,3 +460,72 @@ jobs:
         run: |
           docker rm --force infradesk-ci-terminal-sshd >/dev/null 2>&1 || true
           docker compose -f compose.prod.yml down -v
+
+  # The self-hosted release bundle, tested as a user would run it: built by the same script as a
+  # release (images pushed to a local registry and pinned by digest), verified, extracted and
+  # installed on a real Ubuntu host, then operated, backed up, restored, updated and uninstalled.
+  self-hosted:
+    runs-on: ${{ matrix.os }}
+    needs: [backend, frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-22.04]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: ShellCheck the installer, CLI and lifecycle scripts
+        run: |
+          shellcheck --version
+          shellcheck --severity=warning --external-sources --source-path=SCRIPTDIR \
+            packaging/self-hosted/install.sh packaging/self-hosted/update.sh packaging/self-hosted/backup.sh \
+            packaging/self-hosted/restore.sh packaging/self-hosted/uninstall.sh packaging/self-hosted/infradesk \
+            packaging/self-hosted/lib/common.sh packaging/self-hosted/build-bundle.sh packaging/self-hosted/tests/*.sh
+      - name: Installer unit tests
+        run: bash packaging/self-hosted/tests/unit.sh
+      - name: Build two releases' images into a local registry
+        run: |
+          docker run --detach --name ci-registry --publish 127.0.0.1:5000:5000 registry:2
+          for version in 0.0.1 0.0.2; do
+            docker build --file deploy/backend.Dockerfile \
+              --build-arg INFRADESK_GIT_SHA="${GITHUB_SHA}" --build-arg INFRADESK_BUILD_VERSION="${version}" \
+              --tag "localhost:5000/infradesk-backend:${version}" .
+            docker push --quiet "localhost:5000/infradesk-backend:${version}"
+          done
+          docker build --file deploy/frontend.Dockerfile --build-arg INFRADESK_GIT_SHA="${GITHUB_SHA}" \
+            --tag localhost:5000/infradesk-frontend:ci .
+          docker push --quiet localhost:5000/infradesk-frontend:ci
+          docker pull --quiet postgres:17
+      - name: Build the release bundles with the release script
+        run: |
+          digest() { docker inspect --format '{{index .RepoDigests 0}}' "$1"; }
+          for version in 0.0.1 0.0.2; do
+            packaging/self-hosted/build-bundle.sh --version "v${version}" --git-sha "${GITHUB_SHA}" \
+              --backend-image "$(digest "localhost:5000/infradesk-backend:${version}")" \
+              --frontend-image "$(digest localhost:5000/infradesk-frontend:ci)" \
+              --postgres-image "$(digest postgres:17)" --output "dist/${version}"
+          done
+          tar -tzf dist/0.0.1/infradesk-v0.0.1-linux-amd64.tar.gz
+          cat dist/0.0.1/SHA256SUMS
+          # The installer must pull what the bundle names, not find it already built on this host.
+          docker image rm localhost:5000/infradesk-backend:0.0.1 localhost:5000/infradesk-backend:0.0.2 \
+            localhost:5000/infradesk-frontend:ci >/dev/null
+      - name: Installer preflight on clean Ubuntu and Debian containers
+        run: packaging/self-hosted/tests/preflight.sh dist/0.0.1
+      - name: Install, operate, back up, restore, update and uninstall the bundle
+        run: sudo env "PATH=${PATH}" bash packaging/self-hosted/tests/e2e.sh dist/0.0.1 dist/0.0.2 "${GITHUB_SHA}"
+      - name: Collect InfraDesk logs on failure
+        if: failure()
+        run: |
+          sudo docker ps -a --filter label=com.docker.compose.project=infradesk
+          for container in infradesk-backend-1 infradesk-proxy-1 infradesk-postgres-1; do
+            sudo docker logs --tail 200 "${container}" 2>&1 || true
+          done
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-24.04'
+        with:
+          name: self-hosted-bundle-ci
+          path: dist/0.0.1
+          retention-days: 7

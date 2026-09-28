@@ -35,6 +35,9 @@ object ConfigurationAssignmentEligibility {
   */
 trait ConfigurationAssignmentRepository[F[_]] {
 
+  /** Lock the resource before a rule when a write needs both rows. False when it is absent. */
+  def lockResource(organizationId: UUID, resourceId: UUID): F[Boolean]
+
   /** Recheck create prerequisites while locking the mutable rows until the insert and audit commit. */
   def createEligibility(organizationId: UUID, resourceId: UUID, profileId: UUID,
                         revisionNumber: Int): F[ConfigurationAssignmentEligibility]

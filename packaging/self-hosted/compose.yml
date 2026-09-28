@@ -1,0 +1,108 @@
+# InfraDesk self-hosted topology. The same shape as the tested production topology: the proxy is
+# the only service with a published port, the backend and PostgreSQL talk over a private network.
+#
+# Images are pinned by digest when the release bundle is built; nothing here refers to a mutable
+# tag or to a source tree. Every value below comes from /etc/infradesk/infradesk.env, which the
+# installer creates (mode 600) and every `infradesk` command passes with --env-file.
+
+name: infradesk
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: "@@POSTGRES_IMAGE@@"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: infradesk
+      POSTGRES_USER: infradesk
+      POSTGRES_PASSWORD: ${INFRADESK_DB_PASSWORD:?INFRADESK_DB_PASSWORD is required}
+      TZ: UTC
+      PGTZ: UTC
+    # No published port. The data lives on the host at a fixed, installer-owned path.
+    volumes:
+      - /var/lib/infradesk/postgres:/var/lib/postgresql/data
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: ${INFRADESK_POSTGRES_MEMORY_LIMIT:-1g}
+
+  backend:
+    image: "@@BACKEND_IMAGE@@"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Only what an installation decides. Workers, pools, leases and timeouts keep the
+    # application's own defaults.
+    environment:
+      INFRADESK_DB_URL: jdbc:postgresql://postgres:5432/infradesk
+      INFRADESK_DB_USER: infradesk
+      INFRADESK_DB_PASSWORD: ${INFRADESK_DB_PASSWORD:?INFRADESK_DB_PASSWORD is required}
+      INFRADESK_HTTP_HOST: 0.0.0.0
+      INFRADESK_HTTP_PORT: 8080
+      INFRADESK_AUTH_COOKIE_SECURE: ${INFRADESK_AUTH_COOKIE_SECURE:-true}
+      # The backend is reachable only through the proxy, which overwrites X-Real-IP.
+      INFRADESK_TRUST_FORWARDED_FOR: "true"
+      # Decrypts the stored connection credentials: created once by the installer and kept.
+      INFRADESK_SECRET_MASTER_KEY_BASE64: ${INFRADESK_SECRET_MASTER_KEY_BASE64:?INFRADESK_SECRET_MASTER_KEY_BASE64 is required}
+      # First boot only. The installer supplies these from a separate, short-lived file and then
+      # recreates the backend without them.
+      INFRADESK_BOOTSTRAP_EMAIL: ${INFRADESK_BOOTSTRAP_EMAIL:-}
+      INFRADESK_BOOTSTRAP_PASSWORD: ${INFRADESK_BOOTSTRAP_PASSWORD:-}
+      INFRADESK_BOOTSTRAP_ORGANIZATION_ID: ${INFRADESK_BOOTSTRAP_ORGANIZATION_ID:-}
+      INFRADESK_BOOTSTRAP_ORGANIZATION_NAME: ${INFRADESK_BOOTSTRAP_ORGANIZATION_NAME:-}
+      INFRADESK_BOOTSTRAP_DISPLAY_NAME: ${INFRADESK_BOOTSTRAP_DISPLAY_NAME:-}
+      INFRADESK_NOTIFICATION_WEBHOOK_URL: ${INFRADESK_NOTIFICATION_WEBHOOK_URL:-}
+    expose:
+      - "8080"
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 45s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: ${INFRADESK_BACKEND_MEMORY_LIMIT:-1g}
+
+  proxy:
+    image: "@@FRONTEND_IMAGE@@"
+    restart: unless-stopped
+    environment:
+      # Only the host-side gateway of the private network may assert X-Forwarded-For.
+      INFRADESK_TRUSTED_PROXY_CIDR: ${INFRADESK_TRUSTED_PROXY_CIDR:?INFRADESK_TRUSTED_PROXY_CIDR is required}
+    depends_on:
+      backend:
+        condition: service_healthy
+    # The single entrypoint: loopback by default, so an existing reverse proxy fronts it.
+    ports:
+      - "${INFRADESK_HTTP_PUBLISH:?INFRADESK_HTTP_PUBLISH is required}:80"
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+
+networks:
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${INFRADESK_INTERNAL_SUBNET:?INFRADESK_INTERNAL_SUBNET is required}

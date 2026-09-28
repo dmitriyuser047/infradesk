@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# The InfraDesk self-hosted command line. Works from any directory: every command uses the fixed
+# compose file, environment file and project name of the installation. Prints no secret.
+set -Eeuo pipefail
+
+# shellcheck source=lib/common.sh
+. /opt/infradesk/lib/common.sh
+
+usage() {
+  cat <<'EOF'
+Usage: infradesk <command>
+
+  status                 Services, readiness and where InfraDesk listens
+  logs [SERVICE]         Recent logs (backend, proxy/frontend, postgres); default all
+  start | stop | restart Start, stop or restart InfraDesk (data is never removed)
+  version                Installed bundle and the build the backend reports
+  doctor                 Safe diagnostics you can share (no secrets)
+  backup                 Take a verified PostgreSQL backup
+  restore FILE [--yes]   Replace the database with a backup (destructive)
+  update [VERSION]       Update to a release: update v0.1.1, or update --from-file ARCHIVE --sha256sums FILE
+  uninstall [...]        Remove InfraDesk; data is kept unless --purge-data
+EOF
+}
+
+require_installation() {
+  [ -f "${INFRADESK_STATE_FILE}" ] && [ -f "${INFRADESK_ENV_FILE}" ] ||
+    die "InfraDesk is not installed on this host (${INFRADESK_STATE_FILE} is missing)."
+}
+
+service_name() {
+  case "$1" in
+    backend) printf 'backend' ;;
+    frontend|proxy) printf 'proxy' ;;
+    postgres|database|db) printf 'postgres' ;;
+    *) die "Unknown service: $1 (use backend, frontend or postgres)" ;;
+  esac
+}
+
+cmd_status() {
+  local url ready
+  url="$(base_url)"
+  if [ "$(http_status "${url}/ready")" = "200" ]; then ready="ready"; else ready="not ready"; fi
+  log "InfraDesk $(state_value VERSION)"
+  log ""
+  printf '%-11s %s\n' "Frontend" "$(container_health proxy)"
+  printf '%-11s %s (%s)\n' "Backend" "$(container_health backend)" "${ready}"
+  printf '%-11s %s\n' "PostgreSQL" "$(container_health postgres)"
+  log ""
+  log "URL:"
+  log "  ${url}"
+  log ""
+  log "Data:"
+  log "  Database:      ${INFRADESK_PG_DATA_DIR}"
+  log "  Backups:       ${INFRADESK_BACKUP_DIR}"
+  log "  Configuration: ${INFRADESK_ENV_FILE}"
+  [ "${ready}" = "ready" ]
+}
+
+cmd_logs() {
+  if [ "$#" -gt 0 ]; then compose logs --tail=200 "$(service_name "$1")"
+  else compose logs --tail=200; fi
+}
+
+cmd_start() {
+  compose up -d
+  wait_ready "$(base_url)" 180 && log "InfraDesk is ready at $(base_url)." ||
+    die "InfraDesk did not become ready within 180 seconds." "Your data is preserved. Check: infradesk logs backend"
+}
+
+cmd_stop() { compose stop; log "InfraDesk is stopped. Data is preserved; start it with: infradesk start"; }
+
+cmd_restart() {
+  compose restart
+  wait_ready "$(base_url)" 180 && log "InfraDesk is ready at $(base_url)." ||
+    die "InfraDesk did not become ready within 180 seconds." "Your data is preserved. Check: infradesk logs backend"
+}
+
+cmd_version() {
+  local bundle sha identity running_version running_sha
+  bundle="$(state_value VERSION)"
+  sha="$(state_value GIT_SHA)"
+  identity="$(running_identity "$(base_url)")"
+  running_version="${identity% *}"
+  running_sha="${identity#* }"
+  log "CLI bundle:"
+  log "  ${bundle}"
+  log "  ${sha}"
+  log ""
+  log "Backend:"
+  if [ -z "${running_version}" ]; then
+    log "  not reachable"
+    return 1
+  fi
+  log "  v${running_version}"
+  log "  ${running_sha}"
+  if [ "v${running_version}" != "${bundle}" ] || [ "${running_sha}" != "${sha}" ]; then
+    log ""
+    log "WARNING:"
+    log "Installed bundle and running backend do not match."
+    return 1
+  fi
+}
+
+check() {
+  local label="$1" result="$2" detail="$3"
+  printf '%-5s %-26s %s\n' "${result}" "${label}" "${detail}"
+}
+
+cmd_doctor() {
+  local url identity mode owner free memory schema failures=0
+  url="$(base_url)"
+  log "InfraDesk doctor — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  log "(contains no secret values; safe to share)"
+  log ""
+  check "installer state" OK "$(state_value VERSION) $(state_value GIT_SHA) status=$(state_value STATUS) schema=$(state_value INSTALLER_SCHEMA_VERSION)"
+  check "docker" OK "engine $(docker_server_version || printf '?'), compose $(compose_version || printf '?')"
+  mode="$(stat -c '%a' "${INFRADESK_ENV_FILE}")"; owner="$(stat -c '%U:%G' "${INFRADESK_ENV_FILE}")"
+  if check_env_permissions; then check "configuration file" OK "${owner} ${mode}"
+  else check "configuration file" FAIL "${owner} ${mode} (expected root:root 600)"; failures=$((failures + 1)); fi
+  check "listen" OK "$(env_value INFRADESK_HTTP_PUBLISH) (cookie secure=$(env_value INFRADESK_AUTH_COOKIE_SECURE))"
+  for service in postgres backend proxy; do
+    case "$(container_health "${service}")" in
+      "running / healthy") check "container ${service}" OK "running / healthy" ;;
+      *) check "container ${service}" FAIL "$(container_health "${service}")"; failures=$((failures + 1)) ;;
+    esac
+  done
+  if [ "$(http_status "${url}/ready")" = "200" ]; then check "readiness" OK "${url}/ready"
+  else check "readiness" FAIL "${url}/ready"; failures=$((failures + 1)); fi
+  if [ "$(http_status "${url}/")" = "200" ]; then check "frontend" OK "${url}/"
+  else check "frontend" FAIL "${url}/"; failures=$((failures + 1)); fi
+  identity="$(running_identity "${url}")"
+  if [ "${identity}" = "$(state_value VERSION | sed 's/^v//') $(state_value GIT_SHA)" ]; then check "build identity" OK "${identity}"
+  else check "build identity" FAIL "running '${identity}'"; failures=$((failures + 1)); fi
+  schema="$(db_schema_version || true)"
+  check "database schema" "${schema:+OK}${schema:-FAIL}" "${schema:-unknown}"
+  free="$(df -Ph "${INFRADESK_DATA_DIR}" | awk 'NR == 2 { print $4 " free on " $6 }')"
+  check "disk" OK "${free}"
+  memory="$(awk '/^MemTotal:/ { printf "%d MiB total", $2 / 1024 } /^MemAvailable:/ { printf ", %d MiB available", $2 / 1024 }' /proc/meminfo)"
+  check "memory" OK "${memory}"
+  check "backups" OK "$(find "${INFRADESK_BACKUP_DIR}" -maxdepth 1 -name '*.dump' 2>/dev/null | wc -l) in ${INFRADESK_BACKUP_DIR}"
+  log ""
+  log "Recent backend warnings and errors:"
+  # Application logs never carry credentials; anything shaped like one is masked all the same.
+  compose logs --no-color --tail=500 backend 2>/dev/null | grep -E ' (WARN|ERROR) ' | tail -n 20 |
+    sed -E 's/((password|secret|token|key)[^= ]*=)[^ ]*/\1<redacted>/Ig' || true
+  [ "${failures}" -eq 0 ]
+}
+
+main() {
+  local command="${1:-}"
+  [ "$#" -gt 0 ] && shift
+  case "${command}" in
+    ""|-h|--help|help) usage ;;
+    status) require_root; require_installation; cmd_status ;;
+    logs) require_root; require_installation; cmd_logs "$@" ;;
+    start) require_root; require_installation; cmd_start ;;
+    stop) require_root; require_installation; cmd_stop ;;
+    restart) require_root; require_installation; cmd_restart ;;
+    version) require_installation; cmd_version ;;
+    doctor) require_root; require_installation; cmd_doctor ;;
+    backup) exec "${INFRADESK_APP_DIR}/backup.sh" "$@" ;;
+    restore) exec "${INFRADESK_APP_DIR}/restore.sh" "$@" ;;
+    update) exec "${INFRADESK_APP_DIR}/update.sh" "$@" ;;
+    uninstall) exec "${INFRADESK_APP_DIR}/uninstall.sh" "$@" ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"
