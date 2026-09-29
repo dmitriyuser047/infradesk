@@ -39,10 +39,12 @@ type Call = { url: string; method: string; body?: Record<string, unknown> }
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value),
   { status, headers: { 'Content-Type': 'application/json' } })
 
-function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syncFails?: string; activeDisabled?: boolean } = {}) {
+function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syncFails?: string; activeDisabled?: boolean; loseFirstActionResponse?: boolean
+  hideActionHistory?: boolean } = {}) {
   const calls: Call[] = []
   let nodes = [frankfurt, options.activeDisabled ? { ...idle, active: true } : idle]
   let executions: IntegrationActionExecution[] = []
+  let lostResponses = options.loseFirstActionResponse ? 1 : 0
   const client = createAppQueryClient()
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input); const method = init?.method ?? 'GET'
@@ -53,16 +55,21 @@ function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syn
     if (url === '/api/v1/organizations/org/integrations' && method === 'GET') return json([{ ...integration, overview }])
     if (url === base && method === 'GET') return json({ ...integration, overview })
     if (url === `${base}/inventory/summary`) return json(overview)
-    if (url === `${base}/actions?limit=50`) return json({ items: executions })
+    if (url === `${base}/actions?limit=50`) return json({ items: options.hideActionHistory ? [] : executions })
     if (url.startsWith(`${base}/actions/`)) return json(executions.find(value => url.endsWith(value.id)))
     if (url.endsWith('/actions') && method === 'POST') {
       const objectId = url.split('/').at(-2)!
       const action = body!.action as IntegrationActionExecution['action']
+      // Idempotent by request ID, as the backend is.
+      const existing = executions.find(value => value.requestId === body!.requestId)
+      if (existing) return json(existing, 200)
       const value: IntegrationActionExecution = { id: `action-${executions.length}`, requestId: body!.requestId as string,
         integrationId: 'one', inventoryObjectId: objectId, displayName: objectId === 'obj-a' ? 'Frankfurt' : 'Idle',
         requestedByUserId: 'user', requestedByName: 'Operator', action, status: 'QUEUED',
         createdAt: '2026-09-29T10:00:03Z', startedAt: null, finishedAt: null, errorCode: null }
       executions = [value, ...executions]
+      // The intent is recorded, but the answer never reaches the browser.
+      if (lostResponses > 0) { lostResponses -= 1; throw new TypeError('Failed to fetch') }
       return json(value, 202)
     }
     if (url.startsWith(`${base}/inventory/nodes`)) {
@@ -174,6 +181,40 @@ describe('integration detail', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Actions' }))
     expect(await screen.findByText('Operator')).toBeTruthy()
     expect(await screen.findByText('NODE_RESTART')).toBeTruthy()
+  })
+
+  it('after a lost response the same request ID must be checked; it cannot be cancelled and forgotten', async () => {
+    const { calls } = setup('/organizations/org/integrations/one?tab=nodes', 'OWNER',
+      { activeDisabled: true, loseFirstActionResponse: true })
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Confirm' }))
+    // Until the request is resolved it can only be checked with its own ID, never cancelled and forgotten.
+    const dialog = screen.queryByRole('dialog')
+    if (dialog && within(dialog).queryByText(/The response was lost/)) {
+      expect((within(dialog).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true)
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Check request' }))
+    }
+    // Resolved either by the retry or by finding the request ID in the action history.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    const posts = calls.filter(call => call.url.endsWith('/actions') && call.method === 'POST')
+    expect(new Set(posts.map(call => call.body?.requestId)).size).toBe(1)
+    expect(await screen.findByText('Queued')).toBeTruthy()
+    expect(Object.keys(window.sessionStorage).some(key => key.startsWith('integration-action-request:'))).toBe(false)
+  })
+
+  it('while the lost request is not visible yet, Cancel is locked and the retry reuses its request ID', async () => {
+    const { calls } = setup('/organizations/org/integrations/one?tab=nodes', 'OWNER',
+      { activeDisabled: true, loseFirstActionResponse: true, hideActionHistory: true })
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Confirm' }))
+    const dialog = screen.getByRole('dialog')
+    expect(await within(dialog).findByText(/The response was lost/)).toBeTruthy()
+    expect((within(dialog).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Check request' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    const posts = calls.filter(call => call.url.endsWith('/actions') && call.method === 'POST')
+    expect(posts).toHaveLength(2)
+    expect(posts[1].body?.requestId).toBe(posts[0].body?.requestId)
   })
 
   it('the list links each integration to its detail and summarizes its last sync', async () => {

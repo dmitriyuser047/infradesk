@@ -66,8 +66,12 @@ final class IntegrationSyncTransactions[Tx[_]: MonadThrow](
   /** TX2: the whole snapshot and the completion of the session, or nothing. When the session was
     * retired meanwhile (it outlived its deadline), the snapshot is rolled back with it.
     */
-  def persist(session: IntegrationSyncSession, observation: IntegrationObservation): Tx[IntegrationSyncSession] =
+  def persist(prepared: PreparedIntegrationSync, observation: IntegrationObservation): Tx[IntegrationSyncSession] = {
+    val session = prepared.session
     for {
+      current <- integrations.findByIdForUpdate(session.organizationId, session.integrationId)
+      _ <- Either.cond(current.exists(value => value.baseUrl == prepared.integration.baseUrl &&
+        value.secretId == prepared.integration.secretId), (), ConfigurationChanged).liftTo[Tx]
       now <- time.now
       deactivated <- inventory.applySnapshot(session.organizationId, session.integrationId, session.id, observation, now)
       counts = IntegrationSyncCounts(observation.count(IntegrationObjectType.Node),
@@ -75,6 +79,7 @@ final class IntegrationSyncTransactions[Tx[_]: MonadThrow](
       completed <- sessions.complete(session.organizationId, session.id, now, counts)
       _ <- if (completed) ().pure[Tx] else (StaleSessionRetired: Throwable).raiseError[Tx, Unit]
     } yield session.copy(finishedAt = Some(now), status = IntegrationSyncStatus.Completed, counts = Some(counts))
+  }
 
   /** Fails a still-RUNNING session. When it was already finished elsewhere (retired as stale while
     * the provider was being read), that durable outcome stands and is what is returned: a later
@@ -138,7 +143,7 @@ final class IntegrationSync[Tx[_]](transactions: IntegrationSyncTransactions[Tx]
           case Right(observation) =>
             elapsed.flatMap(ms => info(s"integration.sync.remote.completed $context nodes=${observation.count(IntegrationObjectType.Node)} " +
               s"hosts=${observation.count(IntegrationObjectType.Host)} configProfiles=${observation.count(IntegrationObjectType.ConfigProfile)} durationMs=$ms")) *>
-              runner.run(transactions.persist(session, observation)).attempt.flatMap {
+              runner.run(transactions.persist(prepared, observation)).attempt.flatMap {
                 case Right(completed) =>
                   val counts = completed.counts.getOrElse(IntegrationSyncCounts(0, 0, 0, 0))
                   info(s"integration.sync.snapshot.persisted $context deactivated=${counts.deactivated}") *>
@@ -149,6 +154,8 @@ final class IntegrationSync[Tx[_]](transactions: IntegrationSyncTransactions[Tx]
                   runner.run(transactions.durable(session)).flatTap(stored => elapsed.flatMap(ms =>
                     error(s"integration.sync.failed $context errorCode=${stored.errorCode.getOrElse("NONE")} " +
                       s"retired=true durationMs=$ms")))
+                case Left(ConfigurationChanged) =>
+                  failSession(session, ConfigurationChangedCode, context, elapsed)
                 case Left(other) =>
                   failSession(session, PersistFailedCode, context, elapsed, Some(other.getClass.getSimpleName))
               }
@@ -197,9 +204,11 @@ object IntegrationSync {
   val StaleCode = "INTEGRATION_SYNC_STALE"
   val StaleMessage = "Synchronization was abandoned and recovered"
   val PersistFailedCode = "INTEGRATION_SYNC_FAILED"
+  val ConfigurationChangedCode = "INTEGRATION_CONFIGURATION_CHANGED"
   val RecoveryGrace: FiniteDuration = scala.concurrent.duration.DurationInt(60).seconds
 
   private[integration] case object StaleSessionRetired extends RuntimeException("Synchronization session was retired")
+  private[integration] case object ConfigurationChanged extends RuntimeException("Integration configuration changed")
 
   /** Only error codes reach a session: never a provider's text, a URL or a credential. */
   def codeOf(error: Throwable): String = error match {
@@ -221,6 +230,7 @@ object IntegrationSync {
     case "INTEGRATION_DESTINATION_NOT_ALLOWED" => "Remote API address is not allowed"
     case "INTEGRATION_CREDENTIAL_INVALID" => "Integration credential is invalid"
     case "INTEGRATION_PROVIDER_UNSUPPORTED" => "Integration provider is unavailable"
+    case ConfigurationChangedCode => "Integration configuration changed during synchronization"
     case StaleCode => StaleMessage
     case _ => "Synchronization failed"
   }

@@ -69,6 +69,8 @@ export const en = {
     generic: 'Something went wrong. Please try again.',
     tryLater: 'Please try again shortly.',
     codes: {
+      INTEGRATION_ACTION_ALREADY_RUNNING: 'A node action is still queued or running. Wait for it to finish before changing the endpoint, the credentials or deleting the integration.',
+      INTEGRATION_CONFIGURATION_CHANGED: 'The integration endpoint or credentials changed during synchronization. Run Sync now again.',
       CONFIGURATION_PROFILE_NOT_FOUND: 'Configuration not found.',
       CONFIGURATION_ASSIGNMENT_NOT_FOUND: 'Configuration assignment not found.',
       CONFIGURATION_TARGET_NOT_FOUND: 'Target resource not found.',

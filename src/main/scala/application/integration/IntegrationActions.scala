@@ -38,7 +38,7 @@ final class IntegrationActions[Tx[_]: MonadThrow](integrations: IntegrationRepos
 
   private def create(actor: ActorContext, integrationId: UUID, objectId: UUID, requestId: UUID,
     action: IntegrationActionCode): Tx[IntegrationActionExecution] = for {
-    integration <- integrations.findById(actor.organizationId, integrationId).flatMap(_.liftTo[Tx](
+    integration <- integrations.findByIdForUpdate(actor.organizationId, integrationId).flatMap(_.liftTo[Tx](
       IntegrationError("INTEGRATION_NOT_FOUND", "Integration was not found")))
     _ <- Either.cond(integration.providerType == IntegrationProviderType.Remnawave &&
       providers.find(integration.providerType).exists(_.capabilities.contains(IntegrationCapability.SafeActions)),

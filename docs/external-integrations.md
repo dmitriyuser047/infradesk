@@ -131,5 +131,26 @@ automatic observation. A disabled integration can be refreshed manually with **S
 | `INFRADESK_INTEGRATIONS_ACTIONS_BATCH_SIZE` | `20` |
 | `INFRADESK_INTEGRATIONS_ACTIONS_MAX_CONCURRENCY` | `3` |
 
+**The target of an action cannot move under it.** An execution does not copy the base URL or the
+credential; the integration is locked instead. A request locks the integration row
+(`SELECT ... FOR UPDATE`), and so do edit and delete, so they are serialized. While any action of
+the integration is `QUEUED` or `RUNNING`:
+
+- changing the base URL or replacing the credential is refused with `409
+  INTEGRATION_ACTION_ALREADY_RUNNING` (renaming stays allowed);
+- deleting the integration is refused the same way, so an execution can never be cascaded away
+  while its remote write is in flight.
+
+A base URL change or a credential replacement also marks every observed object of the
+integration inactive in the same transaction; bindings are kept. Actions need an active node, so
+nothing can be sent to the new endpoint with an identifier observed at the old one. The next
+**Sync now** reactivates what the new endpoint really reports. An observation that started before
+such a change is not applied: its session fails with `INTEGRATION_CONFIGURATION_CHANGED`.
+
+The browser keeps a request's `requestId` until the request is resolved. After an ambiguous
+failure (network error or 5xx) the dialog can only check the same request again — it cannot be
+cancelled and replaced by a new ID — and it is resolved as soon as the action history shows that
+request ID.
+
 Traffic reset, forced restart, bulk actions, desired state and automatic remediation remain out
 of scope.

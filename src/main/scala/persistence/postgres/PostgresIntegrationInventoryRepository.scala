@@ -97,6 +97,10 @@ final class PostgresIntegrationSyncSessionRepository extends IntegrationSyncSess
 final class PostgresIntegrationInventoryRepository extends IntegrationInventoryRepository[ConnectionIO] {
   import IntegrationInventoryRows._
 
+  override def deactivateAll(organizationId: UUID, integrationId: UUID, at: Instant): ConnectionIO[Int] =
+    sql"""update integration_inventory_object set is_active = false, updated_at = $at
+      where organization_id = $organizationId and integration_id = $integrationId and is_active""".update.run
+
   override def applySnapshot(organizationId: UUID, integrationId: UUID, sessionId: UUID,
     observation: IntegrationObservation, at: Instant): ConnectionIO[Int] = {
     val objects = observation.objects

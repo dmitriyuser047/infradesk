@@ -73,6 +73,8 @@ export const ru: Messages = {
     generic: 'Что-то пошло не так. Попробуйте ещё раз.',
     tryLater: 'Попробуйте ещё раз немного позже.',
     codes: {
+      INTEGRATION_ACTION_ALREADY_RUNNING: 'Действие над нодой ещё в очереди или выполняется. Дождитесь его завершения, прежде чем менять адрес, учётные данные или удалять интеграцию.',
+      INTEGRATION_CONFIGURATION_CHANGED: 'Адрес или учётные данные интеграции изменились во время синхронизации. Запустите синхронизацию ещё раз.',
       CONFIGURATION_PROFILE_NOT_FOUND: 'Конфигурация не найдена.',
       CONFIGURATION_ASSIGNMENT_NOT_FOUND: 'Назначение конфигурации не найдено.',
       CONFIGURATION_TARGET_NOT_FOUND: 'Целевой ресурс не найден.',

@@ -3,8 +3,9 @@ package application.integration
 
 import application.audit.AuditRecorder
 import application.auth.ActorContext
-import application.port.{IdGenerator, IntegrationCryptography, IntegrationRepository, IntegrationSecret,
-  IntegrationSecretRepository, IntegrationSyncStateRepository, TimeProvider}
+import application.port.{IdGenerator, IntegrationActionRepository, IntegrationCryptography,
+  IntegrationInventoryRepository, IntegrationRepository, IntegrationSecret, IntegrationSecretRepository,
+  IntegrationSyncStateRepository, TimeProvider}
 import cats.MonadThrow
 import cats.syntax.all._
 import domain.audit.{AuditAction, AuditTargetType}
@@ -23,7 +24,8 @@ final case class UpdateIntegrationCommand(name: String, baseUrl: String,
 final class IntegrationManagement[Tx[_]: MonadThrow](
   integrations: IntegrationRepository[Tx], secrets: IntegrationSecretRepository[Tx],
   ids: IdGenerator[Tx], time: TimeProvider[Tx], cipher: IntegrationCryptography,
-  audit: AuditRecorder[Tx], syncState: IntegrationSyncStateRepository[Tx]
+  audit: AuditRecorder[Tx], syncState: IntegrationSyncStateRepository[Tx],
+  actions: IntegrationActionRepository[Tx], inventory: IntegrationInventoryRepository[Tx]
 ) {
   def list(organizationId: UUID): Tx[List[Integration]] = integrations.listByOrganization(organizationId)
   def get(organizationId: UUID, id: UUID): Tx[Option[Integration]] = integrations.findById(organizationId, id)
@@ -50,6 +52,8 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
     url <- IntegrationBaseUrl.parse(command.baseUrl).leftMap(_ => invalid).liftTo[Tx]
     _ <- command.credential.traverse_(validCredential).liftTo[Tx]
     stored <- load(actor.organizationId, id)
+    targetChanged = stored.baseUrl != url || command.credential.nonEmpty
+    _ <- if (targetChanged) requireNoActive(actor.organizationId, id) else ().pure[Tx]
     replacement <- command.credential.traverse(credential =>
       ids.nextId.map(secretId => cipher.encrypt(secretId, actor.organizationId, credential)))
     _ <- replacement.traverse_(secrets.save)
@@ -59,6 +63,7 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
       caddyApiKeyConfigured = command.credential.map(_.caddyApiKey.nonEmpty)
         .getOrElse(stored.caddyApiKeyConfigured), updatedAt = now)
     _ <- integrations.save(next)
+    _ <- if (targetChanged) inventory.deactivateAll(actor.organizationId, id, now).void else ().pure[Tx]
     _ <- replacement.traverse_(_ => secrets.delete(actor.organizationId, stored.secretId))
     _ <- audit.record(actor, AuditAction.IntegrationUpdated, AuditTargetType.Integration, Some(id))
   } yield next
@@ -79,6 +84,7 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
 
   def delete(actor: ActorContext, id: UUID): Tx[Unit] = for {
     stored <- load(actor.organizationId, id)
+    _ <- requireNoActive(actor.organizationId, id)
     _ <- integrations.delete(actor.organizationId, id)
     _ <- secrets.delete(actor.organizationId, stored.secretId)
     _ <- audit.record(actor, AuditAction.IntegrationDeleted, AuditTargetType.Integration, Some(id))
@@ -94,6 +100,10 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
 
   private def load(org: UUID, id: UUID): Tx[Integration] =
     integrations.findByIdForUpdate(org, id).flatMap(_.liftTo[Tx](notFound))
+  private def requireNoActive(org: UUID, id: UUID): Tx[Unit] =
+    actions.hasActive(org, id).flatMap(active => Either.cond(!active, (),
+      IntegrationError("INTEGRATION_ACTION_ALREADY_RUNNING", "An action is already active"))
+      .liftTo[Tx])
   private def notFound = IntegrationError("INTEGRATION_NOT_FOUND", "Integration was not found")
   private def invalid = IntegrationError("INVALID_REQUEST", "Invalid integration configuration")
   private def validName(value: String): Either[IntegrationError, String] =

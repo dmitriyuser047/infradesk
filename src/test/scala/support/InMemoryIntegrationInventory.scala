@@ -61,6 +61,13 @@ final class InMemoryIntegrationInventory {
   }
 
   val inventory: IntegrationInventoryRepository[IO] = new IntegrationInventoryRepository[IO] {
+    override def deactivateAll(organizationId: UUID, integrationId: UUID, at: Instant): IO[Int] = sync {
+      val affected = objects.count(value => value.organizationId == organizationId &&
+        value.integrationId == integrationId && value.isActive)
+      objects = objects.map(value => if (value.organizationId == organizationId &&
+        value.integrationId == integrationId) value.copy(isActive = false) else value)
+      affected
+    }
     override def applySnapshot(organizationId: UUID, integrationId: UUID, sessionId: UUID,
       observation: IntegrationObservation, at: Instant): IO[Int] = sync {
       snapshotWrites += 1

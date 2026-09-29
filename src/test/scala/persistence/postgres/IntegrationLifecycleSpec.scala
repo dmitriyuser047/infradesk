@@ -31,7 +31,9 @@ final class IntegrationLifecycleSpec extends FunSuite {
       val audit = new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
         new ConnectionIOIdGenerator, new ConnectionIOTimeProvider)
       val management = new IntegrationManagement[ConnectionIO](repository, secrets,
-        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, cipher, audit, new PostgresIntegrationSyncStateRepository)
+        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, cipher, audit,
+        new PostgresIntegrationSyncStateRepository, new PostgresIntegrationActionRepository,
+        new PostgresIntegrationInventoryRepository)
       val actor = ActorContext(user, org)
       val setup: ConnectionIO[Unit] = for {
         _ <- sql"insert into organization (id, code, name) values ($org, ${org.toString}, 'Integrations')".update.run

@@ -11,7 +11,8 @@ export const sessionTones: Record<string, StatusTone> = { RUNNING: 'info', COMPL
 export function useSyncErrorText() {
   const { t } = useI18n()
   return (code: string | null) => code === null ? null
-    : (t.integrations.errors as Record<string, string>)[code] ?? t.integrationInventory.errors[code] ?? code
+    : (t.integrations.errors as Record<string, string>)[code] ?? t.integrationInventory.errors[code]
+      ?? (t.errors.codes as Record<string, string>)[code] ?? code
 }
 
 /** Only an InfraDesk NODE can be bound to an external control plane's node. */

@@ -13,6 +13,8 @@ trait IntegrationActionRepository[F[_]] {
   def recent(organizationId: UUID, integrationId: UUID, limit: Int): F[List[IntegrationActionExecution]]
   def latestUnknownFinishedAt(organizationId: UUID, integrationId: UUID,
     inventoryObjectId: UUID): F[Option[Instant]]
+  /** Called while holding the integration row lock during endpoint/credential changes or deletion. */
+  def hasActive(organizationId: UUID, integrationId: UUID): F[Boolean]
   /** Retires stale claims as UNKNOWN, then claims at most limit queued rows. */
   def recoverAndClaim(owner: UUID, token: UUID, at: Instant, recoverAfter: Instant,
     limit: Int): F[(Int, List[IntegrationActionExecution])]

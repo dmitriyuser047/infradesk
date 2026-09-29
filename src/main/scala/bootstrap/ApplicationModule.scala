@@ -344,7 +344,7 @@ object ApplicationModule {
     val integrationManagement = new IntegrationManagement[ConnectionIO](
       integrationRepository, integrationSecretRepository, transactionIdGenerator,
       transactionTimeProvider, integrations.integrationCredentialCipher, auditRecorder,
-      integrationSyncStateRepository)
+      integrationSyncStateRepository, integrationActionRepository, integrationInventoryRepository)
     val integrationSyncSettings = config.integrations.sync
     val integrationSync = new IntegrationSync[ConnectionIO](
       new IntegrationSyncTransactions[ConnectionIO](integrationRepository, integrationSecretRepository,

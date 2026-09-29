@@ -253,6 +253,8 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
       case "INTEGRATION_NOT_FOUND" => NotFound(notFound)
       case IntegrationSync.AlreadyRunningCode =>
         Conflict(ApiErrorResponse(error.code, "Integration synchronization is already running"))
+      case "INTEGRATION_ACTION_ALREADY_RUNNING" =>
+        Conflict(ApiErrorResponse(error.code, "An action is already active on this integration"))
       case "INTEGRATION_OBJECT_NOT_FOUND" => NotFound(ApiErrorResponse(error.code, "Integration object was not found"))
       case "INTEGRATION_BINDING_INVALID_RESOURCE" =>
         UnprocessableEntity(ApiErrorResponse(error.code, "Only an active NODE resource can be bound"))

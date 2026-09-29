@@ -4,8 +4,8 @@ package infrastructure.http
 import application.integration.{IntegrationBindings, IntegrationError, IntegrationManagement, IntegrationProvider,
   IntegrationProviderRegistry, IntegrationRuntimeContext, IntegrationSync, IntegrationSyncTransactions,
   IntegrationTestResult, TestIntegration}
-import application.port.{BindableResource, IntegrationRepository, IntegrationSecret, IntegrationSecretRepository,
-  TransactionRunner}
+import application.port.{BindableResource, IntegrationActionRepository, IntegrationRepository, IntegrationSecret,
+  IntegrationSecretRepository, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.auth.OrganizationRole
@@ -20,6 +20,7 @@ import org.http4s.circe.CirceEntityDecoder._
 import org.typelevel.ci.CIString
 import org.typelevel.log4cats.noop.NoOpLogger
 import support.{AuthorizationFixtures, InMemoryIntegrationInventory, RecordingAuditEventRepository, TestAuditRecorder}
+import java.time.Instant
 import java.util.{Base64, UUID}
 import scala.concurrent.duration._
 
@@ -62,8 +63,26 @@ final class IntegrationRoutesSpec extends FunSuite {
     val cipher = IntegrationCredentialCipher.fromConfig(SecretEncryptionConfig.fromEnvironment(
       Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> key)).toOption.get)
     val audit = TestAuditRecorder(journal)
+    @volatile var activeAction = false
+    val actionRepository = new IntegrationActionRepository[IO] {
+      override def hasActive(organizationId: UUID, integrationId: UUID): IO[Boolean] = IO(activeAction)
+      override def insertOrFind(value: IntegrationActionExecution): IO[(IntegrationActionExecution, Boolean)] =
+        IO.raiseError(new UnsupportedOperationException)
+      override def findByRequest(organizationId: UUID, requestId: UUID): IO[Option[IntegrationActionExecution]] =
+        IO.pure(None)
+      override def find(organizationId: UUID, integrationId: UUID, id: UUID): IO[Option[IntegrationActionExecution]] =
+        IO.pure(None)
+      override def recent(organizationId: UUID, integrationId: UUID, limit: Int): IO[List[IntegrationActionExecution]] =
+        IO.pure(Nil)
+      override def latestUnknownFinishedAt(organizationId: UUID, integrationId: UUID,
+        inventoryObjectId: UUID): IO[Option[Instant]] = IO.pure(None)
+      override def recoverAndClaim(owner: UUID, token: UUID, at: Instant, recoverAfter: Instant,
+        limit: Int): IO[(Int, List[IntegrationActionExecution])] = IO.pure((0, Nil))
+      override def complete(value: IntegrationActionExecution, token: UUID, at: Instant,
+        status: String, errorCode: Option[String], errorMessage: Option[String]): IO[Boolean] = IO.pure(false)
+    }
     val management = new IntegrationManagement[IO](integrations, secrets, new SystemIdGenerator,
-      new SystemTimeProvider, cipher, audit, memory.syncState)
+      new SystemTimeProvider, cipher, audit, memory.syncState, actionRepository, memory.inventory)
     var auditedBeforeProbe = false
     var auditedBeforeObserve = false
     var observations = 0
@@ -203,6 +222,27 @@ final class IntegrationRoutesSpec extends FunSuite {
     assertEquals(body.get[String]("errorCode"), Right(IntegrationSync.StaleCode))
     assertEquals(body.get[String]("id"), Right(stored.id.toString))
     assertEquals(f.memory.snapshotWrites, 0)
+  }
+
+  test("an active action freezes endpoint, credential and deletion; a name edit stays allowed") {
+    val f = new World
+    val id = f.created()
+    f.call(Method.POST, s"$root/$id/sync")
+    f.activeAction = true
+    def put(body: String) = f.call(Method.PUT, s"$root/$id", Some(body))
+    assertEquals(put("""{"name":"Renamed","baseUrl":"https://panel.example.test"}""").status, Status.Ok)
+    val moved = put("""{"name":"Renamed","baseUrl":"https://other.example.test"}""")
+    assertEquals(moved.status, Status.Conflict)
+    assertEquals(moved.as[Json].unsafeRunSync().hcursor.get[String]("code"), Right("INTEGRATION_ACTION_ALREADY_RUNNING"))
+    assertEquals(put("""{"name":"Renamed","baseUrl":"https://panel.example.test","credentials":{"apiToken":"t2"}}""").status,
+      Status.Conflict)
+    assertEquals(f.call(Method.DELETE, s"$root/$id").status, Status.Conflict)
+    assert(f.memory.objects.forall(_.isActive), "a refused change touches nothing")
+    // Once nothing is in flight the endpoint may change, and what was observed at the old one is no longer current.
+    f.activeAction = false
+    assertEquals(put("""{"name":"Renamed","baseUrl":"https://other.example.test"}""").status, Status.Ok)
+    assert(f.memory.objects.nonEmpty && f.memory.objects.forall(!_.isActive))
+    assertEquals(f.call(Method.DELETE, s"$root/$id").status, Status.NoContent)
   }
 
   test("a snapshot naming one object twice is rejected as a whole") {

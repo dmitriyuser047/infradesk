@@ -31,6 +31,8 @@ trait IntegrationInventoryRepository[F[_]] {
     observation: IntegrationObservation, at: Instant): F[Int]
   def findObject(organizationId: UUID, integrationId: UUID, objectId: UUID,
     forUpdate: Boolean): F[Option[IntegrationInventoryObject]]
+  /** Invalidates observations from a replaced endpoint/credential without deleting bindings. */
+  def deactivateAll(organizationId: UUID, integrationId: UUID, at: Instant): F[Int]
 }
 
 /** A due automatic synchronization, fenced by the token of this claim. */

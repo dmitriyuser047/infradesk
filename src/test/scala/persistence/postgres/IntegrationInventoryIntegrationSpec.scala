@@ -60,9 +60,13 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite {
     val states = new PostgresIntegrationSyncStateRepository
     val bindingRepository = new PostgresIntegrationBindingRepository
     val query = new PostgresIntegrationInventoryQuery
-    val management = new IntegrationManagement[ConnectionIO](integrations, secrets, ids, time, cipher, audit, states)
+    val actionRepository = new PostgresIntegrationActionRepository
+    val management = new IntegrationManagement[ConnectionIO](integrations, secrets, ids, time, cipher, audit, states,
+      actionRepository, inventory)
     @volatile var observation: IO[IntegrationObservation] = IO.pure(snapshot())
     @volatile var remoteActionCalls = 0
+    @volatile var remoteOutcome: IO[IntegrationActionRemoteOutcome] =
+      IO.pure(IntegrationActionRemoteOutcome.Succeeded)
     val provider: IntegrationProvider[IO] = new IntegrationProvider[IO] {
       override val providerType = IntegrationProviderType.Remnawave
       override val displayName = "Remnawave"
@@ -70,16 +74,13 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite {
       override def testConnection(context: IntegrationRuntimeContext) = IO.raiseError(new IllegalStateException)
       override def observe(context: IntegrationRuntimeContext) = observation
       override def executeAction(context: IntegrationRuntimeContext, externalId: String,
-        action: IntegrationActionCode): IO[IntegrationActionRemoteOutcome] = IO {
-          remoteActionCalls += 1
-          IntegrationActionRemoteOutcome.Succeeded
-        }
+        action: IntegrationActionCode): IO[IntegrationActionRemoteOutcome] =
+        IO { remoteActionCalls += 1 } *> remoteOutcome
     }
     val sync = new IntegrationSync[ConnectionIO](new IntegrationSyncTransactions[ConnectionIO](integrations, secrets,
       sessions, inventory, ids, time, audit), run, cipher, new IntegrationProviderRegistry[IO](List(provider)),
       NoOpLogger[IO], 10.seconds, 1000)
     val bindings = new IntegrationBindings[ConnectionIO](integrations, inventory, bindingRepository, ids, time, audit)
-    val actionRepository = new PostgresIntegrationActionRepository
     val actionService = new IntegrationActions[ConnectionIO](integrations, inventory, actionRepository,
       secrets, new IntegrationProviderRegistry[IO](List(provider)), ids, time, audit)
 
@@ -511,6 +512,112 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite {
       assertEquals(List(a, b).flatMap(_.left.toOption.collect { case e: IntegrationError => e.code }),
         List("INTEGRATION_ACTION_ALREADY_RUNNING"))
       assertEquals(w.actions.count(_ == "INTEGRATION_ACTION_REQUESTED"), 1)
+    }
+  }
+
+  test("an active action freezes destination and credential; an endpoint edit invalidates observed nodes") {
+    withWorld { w =>
+      val integration = w.create("Endpoint lifecycle")
+      val externalId = UUID.randomUUID().toString
+      w.observation = IO.pure(snapshot(node(externalId, "Frankfurt")))
+      w.manual(integration.id)
+      val objectId = w.objects(integration.id).head._5
+      w.run.run(w.bindings.bind(w.actor, integration.id, objectId, w.nodeResource)).unsafeRunSync()
+      val execution = w.run.run(w.actionService.request(w.actor, integration.id, objectId,
+        UUID.randomUUID(), IntegrationActionCode.NodeRestart)).unsafeRunSync()
+      val renamed = w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("Renamed", integration.baseUrl.value, None))).unsafeRunSync()
+      assertEquals(renamed.name, "Renamed")
+      def rejected(command: UpdateIntegrationCommand): String = w.run.run(
+        w.management.update(w.actor, integration.id, command)).attempt.unsafeRunSync()
+        .left.toOption.collect { case e: IntegrationError => e.code }.get
+      assertEquals(rejected(UpdateIntegrationCommand("Other", "https://panel-b.example.test", None)),
+        "INTEGRATION_ACTION_ALREADY_RUNNING")
+      assertEquals(rejected(UpdateIntegrationCommand("Other", integration.baseUrl.value,
+        Some(RemnawaveCredential("token-b", None)))), "INTEGRATION_ACTION_ALREADY_RUNNING")
+      val deleted = w.run.run(w.management.delete(w.actor, integration.id)).attempt.unsafeRunSync()
+      assertEquals(deleted.left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_ACTION_ALREADY_RUNNING"))
+      assertEquals(w.run.run(w.integrations.findById(w.org, integration.id)).unsafeRunSync().get.baseUrl,
+        integration.baseUrl)
+      assert(w.run.run(w.actionRepository.find(w.org, integration.id, execution.id)).unsafeRunSync().nonEmpty)
+
+      val worker = new IntegrationActionWorker[ConnectionIO](w.actionRepository, w.integrations, w.secrets,
+        cipher, new IntegrationProviderRegistry[IO](List(w.provider)), w.run, new SystemTimeProvider,
+        NoOpLogger[IO], 1.second, batch = 1, concurrency = 1, requestTimeout = 2.seconds,
+        owner = UUID.randomUUID())
+      worker.tick.unsafeRunSync()
+      assertEquals(w.remoteActionCalls, 1)
+      assertEquals(w.run.run(w.actionRepository.find(w.org, integration.id, execution.id))
+        .unsafeRunSync().get.status, IntegrationActionStatus.Succeeded)
+
+      w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("Panel B", "https://panel-b.example.test",
+          Some(RemnawaveCredential("token-b", None))))).unsafeRunSync()
+      assertEquals(w.objects(integration.id).head._3, false)
+      assert(w.run.run(w.bindingRepository.find(w.org, objectId)).unsafeRunSync().nonEmpty)
+      val blocked = w.run.run(w.actionService.request(w.actor, integration.id, objectId,
+        UUID.randomUUID(), IntegrationActionCode.NodeRestart)).attempt.unsafeRunSync()
+      assertEquals(blocked.left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_OBJECT_INACTIVE"))
+      w.manual(integration.id)
+      assert(w.objects(integration.id).head._3)
+      assert(w.run.run(w.actionService.request(w.actor, integration.id, objectId,
+        UUID.randomUUID(), IntegrationActionCode.NodeRestart)).attempt.unsafeRunSync().isRight)
+    }
+  }
+
+  test("an observation started before endpoint edit cannot reactivate old inventory") {
+    withWorld { w =>
+      val integration = w.create("Sync endpoint race")
+      w.observation = IO.pure(snapshot(node(UUID.randomUUID().toString, "Old node")))
+      w.manual(integration.id)
+      val objectId = w.objects(integration.id).head._5
+      val gate = cats.effect.Deferred.unsafe[IO, Unit]
+      w.observation = gate.get.as(snapshot(node(UUID.randomUUID().toString, "Late old node")))
+      val pending = w.sync.manual(w.actor, integration.id).start.unsafeRunSync()
+      val deadline = System.nanoTime() + 5.seconds.toNanos
+      while (w.run.run(sql"select count(*) from integration_sync_session where integration_id = ${integration.id} and status = 'RUNNING'"
+        .query[Int].unique).unsafeRunSync() == 0 && System.nanoTime() < deadline) Thread.sleep(5)
+      w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("New endpoint", "https://panel-b.example.test", None))).unsafeRunSync()
+      gate.complete(()).unsafeRunSync()
+      val completed = pending.joinWithNever.unsafeRunSync()
+      assertEquals(completed.status, IntegrationSyncStatus.Failed)
+      assertEquals(completed.errorCode, Some(IntegrationSync.ConfigurationChangedCode))
+      assertEquals(w.objects(integration.id).map(_._3), List(false))
+      assertEquals(w.objects(integration.id).head._5, objectId)
+      w.observation = IO.pure(snapshot(node(UUID.randomUUID().toString, "New node")))
+      assertEquals(w.manual(integration.id).status, IntegrationSyncStatus.Completed)
+      assertEquals(w.objects(integration.id).count(_._3), 1)
+    }
+  }
+
+  test("delete cannot remove a running action while its remote write is in flight") {
+    withWorld { w =>
+      val integration = w.create("Running delete")
+      w.observation = IO.pure(snapshot(node(UUID.randomUUID().toString, "Frankfurt")))
+      w.manual(integration.id)
+      val objectId = w.objects(integration.id).head._5
+      val execution = w.run.run(w.actionService.request(w.actor, integration.id, objectId,
+        UUID.randomUUID(), IntegrationActionCode.NodeRestart)).unsafeRunSync()
+      val gate = cats.effect.Deferred.unsafe[IO, Unit]
+      w.remoteOutcome = gate.get.as(IntegrationActionRemoteOutcome.Succeeded)
+      val worker = new IntegrationActionWorker[ConnectionIO](w.actionRepository, w.integrations, w.secrets,
+        cipher, new IntegrationProviderRegistry[IO](List(w.provider)), w.run, new SystemTimeProvider,
+        NoOpLogger[IO], 1.second, batch = 1, concurrency = 1, requestTimeout = 2.seconds,
+        owner = UUID.randomUUID())
+      val pending = worker.tick.start.unsafeRunSync()
+      val deadline = System.nanoTime() + 5.seconds.toNanos
+      while (w.remoteActionCalls == 0 && System.nanoTime() < deadline) Thread.sleep(5)
+      assertEquals(w.remoteActionCalls, 1)
+      val deleted = w.run.run(w.management.delete(w.actor, integration.id)).attempt.unsafeRunSync()
+      assertEquals(deleted.left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_ACTION_ALREADY_RUNNING"))
+      gate.complete(()).unsafeRunSync()
+      pending.joinWithNever.unsafeRunSync()
+      assertEquals(w.run.run(w.actionRepository.find(w.org, integration.id, execution.id))
+        .unsafeRunSync().get.status, IntegrationActionStatus.Succeeded)
     }
   }
 }
