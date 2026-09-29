@@ -5,13 +5,67 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import munit.FunSuite
+import org.flywaydb.core.Flyway
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("Flyway applies V1 through V37 to an empty PostgreSQL database and is idempotent") {
+  test("V37 configuration data survives migration to V38") {
+    assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
+      "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
+    val base = DatabaseConfig.fromEnvironment(sys.env).fold(throw _, identity)
+    val url = "^(jdbc:postgresql://[^/]+/)[^?]+(\\?.*)?$".r
+    val (prefix, suffix) = base.url match {
+      case url(hostAndPort, query) => (hostAndPort, Option(query).getOrElse(""))
+      case _ => fail("Integration test requires a PostgreSQL JDBC URL with explicit host and database")
+    }
+    val databaseName = "infradesk_upgrade_" + UUID.randomUUID().toString.replace("-", "")
+    val testConfig = base.copy(url = s"$prefix$databaseName$suffix")
+    val maintenanceUrl = s"${prefix}postgres$suffix"
+    def sql(jdbcUrl: String, statement: String): Unit = {
+      val connection = DriverManager.getConnection(jdbcUrl, base.user, base.password)
+      try {
+        val command = connection.createStatement()
+        try command.execute(statement)
+        finally command.close()
+      } finally connection.close()
+    }
+    sql(maintenanceUrl, s"CREATE DATABASE $databaseName")
+    try {
+      val flyway = Flyway.configure().dataSource(testConfig.url, testConfig.user, testConfig.password)
+        .locations("classpath:db/migration").target("37").load()
+      assertEquals(flyway.migrate().migrationsExecuted, 37)
+      val org = UUID.randomUUID()
+      sql(testConfig.url, s"insert into organization (id, code, name) values ('$org', 'upgrade-test', 'Upgrade test')")
+      sql(testConfig.url, s"insert into configuration_profile (id, organization_id, code, name, " +
+        s"latest_revision_number, created_at, updated_at) values ('${UUID.randomUUID()}', '$org', " +
+        "'preserved', 'Preserved profile', 1, now(), now())")
+      val result = DatabaseMigrator.migrate(testConfig,
+        Slf4jLogger.getLoggerFromName[IO]("test.database.migrator")).unsafeRunSync()
+      assertEquals(result.migrationsApplied, 1)
+      assertEquals(result.currentVersion, "38")
+      val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
+      try {
+        val statement = connection.createStatement()
+        try {
+          val rows = statement.executeQuery("select (select count(*) from configuration_profile " +
+            "where code = 'preserved'), (select count(*) from information_schema.tables " +
+            "where table_schema = current_schema() and table_name in ('integration', 'integration_secret')), " +
+            "(select count(*) from flyway_schema_history where version = '38' and success)")
+          try {
+            assert(rows.next())
+            assertEquals(rows.getInt(1), 1)
+            assertEquals(rows.getInt(2), 2)
+            assertEquals(rows.getInt(3), 1)
+          } finally rows.close()
+        } finally statement.close()
+      } finally connection.close()
+    } finally sql(maintenanceUrl, s"DROP DATABASE $databaseName WITH (FORCE)")
+  }
+
+  test("Flyway applies V1 through V38 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -39,10 +93,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 37)
-        assertEquals(first.currentVersion, "37")
+        assertEquals(first.migrationsApplied, 38)
+        assertEquals(first.currentVersion, "38")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "37")
+        assertEquals(second.currentVersion, "38")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()
@@ -170,6 +224,20 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
               assertEquals(rules.getInt(4), 4)
               assertEquals(rules.getInt(5), 1)
             } finally rules.close()
+            val integrations = statement.executeQuery(
+              "select (select count(*) from information_schema.tables where table_schema = current_schema() " +
+                "and table_name in ('integration', 'integration_secret')), " +
+                "(select count(*) from pg_constraint where conname = 'fk_integration_secret'), " +
+                "(select count(*) from pg_indexes where schemaname = current_schema() " +
+                "and indexname in ('ix_integration_organization_name', " +
+                "'uq_integration_organization_lower_name'))"
+            )
+            try {
+              assert(integrations.next())
+              assertEquals(integrations.getInt(1), 2)
+              assertEquals(integrations.getInt(2), 1)
+              assertEquals(integrations.getInt(3), 2)
+            } finally integrations.close()
             val incidentByResource = statement.executeQuery(
               "select count(*) from pg_indexes where schemaname = current_schema() " +
                 "and indexname = 'ix_incident_resource_opened'"

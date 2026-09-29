@@ -47,6 +47,7 @@ import application.context.{
   ListEnvironmentResourceSources
 }
 import application.incident.{GetIncidentDetail, ListConnectionIncidents, ListIncidents, ListResourceIncidents}
+import application.integration.{IntegrationManagement, TestIntegration}
 import application.overview.GetOperationsOverview
 import application.monitor.{CreateMonitorRule, EvaluateMonitorRules, ListMonitorRules, UpdateMonitorRule}
 import application.notification.{
@@ -144,6 +145,9 @@ final case class ApplicationComponents(
   listNotificationChannels: ListNotificationChannels[ConnectionIO],
   getNotificationChannel: GetNotificationChannel[ConnectionIO],
   notificationChannelManagement: NotificationChannelManagement[ConnectionIO],
+  integrationManagement: IntegrationManagement[ConnectionIO],
+  testIntegration: TestIntegration[ConnectionIO],
+  integrationProviderRegistry: application.integration.IntegrationProviderRegistry[IO],
   testNotificationChannel: TestNotificationChannel,
   listHistoryEvents: ListHistoryEvents[ConnectionIO],
   getOperationsOverview: GetOperationsOverview[ConnectionIO],
@@ -328,6 +332,10 @@ object ApplicationModule {
       configurationDeploymentSourceQuery, configurationDeploymentRepository,
       integrations.configurationTransport, transactionIdGenerator, transactionTimeProvider,
       auditRecorder, readOnlySnapshotRunner, transactionRunner, config.configurationDeployment)
+
+    val integrationManagement = new IntegrationManagement[ConnectionIO](
+      integrationRepository, integrationSecretRepository, transactionIdGenerator,
+      transactionTimeProvider, integrations.integrationCredentialCipher, auditRecorder)
 
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
@@ -530,6 +538,10 @@ object ApplicationModule {
         integrations.notificationChannelCipher,
         auditRecorder
       ),
+      integrationManagement = integrationManagement,
+      testIntegration = new TestIntegration[ConnectionIO](integrationManagement, transactionRunner,
+        integrations.integrationCredentialCipher, integrations.integrationProviderRegistry),
+      integrationProviderRegistry = integrations.integrationProviderRegistry,
       testNotificationChannel = new TestNotificationChannel(managedNotificationSender),
       listHistoryEvents = new ListHistoryEvents[ConnectionIO](historyEventQuery),
       getOperationsOverview = new GetOperationsOverview[ConnectionIO](

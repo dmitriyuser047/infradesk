@@ -231,11 +231,13 @@ jobs:
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
           # Build a representative production V29 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V30 through V37 to the restored database before the backend reports itself ready.
+          # V30 through V38 to the restored database before the backend reports itself ready.
           # Remove the additive tables and Stage 21 index; earlier schema stays as in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          drop table integration;
+          drop table integration_secret;
           alter table configuration_assignment drop column source_rule_id;
           drop table configuration_assignment_rule_issue;
           drop table configuration_assignment_rule_exclusion;
@@ -262,14 +264,14 @@ jobs:
           drop table terminal_session;
           drop table account_security_event;
           drop index ix_incident_resource_opened;
-          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37');
+          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37', '38');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V30 through V37.
+          # recover the marker and let Flyway apply V30 through V38.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -290,7 +292,7 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "37"
+          test "${migrated}" = "38"
           # What V26 built survives the upgrade: the notification_delivery.context column was in the
           # dump and is still there after Flyway ran V29 on the restored database.
           delivery_context="$(docker compose -f compose.prod.yml exec -T postgres \
@@ -389,6 +391,72 @@ jobs:
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select count(*) from pg_indexes where schemaname = current_schema() and indexname in ('ux_notification_delivery_legacy_event', 'ux_notification_delivery_managed_event')")"
           test "${delivery_indexes}" = "2"
+          ./scripts/check-production.sh http://127.0.0.1:8081
+      - name: Verify production V37 backup upgrades to V38
+        run: |
+          # Keep real V37 configuration data in the dump, then reverse only V38's additive
+          # changes. The new backend applies V38 after restore before it reports ready.
+          docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          insert into configuration_profile (id, organization_id, code, name, latest_revision_number, created_at, updated_at)
+          values ('00000000-0000-0000-0000-000000000015', '00000000-0000-0000-0000-000000000020',
+            'v37-preserved', 'V37 preserved', 1, now(), now());
+          insert into configuration_revision (id, organization_id, profile_id, revision_number, template_text, created_by_user_id, created_at)
+          values ('00000000-0000-0000-0000-000000000016', '00000000-0000-0000-0000-000000000020',
+            '00000000-0000-0000-0000-000000000015', 1, 'v37-original-content',
+            (select id from user_account where email = 'terminal-ci@example.test'), now());
+          SQL
+          docker compose -f compose.prod.yml stop backend proxy
+          docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          drop table integration;
+          drop table integration_secret;
+          alter table audit_event drop constraint ck_audit_event_action;
+          alter table audit_event add constraint ck_audit_event_action check (action in (
+            'PROJECT_CREATED','ENVIRONMENT_CREATED','CONNECTION_CREATED','CONNECTION_UPDATED',
+            'CONNECTION_DELETED','MONITOR_RULE_CREATED','MONITOR_RULE_UPDATED','MANUAL_SYNC_REQUESTED',
+            'CONTAINER_START_REQUESTED','CONTAINER_STOP_REQUESTED','CONTAINER_RESTART_REQUESTED',
+            'NOTIFICATION_CHANNEL_CREATED','NOTIFICATION_CHANNEL_UPDATED',
+            'NOTIFICATION_CHANNEL_ENABLED','NOTIFICATION_CHANNEL_DISABLED',
+            'ACCOUNT_PASSWORD_CHANGED','ACCOUNT_PROFILE_UPDATED',
+            'ACCOUNT_SESSION_REVOKED','ACCOUNT_OTHER_SESSIONS_REVOKED','ACCOUNT_ALL_SESSIONS_REVOKED',
+            'TERMINAL_SESSION_OPENED','TERMINAL_SESSION_CLOSED',
+            'CONFIGURATION_PROFILE_CREATED','CONFIGURATION_PROFILE_UPDATED',
+            'CONFIGURATION_PROFILE_ARCHIVED','CONFIGURATION_REVISION_CREATED',
+            'CONFIGURATION_ASSIGNMENT_CREATED','CONFIGURATION_ASSIGNMENT_UPDATED','CONFIGURATION_ASSIGNMENT_REMOVED',
+            'CONFIGURATION_DEPLOYMENT_REQUESTED','CONFIGURATION_DEPLOYMENT_CANCELLED',
+            'CONFIGURATION_ASSIGNMENTS_PROMOTED','CONFIGURATION_ROLLOUT_REQUESTED','CONFIGURATION_ROLLOUT_CANCELLED',
+            'CONFIGURATION_RULE_CREATED','CONFIGURATION_RULE_UPDATED','CONFIGURATION_RULE_ENABLED',
+            'CONFIGURATION_RULE_DISABLED','CONFIGURATION_RULE_ARCHIVED','CONFIGURATION_RULE_REVISION_PROMOTED',
+            'CONFIGURATION_RULE_RESOURCE_EXCLUDED','CONFIGURATION_RULE_RESOURCE_INCLUDED',
+            'CONFIGURATION_RULE_RECONCILE_REQUESTED',
+            'CONFIGURATION_ASSIGNMENT_ADOPTED','CONFIGURATION_ASSIGNMENT_DETACHED','RESOURCE_LABELS_UPDATED'
+          ));
+          alter table audit_event drop constraint ck_audit_event_target_type;
+          alter table audit_event add constraint ck_audit_event_target_type check (target_type in (
+            'PROJECT','ENVIRONMENT','CONNECTION','MONITOR_RULE','RESOURCE','NOTIFICATION_CHANNEL','ACCOUNT',
+            'TERMINAL_SESSION','CONFIGURATION_PROFILE','CONFIGURATION_ASSIGNMENT','CONFIGURATION_DEPLOYMENT',
+            'CONFIGURATION_ROLLOUT','CONFIGURATION_ASSIGNMENT_RULE'
+          ));
+          delete from flyway_schema_history where version = '38';
+          SQL
+          INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/v37-backups" ./scripts/backup-database.sh
+          dump="$(find "${RUNNER_TEMP}/v37-backups" -name 'infradesk-*.dump' -type f -print -quit)"
+          test -n "${dump}"
+          docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
+            --command "insert into configuration_profile (id, organization_id, code, name, latest_revision_number, created_at, updated_at) values ('00000000-0000-0000-0000-000000000017', '00000000-0000-0000-0000-000000000020', 'after-v37-backup', 'After backup', 1, now(), now())"
+          ./scripts/restore-database.sh "${dump}"
+          for _ in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then break; fi
+            sleep 5
+          done
+          curl --silent --fail http://127.0.0.1:8081/ready > /dev/null
+          version="$(docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --tuples-only --no-align --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
+          test "${version}" = "38"
+          tables="$(docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --tuples-only --no-align --command "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('integration', 'integration_secret')")"
+          test "${tables}" = "2"
+          preserved="$(docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --tuples-only --no-align --command "select count(*) from configuration_profile p join configuration_revision r on r.profile_id = p.id where p.code = 'v37-preserved' and r.template_text = 'v37-original-content'")"
+          test "${preserved}" = "1"
+          after="$(docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --tuples-only --no-align --command "select count(*) from configuration_profile where code = 'after-v37-backup'")"
+          test "${after}" = "0"
           ./scripts/check-production.sh http://127.0.0.1:8081
       - name: Separate liveness from readiness while the database is down
         run: |

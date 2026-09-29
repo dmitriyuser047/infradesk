@@ -21,6 +21,7 @@ import { LoginPage } from '../pages/LoginPage'
 import { AccountPage } from '../pages/AccountPage'
 import { NotificationChannelsPage } from '../pages/NotificationChannelsPage'
 import { NotificationChannelFormPage } from '../pages/NotificationChannelFormPage'
+import { IntegrationsPage, IntegrationFormPage } from '../pages/IntegrationsPage'
 
 export const router = createBrowserRouter([
   {
@@ -44,6 +45,9 @@ export const router = createBrowserRouter([
       { path: '/organizations/:organizationId/notifications/:channelId/edit', element: <NotificationChannelFormPage /> },
       { path: '/organizations/:organizationId/notifications/new', element: <NotificationChannelFormPage /> },
       { path: '/organizations/:organizationId/notifications', element: <NotificationChannelsPage /> },
+      { path: '/organizations/:organizationId/integrations/new', element: <IntegrationFormPage /> },
+      { path: '/organizations/:organizationId/integrations/:integrationId/edit', element: <IntegrationFormPage /> },
+      { path: '/organizations/:organizationId/integrations', element: <IntegrationsPage /> },
       // Owner-only and rarely opened: loaded on first visit, not with every page.
       { path: '/organizations/:organizationId/configurations', lazy: async () => {
         const { ConfigurationsPage } = await import('../pages/ConfigurationsPage')

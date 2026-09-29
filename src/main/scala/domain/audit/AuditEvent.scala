@@ -31,6 +31,12 @@ object AuditAction {
   case object NotificationChannelUpdated extends AuditAction { override val code: String = "NOTIFICATION_CHANNEL_UPDATED" }
   case object NotificationChannelEnabled extends AuditAction { override val code: String = "NOTIFICATION_CHANNEL_ENABLED" }
   case object NotificationChannelDisabled extends AuditAction { override val code: String = "NOTIFICATION_CHANNEL_DISABLED" }
+  case object IntegrationCreated extends AuditAction { override val code: String = "INTEGRATION_CREATED" }
+  case object IntegrationUpdated extends AuditAction { override val code: String = "INTEGRATION_UPDATED" }
+  case object IntegrationEnabled extends AuditAction { override val code: String = "INTEGRATION_ENABLED" }
+  case object IntegrationDisabled extends AuditAction { override val code: String = "INTEGRATION_DISABLED" }
+  case object IntegrationDeleted extends AuditAction { override val code: String = "INTEGRATION_DELETED" }
+  case object IntegrationTestRequested extends AuditAction { override val code: String = "INTEGRATION_TEST_REQUESTED" }
 
   /** A user changed their own password. The journal records that it happened, never the secret. */
   case object AccountPasswordChanged extends AuditAction { override val code: String = "ACCOUNT_PASSWORD_CHANGED" }
@@ -90,6 +96,12 @@ object AuditAction {
     NotificationChannelUpdated,
     NotificationChannelEnabled,
     NotificationChannelDisabled,
+    IntegrationCreated,
+    IntegrationUpdated,
+    IntegrationEnabled,
+    IntegrationDisabled,
+    IntegrationDeleted,
+    IntegrationTestRequested,
     AccountPasswordChanged,
     AccountProfileUpdated,
     AccountSessionRevoked,
@@ -142,6 +154,7 @@ object AuditTargetType {
   case object MonitorRule extends AuditTargetType { override val code: String = "MONITOR_RULE" }
   case object Resource extends AuditTargetType { override val code: String = "RESOURCE" }
   case object NotificationChannel extends AuditTargetType { override val code: String = "NOTIFICATION_CHANNEL" }
+  case object Integration extends AuditTargetType { override val code: String = "INTEGRATION" }
   /** The actor's own user account: the target of a self-service account change. */
   case object Account extends AuditTargetType { override val code: String = "ACCOUNT" }
   case object ConfigurationProfile extends AuditTargetType { override val code: String = "CONFIGURATION_PROFILE" }
@@ -151,7 +164,7 @@ object AuditTargetType {
   case object ConfigurationAssignmentRule extends AuditTargetType { override val code: String = "CONFIGURATION_ASSIGNMENT_RULE" }
 
   val All: List[AuditTargetType] =
-    List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Account, TerminalSession,
+    List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Integration, Account, TerminalSession,
       ConfigurationProfile, ConfigurationAssignment, ConfigurationDeployment, ConfigurationRollout,
       ConfigurationAssignmentRule)
 

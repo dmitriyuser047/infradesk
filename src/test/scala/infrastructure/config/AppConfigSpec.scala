@@ -87,6 +87,19 @@ final class AppConfigSpec extends FunSuite {
     assert(!enabled.toString.contains("hooks.example.test"))
   }
 
+  test("integration HTTP policy is separate from notifications and private destinations default to blocked") {
+    val defaults = AppConfig.fromEnvironment(minimal).toOption.get.integrations
+    assertEquals(defaults.requestTimeout, 10.seconds)
+    assertEquals(defaults.allowPrivateDestinations, false)
+    val configured = AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_INTEGRATIONS_REQUEST_TIMEOUT_SECONDS" -> "4",
+      "INFRADESK_INTEGRATIONS_ALLOW_PRIVATE_DESTINATIONS" -> "true"
+    )).toOption.get.integrations
+    assertEquals(configured.requestTimeout, 4.seconds)
+    assertEquals(configured.allowPrivateDestinations, true)
+    assert(AppConfig.fromEnvironment(minimal + ("INFRADESK_INTEGRATIONS_REQUEST_TIMEOUT_SECONDS" -> "0")).isLeft)
+  }
+
   test("a webhook URL that is not an absolute http or https endpoint fails startup") {
     List(
       "ftp://hooks.example.test/infradesk",

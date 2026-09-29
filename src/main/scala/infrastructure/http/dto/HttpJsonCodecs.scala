@@ -83,6 +83,38 @@ object HttpJsonCodecs {
   implicit val testNotificationChannelResponseEncoder: Encoder[TestNotificationChannelResponse] =
     Encoder.forProduct2("status", "code")(v => (v.status, v.code))
 
+  implicit val remnawaveCredentialRequestDecoder: Decoder[RemnawaveCredentialRequest] =
+    Decoder.forProduct2("apiToken", "caddyApiKey")(RemnawaveCredentialRequest.apply)
+  implicit val createIntegrationRequestDecoder: Decoder[CreateIntegrationRequest] =
+    Decoder.forProduct4("name", "providerType", "baseUrl", "credentials")(CreateIntegrationRequest.apply)
+      .validate(cursor => cursor.downField("enabled").succeeded != true,
+        "New integrations start disabled")
+  implicit val updateIntegrationRequestDecoder: Decoder[UpdateIntegrationRequest] =
+    Decoder.instance { cursor =>
+      for {
+        name <- cursor.get[String]("name")
+        baseUrl <- cursor.get[String]("baseUrl")
+        credential <- if (cursor.downField("credentials").succeeded)
+          cursor.get[RemnawaveCredentialRequest]("credentials").map(Some(_))
+          else Right(None)
+        _ <- if (cursor.downField("enabled").succeeded || cursor.downField("providerType").succeeded)
+          Left(io.circe.DecodingFailure("Use lifecycle endpoints; provider type is immutable", cursor.history))
+          else Right(())
+      } yield UpdateIntegrationRequest(name, baseUrl, credential)
+    }
+  implicit val integrationCredentialStatusEncoder: Encoder[IntegrationCredentialStatus] =
+    Encoder.forProduct2("apiTokenConfigured", "caddyApiKeyConfigured")(v =>
+      (v.apiTokenConfigured, v.caddyApiKeyConfigured))
+  implicit val integrationResponseEncoder: Encoder[IntegrationResponse] =
+    Encoder.forProduct8("id", "name", "providerType", "baseUrl", "enabled", "credential",
+      "createdAt", "updatedAt")(v => (v.id, v.name, v.providerType, v.baseUrl, v.enabled,
+      v.credential, v.createdAt, v.updatedAt))
+  implicit val integrationProviderResponseEncoder: Encoder[IntegrationProviderResponse] =
+    Encoder.forProduct3("type", "displayName", "capabilities")(v =>
+      (v.`type`, v.displayName, v.capabilities))
+  implicit val integrationTestResponseEncoder: Encoder[IntegrationTestResponse] =
+    Encoder.forProduct3("ok", "providerType", "latencyMs")(v => (v.ok, v.providerType, v.latencyMs))
+
   implicit val apiErrorResponseEncoder: Encoder[ApiErrorResponse] =
     Encoder.forProduct2("code", "message")(value => (value.code, value.message))
 

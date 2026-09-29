@@ -42,7 +42,8 @@ final class CompositionSpec extends FunSuite {
     val resourceTypes = PersistenceModule.resourceDefinitionRegistry
       .getOrElse(fail("Expected the shipped resource type registry to build"))
     val persistence = PersistenceModule.build(unusableTransactor, resourceTypes)
-    val integrations = IntegrationModule.build(config, persistence).unsafeRunSync()
+    val integrations = IntegrationModule.integrationProviders(config.integrations).use(providers =>
+      IntegrationModule.build(config, persistence, providers)).unsafeRunSync()
     val application =
       ApplicationModule.build(config, persistence, integrations, AppLoggers.slf4j, UUID.randomUUID(),
         new support.RecordingTransports().transports)

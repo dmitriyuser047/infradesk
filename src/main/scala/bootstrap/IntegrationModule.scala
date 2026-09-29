@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package bootstrap
 
 import application.connector.ResourceConnectorRegistry
+import application.integration.IntegrationProviderRegistry
 import application.port.{
   ConnectionSyncBudget,
   EmailNotificationTransport,
@@ -17,7 +18,7 @@ import application.connection.OpenSshTerminal
 import domain.operation.ResourceOperationCode
 import cats.effect.{IO, Resource}
 import cats.syntax.all._
-import infrastructure.config.{AppConfig, NotificationConfig}
+import infrastructure.config.{AppConfig, IntegrationsConfig, NotificationConfig}
 import integration.notification.{
   ManagedWebhookTransport,
   NotificationChannelCipher,
@@ -41,6 +42,8 @@ import integration.ssh.{
   SshjConfigurationTransport
 }
 import integration.ssh.docker.SshContainerOperationExecutor
+import integration.remnawave.{RemnawaveClient, RemnawaveProvider}
+import integration.secret.IntegrationCredentialCipher
 import org.typelevel.doobie.ConnectionIO
 import org.typelevel.log4cats.Logger
 
@@ -52,6 +55,8 @@ import org.typelevel.log4cats.Logger
 final case class IntegrationComponents(
   secretCipher: ConnectionSecretCipher,
   notificationChannelCipher: NotificationChannelCipher,
+  integrationCredentialCipher: IntegrationCredentialCipher,
+  integrationProviderRegistry: IntegrationProviderRegistry[IO],
   sshConnectionProbe: SshConnectionProbe[IO],
   sshCredentialResolver: SshCredentialResolver[IO],
   resourceOperationExecutor: ResourceOperationExecutor[IO],
@@ -64,11 +69,13 @@ final case class IntegrationComponents(
 
 object IntegrationModule {
 
-  def build(config: AppConfig, persistence: PersistenceComponents): IO[IntegrationComponents] = {
+  def build(config: AppConfig, persistence: PersistenceComponents,
+    providers: IntegrationProviderRegistry[IO]): IO[IntegrationComponents] = {
     val secretCipher = ConnectionSecretCipher.fromConfig(config.secretEncryption)
     // The same key and the same primitive as an SSH credential; a different payload and a
     // different table.
     val notificationChannelCipher = NotificationChannelCipher.fromConfig(config.secretEncryption)
+    val integrationCredentialCipher = IntegrationCredentialCipher.fromConfig(config.secretEncryption)
 
     val sshClient = new SshjClient[IO]
 
@@ -101,6 +108,8 @@ object IntegrationModule {
     ).map { openSshTerminal => IntegrationComponents(
       secretCipher = secretCipher,
       notificationChannelCipher = notificationChannelCipher,
+      integrationCredentialCipher = integrationCredentialCipher,
+      integrationProviderRegistry = providers,
       sshConnectionProbe = new SshConnectionProbeAdapter(sshClient),
       sshCredentialResolver = sshAuthenticationProvider,
       resourceOperationExecutor = sshContainerOperations,
@@ -111,6 +120,17 @@ object IntegrationModule {
         config.configurationDeployment.sftpTimeout),
       connectorRegistry = connectorRegistry
     ) }
+  }
+
+  /** One validated HTTP client for all product integration tests in this runtime. */
+  def integrationProviders(config: IntegrationsConfig): Resource[IO, IntegrationProviderRegistry[IO]] = {
+    val policy = OutboundDestinationPolicy.resolving(config.allowPrivateDestinations,
+      config.requestTimeout)
+    EmberClientBuilder.default[IO].withTimeout(config.requestTimeout)
+      .withSocketGroup(new ValidatingSocketGroup(Network[IO], policy)).build.map { client =>
+        new IntegrationProviderRegistry[IO](List(new RemnawaveProvider(
+          new RemnawaveClient(client, config.requestTimeout))))
+      }
   }
 
   /** Everything the notification workers need in order to reach the outside world.

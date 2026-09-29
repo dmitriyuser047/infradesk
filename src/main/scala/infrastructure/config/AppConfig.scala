@@ -14,6 +14,7 @@ import scala.concurrent.duration._
 import scala.util.Try
 
 final case class HttpConfig(host: Host, port: Port)
+final case class IntegrationsConfig(requestTimeout: FiniteDuration, allowPrivateDestinations: Boolean)
 final case class SchedulerConfig(
   enabled: Boolean,
   pollInterval: FiniteDuration,
@@ -68,7 +69,8 @@ final case class AppConfig(
   sshEnvironmentSecrets: EnvironmentSecrets,
   terminal: TerminalConfig,
   configurationDeployment: ConfigurationDeploymentSettings = ConfigurationDeploymentSettings.Default,
-  configurationRules: ConfigurationRuleSettings = ConfigurationRuleSettings()
+  configurationRules: ConfigurationRuleSettings = ConfigurationRuleSettings(),
+  integrations: IntegrationsConfig = IntegrationsConfig(10.seconds, allowPrivateDestinations = false)
 )
 
 object AppConfig {
@@ -85,13 +87,16 @@ object AppConfig {
       secretEncryption <- SecretEncryptionConfig.fromEnvironment(values)
       scheduler <- parseScheduler(values)
       notification <- parseNotification(values)
+      integrationTimeout <- bounded(values, "INFRADESK_INTEGRATIONS_REQUEST_TIMEOUT_SECONDS", 10, 1, 120)
+      integrationAllowPrivate <- parseBoolean(values, "INFRADESK_INTEGRATIONS_ALLOW_PRIVATE_DESTINATIONS")
       terminal <- TerminalConfig.fromEnvironment(values)
       configurationDeployment <- parseConfigurationDeployment(values)
       ruleEnabled <- parseBoolean(values, "INFRADESK_CONFIGURATION_RULES_ENABLED", default = true)
       ruleInterval <- bounded(values, "INFRADESK_CONFIGURATION_RULE_RECONCILE_SECONDS", 45, 5, 3600)
     } yield AppConfig(database, http, auth, loginRateLimit, SecurityEventSettings(securityEvents.seconds), bootstrap, secretEncryption, scheduler,
       notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment,
-      ConfigurationRuleSettings(enabled = ruleEnabled, reconcileInterval = ruleInterval.seconds))
+      ConfigurationRuleSettings(enabled = ruleEnabled, reconcileInterval = ruleInterval.seconds),
+      IntegrationsConfig(integrationTimeout.seconds, integrationAllowPrivate))
 
   private def parseLoginRateLimit(
     values: Map[String, String]

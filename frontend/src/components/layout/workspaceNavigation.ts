@@ -4,7 +4,7 @@
  * The URL stays the only source of truth for the context: organization in the path, project and
  * environment in `?project=&environment=`. Nothing here keeps state.
  */
-export type WorkspaceModule = 'overview' | 'resources' | 'connections' | 'incidents' | 'notifications' | 'configurations' | 'workspace'
+export type WorkspaceModule = 'overview' | 'resources' | 'connections' | 'incidents' | 'notifications' | 'integrations' | 'configurations' | 'workspace'
 
 export interface WorkspaceScope {
   organizationId?: string
@@ -19,6 +19,7 @@ export function activeWorkspaceModule(pathname: string): WorkspaceModule | null 
   if (pathname.includes('/incidents')) return 'incidents'
   if (pathname.includes('/connections')) return 'connections'
   if (pathname.includes('/notifications')) return 'notifications'
+  if (pathname.includes('/integrations')) return 'integrations'
   if (/^\/organizations\/[^/]+\/configurations(\/|$)/.test(pathname)) return 'configurations'
   if (/^\/organizations\/[^/]+\/resources\/?$/.test(pathname)) return 'resources'
   if (pathname.includes('/environments/') && !pathname.endsWith('/environments/new')) return 'resources'
@@ -37,6 +38,7 @@ export function modulePath(module: WorkspaceModule, scope: WorkspaceScope): stri
     case 'incidents': return `${base}/incidents${query}`
     case 'connections': return `${base}/connections${query}`
     case 'notifications': return `${base}/notifications${query}`
+    case 'integrations': return `${base}/integrations${query}`
     case 'configurations': return `${base}/configurations${query}`
     case 'resources':
       // Resources are listed per environment; without one the page asks which to open.

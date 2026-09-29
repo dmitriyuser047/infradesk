@@ -52,6 +52,10 @@ object OrganizationPermission {
     override val code: String = "MANAGE_NOTIFICATIONS"
   }
 
+  case object ManageIntegrations extends OrganizationPermission {
+    override val code: String = "MANAGE_INTEGRATIONS"
+  }
+
   case object ExecuteOperations extends OrganizationPermission {
     override val code: String = "EXECUTE_OPERATIONS"
   }
@@ -82,6 +86,7 @@ object OrganizationPermission {
     ManageMonitoring,
     ViewAudit,
     ManageNotifications,
+    ManageIntegrations,
     ExecuteOperations,
     OpenTerminal,
     ManageConfigurations,

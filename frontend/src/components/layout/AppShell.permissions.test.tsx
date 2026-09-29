@@ -24,14 +24,16 @@ function renderShell(role: 'OWNER' | 'MEMBER') {
 afterEach(() => cleanup())
 
 describe('permission-aware workspace navigation', () => {
-  it('shows Notifications only with manageNotifications permission', () => {
+  it('shows sensitive settings only to owners', () => {
     renderShell('MEMBER')
     const memberNav = screen.getByRole('navigation', { name: 'Primary navigation' })
     expect(within(memberNav).queryByRole('link', { name: 'Notifications' })).toBeNull()
+    expect(within(memberNav).queryByRole('link', { name: 'Integrations' })).toBeNull()
     cleanup()
 
     renderShell('OWNER')
     const ownerNav = screen.getByRole('navigation', { name: 'Primary navigation' })
     expect(within(ownerNav).getByRole('link', { name: 'Notifications' })).toBeTruthy()
+    expect(within(ownerNav).getByRole('link', { name: 'Integrations' })).toBeTruthy()
   })
 })

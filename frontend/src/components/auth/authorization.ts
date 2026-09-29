@@ -9,6 +9,7 @@ export type OrganizationPermission =
   | 'runConnectionSync'
   | 'manageMonitoring'
   | 'manageNotifications'
+  | 'manageIntegrations'
   | 'viewAudit'
   | 'executeOperations'
   | 'openTerminal'
