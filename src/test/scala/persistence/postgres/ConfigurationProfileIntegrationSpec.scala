@@ -35,8 +35,10 @@ import java.util.UUID
   */
 final class ConfigurationProfileIntegrationSpec extends FunSuite {
 
-  private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-0000000000c0")
-  private val OtherOrganizationId = UUID.fromString("20000000-0000-0000-0000-0000000000c1")
+  // Organizations of this suite alone: suites run in parallel and clean up their own organizations'
+  // journals, so a shared id lets one suite delete another's audit rows mid-test.
+  private val OrganizationId = UUID.fromString("20000000-0000-0000-0000-0000000000c2")
+  private val OtherOrganizationId = UUID.fromString("20000000-0000-0000-0000-0000000000c3")
   private val Template = """{"routing": {"domainStrategy": "{{ routing_strategy }}"}, "inbounds": [{"port": {{ port }}}]}"""
 
   test("a profile is created with its revision 1, its variables in order, and two journal entries") {
@@ -301,8 +303,8 @@ final class ConfigurationProfileIntegrationSpec extends FunSuite {
     def reset: IO[Unit] = run(for {
       _ <- sql"""
         insert into organization (id, code, name) values
-          ($OrganizationId, 'configuration-profiles', 'Configuration profiles'),
-          ($OtherOrganizationId, 'configuration-profiles-other', 'Other organization')
+          ($OrganizationId, 'configuration-profiles-spec', 'Configuration profiles'),
+          ($OtherOrganizationId, 'configuration-profiles-spec-other', 'Other organization')
         on conflict do nothing
       """.update.run
       _ <- sql"delete from audit_event where organization_id in ($OrganizationId, $OtherOrganizationId)".update.run
