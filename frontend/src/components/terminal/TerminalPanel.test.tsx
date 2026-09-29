@@ -258,6 +258,43 @@ describe('terminal workspace', () => {
     expect(Socket.instances).toHaveLength(3)
   })
 
+  it('turns a burst of failures of one socket into a single retry, and ignores that socket afterwards', async () => {
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    vi.useFakeTimers()
+    act(() => {
+      Socket.instances[0].onerror?.()
+      Socket.instances[0].control('error', 'TRANSPORT_CLOSED')
+      Socket.instances[0].onclose?.({ reason: '' })
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(Socket.instances).toHaveLength(2)
+    act(() => Socket.instances[1].ready())
+    // Session A speaking after session B started changes nothing in B.
+    act(() => {
+      Socket.instances[0].output('stale output from session A')
+      Socket.instances[0].control('closed', 'CLIENT_CLOSE')
+    })
+    expect(FakeTerminal.instances[0].written.join('')).not.toContain('stale output from session A')
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0)
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+    expect(Socket.instances).toHaveLength(2)
+  })
+
+  it('cannot be made to open extra sockets while a retry is pending', async () => {
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    vi.useFakeTimers()
+    act(() => Socket.instances[0].onerror?.())
+    for (const button of screen.queryAllByRole('button', { name: /^(Connect|Reconnect)$/ })) {
+      for (let i = 0; i < 5; i++) fireEvent.click(button)
+    }
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(Socket.instances).toHaveLength(2)
+  })
+
   it('cancels a pending retry when the terminal is closed', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(app(workspace))

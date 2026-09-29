@@ -387,6 +387,26 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
       }
     }
   }
+  test("a renewal that never answers is bounded: three timed-out attempts fail closed before the lease could expire") {
+    val attempts = Ref.of[IO, Int](0).unsafeRunSync()
+    val repository = new LifecycleRepository(attempts.update(_ + 1) *> IO.never)
+    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(heartbeatInterval = 50.millis),
+      output = Stream.never[IO], sessionRepository = Some(repository))
+    val worstCase = infrastructure.config.TerminalConfig.RenewWorstCase
+    // The default lease leaves room for a heartbeat plus every attempt and pause, with margin.
+    assert(infrastructure.config.TerminalConfig.default.heartbeatInterval + worstCase +
+      infrastructure.config.TerminalConfig.RenewSafetyMargin <= infrastructure.config.TerminalConfig.default.leaseDuration)
+    withServer(fixture.routes, OrganizationRole.Owner) { base =>
+      withSocket(base) { (_, listener) =>
+        val started = System.nanoTime()
+        assertEquals(listener.closed.poll(worstCase.toSeconds + 10, TimeUnit.SECONDS), (1011, "SESSION_VALIDATION_FAILED"))
+        val elapsed = (System.nanoTime() - started).nanos
+        assert(elapsed < worstCase + 3.seconds, s"closed after $elapsed, expected within $worstCase")
+        assertEquals(attempts.get.unsafeRunSync(), 3)
+        eventually(5.seconds) { assertEquals(fixture.released.get.unsafeRunSync(), 1) }
+      }
+    }
+  }
   test("a transient heartbeat database failure keeps the WebSocket and shell alive") {
     val attempts = Ref.of[IO, Int](0).unsafeRunSync()
     val renewal = attempts.getAndUpdate(_ + 1).flatMap {
