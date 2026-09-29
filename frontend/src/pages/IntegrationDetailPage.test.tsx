@@ -24,8 +24,8 @@ const overview: IntegrationOverview = { lastSync: session('COMPLETED'), lastSucc
 const nodeSummary = (state: RemnawaveNodeSummary['state']): RemnawaveNodeSummary => ({
   address: '203.0.113.10', port: 2222, state, isConnected: state === 'CONNECTED', isConnecting: false,
   isDisabled: state === 'DISABLED', lastStatusChange: null, xrayVersion: '25.9.11', nodeVersion: null,
-  xrayUptimeSeconds: null, trafficTrackingActive: false, trafficLimitBytes: null, trafficUsedBytes: 1536,
-  usersOnline: 7, countryCode: 'DE', cpuCount: null, cpuModel: null, totalRam: null, activeConfigProfileUuid: null,
+  xrayUptimeSeconds: 0, trafficTrackingActive: false, trafficLimitBytes: null, trafficUsedBytes: 1536,
+  usersOnline: 7, countryCode: 'DE', cpuCount: null, cpuModel: null, memoryTotalBytes: null, activeConfigProfileUuid: null,
   tags: [], providerUuid: null, providerName: null })
 const frankfurt: InventoryObject<RemnawaveNodeSummary> = { id: 'obj-a', objectType: 'NODE', externalId: 'node-a',
   displayName: 'Frankfurt', active: true, firstSeenAt: '', lastSeenAt: '2026-09-29T10:00:02Z',

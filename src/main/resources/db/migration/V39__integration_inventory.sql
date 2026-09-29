@@ -21,7 +21,8 @@ CREATE TABLE integration_sync_session (
   hosts_count integer CHECK (hosts_count >= 0),
   config_profiles_count integer CHECK (config_profiles_count >= 0),
   deactivated_count integer CHECK (deactivated_count >= 0),
-  CONSTRAINT uq_integration_sync_session_id_org UNIQUE (id, organization_id),
+  -- Referenced with its integration, so nothing can point at another integration's session.
+  CONSTRAINT uq_integration_sync_session_scope UNIQUE (id, integration_id, organization_id),
   CONSTRAINT fk_integration_sync_session_integration FOREIGN KEY (integration_id, organization_id)
     REFERENCES integration(id, organization_id) ON DELETE CASCADE,
   CONSTRAINT ck_integration_sync_session_state CHECK (
@@ -52,13 +53,15 @@ CREATE TABLE integration_inventory_object (
   last_seen_sync_session_id uuid NOT NULL,
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  CONSTRAINT uq_integration_inventory_object_id_org UNIQUE (id, organization_id),
+  CONSTRAINT uq_integration_inventory_object_scope UNIQUE (id, integration_id, organization_id),
   CONSTRAINT uq_integration_inventory_object_identity
     UNIQUE (organization_id, integration_id, object_type, external_id),
   CONSTRAINT fk_integration_inventory_object_integration FOREIGN KEY (integration_id, organization_id)
     REFERENCES integration(id, organization_id) ON DELETE CASCADE,
-  CONSTRAINT fk_integration_inventory_object_session FOREIGN KEY (last_seen_sync_session_id, organization_id)
-    REFERENCES integration_sync_session(id, organization_id)
+  -- The session that last saw an object belongs to the object's own integration.
+  CONSTRAINT fk_integration_inventory_object_session
+    FOREIGN KEY (last_seen_sync_session_id, integration_id, organization_id)
+    REFERENCES integration_sync_session(id, integration_id, organization_id)
 );
 CREATE INDEX ix_integration_inventory_object_list
   ON integration_inventory_object (organization_id, integration_id, object_type, display_name, id);
@@ -77,8 +80,10 @@ CREATE TABLE integration_resource_binding (
   CONSTRAINT uq_integration_resource_binding_object UNIQUE (inventory_object_id),
   CONSTRAINT fk_integration_resource_binding_integration FOREIGN KEY (integration_id, organization_id)
     REFERENCES integration(id, organization_id) ON DELETE CASCADE,
-  CONSTRAINT fk_integration_resource_binding_object FOREIGN KEY (inventory_object_id, organization_id)
-    REFERENCES integration_inventory_object(id, organization_id) ON DELETE CASCADE,
+  -- A binding belongs to the integration of the object it binds.
+  CONSTRAINT fk_integration_resource_binding_object
+    FOREIGN KEY (inventory_object_id, integration_id, organization_id)
+    REFERENCES integration_inventory_object(id, integration_id, organization_id) ON DELETE CASCADE,
   CONSTRAINT fk_integration_resource_binding_resource FOREIGN KEY (resource_id, organization_id)
     REFERENCES resource(id, organization_id)
 );

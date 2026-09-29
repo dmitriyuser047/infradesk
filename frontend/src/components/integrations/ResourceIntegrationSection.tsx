@@ -27,7 +27,7 @@ export function ResourceIntegrationSection({ organizationId, resourceId }: { org
       { label: t.address, value: object.summary.port === null ? object.summary.address
         : `${object.summary.address}:${object.summary.port}`, technical: true },
       { label: t.version, value: object.summary.xrayVersion ?? '—' },
-      { label: t.users, value: object.summary.usersOnline === null ? '—' : i18n.format.number(object.summary.usersOnline) },
+      { label: t.users, value: i18n.format.number(object.summary.usersOnline) },
       { label: t.lastSeen, value: i18n.format.dateTime(object.lastSeenAt) },
     ]} />
   </WorkspaceSection>)}</>

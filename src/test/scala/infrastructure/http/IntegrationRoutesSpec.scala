@@ -51,7 +51,7 @@ final class IntegrationRoutesSpec extends FunSuite {
 
   private def node(uuid: String, name: String) = ObservedIntegrationObject(IntegrationObjectType.Node, uuid, name,
     RemnawaveNodeSummary("10.0.0.1", Some(2222), isConnected = true, isConnecting = false, isDisabled = false, None,
-      Some("25.1.1"), Some("2.0.0"), Some(10L), trafficTrackingActive = false, None, Some(5L), Some(1L), Some("DE"),
+      Some("25.1.1"), Some("2.0.0"), 10L, trafficTrackingActive = false, None, Some(5L), 1L, "DE",
       Some(2), None, None, None, Nil, None, None))
 
   private final class World {
@@ -180,6 +180,26 @@ final class IntegrationRoutesSpec extends FunSuite {
     assert(!body.noSpaces.contains(token))
     assertEquals(f.memory.snapshotWrites, 1)
     assert(f.memory.objects.forall(_.isActive))
+  }
+
+  test("a session retired as stale during observation keeps its durable outcome over a later provider error") {
+    val f = new World
+    val id = f.created()
+    // While the provider is being read, another worker retires the session as stale; then the
+    // provider itself fails. The stale outcome is already durable and must be what is answered.
+    f.observation = IO {
+      f.memory.sessionRows = f.memory.sessionRows.map(value =>
+        if (value.status == IntegrationSyncStatus.Running) value.copy(status = IntegrationSyncStatus.Failed,
+          finishedAt = Some(java.time.Instant.now()), errorCode = Some(IntegrationSync.StaleCode),
+          errorMessage = Some(IntegrationSync.StaleMessage)) else value)
+    } *> IO.raiseError(IntegrationError("INTEGRATION_TIMEOUT", "late"))
+    val body = f.call(Method.POST, s"$root/$id/sync").as[Json].unsafeRunSync().hcursor
+    val stored = f.memory.sessionRows.head
+    assertEquals(stored.errorCode, Some(IntegrationSync.StaleCode))
+    assertEquals(body.get[String]("status"), Right("FAILED"))
+    assertEquals(body.get[String]("errorCode"), Right(IntegrationSync.StaleCode))
+    assertEquals(body.get[String]("id"), Right(stored.id.toString))
+    assertEquals(f.memory.snapshotWrites, 0)
   }
 
   test("a snapshot naming one object twice is rejected as a whole") {

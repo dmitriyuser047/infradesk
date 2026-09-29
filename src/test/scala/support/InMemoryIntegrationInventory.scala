@@ -51,6 +51,9 @@ final class InMemoryIntegrationInventory {
         case None => false
       }
     }
+    override def find(organizationId: UUID, id: UUID): IO[Option[IntegrationSyncSession]] = sync {
+      sessionRows.find(value => value.organizationId == organizationId && value.id == id)
+    }
     override def recent(organizationId: UUID, integrationId: UUID, limit: Int): IO[List[IntegrationSyncSession]] = sync {
       sessionRows.filter(value => value.organizationId == organizationId && value.integrationId == integrationId)
         .sortBy(value => (value.startedAt, value.id.toString)).reverse.take(limit).toList

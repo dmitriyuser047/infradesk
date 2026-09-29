@@ -76,11 +76,21 @@ final class IntegrationSyncTransactions[Tx[_]: MonadThrow](
       _ <- if (completed) ().pure[Tx] else (StaleSessionRetired: Throwable).raiseError[Tx, Unit]
     } yield session.copy(finishedAt = Some(now), status = IntegrationSyncStatus.Completed, counts = Some(counts))
 
+  /** Fails a still-RUNNING session. When it was already finished elsewhere (retired as stale while
+    * the provider was being read), that durable outcome stands and is what is returned: a later
+    * error of this attempt never overrides it.
+    */
   def fail(session: IntegrationSyncSession, code: String): Tx[IntegrationSyncSession] = for {
     now <- time.now
-    _ <- sessions.fail(session.organizationId, session.id, now, code, messageFor(code))
-  } yield session.copy(finishedAt = Some(now), status = IntegrationSyncStatus.Failed, errorCode = Some(code),
-    errorMessage = Some(messageFor(code)))
+    failed <- sessions.fail(session.organizationId, session.id, now, code, messageFor(code))
+    result <- if (failed) session.copy(finishedAt = Some(now), status = IntegrationSyncStatus.Failed,
+      errorCode = Some(code), errorMessage = Some(messageFor(code))).pure[Tx] else durable(session)
+  } yield result
+
+  /** The session as the database holds it. */
+  def durable(session: IntegrationSyncSession): Tx[IntegrationSyncSession] =
+    sessions.find(session.organizationId, session.id).flatMap(_.liftTo[Tx](
+      new IllegalStateException("Synchronization session disappeared")))
 }
 
 /** One read-only observation of an integration: TX1 claims a RUNNING session, the provider is read
@@ -134,10 +144,11 @@ final class IntegrationSync[Tx[_]](transactions: IntegrationSyncTransactions[Tx]
                   info(s"integration.sync.snapshot.persisted $context deactivated=${counts.deactivated}") *>
                     elapsed.flatMap(ms => info(s"integration.sync.completed $context status=COMPLETED durationMs=$ms")).as(completed)
                 case Left(StaleSessionRetired) =>
-                  // Another worker already failed this session as stale; the snapshot was rolled back.
-                  elapsed.flatMap(ms => error(s"integration.sync.failed $context errorCode=$StaleCode durationMs=$ms")) *>
-                    IO.pure(session.copy(status = IntegrationSyncStatus.Failed, errorCode = Some(StaleCode),
-                      errorMessage = Some(StaleMessage)))
+                  // Another worker already finished this session; the snapshot was rolled back and
+                  // the durable outcome is the answer.
+                  runner.run(transactions.durable(session)).flatTap(stored => elapsed.flatMap(ms =>
+                    error(s"integration.sync.failed $context errorCode=${stored.errorCode.getOrElse("NONE")} " +
+                      s"retired=true durationMs=$ms")))
                 case Left(other) =>
                   failSession(session, PersistFailedCode, context, elapsed, Some(other.getClass.getSimpleName))
               }
@@ -167,7 +178,9 @@ final class IntegrationSync[Tx[_]](transactions: IntegrationSyncTransactions[Tx]
   private def failSession(session: IntegrationSyncSession, code: String, context: String, elapsed: IO[Long],
     errorType: Option[String] = None): IO[IntegrationSyncSession] =
     runner.run(transactions.fail(session, code)).flatMap { failed =>
-      elapsed.flatMap(ms => error(s"integration.sync.failed $context errorCode=$code" +
+      // The logged code is the stored one, which differs from `code` when the session was retired first.
+      elapsed.flatMap(ms => error(s"integration.sync.failed $context errorCode=${failed.errorCode.getOrElse(code)}" +
+        (if (failed.errorCode.contains(code)) "" else s" attemptErrorCode=$code retired=true") +
         errorType.fold("")(value => s" errorType=$value") + s" durationMs=$ms")).as(failed)
     }
 

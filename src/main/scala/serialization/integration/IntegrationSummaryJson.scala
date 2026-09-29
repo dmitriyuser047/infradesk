@@ -31,7 +31,7 @@ object IntegrationSummaryJson {
       "countryCode" -> node.countryCode.asJson,
       "cpuCount" -> node.cpuCount.asJson,
       "cpuModel" -> node.cpuModel.asJson,
-      "totalRam" -> node.totalRam.asJson,
+      "memoryTotalBytes" -> node.memoryTotalBytes.asJson,
       "activeConfigProfileUuid" -> node.activeConfigProfileUuid.asJson,
       "tags" -> node.tags.asJson,
       "providerUuid" -> node.providerUuid.asJson,
@@ -49,8 +49,8 @@ object IntegrationSummaryJson {
       "serverDescription" -> host.serverDescription.asJson)
     case profile: RemnawaveConfigProfileSummary => Json.obj(
       "viewPosition" -> profile.viewPosition.asJson,
-      "createdAt" -> profile.createdAt.map(_.toString).asJson,
-      "updatedAt" -> profile.updatedAt.map(_.toString).asJson,
+      "createdAt" -> profile.createdAt.toString.asJson,
+      "updatedAt" -> profile.updatedAt.toString.asJson,
       "nodeUuids" -> profile.nodeUuids.asJson,
       "inbounds" -> profile.inbounds.map(inbound => Json.obj(
         "uuid" -> inbound.uuid.asJson,
@@ -79,15 +79,15 @@ object IntegrationSummaryJson {
     lastStatusChange <- c.get[Option[java.time.Instant]]("lastStatusChange")
     xray <- c.get[Option[String]]("xrayVersion")
     nodeVersion <- c.get[Option[String]]("nodeVersion")
-    uptime <- c.get[Option[Long]]("xrayUptimeSeconds")
+    uptime <- c.get[Long]("xrayUptimeSeconds")
     tracking <- c.get[Boolean]("trafficTrackingActive")
     limit <- c.get[Option[Long]]("trafficLimitBytes")
     used <- c.get[Option[Long]]("trafficUsedBytes")
-    online <- c.get[Option[Long]]("usersOnline")
-    country <- c.get[Option[String]]("countryCode")
+    online <- c.get[Long]("usersOnline")
+    country <- c.get[String]("countryCode")
     cpuCount <- c.get[Option[Int]]("cpuCount")
     cpuModel <- c.get[Option[String]]("cpuModel")
-    ram <- c.get[Option[String]]("totalRam")
+    ram <- c.get[Option[Long]]("memoryTotalBytes")
     profile <- c.get[Option[String]]("activeConfigProfileUuid")
     tags <- c.get[List[String]]("tags")
     providerUuid <- c.get[Option[String]]("providerUuid")
@@ -97,28 +97,28 @@ object IntegrationSummaryJson {
 
   private def host(c: HCursor): Decoder.Result[IntegrationObjectSummary] = for {
     address <- c.get[String]("address")
-    port <- c.get[Option[Int]]("port")
+    port <- c.get[Int]("port")
     disabled <- c.get[Boolean]("isDisabled")
     hidden <- c.get[Boolean]("isHidden")
     profile <- c.get[Option[String]]("configProfileUuid")
     inbound <- c.get[Option[String]]("configProfileInboundUuid")
     nodes <- c.get[List[String]]("nodeUuids")
     tags <- c.get[List[String]]("tags")
-    security <- c.get[Option[String]]("securityLayer")
+    security <- c.get[String]("securityLayer")
     description <- c.get[Option[String]]("serverDescription")
   } yield RemnawaveHostSummary(address, port, disabled, hidden, profile, inbound, nodes, tags, security, description)
 
   private def profile(c: HCursor): Decoder.Result[IntegrationObjectSummary] = for {
-    position <- c.get[Option[Int]]("viewPosition")
-    created <- c.get[Option[java.time.Instant]]("createdAt")
-    updated <- c.get[Option[java.time.Instant]]("updatedAt")
+    position <- c.get[Int]("viewPosition")
+    created <- c.get[java.time.Instant]("createdAt")
+    updated <- c.get[java.time.Instant]("updatedAt")
     nodes <- c.get[List[String]]("nodeUuids")
     inbounds <- c.downField("inbounds").values.toList.flatten.traverse { value =>
       val i = value.hcursor
       for {
         uuid <- i.get[String]("uuid")
         tag <- i.get[String]("tag")
-        kind <- i.get[Option[String]]("type")
+        kind <- i.get[String]("type")
         network <- i.get[Option[String]]("network")
         security <- i.get[Option[String]]("security")
         port <- i.get[Option[Int]]("port")

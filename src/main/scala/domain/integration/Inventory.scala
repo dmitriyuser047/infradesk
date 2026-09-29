@@ -43,15 +43,15 @@ final case class RemnawaveNodeSummary(
   lastStatusChange: Option[Instant],
   xrayVersion: Option[String],
   nodeVersion: Option[String],
-  xrayUptimeSeconds: Option[Long],
+  xrayUptimeSeconds: Long,
   trafficTrackingActive: Boolean,
   trafficLimitBytes: Option[Long],
   trafficUsedBytes: Option[Long],
-  usersOnline: Option[Long],
-  countryCode: Option[String],
+  usersOnline: Long,
+  countryCode: String,
   cpuCount: Option[Int],
   cpuModel: Option[String],
-  totalRam: Option[String],
+  memoryTotalBytes: Option[Long],
   activeConfigProfileUuid: Option[String],
   tags: List[String],
   providerUuid: Option[String],
@@ -61,22 +61,22 @@ final case class RemnawaveNodeSummary(
 }
 final case class RemnawaveHostSummary(
   address: String,
-  port: Option[Int],
+  port: Int,
   isDisabled: Boolean,
   isHidden: Boolean,
   configProfileUuid: Option[String],
   configProfileInboundUuid: Option[String],
   nodeUuids: List[String],
   tags: List[String],
-  securityLayer: Option[String],
+  securityLayer: String,
   serverDescription: Option[String]
 ) extends IntegrationObjectSummary
-final case class RemnawaveInboundSummary(uuid: String, tag: String, inboundType: Option[String],
+final case class RemnawaveInboundSummary(uuid: String, tag: String, inboundType: String,
   network: Option[String], security: Option[String], port: Option[Int])
 final case class RemnawaveConfigProfileSummary(
-  viewPosition: Option[Int],
-  createdAt: Option[Instant],
-  updatedAt: Option[Instant],
+  viewPosition: Int,
+  createdAt: Instant,
+  updatedAt: Instant,
   nodeUuids: List[String],
   inbounds: List[RemnawaveInboundSummary]
 ) extends IntegrationObjectSummary

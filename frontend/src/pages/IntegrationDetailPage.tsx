@@ -213,7 +213,7 @@ function NodesTab({ organizationId, integrationId }: { organizationId: string; i
         <td className="property-technical">{hostPort(item.summary.address, item.summary.port)}</td>
         <td><StatusIndicator label={t.nodeState[item.summary.state] ?? item.summary.state} tone={nodeStateTones[item.summary.state]} /></td>
         <td>{item.summary.xrayVersion ?? '—'}</td>
-        <td>{item.summary.usersOnline === null ? '—' : i18n.format.number(item.summary.usersOnline)}</td>
+        <td>{i18n.format.number(item.summary.usersOnline)}</td>
         <td>{formatBytes(item.summary.trafficUsedBytes, i18n.format.number)}</td>
         <td>{item.binding ? <Link to={`${orgPath}/environments/${encodeURIComponent(item.binding.environment.id)}/resources/${encodeURIComponent(item.binding.resource.id)}`}>
           {item.binding.resource.name}</Link> : <span className="muted-copy">{t.notBound}</span>}
@@ -281,7 +281,7 @@ function HostsTab({ organizationId, integrationId }: { organizationId: string; i
     row={item => <tr key={item.id} className={item.active ? undefined : 'row-quiet'}>
       <td><strong>{item.displayName}</strong>{!item.active ? <> <StatusIndicator label={text.gone} /></> : null}</td>
       <td className="property-technical">{hostPort(item.summary.address, item.summary.port)}</td>
-      <td>{item.summary.securityLayer ?? '—'}</td>
+      <td>{item.summary.securityLayer}</td>
       <td>{[item.summary.isDisabled ? text.disabledFlag : null, item.summary.isHidden ? text.hidden : null]
         .filter(Boolean).join(' · ') || '—'}</td>
       <td>{item.summary.nodeUuids.length}</td>
@@ -298,7 +298,7 @@ function ProfilesTab({ organizationId, integrationId }: { organizationId: string
       <td>{item.summary.inbounds.length === 0 ? '—' : item.summary.inbounds.map(inbound =>
         [inbound.tag, inbound.type, inbound.port].filter(value => value !== null).join(' ')).join(', ')}</td>
       <td>{item.summary.nodeUuids.length}</td>
-      <td>{item.summary.updatedAt ? i18n.format.dateTime(item.summary.updatedAt) : '—'}</td>
+      <td>{i18n.format.dateTime(item.summary.updatedAt)}</td>
     </tr>} />
 }
 

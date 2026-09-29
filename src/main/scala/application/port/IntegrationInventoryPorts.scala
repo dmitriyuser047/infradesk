@@ -19,6 +19,7 @@ trait IntegrationSyncSessionRepository[F[_]] {
   def complete(organizationId: UUID, id: UUID, finishedAt: Instant, counts: IntegrationSyncCounts): F[Boolean]
   def fail(organizationId: UUID, id: UUID, finishedAt: Instant, errorCode: String, errorMessage: String): F[Boolean]
   def recent(organizationId: UUID, integrationId: UUID, limit: Int): F[List[IntegrationSyncSession]]
+  def find(organizationId: UUID, id: UUID): F[Option[IntegrationSyncSession]]
 }
 
 trait IntegrationInventoryRepository[F[_]] {

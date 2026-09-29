@@ -46,22 +46,22 @@ export type RemnawaveNodeState = 'CONNECTED' | 'CONNECTING' | 'DISCONNECTED' | '
 export interface RemnawaveNodeSummary {
   address: string; port: number | null; state: RemnawaveNodeState
   isConnected: boolean; isConnecting: boolean; isDisabled: boolean; lastStatusChange: string | null
-  xrayVersion: string | null; nodeVersion: string | null; xrayUptimeSeconds: number | null
+  xrayVersion: string | null; nodeVersion: string | null; xrayUptimeSeconds: number
   trafficTrackingActive: boolean; trafficLimitBytes: number | null; trafficUsedBytes: number | null
-  usersOnline: number | null; countryCode: string | null; cpuCount: number | null; cpuModel: string | null
-  totalRam: string | null; activeConfigProfileUuid: string | null; tags: string[]
+  usersOnline: number; countryCode: string; cpuCount: number | null; cpuModel: string | null
+  memoryTotalBytes: number | null; activeConfigProfileUuid: string | null; tags: string[]
   providerUuid: string | null; providerName: string | null
 }
 export interface RemnawaveHostSummary {
-  address: string; port: number | null; isDisabled: boolean; isHidden: boolean
+  address: string; port: number; isDisabled: boolean; isHidden: boolean
   configProfileUuid: string | null; configProfileInboundUuid: string | null; nodeUuids: string[]; tags: string[]
-  securityLayer: string | null; serverDescription: string | null
+  securityLayer: string; serverDescription: string | null
 }
 export interface RemnawaveInboundSummary {
-  uuid: string; tag: string; type: string | null; network: string | null; security: string | null; port: number | null
+  uuid: string; tag: string; type: string; network: string | null; security: string | null; port: number | null
 }
 export interface RemnawaveConfigProfileSummary {
-  viewPosition: number | null; createdAt: string | null; updatedAt: string | null
+  viewPosition: number; createdAt: string; updatedAt: string
   nodeUuids: string[]; inbounds: RemnawaveInboundSummary[]
 }
 export interface NamedRef { id: string; name: string }

@@ -45,16 +45,22 @@ security layer; config profile name, position, timestamps, node references and e
 tag, type, network, security and port. A node's `proxyUrl`, a profile's `config`, an inbound's
 `rawInbound`, a host's `xhttpExtraParams`, `muxParams`, `sockoptParams` and `finalMask`, and any
 other raw Xray JSON are never read, so they cannot reach the database, logs, audit or errors.
-A response over `INFRADESK_INTEGRATIONS_INVENTORY_MAX_RESPONSE_BYTES` (checked on
-`Content-Length` and on raw bytes), invalid UTF-8 or JSON, a missing required field, a
-duplicated object or a snapshot over `INFRADESK_INTEGRATIONS_INVENTORY_MAX_OBJECTS` is
-`INTEGRATION_INVALID_RESPONSE`.
+Decoding follows the upstream contract (`NodesSchema`, `HostsSchema`, `ConfigProfileSchema`)
+strictly: a required field that is missing or of the wrong type, a nullable field that is absent
+(rather than `null`), an identity or reference that is not a canonical UUID, or any bad item in a
+related list is contract drift, and the whole listing is rejected. Nothing is defaulted (a missing
+connection flag never becomes `false`) and no related list is shortened. A response over
+`INFRADESK_INTEGRATIONS_INVENTORY_MAX_RESPONSE_BYTES` (checked on `Content-Length` and on raw
+bytes), invalid UTF-8 or JSON, a duplicated object or a snapshot over
+`INFRADESK_INTEGRATIONS_INVENTORY_MAX_OBJECTS` is `INTEGRATION_INVALID_RESPONSE` as well.
 
 **How it is stored.** `integration_inventory_object` holds one row per external object. A
 snapshot is applied in one transaction with two statements: a batch upsert (unchanged rows keep
 their update time) and a deactivation of every stored object of a listed type that the snapshot
 no longer contains. Objects are never deleted by synchronization; a reappearing object is
 reactivated with the same id. Every table is tenant-scoped and removed with its integration.
+Composite foreign keys keep an object's last-seen session and a binding's object inside the same
+integration, so no row can point across integrations.
 
 **Sessions.** Each synchronization is an `integration_sync_session` (MANUAL or SCHEDULED; RUNNING,
 COMPLETED or FAILED with a stable error code). A partial unique index allows one RUNNING session
@@ -63,6 +69,8 @@ session past its own deadline is failed as `INTEGRATION_SYNC_STALE` by the next 
 first transaction claims the session (and audits `INTEGRATION_SYNC_REQUESTED` for a manual
 request); decryption and HTTP happen outside any transaction; the second transaction applies the
 snapshot and completes the session, or rolls both back if the session was retired meanwhile.
+A session that was already finished elsewhere keeps that durable outcome: a later failure of the
+same attempt never overwrites it, and the API answers with the stored session.
 
 **Scheduling.** Enabled integrations are observed automatically by a scheduler separate from
 connection synchronization. Due rows of `integration_sync_state` are claimed with

@@ -7,19 +7,23 @@ import io.circe.{ACursor, HCursor, Json}
 import io.circe.parser.parse
 
 import java.time.Instant
+import java.util.UUID
 import scala.util.Try
 
-/** Decodes Remnawave inventory responses into sanitized projections.
+/** Decodes Remnawave inventory responses into sanitized projections, strictly against the
+  * upstream contract (`NodesSchema`, `HostsSchema`, `ConfigProfileSchema`).
   *
   * Only named fields are read. Everything else a response carries — a node's proxy URL, a profile's
   * Xray configuration, an inbound's raw definition, a host's transport parameters — is never
-  * extracted, so it cannot reach the database, a log or an error. A required field that is missing
-  * or of the wrong type makes the whole response invalid rather than half-understood.
+  * extracted, so it cannot reach the database, a log or an error.
+  *
+  * Contract drift is never absorbed: a required field that is missing or of the wrong type, a
+  * nullable field that is missing, an identity that is not a UUID, or a list with one bad item
+  * makes the whole listing invalid. Nothing is defaulted and no list is shortened; size is bounded
+  * by the response byte and object limits instead.
   */
 object RemnawaveInventory {
   private val MaxText = 255
-  private val MaxId = 128
-  private val MaxListItems = 200
 
   def nodes(body: String): Option[List[ObservedIntegrationObject]] =
     responseArray(body, None).flatMap(_.traverse(node))
@@ -34,118 +38,127 @@ object RemnawaveInventory {
   private def responseArray(body: String, nested: Option[String]): Option[List[HCursor]] =
     parse(body).toOption.flatMap { document =>
       val response = document.hcursor.downField("response")
-      val array = response.focus.flatMap(_.asArray).orElse(nested.flatMap(field =>
-        response.downField(field).focus.flatMap(_.asArray)))
-      array.map(_.toList.map(_.hcursor))
+      val array = nested.fold(response.focus)(field => response.downField(field).focus)
+      array.flatMap(_.asArray).map(_.toList.map(_.hcursor))
     }
 
   private def node(c: HCursor): Option[ObservedIntegrationObject] = for {
-    uuid <- id(c.downField("uuid"))
-    name <- text(c.downField("name"))
-    address <- text(c.downField("address"))
-  } yield {
-    val configProfile = c.downField("configProfile")
-    val provider = c.downField("provider")
-    ObservedIntegrationObject(IntegrationObjectType.Node, uuid, name, RemnawaveNodeSummary(
-      address = address,
-      port = int(c.downField("port")),
-      isConnected = bool(c.downField("isConnected")),
-      isConnecting = bool(c.downField("isConnecting")),
-      isDisabled = bool(c.downField("isDisabled")),
-      lastStatusChange = instant(c.downField("lastStatusChange")),
-      xrayVersion = text(c.downField("xrayVersion")),
-      nodeVersion = text(c.downField("nodeVersion")),
-      xrayUptimeSeconds = long(c.downField("xrayUptime")),
-      trafficTrackingActive = bool(c.downField("isTrafficTrackingActive")),
-      trafficLimitBytes = long(c.downField("trafficLimitBytes")),
-      trafficUsedBytes = long(c.downField("trafficUsedBytes")),
-      usersOnline = long(c.downField("usersOnline")),
-      countryCode = text(c.downField("countryCode")),
-      cpuCount = int(c.downField("cpuCount")),
-      cpuModel = text(c.downField("cpuModel")),
-      totalRam = text(c.downField("totalRam")),
-      activeConfigProfileUuid = id(configProfile.downField("activeConfigProfileUuid"))
-        .orElse(id(c.downField("activeConfigProfileUuid"))),
-      tags = strings(c.downField("tags")),
-      providerUuid = id(c.downField("providerUuid")).orElse(id(provider.downField("uuid"))),
-      providerName = text(provider.downField("name"))
-    ))
-  }
-
-  private def host(c: HCursor): Option[ObservedIntegrationObject] = for {
-    uuid <- id(c.downField("uuid"))
-    remark <- text(c.downField("remark"))
-    address <- text(c.downField("address"))
-  } yield {
-    val inbound = c.downField("inbound")
-    val tags = strings(c.downField("tags")) match {
-      case Nil => text(c.downField("tag")).toList
-      case values => values
-    }
-    ObservedIntegrationObject(IntegrationObjectType.Host, uuid, remark, RemnawaveHostSummary(
-      address = address,
-      port = int(c.downField("port")),
-      isDisabled = bool(c.downField("isDisabled")),
-      isHidden = bool(c.downField("isHidden")),
-      configProfileUuid = id(inbound.downField("configProfileUuid")),
-      configProfileInboundUuid = id(inbound.downField("configProfileInboundUuid")),
-      nodeUuids = references(c.downField("nodes")),
-      tags = tags,
-      securityLayer = text(c.downField("securityLayer")),
-      serverDescription = text(c.downField("serverDescription"))
-    ))
-  }
-
-  private def configProfile(c: HCursor): Option[ObservedIntegrationObject] = for {
-    uuid <- id(c.downField("uuid"))
-    name <- text(c.downField("name"))
-    inbounds <- c.downField("inbounds").focus match {
-      case None => Some(Nil)
-      case Some(json) if json.isNull => Some(Nil)
-      case Some(json) => json.asArray.flatMap(_.toList.take(MaxListItems).traverse(value => inboundOf(value.hcursor)))
-    }
-  } yield ObservedIntegrationObject(IntegrationObjectType.ConfigProfile, uuid, name, RemnawaveConfigProfileSummary(
-    viewPosition = int(c.downField("viewPosition")),
-    createdAt = instant(c.downField("createdAt")),
-    updatedAt = instant(c.downField("updatedAt")),
-    nodeUuids = references(c.downField("nodes")),
-    inbounds = inbounds
+    id <- uuid(c.downField("uuid"))
+    name <- string(c.downField("name"))
+    address <- string(c.downField("address"))
+    port <- nullable(c.downField("port"))(int)
+    connected <- bool(c.downField("isConnected"))
+    connecting <- bool(c.downField("isConnecting"))
+    disabled <- bool(c.downField("isDisabled"))
+    lastStatusChange <- nullable(c.downField("lastStatusChange"))(instant)
+    tracking <- bool(c.downField("isTrafficTrackingActive"))
+    limit <- nullable(c.downField("trafficLimitBytes"))(count)
+    used <- nullable(c.downField("trafficUsedBytes"))(count)
+    country <- string(c.downField("countryCode"))
+    tags <- list(c.downField("tags"))(string)
+    activeProfile <- nullable(c.downField("configProfile").downField("activeConfigProfileUuid"))(uuid)
+    providerUuid <- nullable(c.downField("providerUuid"))(uuid)
+    providerName <- nullable(c.downField("provider"))(provider => string(provider.downField("name")))
+    versions <- nullable(c.downField("versions"))(v =>
+      (string(v.downField("xray")), string(v.downField("node"))).tupled)
+    system <- nullable(c.downField("system"))(s => {
+      val info = s.downField("info")
+      (int(info.downField("cpus")), string(info.downField("cpuModel")), count(info.downField("memoryTotal"))).tupled
+    })
+    uptime <- count(c.downField("xrayUptime"))
+    online <- count(c.downField("usersOnline"))
+  } yield ObservedIntegrationObject(IntegrationObjectType.Node, id, name, RemnawaveNodeSummary(
+    address = address,
+    port = port,
+    isConnected = connected,
+    isConnecting = connecting,
+    isDisabled = disabled,
+    lastStatusChange = lastStatusChange,
+    xrayVersion = versions.map(_._1),
+    nodeVersion = versions.map(_._2),
+    xrayUptimeSeconds = uptime,
+    trafficTrackingActive = tracking,
+    trafficLimitBytes = limit,
+    trafficUsedBytes = used,
+    usersOnline = online,
+    countryCode = country,
+    cpuCount = system.map(_._1),
+    cpuModel = system.map(_._2),
+    memoryTotalBytes = system.map(_._3),
+    activeConfigProfileUuid = activeProfile,
+    tags = tags,
+    providerUuid = providerUuid,
+    providerName = providerName
   ))
 
+  private def host(c: HCursor): Option[ObservedIntegrationObject] = for {
+    id <- uuid(c.downField("uuid"))
+    remark <- string(c.downField("remark"))
+    address <- string(c.downField("address"))
+    port <- int(c.downField("port"))
+    disabled <- bool(c.downField("isDisabled"))
+    hidden <- bool(c.downField("isHidden"))
+    profile <- nullable(c.downField("inbound").downField("configProfileUuid"))(uuid)
+    inbound <- nullable(c.downField("inbound").downField("configProfileInboundUuid"))(uuid)
+    nodes <- list(c.downField("nodes"))(uuid)
+    tags <- list(c.downField("tags"))(string)
+    security <- string(c.downField("securityLayer"))
+    description <- nullable(c.downField("serverDescription"))(string)
+  } yield ObservedIntegrationObject(IntegrationObjectType.Host, id, remark, RemnawaveHostSummary(
+    address, port, disabled, hidden, profile, inbound, nodes, tags, security, description))
+
+  private def configProfile(c: HCursor): Option[ObservedIntegrationObject] = for {
+    id <- uuid(c.downField("uuid"))
+    name <- string(c.downField("name"))
+    position <- int(c.downField("viewPosition"))
+    created <- instant(c.downField("createdAt"))
+    updated <- instant(c.downField("updatedAt"))
+    nodes <- list(c.downField("nodes"))(node => uuid(node.downField("uuid")))
+    inbounds <- list(c.downField("inbounds"))(inboundOf)
+  } yield ObservedIntegrationObject(IntegrationObjectType.ConfigProfile, id, name,
+    RemnawaveConfigProfileSummary(position, created, updated, nodes, inbounds))
+
   // Only identity and addressing of an inbound; its raw definition is never read.
-  private def inboundOf(c: HCursor): Option[RemnawaveInboundSummary] = for {
-    uuid <- id(c.downField("uuid"))
-    tag <- text(c.downField("tag"))
-  } yield RemnawaveInboundSummary(uuid, tag, text(c.downField("type")), text(c.downField("network")),
-    text(c.downField("security")), int(c.downField("port")))
+  private def inboundOf(c: ACursor): Option[RemnawaveInboundSummary] = for {
+    id <- uuid(c.downField("uuid"))
+    tag <- string(c.downField("tag"))
+    kind <- string(c.downField("type"))
+    network <- nullable(c.downField("network"))(string)
+    security <- nullable(c.downField("security"))(string)
+    port <- nullable(c.downField("port"))(int)
+  } yield RemnawaveInboundSummary(id, tag, kind, network, security, port)
 
-  private def id(c: ACursor): Option[String] =
-    c.focus.flatMap(_.asString).map(_.trim).filter(value => value.nonEmpty && value.length <= MaxId && !value.exists(_.isControl))
+  /** A canonical UUID, stored in its lower-case canonical form. Anything else is not an identity. */
+  private[remnawave] def uuid(c: ACursor): Option[String] = c.focus.flatMap(_.asString).flatMap { value =>
+    val lower = value.toLowerCase(java.util.Locale.ROOT)
+    Try(UUID.fromString(value)).toOption.map(_.toString).filter(_ == lower)
+  }
 
-  private def text(c: ACursor): Option[String] =
-    c.focus.flatMap(json => json.asString.orElse(json.asNumber.map(_.toString)))
-      .map(value => value.filterNot(_.isControl).trim.take(MaxText)).filter(_.nonEmpty)
+  /** A JSON string, shown as text: control characters removed, bounded for display. */
+  private def string(c: ACursor): Option[String] =
+    c.focus.flatMap(_.asString).map(_.filterNot(_.isControl).trim.take(MaxText))
 
-  private def bool(c: ACursor): Boolean = c.focus.flatMap(_.asBoolean).getOrElse(false)
+  private def bool(c: ACursor): Option[Boolean] = c.focus.flatMap(_.asBoolean)
 
-  private def int(c: ACursor): Option[Int] = long(c).filter(_ <= Int.MaxValue).map(_.toInt)
+  /** A JSON integer in `Int` range. */
+  private def int(c: ACursor): Option[Int] = c.focus.flatMap(_.asNumber).flatMap(_.toInt)
 
-  /** A non-negative whole number, given as a JSON number or a numeric string. */
-  private def long(c: ACursor): Option[Long] = c.focus.flatMap { json =>
-    json.asNumber.flatMap(_.toLong).orElse(json.asString.flatMap(value => Try(BigDecimal(value.trim)).toOption
-      .filter(_.isValidLong).map(_.toLong)))
-  }.filter(_ >= 0)
+  /** A non-negative JSON number counted in whole units (bytes, seconds, users); a fraction is dropped. */
+  private def count(c: ACursor): Option[Long] = c.focus.flatMap(_.asNumber).flatMap(_.toBigDecimal)
+    .filter(value => value >= 0 && value <= BigDecimal(Long.MaxValue))
+    .map(_.setScale(0, BigDecimal.RoundingMode.FLOOR).toLong)
 
   private def instant(c: ACursor): Option[Instant] =
     c.focus.flatMap(_.asString).flatMap(value => Try(Instant.parse(value)).toOption)
 
-  private def strings(c: ACursor): List[String] =
-    c.focus.flatMap(_.asArray).map(_.toList.flatMap(_.asString).map(_.filterNot(_.isControl).trim.take(64))
-      .filter(_.nonEmpty).take(MaxListItems)).getOrElse(Nil)
+  /** Present and null is None; present with a valid value is Some; absent or invalid rejects. */
+  private def nullable[A](c: ACursor)(read: ACursor => Option[A]): Option[Option[A]] = c.focus match {
+    case None => None
+    case Some(json) if json.isNull => Some(None)
+    case Some(_) => read(c).map(Some(_))
+  }
 
-  /** Related objects listed either as UUID strings or as objects carrying a `uuid`. */
-  private def references(c: ACursor): List[String] =
-    c.focus.flatMap(_.asArray).map(_.toList.flatMap { json: Json =>
-      json.asString.orElse(json.hcursor.downField("uuid").focus.flatMap(_.asString))
-    }.map(_.trim).filter(value => value.nonEmpty && value.length <= MaxId).distinct.take(MaxListItems)).getOrElse(Nil)
+  /** Every item must be valid; the list is kept whole. */
+  private def list[A](c: ACursor)(read: ACursor => Option[A]): Option[List[A]] =
+    c.focus.flatMap(_.asArray).flatMap(_.toList.traverse((item: Json) => read(item.hcursor)))
 }

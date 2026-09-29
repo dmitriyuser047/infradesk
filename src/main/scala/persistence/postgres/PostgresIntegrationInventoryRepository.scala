@@ -88,6 +88,10 @@ final class PostgresIntegrationSyncSessionRepository extends IntegrationSyncSess
        where s.organization_id = $organizationId and s.integration_id = $integrationId
        order by s.started_at desc, s.id desc limit $limit""").query[SessionRow].to[List]
       .flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
+
+  override def find(organizationId: UUID, id: UUID): ConnectionIO[Option[IntegrationSyncSession]] =
+    (fr"select" ++ sessionColumns ++ fr"from integration_sync_session s where s.organization_id = $organizationId and s.id = $id")
+      .query[SessionRow].option.flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
 }
 
 final class PostgresIntegrationInventoryRepository extends IntegrationInventoryRepository[ConnectionIO] {

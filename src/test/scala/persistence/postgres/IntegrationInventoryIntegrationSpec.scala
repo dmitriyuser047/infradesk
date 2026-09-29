@@ -31,14 +31,14 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite {
 
   private def node(uuid: String, name: String, disabled: Boolean = false, address: String = "203.0.113.1") =
     ObservedIntegrationObject(IntegrationObjectType.Node, uuid, name, RemnawaveNodeSummary(address, Some(2222),
-      isConnected = !disabled, isConnecting = false, isDisabled = disabled, None, Some("25.1"), None, None,
-      trafficTrackingActive = false, None, None, None, None, None, None, None, None, List("eu"), None, None))
+      isConnected = !disabled, isConnecting = false, isDisabled = disabled, None, Some("25.1"), None, 0L,
+      trafficTrackingActive = false, None, None, 0L, "DE", None, None, None, None, List("eu"), None, None))
   private val host = ObservedIntegrationObject(IntegrationObjectType.Host, "host-1", "Main host",
-    RemnawaveHostSummary("vpn.example.test", Some(443), isDisabled = false, isHidden = false, Some("profile-1"), None,
-      List("node-a"), Nil, Some("TLS"), None))
+    RemnawaveHostSummary("vpn.example.test", 443, isDisabled = false, isHidden = false, Some("profile-1"), None,
+      List("node-a"), Nil, "TLS", None))
   private val profile = ObservedIntegrationObject(IntegrationObjectType.ConfigProfile, "profile-1", "Default",
-    RemnawaveConfigProfileSummary(Some(1), None, None, List("node-a"),
-      List(RemnawaveInboundSummary("inbound-1", "VLESS", Some("vless"), Some("tcp"), None, Some(443)))))
+    RemnawaveConfigProfileSummary(1, Instant.parse("2026-08-01T00:00:00Z"), Instant.parse("2026-09-01T00:00:00Z"),
+      List("node-a"), List(RemnawaveInboundSummary("inbound-1", "VLESS", "vless", Some("tcp"), None, Some(443)))))
   private def snapshot(objects: ObservedIntegrationObject*) =
     IntegrationObservation(objects.toList, IntegrationObjectType.All.toSet)
 
@@ -190,6 +190,39 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite {
       val result = w.manual(integration.id)
       assertEquals(result.errorCode, Some(IntegrationSync.StaleCode))
       assertEquals(w.objects(integration.id), Nil)
+    }
+  }
+
+  test("a provider error after the session was retired never overrides the durable stale outcome") {
+    withWorld { w =>
+      val integration = w.create("Late failure")
+      w.observation = w.run.run(sql"""update integration_sync_session set status = 'FAILED', finished_at = now(),
+          error_code = 'INTEGRATION_SYNC_STALE', error_message = 'Synchronization was abandoned and recovered'
+          where integration_id = ${integration.id} and status = 'RUNNING'""".update.run) *>
+        IO.raiseError(IntegrationError("INTEGRATION_TIMEOUT", "late"))
+      val returned = w.manual(integration.id)
+      val stored = w.run.run(w.sessions.recent(w.org, integration.id, 5)).unsafeRunSync()
+      assertEquals(stored.map(_.errorCode), List(Some(IntegrationSync.StaleCode)))
+      assertEquals(returned, stored.head)
+      assertEquals(w.objects(integration.id), Nil)
+    }
+  }
+
+  test("the database refuses a binding or a last-seen session from another integration") {
+    withWorld { w =>
+      val first = w.create("First"); val second = w.create("Second")
+      w.observation = IO.pure(snapshot(node("node-a", "Frankfurt")))
+      w.manual(first.id)
+      val secondSession = w.manual(second.id).id
+      val objectId = w.objects(first.id).head._5
+      def refused(statement: ConnectionIO[Int]) = w.run.run(statement).attempt.unsafeRunSync().left.toOption
+        .collect { case e: java.sql.SQLException => e.getSQLState }
+      assertEquals(refused(sql"""insert into integration_resource_binding (id, organization_id, integration_id,
+          inventory_object_id, resource_id, created_by_user_id, created_at, updated_at)
+          values (${UUID.randomUUID()}, ${w.org}, ${second.id}, $objectId, ${w.nodeResource}, ${w.user}, now(), now())"""
+        .update.run), Some("23503"))
+      assertEquals(refused(sql"""update integration_inventory_object set last_seen_sync_session_id = $secondSession
+          where id = $objectId""".update.run), Some("23503"))
     }
   }
 
