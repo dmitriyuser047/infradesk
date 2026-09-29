@@ -48,7 +48,8 @@ import application.context.{
 }
 import application.incident.{GetIncidentDetail, ListConnectionIncidents, ListIncidents, ListResourceIncidents}
 import application.integration.{IntegrationBindings, IntegrationManagement, IntegrationSync,
-  IntegrationSyncScheduler, IntegrationSyncSchedulerSettings, IntegrationSyncTransactions, TestIntegration}
+  IntegrationSyncScheduler, IntegrationSyncSchedulerSettings, IntegrationSyncTransactions, TestIntegration,
+  IntegrationActions, IntegrationActionWorker}
 import application.overview.GetOperationsOverview
 import application.monitor.{CreateMonitorRule, EvaluateMonitorRules, ListMonitorRules, UpdateMonitorRule}
 import application.notification.{
@@ -150,6 +151,9 @@ final case class ApplicationComponents(
   testIntegration: TestIntegration[ConnectionIO],
   integrationProviderRegistry: application.integration.IntegrationProviderRegistry[IO],
   integrationSync: IntegrationSync[ConnectionIO],
+  integrationActions: IntegrationActions[ConnectionIO],
+  integrationActionWorker: IntegrationActionWorker[ConnectionIO],
+  integrationActionsEnabled: Boolean,
   integrationBindings: IntegrationBindings[ConnectionIO],
   integrationSyncScheduler: IntegrationSyncScheduler[ConnectionIO],
   testNotificationChannel: TestNotificationChannel,
@@ -348,6 +352,15 @@ object ApplicationModule {
         transactionTimeProvider, auditRecorder),
       transactionRunner, integrations.integrationCredentialCipher, integrations.integrationProviderRegistry,
       loggers.integration, integrationSyncSettings.attemptTimeout, config.integrations.inventoryMaxObjects)
+    val integrationActions = new IntegrationActions[ConnectionIO](integrationRepository,
+      integrationInventoryRepository, integrationActionRepository, integrationSecretRepository,
+      integrations.integrationProviderRegistry, transactionIdGenerator, transactionTimeProvider, auditRecorder)
+    val actionSettings = config.integrations.actions
+    val integrationActionWorker = new IntegrationActionWorker[ConnectionIO](integrationActionRepository,
+      integrationRepository, integrationSecretRepository, integrations.integrationCredentialCipher,
+      integrations.integrationProviderRegistry, transactionRunner, timeProvider, loggers.integration,
+      actionSettings.pollInterval, actionSettings.batchSize, actionSettings.maxConcurrency,
+      config.integrations.requestTimeout, UUID.randomUUID())
 
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
@@ -555,6 +568,9 @@ object ApplicationModule {
         integrations.integrationCredentialCipher, integrations.integrationProviderRegistry),
       integrationProviderRegistry = integrations.integrationProviderRegistry,
       integrationSync = integrationSync,
+      integrationActions = integrationActions,
+      integrationActionWorker = integrationActionWorker,
+      integrationActionsEnabled = actionSettings.enabled,
       integrationBindings = new IntegrationBindings[ConnectionIO](integrationRepository,
         integrationInventoryRepository, integrationBindingRepository, transactionIdGenerator,
         transactionTimeProvider, auditRecorder),

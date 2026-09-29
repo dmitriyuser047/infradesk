@@ -51,6 +51,10 @@ final class ResolvingOutboundDestinationPolicy(
     literal(host) match {
       case Some(address) => IO.pure(validate(List(address)))
       case None if host.isEmpty => IO.pure(Left(OutboundDestinationFailure.Forbidden(Forbidden)))
+      // localhost is a reserved local name. Reject it even when a deployment's DNS server does
+      // not answer for it; otherwise the policy's answer depends on resolver configuration.
+      case None if host.equalsIgnoreCase("localhost") || host.equalsIgnoreCase("localhost.") =>
+        IO.pure(Left(OutboundDestinationFailure.Forbidden(Forbidden)))
       case None =>
         IO.delay(Name.fromString(host)).attempt.flatMap {
           case Left(_) => IO.pure(Left(OutboundDestinationFailure.ResolutionFailed(ResolutionFailed)))

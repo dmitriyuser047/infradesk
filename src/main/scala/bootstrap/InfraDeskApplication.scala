@@ -75,7 +75,8 @@ object InfraDeskApplication {
           if (config.configurationRules.enabled) List(application.configurationAssignmentRuleWorker.run) else Nil
         // Read-only observation of enabled integrations; manual synchronization works without it.
         val integrationWorkers =
-          if (config.integrations.sync.enabled) List(application.integrationSyncScheduler.run) else Nil
+          (if (config.integrations.sync.enabled) List(application.integrationSyncScheduler.run) else Nil) ++
+            (if (config.integrations.actions.enabled) List(application.integrationActionWorker.run) else Nil)
         val workers = schedulerWorkers ++ notificationWorkers ++ configurationWorkers ++ ruleWorkers ++
           integrationWorkers ++ List(
           application.cleanupLoginThrottle.run,

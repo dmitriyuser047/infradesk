@@ -4,12 +4,13 @@ package persistence.postgres
 import application.audit.AuditRecorder
 import application.auth.ActorContext
 import application.integration._
-import application.port.{InventoryFilter, TransactionRunner}
+import application.port.{ClaimedIntegrationSync, InventoryFilter, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.integration._
 import infrastructure.database.{ConnectionIOIdGenerator, ConnectionIOTimeProvider, DoobieTransactionRunner}
+import infrastructure.runtime.SystemTimeProvider
 import integration.secret.IntegrationCredentialCipher
 import integration.ssh.SecretEncryptionConfig
 import munit.FunSuite
@@ -61,17 +62,26 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite {
     val query = new PostgresIntegrationInventoryQuery
     val management = new IntegrationManagement[ConnectionIO](integrations, secrets, ids, time, cipher, audit, states)
     @volatile var observation: IO[IntegrationObservation] = IO.pure(snapshot())
+    @volatile var remoteActionCalls = 0
     val provider: IntegrationProvider[IO] = new IntegrationProvider[IO] {
       override val providerType = IntegrationProviderType.Remnawave
       override val displayName = "Remnawave"
-      override val capabilities: Set[IntegrationCapability] = Set.empty
+      override val capabilities: Set[IntegrationCapability] = Set(IntegrationCapability.SafeActions)
       override def testConnection(context: IntegrationRuntimeContext) = IO.raiseError(new IllegalStateException)
       override def observe(context: IntegrationRuntimeContext) = observation
+      override def executeAction(context: IntegrationRuntimeContext, externalId: String,
+        action: IntegrationActionCode): IO[IntegrationActionRemoteOutcome] = IO {
+          remoteActionCalls += 1
+          IntegrationActionRemoteOutcome.Succeeded
+        }
     }
     val sync = new IntegrationSync[ConnectionIO](new IntegrationSyncTransactions[ConnectionIO](integrations, secrets,
       sessions, inventory, ids, time, audit), run, cipher, new IntegrationProviderRegistry[IO](List(provider)),
       NoOpLogger[IO], 10.seconds, 1000)
     val bindings = new IntegrationBindings[ConnectionIO](integrations, inventory, bindingRepository, ids, time, audit)
+    val actionRepository = new PostgresIntegrationActionRepository
+    val actionService = new IntegrationActions[ConnectionIO](integrations, inventory, actionRepository,
+      secrets, new IntegrationProviderRegistry[IO](List(provider)), ids, time, audit)
 
     def create(name: String): Integration = run.run(management.create(actor, CreateIntegrationCommand(name,
       IntegrationProviderType.Remnawave, "https://panel.example.test", RemnawaveCredential("tok", None)))).unsafeRunSync()
@@ -368,6 +378,139 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite {
         .foreach(key => assert(!keys.contains(key), key))
       assertEquals(w.run.run(sql"""select distinct summary_version from integration_inventory_object
           where integration_id = ${integration.id}""".query[Int].to[List]).unsafeRunSync(), List(1))
+    }
+  }
+
+  test("node actions are idempotent, exclusive, fenced and require observation after UNKNOWN") {
+    withWorld { w =>
+      val integration = w.create("Actions") // manual actions also work while observation is disabled
+      w.observation = IO.pure(snapshot(node(UUID.randomUUID().toString, "Frankfurt"),
+        node(UUID.randomUUID().toString, "Amsterdam", disabled = true), host))
+      w.manual(integration.id)
+      val objects = w.run.run(w.inventory.findObject(w.org, integration.id,
+        w.objects(integration.id).find(_._2 == "Frankfurt").get._5, false)).unsafeRunSync().get
+      val other = w.objects(integration.id).find(_._2 == "Amsterdam").get._5
+      val hostId = w.objects(integration.id).find(_._1 == "host-1").get._5
+      val requestId = UUID.randomUUID()
+      def request(id: UUID, key: UUID, action: IntegrationActionCode) =
+        w.run.run(w.actionService.request(w.actor, integration.id, id, key, action)).attempt.unsafeRunSync()
+      def code(result: Either[Throwable, _]) = result.left.toOption.collect { case e: IntegrationError => e.code }
+      val first = request(objects.id, requestId, IntegrationActionCode.NodeRestart).toOption.get
+      assertEquals(request(objects.id, requestId, IntegrationActionCode.NodeRestart).toOption.get.id, first.id)
+      assertEquals(code(request(objects.id, requestId, IntegrationActionCode.NodeDisable)),
+        Some("INTEGRATION_ACTION_REQUEST_ID_CONFLICT"))
+      assertEquals(code(request(objects.id, UUID.randomUUID(), IntegrationActionCode.NodeDisable)),
+        Some("INTEGRATION_ACTION_ALREADY_RUNNING"))
+      assert(request(other, UUID.randomUUID(), IntegrationActionCode.NodeEnable).isRight)
+      assertEquals(code(request(hostId, UUID.randomUUID(), IntegrationActionCode.NodeRestart)),
+        Some("INTEGRATION_ACTION_UNSUPPORTED"))
+      assertEquals(code(request(UUID.randomUUID(), UUID.randomUUID(), IntegrationActionCode.NodeRestart)),
+        Some("INTEGRATION_OBJECT_NOT_FOUND"))
+      assertEquals(w.actions.count(_ == "INTEGRATION_ACTION_REQUESTED"), 2)
+
+      val at = Instant.now()
+      val claimed = w.run.run(w.actionRepository.recoverAndClaim(UUID.randomUUID(), UUID.randomUUID(), at,
+        at.plusSeconds(80), 1)).unsafeRunSync()._2
+      assertEquals(claimed.map(_.id), List(first.id))
+      assert(!w.run.run(w.actionRepository.complete(first, UUID.randomUUID(), at.plusSeconds(1),
+        "SUCCEEDED", None, None)).unsafeRunSync())
+      assert(w.run.run(w.actionRepository.complete(claimed.head, claimed.head.claimToken.get, at,
+        "UNKNOWN", Some("INTEGRATION_ACTION_RESULT_UNKNOWN"), Some("Remote result is unknown"))).unsafeRunSync())
+      assertEquals(code(request(objects.id, UUID.randomUUID(), IntegrationActionCode.NodeRestart)),
+        Some("INTEGRATION_ACTION_REQUIRES_REFRESH"))
+      Thread.sleep(20)
+      w.manual(integration.id)
+      assert(request(objects.id, UUID.randomUUID(), IntegrationActionCode.NodeRestart).isRight)
+      assertEquals(w.run.run(w.actionRepository.find(w.org, integration.id, first.id)).unsafeRunSync().get.status,
+        IntegrationActionStatus.Unknown)
+    }
+  }
+
+  test("a lost worker claim becomes UNKNOWN without replay and nudges enabled observation") {
+    withWorld { w =>
+      val integration = w.create("Lost action")
+      val externalId = UUID.randomUUID().toString
+      w.observation = IO.pure(snapshot(node(externalId, "Frankfurt")))
+      w.manual(integration.id)
+      w.run.run(w.management.setEnabled(w.actor, integration.id, enabled = true)).unsafeRunSync()
+      val objectId = w.objects(integration.id).head._5
+      val created = w.run.run(w.actionService.request(w.actor, integration.id, objectId,
+        UUID.randomUUID(), IntegrationActionCode.NodeRestart)).unsafeRunSync()
+      val at = Instant.now()
+      w.run.run(sql"update integration_sync_state set next_run_at = ${at.plusSeconds(3600)} where integration_id = ${integration.id}"
+        .update.run).unsafeRunSync()
+      val first = w.run.run(w.actionRepository.recoverAndClaim(UUID.randomUUID(), UUID.randomUUID(), at,
+        at.plusSeconds(70), 1)).unsafeRunSync()._2
+      assertEquals(first.map(_.id), List(created.id))
+      w.provider.executeAction(IntegrationRuntimeContext(integration.id, w.org, integration.baseUrl,
+        RemnawaveCredential("tok", None)), externalId, IntegrationActionCode.NodeRestart).unsafeRunSync()
+      assertEquals(w.remoteActionCalls, 1)
+      val later = at.plusSeconds(71)
+      val second = w.run.run(w.actionRepository.recoverAndClaim(UUID.randomUUID(), UUID.randomUUID(), later,
+        later.plusSeconds(70), 1)).unsafeRunSync()
+      assertEquals(second._1, 1)
+      assertEquals(second._2, Nil)
+      assert(!w.run.run(w.actionRepository.complete(first.head, first.head.claimToken.get, later,
+        "SUCCEEDED", None, None)).unsafeRunSync())
+      assertEquals(w.run.run(w.actionRepository.find(w.org, integration.id, created.id)).unsafeRunSync().get.status,
+        IntegrationActionStatus.Unknown)
+      val nextRun = w.run.run(sql"select next_run_at from integration_sync_state where integration_id = ${integration.id}"
+        .query[Instant].unique).unsafeRunSync()
+      assertEquals(nextRun.toEpochMilli, later.toEpochMilli)
+      assertEquals(w.remoteActionCalls, 1)
+    }
+  }
+
+  test("action worker processes bounded batches and leaves observed inventory untouched") {
+    withWorld { w =>
+      val integration = w.create("Worker")
+      w.observation = IO.pure(snapshot(node(UUID.randomUUID().toString, "Frankfurt"),
+        node(UUID.randomUUID().toString, "Berlin")))
+      w.manual(integration.id)
+      w.run.run(w.management.setEnabled(w.actor, integration.id, enabled = true)).unsafeRunSync()
+      val scheduleClaim = ClaimedIntegrationSync(w.org, integration.id, 0L, UUID.randomUUID())
+      w.run.run(sql"""update integration_sync_state set claim_token = ${scheduleClaim.token},
+        claimed_by = ${UUID.randomUUID()}, claim_until = ${Instant.now().plusSeconds(90)}
+        where organization_id = ${w.org} and integration_id = ${integration.id}""".update.run).unsafeRunSync()
+      val objects = w.objects(integration.id).map(_._5)
+      objects.foreach(id => w.run.run(w.actionService.request(w.actor, integration.id, id,
+        UUID.randomUUID(), IntegrationActionCode.NodeDisable)).unsafeRunSync())
+      val worker = new IntegrationActionWorker[ConnectionIO](w.actionRepository, w.integrations, w.secrets,
+        cipher, new IntegrationProviderRegistry[IO](List(w.provider)), w.run, new SystemTimeProvider,
+        NoOpLogger[IO], 1.second, batch = 1, concurrency = 1, requestTimeout = 2.seconds,
+        owner = UUID.randomUUID())
+      worker.tick.unsafeRunSync()
+      assertEquals(w.remoteActionCalls, 1)
+      assert(w.run.run(w.states.completeClaimedRun(scheduleClaim, Instant.now().plusSeconds(60), 0L,
+        Instant.now())).unsafeRunSync())
+      val nextRun = w.run.run(sql"select next_run_at from integration_sync_state where integration_id = ${integration.id}"
+        .query[Instant].unique).unsafeRunSync()
+      assert(nextRun.isBefore(Instant.now().plusSeconds(2)))
+      assertEquals(w.run.run(w.actionRepository.recent(w.org, integration.id, 10)).unsafeRunSync()
+        .map(_.status).toSet, Set[IntegrationActionStatus](IntegrationActionStatus.Queued,
+          IntegrationActionStatus.Succeeded))
+      worker.tick.unsafeRunSync()
+      assertEquals(w.remoteActionCalls, 2)
+      assertEquals(w.run.run(w.actionRepository.recent(w.org, integration.id, 10)).unsafeRunSync()
+        .map(_.status).toSet, Set[IntegrationActionStatus](IntegrationActionStatus.Succeeded))
+      assert(w.page(integration.id, InventoryFilter(None, None, None, 10, 0)).items
+        .forall(item => !item.obj.summary.asInstanceOf[RemnawaveNodeSummary].isDisabled))
+    }
+  }
+
+  test("concurrent action requests on one node admit one intent and one audit") {
+    withWorld { w =>
+      val integration = w.create("Concurrent actions")
+      w.observation = IO.pure(snapshot(node(UUID.randomUUID().toString, "Frankfurt")))
+      w.manual(integration.id)
+      val objectId = w.objects(integration.id).head._5
+      def request(key: UUID) = w.run.run(w.actionService.request(w.actor, integration.id, objectId,
+        key, IntegrationActionCode.NodeRestart)).attempt
+      val (a, b) = (request(UUID.randomUUID()), request(UUID.randomUUID())).parTupled.unsafeRunSync()
+      assertEquals(List(a, b).count(_.isRight), 1)
+      assertEquals(List(a, b).flatMap(_.left.toOption.collect { case e: IntegrationError => e.code }),
+        List("INTEGRATION_ACTION_ALREADY_RUNNING"))
+      assertEquals(w.actions.count(_ == "INTEGRATION_ACTION_REQUESTED"), 1)
     }
   }
 }

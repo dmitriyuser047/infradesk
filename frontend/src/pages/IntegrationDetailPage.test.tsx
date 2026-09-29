@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient } from '../app/queryClient'
 import { I18nProvider } from '../i18n'
 import type { IntegrationOverview, IntegrationResponse, IntegrationSyncSession, InventoryObject,
-  RemnawaveNodeSummary } from '../types/integration'
+  RemnawaveNodeSummary, IntegrationActionExecution } from '../types/integration'
 import { IntegrationDetailPage } from './IntegrationDetailPage'
 import { IntegrationsPage } from './IntegrationsPage'
 
@@ -39,9 +39,10 @@ type Call = { url: string; method: string; body?: Record<string, unknown> }
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value),
   { status, headers: { 'Content-Type': 'application/json' } })
 
-function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syncFails?: string } = {}) {
+function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syncFails?: string; activeDisabled?: boolean } = {}) {
   const calls: Call[] = []
-  let nodes = [frankfurt, idle]
+  let nodes = [frankfurt, options.activeDisabled ? { ...idle, active: true } : idle]
+  let executions: IntegrationActionExecution[] = []
   const client = createAppQueryClient()
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input); const method = init?.method ?? 'GET'
@@ -52,6 +53,18 @@ function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syn
     if (url === '/api/v1/organizations/org/integrations' && method === 'GET') return json([{ ...integration, overview }])
     if (url === base && method === 'GET') return json({ ...integration, overview })
     if (url === `${base}/inventory/summary`) return json(overview)
+    if (url === `${base}/actions?limit=50`) return json({ items: executions })
+    if (url.startsWith(`${base}/actions/`)) return json(executions.find(value => url.endsWith(value.id)))
+    if (url.endsWith('/actions') && method === 'POST') {
+      const objectId = url.split('/').at(-2)!
+      const action = body!.action as IntegrationActionExecution['action']
+      const value: IntegrationActionExecution = { id: `action-${executions.length}`, requestId: body!.requestId as string,
+        integrationId: 'one', inventoryObjectId: objectId, displayName: objectId === 'obj-a' ? 'Frankfurt' : 'Idle',
+        requestedByUserId: 'user', requestedByName: 'Operator', action, status: 'QUEUED',
+        createdAt: '2026-09-29T10:00:03Z', startedAt: null, finishedAt: null, errorCode: null }
+      executions = [value, ...executions]
+      return json(value, 202)
+    }
     if (url.startsWith(`${base}/inventory/nodes`)) {
       const params = new URL(url, 'http://x').searchParams
       const filtered = nodes.filter(node => (!params.get('state') || node.summary.state === params.get('state'))
@@ -142,6 +155,25 @@ describe('integration detail', () => {
     expect(await screen.findByText('The API token was rejected.')).toBeTruthy()
     expect(screen.getByText('2 nodes · 1 hosts · 1 profiles')).toBeTruthy()
     expect(screen.getAllByText('Manual')).toHaveLength(2)
+  })
+
+  it('confirms one node action with one request ID and shows action history', async () => {
+    const { calls } = setup('/organizations/org/integrations/one?tab=nodes', 'OWNER', { activeDisabled: true })
+    expect(await screen.findByRole('button', { name: 'Enable' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Disable' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Restart' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Restart' }))
+    expect(calls.filter(call => call.url.endsWith('/actions') && call.method === 'POST')).toHaveLength(0)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Connections may be interrupted during restart.')).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(calls.filter(call => call.url.endsWith('/actions') && call.method === 'POST')).toHaveLength(1))
+    const posted = calls.find(call => call.url.endsWith('/actions') && call.method === 'POST')!
+    expect(posted.body?.action).toBe('NODE_RESTART')
+    expect(posted.body?.requestId).toMatch(/^[a-f0-9-]{36}$/)
+    fireEvent.click(screen.getByRole('tab', { name: 'Actions' }))
+    expect(await screen.findByText('Operator')).toBeTruthy()
+    expect(await screen.findByText('NODE_RESTART')).toBeTruthy()
   })
 
   it('the list links each integration to its detail and summarizes its last sync', async () => {

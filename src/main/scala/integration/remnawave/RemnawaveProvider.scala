@@ -3,7 +3,8 @@ package integration.remnawave
 
 import application.integration.{IntegrationProvider, IntegrationRuntimeContext, IntegrationTestResult}
 import cats.effect.IO
-import domain.integration.{IntegrationCapability, IntegrationObservation, IntegrationProviderType, RemnawaveCredential}
+import domain.integration.{IntegrationActionCode, IntegrationActionRemoteOutcome, IntegrationCapability,
+  IntegrationObservation, IntegrationProviderType, RemnawaveCredential}
 
 /** Remnawave, observed read-only: a connectivity check and one inventory snapshot. */
 final class RemnawaveProvider(client: RemnawaveClient) extends IntegrationProvider[IO] {
@@ -11,7 +12,8 @@ final class RemnawaveProvider(client: RemnawaveClient) extends IntegrationProvid
   override val displayName = "Remnawave"
   override val capabilities: Set[IntegrationCapability] = Set(
     IntegrationCapability.ConnectivityTest, IntegrationCapability.NodeDiscovery, IntegrationCapability.HostDiscovery,
-    IntegrationCapability.ConfigProfileDiscovery, IntegrationCapability.MetricsRead)
+    IntegrationCapability.ConfigProfileDiscovery, IntegrationCapability.MetricsRead,
+    IntegrationCapability.SafeActions)
 
   override def testConnection(context: IntegrationRuntimeContext): IO[IntegrationTestResult] =
     credentialOf(context).flatMap(credential => IO.monotonic.flatMap(started =>
@@ -20,6 +22,10 @@ final class RemnawaveProvider(client: RemnawaveClient) extends IntegrationProvid
 
   override def observe(context: IntegrationRuntimeContext): IO[IntegrationObservation] =
     credentialOf(context).flatMap(client.inventory(context.baseUrl, _))
+
+  override def executeAction(context: IntegrationRuntimeContext, externalId: String,
+    action: IntegrationActionCode): IO[IntegrationActionRemoteOutcome] =
+    credentialOf(context).flatMap(client.action(context.baseUrl, _, externalId, action))
 
   private def credentialOf(context: IntegrationRuntimeContext): IO[RemnawaveCredential] = context.credential match {
     case credential: RemnawaveCredential => IO.pure(credential)

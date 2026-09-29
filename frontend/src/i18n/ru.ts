@@ -396,7 +396,7 @@ export const ru: Messages = {
     syncFailed: 'Синхронизация не удалась', loadError: 'Не удалось загрузить инвентарь', notFound: 'Интеграция не найдена',
     autoDisabled: 'Автоматическая синхронизация отключена',
     autoDisabledDetail: 'Включите интеграцию, чтобы наблюдать Remnawave автоматически. Ручная синхронизация работает всегда.',
-    readOnly: 'Только чтение: InfraDesk ничего не меняет в Remnawave.',
+    readOnly: 'Наблюдаемое состояние Remnawave. Действия показаны отдельно.',
     tabs: { overview: 'Обзор', nodes: 'Ноды', hosts: 'Хосты', profiles: 'Конфиг-профили', history: 'История синхронизаций' },
     lastSync: 'Последняя синхронизация', lastSuccess: 'Последняя успешная', nextRun: 'Следующая автоматическая', never: 'Никогда',
     notScheduled: 'Не запланирована', lastError: 'Последняя ошибка',

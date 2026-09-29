@@ -181,7 +181,8 @@ final class PostgresIntegrationSyncStateRepository extends IntegrationSyncStateR
   override def completeClaimedRun(claim: ClaimedIntegrationSync, nextRunAt: Instant, consecutiveFailures: Long,
     now: Instant): ConnectionIO[Boolean] =
     sql"""update integration_sync_state
-          set next_run_at = $nextRunAt, consecutive_failures = $consecutiveFailures,
+          set next_run_at = least($nextRunAt, coalesce(action_nudge_at, $nextRunAt)),
+            action_nudge_at = null, consecutive_failures = $consecutiveFailures,
             claim_token = null, claimed_by = null, claim_until = null, updated_at = $now
           where organization_id = ${claim.organizationId} and integration_id = ${claim.integrationId}
             and claim_token = ${claim.token}""".update.run.map(_ == 1)

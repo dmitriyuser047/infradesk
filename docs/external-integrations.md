@@ -1,8 +1,9 @@
-# External integrations: Stages 24A–24B
+# External integrations: Stages 24A–24C
 
 Organization owners can open **Integrations**, add a Remnawave panel, save its API token and
 optional Caddy API key, test the connection, then enable it. New integrations are disabled.
-Enabling turns on automatic, read-only observation (Stage 24B below); no action is ever sent.
+Enabling turns on automatic, read-only observation (Stage 24B below). Node actions require an
+explicit user request.
 
 The base URL must be an absolute HTTP or HTTPS URL with a host. A path prefix is allowed;
 user information, query parameters, fragments and invalid ports are rejected. Trailing slashes
@@ -27,8 +28,8 @@ There is no per-integration bypass of this policy.
 The test intent and the encrypted credential read commit in a short PostgreSQL transaction.
 Decryption and the external API call happen afterward, without holding a database connection.
 Only the `INTEGRATION_TEST_REQUESTED` audit action is recorded; the journal does not imply that
-the external call succeeded. All integration endpoints require `MANAGE_INTEGRATIONS`, held by
-organization owners.
+the external call succeeded. Management and read endpoints require `MANAGE_INTEGRATIONS`;
+node action requests require `EXECUTE_OPERATIONS`.
 
 ## Stage 24B: read-only inventory, synchronization and node binding
 
@@ -97,5 +98,38 @@ Binding to the same resource again changes nothing; binding to another replaces 
 created or bound automatically, and an inactive node keeps its binding. The resource page shows
 the bound node's Remnawave status read-only.
 
-Not part of this stage: node or host actions, traffic reset, profile management, users and
-subscriptions, desired state, remediation, webhooks and automatic matching.
+## Stage 24C: durable node actions
+
+Owners with `MANAGE_INTEGRATIONS` and `EXECUTE_OPERATIONS` can confirm **Enable**, **Disable** or
+**Restart** for an active observed Remnawave node, whether or not it is bound to a resource or
+automatic observation is enabled. The POST endpoint is
+`.../integrations/{integrationId}/inventory/objects/{objectId}/actions`, with a UUID `requestId`
+and one of `NODE_ENABLE`, `NODE_DISABLE`, `NODE_RESTART`. It returns an execution with HTTP 202.
+`GET .../integrations/{integrationId}/actions` lists the latest 50 executions (up to 100), and
+`GET .../integrations/{integrationId}/actions/{executionId}` returns one execution. Both read
+endpoints require `MANAGE_INTEGRATIONS`.
+
+The short request transaction validates the observed node and credential, inserts a `QUEUED`
+execution and records `INTEGRATION_ACTION_REQUESTED` in the same commit. PostgreSQL enforces one
+execution per organization and request ID and one active (`QUEUED` or `RUNNING`) action per node.
+The worker claims only enough rows to start immediately, using `FOR UPDATE SKIP LOCKED`, and
+assigns a token and deadline. Decryption and exactly one Remnawave POST occur after the claim
+commits. Completion requires the same claim token. Abandoned `RUNNING` rows become `UNKNOWN`;
+they are never retried automatically. A later action on that node requires an observation whose
+`lastSeenAt` is after the unknown execution's finish time.
+
+The provider sends `POST /api/nodes/{uuid}/actions/enable` or `disable`, or `POST
+/api/nodes/{uuid}/actions/restart` with `{"forceRestart":false}`. It uses the integration's
+Bearer token and optional Caddy key. Confirmed success does not change stored inventory; a new
+observation does. For an enabled integration, successful and unknown results advance the next
+automatic observation. A disabled integration can be refreshed manually with **Sync now**.
+
+| Variable | Default |
+| --- | --- |
+| `INFRADESK_INTEGRATIONS_ACTIONS_ENABLED` | `true` |
+| `INFRADESK_INTEGRATIONS_ACTIONS_POLL_INTERVAL_SECONDS` | `2` |
+| `INFRADESK_INTEGRATIONS_ACTIONS_BATCH_SIZE` | `20` |
+| `INFRADESK_INTEGRATIONS_ACTIONS_MAX_CONCURRENCY` | `3` |
+
+Traffic reset, forced restart, bulk actions, desired state and automatic remediation remain out
+of scope.

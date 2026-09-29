@@ -73,6 +73,9 @@ final class IntegrationRoutesSpec extends FunSuite {
       override val providerType = IntegrationProviderType.Remnawave
       override val displayName = "Remnawave"
       override val capabilities: Set[IntegrationCapability] = Set(IntegrationCapability.ConnectivityTest)
+      override def executeAction(context: IntegrationRuntimeContext, externalId: String,
+        action: domain.integration.IntegrationActionCode): IO[domain.integration.IntegrationActionRemoteOutcome] =
+        IO.raiseError(new IllegalStateException)
       override def testConnection(context: IntegrationRuntimeContext): IO[IntegrationTestResult] = IO {
         auditedBeforeProbe = journal.recorded.exists(_.action.code == "INTEGRATION_TEST_REQUESTED")
         IntegrationTestResult(ok = true, providerType, 3)

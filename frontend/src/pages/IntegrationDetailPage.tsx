@@ -3,6 +3,7 @@ import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { RefreshCw, Search } from 'lucide-react'
 import { ApiError } from '../api/httpClient'
 import { useIntegration, useTestIntegration } from '../api/integrations'
+import { useIntegrationActions } from '../api/integrationActions'
 import {
   useBindingCandidates, useBindNode, useIntegrationInventory, useIntegrationSummary, useIntegrationSyncSessions,
   useSyncIntegration, useUnbindNode, type InventoryKind, type InventoryParams,
@@ -14,6 +15,7 @@ import {
   WorkspaceSection, WorkspaceTabs,
 } from '../components/layout/WorkspacePrimitives'
 import { nodeStateTones, sessionTones, useSyncErrorText } from '../components/integrations/integrationPresentation'
+import { NodeActionControls } from '../components/integrations/NodeActionControls'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import type {
@@ -23,7 +25,7 @@ import type {
 import { InvalidRoutePage } from './InvalidRoutePage'
 import '../styles/pages/integrations.css'
 
-const Tabs = ['overview', 'nodes', 'hosts', 'profiles', 'history'] as const
+const Tabs = ['overview', 'nodes', 'hosts', 'profiles', 'history', 'actions'] as const
 type Tab = typeof Tabs[number]
 const PageSize = 50
 
@@ -89,7 +91,8 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
     {test.isError ? <InlineAlert tone="danger" title={i18n.t.integrations.testError}>
       {test.error instanceof ApiError ? errorText(test.error.code) : describeError(test.error, i18n)}</InlineAlert> : null}
     <WorkspaceTabs tabs={[{ id: 'overview', label: t.tabs.overview }, { id: 'nodes', label: t.tabs.nodes },
-      { id: 'hosts', label: t.tabs.hosts }, { id: 'profiles', label: t.tabs.profiles }, { id: 'history', label: t.tabs.history }]}
+      { id: 'hosts', label: t.tabs.hosts }, { id: 'profiles', label: t.tabs.profiles }, { id: 'history', label: t.tabs.history },
+      { id: 'actions', label: i18n.locale === 'ru' ? 'Действия' : 'Actions' }]}
     active={active} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
       {active === 'overview' ? <OverviewTab organizationId={organizationId} integrationId={integrationId} enabled={integration.enabled} /> : null}
@@ -97,6 +100,7 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
       {active === 'hosts' ? <HostsTab organizationId={organizationId} integrationId={integrationId} /> : null}
       {active === 'profiles' ? <ProfilesTab organizationId={organizationId} integrationId={integrationId} /> : null}
       {active === 'history' ? <HistoryTab organizationId={organizationId} integrationId={integrationId} /> : null}
+      {active === 'actions' ? <ActionsTab organizationId={organizationId} integrationId={integrationId} /> : null}
     </div>
   </div></AppShell>
 }
@@ -219,6 +223,7 @@ function NodesTab({ organizationId, integrationId }: { organizationId: string; i
           {item.binding.resource.name}</Link> : <span className="muted-copy">{t.notBound}</span>}
           {item.binding ? <div className="muted-copy">{item.binding.project.name} · {item.binding.environment.name}</div> : null}</td>
         <td><div className="integration-row-actions">
+          <NodeActionControls organizationId={organizationId} integrationId={integrationId} node={item} />
           <button className="secondary-button" type="button" onClick={() => setBinding(item)}>{item.binding ? t.change : t.bind}</button>
           {item.binding ? <button className="text-button" type="button" disabled={unbind.isPending}
             onClick={() => unbind.mutate(item.id)}>{t.unbind}</button> : null}
@@ -227,6 +232,29 @@ function NodesTab({ organizationId, integrationId }: { organizationId: string; i
     {binding ? <BindDialog organizationId={organizationId} integrationId={integrationId} node={binding}
       onClose={() => setBinding(null)} /> : null}
   </>
+}
+
+function ActionsTab({ organizationId, integrationId }: { organizationId: string; integrationId: string }) {
+  const i18n = useI18n()
+  const actions = useIntegrationActions(organizationId, integrationId, true)
+  const ru = i18n.locale === 'ru'
+  return <WorkspaceSection title={ru ? 'Действия' : 'Actions'}>
+    {actions.isPending ? <p role="status">{i18n.t.common.loading}</p> : null}
+    {actions.isError ? <LoadError error={actions.error} retry={() => actions.refetch()} /> : null}
+    {actions.data?.length === 0 ? <EmptyWorkspaceState compact title={ru ? 'Действий пока нет' : 'No actions yet'} /> : null}
+    {actions.data?.length ? <div className="table-scroll"><table className="data-grid integration-grid">
+      <thead><tr><th>{ru ? 'Время' : 'Time'}</th><th>{ru ? 'Узел' : 'Node'}</th><th>{ru ? 'Действие' : 'Action'}</th>
+        <th>{ru ? 'Пользователь' : 'Requested by'}</th><th>{ru ? 'Статус' : 'Status'}</th>
+        <th>{ru ? 'Длительность' : 'Duration'}</th><th>{ru ? 'Ошибка' : 'Error'}</th></tr></thead>
+      <tbody>{actions.data.map(value => <tr key={value.id}>
+        <td>{i18n.format.dateTime(value.createdAt)}</td><td>{value.displayName}</td><td>{value.action}</td>
+        <td>{value.requestedByName ?? value.requestedByUserId}</td>
+        <td>{value.status === 'UNKNOWN' ? ru ? 'Результат неизвестен' : 'Result unknown' : value.status}</td>
+        <td>{value.startedAt && value.finishedAt ? i18n.format.duration(Math.max(0,
+          Math.round((Date.parse(value.finishedAt) - Date.parse(value.startedAt)) / 1000))) : '—'}</td>
+        <td>{value.errorCode ?? '—'}</td>
+      </tr>)}</tbody></table></div> : null}
+  </WorkspaceSection>
 }
 
 function BindDialog({ organizationId, integrationId, node, onClose }: {

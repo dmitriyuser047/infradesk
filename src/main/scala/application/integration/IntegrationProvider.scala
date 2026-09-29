@@ -1,8 +1,8 @@
 package ru.bitec.app.ops
 package application.integration
 
-import domain.integration.{IntegrationBaseUrl, IntegrationCapability, IntegrationCredential, IntegrationObservation,
-  IntegrationProviderType}
+import domain.integration.{IntegrationActionCode, IntegrationActionRemoteOutcome, IntegrationBaseUrl,
+  IntegrationCapability, IntegrationCredential, IntegrationObservation, IntegrationProviderType}
 import java.util.UUID
 
 final case class IntegrationRuntimeContext(id: UUID, organizationId: UUID,
@@ -18,6 +18,8 @@ trait IntegrationProvider[F[_]] {
     * ever reaches the provider, and nothing here touches the database.
     */
   def observe(context: IntegrationRuntimeContext): F[IntegrationObservation]
+  def executeAction(context: IntegrationRuntimeContext, externalId: String,
+    action: IntegrationActionCode): F[IntegrationActionRemoteOutcome]
 }
 
 final class IntegrationProviderRegistry[F[_]](providers: List[IntegrationProvider[F]]) {

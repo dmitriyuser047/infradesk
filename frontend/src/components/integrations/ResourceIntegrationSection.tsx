@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useResourceIntegrationBindings } from '../../api/integrationInventory'
 import { useI18n } from '../../i18n'
+import { NodeActionControls } from './NodeActionControls'
 import { InlineAlert, PropertyGrid, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { nodeStateTones } from './integrationPresentation'
 
@@ -30,5 +31,6 @@ export function ResourceIntegrationSection({ organizationId, resourceId }: { org
       { label: t.users, value: i18n.format.number(object.summary.usersOnline) },
       { label: t.lastSeen, value: i18n.format.dateTime(object.lastSeenAt) },
     ]} />
+    <NodeActionControls organizationId={organizationId} integrationId={integration.id} node={object} />
   </WorkspaceSection>)}</>
 }

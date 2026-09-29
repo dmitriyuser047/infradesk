@@ -5,7 +5,8 @@ import application.integration.{IntegrationError, IntegrationProviderRegistry, I
 import bootstrap.IntegrationModule
 import cats.effect.{IO, Ref}
 import cats.effect.unsafe.implicits.global
-import domain.integration.{IntegrationBaseUrl, IntegrationCapability, IntegrationProviderType, RemnawaveCredential}
+import domain.integration.{IntegrationActionCode, IntegrationActionRemoteOutcome, IntegrationBaseUrl,
+  IntegrationCapability, IntegrationProviderType, RemnawaveCredential}
 import integration.http.OutboundDestinationPolicy
 import integration.ssh.SecretEncryptionConfig
 import integration.secret.IntegrationCredentialCipher
@@ -34,14 +35,14 @@ final class RemnawaveProviderSpec extends FunSuite {
     assert(!RemnawaveCredential("bad\nheader", None).valid)
   }
 
-  test("registry rejects duplicate providers and advertises only read-only capabilities") {
+  test("registry rejects duplicate providers and advertises implemented capabilities") {
     val provider = new RemnawaveProvider(new RemnawaveClient(Client.fromHttpApp(HttpApp.notFound[IO]), 1.second))
     val registry = new IntegrationProviderRegistry[IO](List(provider))
     assertEquals(registry.find(IntegrationProviderType.Remnawave), Some(provider))
     assertEquals(provider.capabilities, Set[IntegrationCapability](IntegrationCapability.ConnectivityTest,
       IntegrationCapability.NodeDiscovery, IntegrationCapability.HostDiscovery,
-      IntegrationCapability.ConfigProfileDiscovery, IntegrationCapability.MetricsRead))
-    assert(!provider.capabilities.contains(IntegrationCapability.SafeActions))
+      IntegrationCapability.ConfigProfileDiscovery, IntegrationCapability.MetricsRead,
+      IntegrationCapability.SafeActions))
     assert(!provider.capabilities.contains(IntegrationCapability.ConfigProfileManagement))
     intercept[IllegalArgumentException](new IntegrationProviderRegistry[IO](List(provider, provider)))
   }
@@ -70,6 +71,47 @@ final class RemnawaveProviderSpec extends FunSuite {
     }
     new RemnawaveClient(Client.fromHttpApp(app), 1.second)
       .probe(base, RemnawaveCredential(token, None)).unsafeRunSync()
+  }
+
+  test("node actions send exactly one authenticated POST to each upstream route") {
+    val id = UUID.randomUUID()
+    val actions = List(IntegrationActionCode.NodeEnable -> "enable",
+      IntegrationActionCode.NodeDisable -> "disable", IntegrationActionCode.NodeRestart -> "restart")
+    actions.foreach { case (action, suffix) =>
+      val observed = (for {
+        seen <- Ref.of[IO, List[(String, String, String, Boolean, Boolean, Boolean)]](Nil)
+        app = HttpApp[IO] { request => request.as[String].flatMap { body =>
+          val auth = request.headers.get(CIString("Authorization")).exists(_.head.value == s"Bearer $token")
+          val caddy = request.headers.get(CIString("X-Api-Key")).exists(_.head.value == "stage24a-caddy-key")
+          val contentType = request.headers.get(CIString("Content-Type")).exists(_.head.value == "application/json")
+          seen.update(_ :+ (request.method.name, request.uri.path.renderString, body, auth, caddy, contentType)).as {
+            if (action == IntegrationActionCode.NodeRestart) Response[IO](Status.Accepted)
+            else Response[IO](Status.Ok).withEntity(s"{\"response\":{\"uuid\":\"$id\"}}")
+          }
+        }}
+        result <- new RemnawaveClient(Client.fromHttpApp(app), 1.second).action(base, credential, id.toString, action)
+        requests <- seen.get
+      } yield (result, requests)).unsafeRunSync()
+      assertEquals(observed._1, IntegrationActionRemoteOutcome.Succeeded)
+      assertEquals(observed._2, List(("POST", s"/prefix/api/nodes/$id/actions/$suffix",
+        if (action == IntegrationActionCode.NodeRestart) "{\"forceRestart\":false}" else "", true, true, true)))
+    }
+  }
+
+  test("ambiguous writes stay unknown while definite rejections fail") {
+    val id = UUID.randomUUID().toString
+    def result(status: Status, body: String) = new RemnawaveClient(Client.fromHttpApp(
+      HttpApp[IO](_ => IO.pure(Response[IO](status).withEntity(body)))), 1.second)
+      .action(base, credential, id, IntegrationActionCode.NodeDisable).unsafeRunSync()
+    assertEquals(result(Status.Unauthorized, "secret"),
+      IntegrationActionRemoteOutcome.DefinitelyFailed("INTEGRATION_AUTH_FAILED"))
+    assertEquals(result(Status.ServiceUnavailable, "secret"),
+      IntegrationActionRemoteOutcome.OutcomeUnknown("INTEGRATION_ACTION_RESULT_UNKNOWN"))
+    assertEquals(result(Status.Ok, "bad json"),
+      IntegrationActionRemoteOutcome.OutcomeUnknown("INTEGRATION_ACTION_RESULT_UNKNOWN"))
+    val timeout = new RemnawaveClient(Client.fromHttpApp(HttpApp[IO](_ => IO.never[Response[IO]])), 30.millis)
+      .action(base, credential, id, IntegrationActionCode.NodeRestart).unsafeRunSync()
+    assertEquals(timeout, IntegrationActionRemoteOutcome.OutcomeUnknown("INTEGRATION_ACTION_RESULT_UNKNOWN"))
   }
 
   test("status, invalid JSON, unexpected envelope and timeout have stable sanitized codes") {
@@ -186,5 +228,12 @@ final class RemnawaveProviderSpec extends FunSuite {
     }.unsafeRunSync()
     assertEquals(result.left.toOption.collect { case error: IntegrationError => error.code },
       Some("INTEGRATION_DESTINATION_NOT_ALLOWED"))
+    val action = IntegrationModule.integrationProviders(IntegrationsConfig(1.second,
+      allowPrivateDestinations = false)).use { registry =>
+      registry.find(IntegrationProviderType.Remnawave).get.executeAction(
+        IntegrationRuntimeContext(UUID.randomUUID(), UUID.randomUUID(), local, credential),
+        UUID.randomUUID().toString, IntegrationActionCode.NodeRestart)
+    }.unsafeRunSync()
+    assertEquals(action, IntegrationActionRemoteOutcome.DefinitelyFailed("INTEGRATION_DESTINATION_NOT_ALLOWED"))
   }
 }

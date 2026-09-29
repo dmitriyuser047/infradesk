@@ -386,7 +386,7 @@ export const en = {
     syncFailed: 'Synchronization failed', loadError: 'Unable to load the inventory', notFound: 'Integration not found',
     autoDisabled: 'Automatic synchronization is disabled',
     autoDisabledDetail: 'Enable the integration to observe Remnawave automatically. Sync now works either way.',
-    readOnly: 'Read-only: InfraDesk never changes anything in Remnawave.',
+    readOnly: 'Observed state from Remnawave. Actions appear separately.',
     tabs: { overview: 'Overview', nodes: 'Nodes', hosts: 'Hosts', profiles: 'Config Profiles', history: 'Sync history' },
     lastSync: 'Last sync', lastSuccess: 'Last successful sync', nextRun: 'Next automatic sync', never: 'Never',
     notScheduled: 'Not scheduled', lastError: 'Last error',

@@ -48,9 +48,13 @@ final class IntegrationSyncSchedulerSpec extends FunSuite {
       override val displayName = "Remnawave"
       override val capabilities: Set[IntegrationCapability] = Set.empty
       override def testConnection(context: IntegrationRuntimeContext) = IO.raiseError(new IllegalStateException)
+      override def executeAction(context: IntegrationRuntimeContext, externalId: String,
+        action: domain.integration.IntegrationActionCode): IO[domain.integration.IntegrationActionRemoteOutcome] =
+        IO.raiseError(new IllegalStateException)
       override def observe(context: IntegrationRuntimeContext) = {
         val name = integrations(context.id).name
-        IO { observed :+= name } *> behaviour.getOrElse(name, IO.pure(IntegrationObservation(Nil, IntegrationObjectType.All.toSet)))
+        IO { World.this.synchronized { observed :+= name } } *>
+          behaviour.getOrElse(name, IO.pure(IntegrationObservation(Nil, IntegrationObjectType.All.toSet)))
       }
     }
     val runner = new TransactionRunner[IO, IO] { override def run[A](program: IO[A]): IO[A] = program }

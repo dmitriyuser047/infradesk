@@ -28,10 +28,15 @@ final case class IntegrationSyncConfig(
   require(interval > Duration.Zero && pollInterval > Duration.Zero, "Integration sync intervals must be positive")
   require(claimLease > attemptTimeout, "Integration sync claim lease must exceed the attempt timeout")
 }
+final case class IntegrationActionsConfig(enabled: Boolean = true,
+  pollInterval: FiniteDuration = 2.seconds, batchSize: Int = 20, maxConcurrency: Int = 3) {
+  require(pollInterval > Duration.Zero && batchSize > 0 && maxConcurrency > 0)
+}
 final case class IntegrationsConfig(
   requestTimeout: FiniteDuration,
   allowPrivateDestinations: Boolean,
   sync: IntegrationSyncConfig = IntegrationSyncConfig(),
+  actions: IntegrationActionsConfig = IntegrationActionsConfig(),
   inventoryMaxResponseBytes: Int = 8 * 1024 * 1024,
   inventoryMaxObjects: Int = 10000
 ) {
@@ -112,6 +117,7 @@ object AppConfig {
       integrationTimeout <- bounded(values, "INFRADESK_INTEGRATIONS_REQUEST_TIMEOUT_SECONDS", 10, 1, 120)
       integrationAllowPrivate <- parseBoolean(values, "INFRADESK_INTEGRATIONS_ALLOW_PRIVATE_DESTINATIONS")
       integrationSync <- parseIntegrationSync(values)
+      integrationActions <- parseIntegrationActions(values)
       inventoryMaxBytes <- bounded(values, "INFRADESK_INTEGRATIONS_INVENTORY_MAX_RESPONSE_BYTES", 8 * 1024 * 1024,
         64 * 1024, 64 * 1024 * 1024)
       inventoryMaxObjects <- bounded(values, "INFRADESK_INTEGRATIONS_INVENTORY_MAX_OBJECTS", 10000, 1, 100000)
@@ -122,8 +128,16 @@ object AppConfig {
     } yield AppConfig(database, http, auth, loginRateLimit, SecurityEventSettings(securityEvents.seconds), bootstrap, secretEncryption, scheduler,
       notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment,
       ConfigurationRuleSettings(enabled = ruleEnabled, reconcileInterval = ruleInterval.seconds),
-      IntegrationsConfig(integrationTimeout.seconds, integrationAllowPrivate, integrationSync, inventoryMaxBytes,
-        inventoryMaxObjects))
+      IntegrationsConfig(integrationTimeout.seconds, integrationAllowPrivate, integrationSync,
+        integrationActions, inventoryMaxBytes, inventoryMaxObjects))
+
+  private def parseIntegrationActions(values: Map[String, String]): Either[IllegalArgumentException, IntegrationActionsConfig] =
+    for {
+      enabled <- parseBoolean(values, "INFRADESK_INTEGRATIONS_ACTIONS_ENABLED", default = true)
+      poll <- bounded(values, "INFRADESK_INTEGRATIONS_ACTIONS_POLL_INTERVAL_SECONDS", 2, 1, 3600)
+      batch <- bounded(values, "INFRADESK_INTEGRATIONS_ACTIONS_BATCH_SIZE", 20, 1, 500)
+      concurrency <- bounded(values, "INFRADESK_INTEGRATIONS_ACTIONS_MAX_CONCURRENCY", 3, 1, 32)
+    } yield IntegrationActionsConfig(enabled, poll.seconds, batch, concurrency)
 
   private def parseIntegrationSync(values: Map[String, String]): Either[IllegalArgumentException, IntegrationSyncConfig] =
     for {
