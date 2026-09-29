@@ -7,6 +7,7 @@ import {
   useDeploymentPreview,
 } from '../../api/configurationDeployments'
 import { useResourceContext } from '../../api/infrastructure'
+import { createRequestId } from '../../app/requestId'
 import { useI18n } from '../../i18n'
 import { describeError } from '../../i18n/errors'
 import type { ConfigurationAssignmentDetail } from '../../types/configurationAssignment'
@@ -152,7 +153,7 @@ export function ConfigurationDeploymentPanel({ organizationId, assignment }: {
       connectionId: approved.connection.id,
       expectedRemoteSha256: approved.remote.sha256,
       expectedRemoteMissing: !approved.remote.exists,
-      requestId: crypto.randomUUID(),
+      requestId: createRequestId(),
       execution: request,
       retryOfDeploymentId: retryOf,
     }, { onSuccess: value => { setDeploymentId(value.deploymentId); preview.reset() } })

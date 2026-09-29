@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from 'react'
 
 import { useConfigurationAssignmentPages } from '../../api/configurationAssignments'
+import { createRequestId } from '../../app/requestId'
 import {
   useCancelRollout,
   useCreateRollout,
@@ -192,7 +193,7 @@ function RolloutWizard({ organizationId, profileId, latestRevisionNumber, initia
   })
   const start = () => {
     if (!preflightReady || !strategyValid) return
-    create.mutate({ profileId, revisionNumber, requestId: crypto.randomUUID(), strategy,
+    create.mutate({ profileId, revisionNumber, requestId: createRequestId(), strategy,
       targets: targets.map(target => {
         const item = preflight.data!.items.find(value => value.assignmentId === target.assignmentId)!
         return { ...target, desiredSha256: item.desiredSha256!, connectionUpdatedAt: item.connectionUpdatedAt!,
