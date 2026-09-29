@@ -33,6 +33,13 @@ class FakeTerminal {
   host: HTMLElement | undefined
   written: string[] = []
   parser = { registerOscHandler: vi.fn((_id: number, _handler: () => boolean) => ({ dispose: vi.fn() })) }
+  options: { theme?: unknown } = {}
+  attachCustomKeyEventHandler = vi.fn()
+  hasSelection = vi.fn(() => false)
+  getSelection = vi.fn(() => '')
+  paste = vi.fn()
+  selectAll = vi.fn()
+  clear = vi.fn()
   dispose = vi.fn()
   constructor() { FakeTerminal.instances.push(this) }
   open(host: HTMLElement) { this.host = host }
@@ -103,6 +110,7 @@ const dock = () => screen.queryByRole('navigation', { name: 'Open terminals' })
 let workspace: TerminalWorkspace
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.removeItem('infradesk.terminal.theme')
   Socket.instances = []
   FakeTerminal.instances = []
   vi.stubGlobal('WebSocket', Socket)
@@ -111,7 +119,7 @@ beforeEach(() => {
   vi.stubGlobal('cancelAnimationFrame', vi.fn())
   workspace = new TerminalWorkspace({ loadEmulator: async () => modules })
 })
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
+afterEach(() => { vi.useRealTimers(); cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('terminal workspace', () => {
   it('does not connect on mount in StrictMode; one explicit Connect opens one socket', async () => {
@@ -216,6 +224,84 @@ describe('terminal workspace', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     // A finished terminal leaves without a question.
     expect(dock()).toBeNull()
+  })
+
+  it('retries a temporary session validation failure and ignores the old socket', async () => {
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    vi.useFakeTimers()
+    act(() => Socket.instances[0].control('error', 'SESSION_VALIDATION_FAILED'))
+    expect(screen.getAllByText('Reconnecting').length).toBeGreaterThan(0)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(Socket.instances).toHaveLength(2)
+    act(() => Socket.instances[1].ready())
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0)
+    act(() => Socket.instances[0].control('error', 'CONNECTION_CHANGED'))
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0)
+    expect(FakeTerminal.instances[0].clear).toHaveBeenCalledOnce()
+    vi.useRealTimers()
+  })
+
+  it('does not reconnect after manual disconnect', async () => {
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    vi.useFakeTimers()
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(8000) })
+    expect(Socket.instances).toHaveLength(1)
+    expect(screen.getAllByText('Disconnected').length).toBeGreaterThan(0)
+  })
+
+  it('stops after three failed automatic reconnect attempts', async () => {
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    vi.useFakeTimers()
+    for (const delay of [1000, 2000, 4000]) {
+      act(() => Socket.instances[Socket.instances.length - 1].onerror?.())
+      await act(async () => { await vi.advanceTimersByTimeAsync(delay) })
+    }
+    expect(Socket.instances).toHaveLength(4)
+    act(() => Socket.instances[3].onerror?.())
+    await act(async () => { await vi.advanceTimersByTimeAsync(8000) })
+    expect(Socket.instances).toHaveLength(4)
+    expect(screen.getAllByText('Connection failed').length).toBeGreaterThan(0)
+  })
+
+  it('switches only the terminal theme and saves the choice', async () => {
+    render(app(workspace))
+    await connect()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Terminal theme' }), { target: { value: 'dark' } })
+    expect(localStorage.getItem('infradesk.terminal.theme')).toBe('dark')
+    expect(FakeTerminal.instances[0].options.theme).toMatchObject({ background: '#0d0d0d' })
+  })
+
+  it('copies a selection but leaves Ctrl+C for the shell without one', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { platform: 'Win32', userAgent: navigator.userAgent, clipboard: { writeText } })
+    render(app(workspace))
+    await connect()
+    const emulator = FakeTerminal.instances[0]
+    const key = emulator.attachCustomKeyEventHandler.mock.calls[0][0]
+    const ctrlC = { type: 'keydown', key: 'c', ctrlKey: true, shiftKey: false, metaKey: false }
+    expect(key(ctrlC)).toBe(true)
+    emulator.hasSelection.mockReturnValue(true)
+    emulator.getSelection.mockReturnValue('selected output')
+    expect(key(ctrlC)).toBe(false)
+    expect(writeText).toHaveBeenCalledWith('selected output')
+  })
+
+  it('pastes multiline clipboard text through xterm', async () => {
+    const readText = vi.fn().mockResolvedValue('first line\nsecond line')
+    vi.stubGlobal('navigator', { platform: 'Win32', userAgent: navigator.userAgent, clipboard: { readText } })
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    fireEvent.click(screen.getByRole('button', { name: 'Paste' }))
+    await flush()
+    expect(FakeTerminal.instances[0].paste).toHaveBeenCalledWith('first line\nsecond line')
   })
 
   it('shows why a hidden terminal ended when the server revoked it', async () => {

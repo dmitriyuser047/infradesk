@@ -29,6 +29,7 @@ import java.util.concurrent.{ArrayBlockingQueue, CompletionStage, ExecutionExcep
 import scala.concurrent.duration._
 
 final class TerminalWebSocketIntegrationSpec extends FunSuite {
+  override val munitTimeout: Duration = 30.seconds
   private val organizationId = UUID.fromString("21000000-0000-0000-0000-000000000001")
   private val connectionId = UUID.fromString("22000000-0000-0000-0000-000000000001")
   private val connection = Connection(connectionId, organizationId, ConnectionScope.Organization, "SSH", "ssh",
@@ -381,8 +382,26 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
       sessionRepository = Some(repository))
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       withSocket(base) { (_, listener) =>
-        assertEquals(listener.closed.poll(5, TimeUnit.SECONDS), (1011, "SESSION_VALIDATION_FAILED"))
+        assertEquals(listener.closed.poll(10, TimeUnit.SECONDS), (1011, "SESSION_VALIDATION_FAILED"))
         eventually(5.seconds) { assertEquals(fixture.released.get.unsafeRunSync(), 1) }
+      }
+    }
+  }
+  test("a transient heartbeat database failure keeps the WebSocket and shell alive") {
+    val attempts = Ref.of[IO, Int](0).unsafeRunSync()
+    val renewal = attempts.getAndUpdate(_ + 1).flatMap {
+      case 0 => IO.raiseError(new IllegalStateException("temporary database interruption"))
+      case _ => IO.pure(domain.terminal.TerminalRenewResult.Renewed(Instant.now().plusSeconds(45)))
+    }
+    val repository = new LifecycleRepository(renewal)
+    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(heartbeatInterval = 50.millis),
+      output = Stream.never[IO], sessionRepository = Some(repository))
+    withServer(fixture.routes, OrganizationRole.Owner) { base =>
+      withSocket(base) { (socket, listener) =>
+        eventually(5.seconds) { assert(attempts.get.unsafeRunSync() >= 2) }
+        assertEquals(listener.closed.poll(100, TimeUnit.MILLISECONDS), null)
+        socket.sendBinary(ByteBuffer.wrap("still alive".getBytes(StandardCharsets.UTF_8)), true).get(5, TimeUnit.SECONDS)
+        eventually(5.seconds) { assert(fixture.input.get.unsafeRunSync().nonEmpty) }
       }
     }
   }

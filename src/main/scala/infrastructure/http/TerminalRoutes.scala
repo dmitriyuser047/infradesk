@@ -188,7 +188,16 @@ final class TerminalRoutes[Tx[_]](
               val traffic = outgoing.mergeHaltBoth(incoming).mergeHaltBoth(timeout).mergeHaltBoth(lifetime)
               Stream.eval(activate) >> ((durable, lifecycle) match {
                 case (Some(value), Some(service)) =>
-                  val heartbeat = Stream.awakeEvery[IO](config.heartbeatInterval).evalMap(_ => service.renew(value).attempt.flatMap {
+                  // A brief database interruption is not proof that the SSH session or access has ended.
+                  // Keep the current socket while retrying, but fail closed before its lease can expire.
+                  def renewWithRetry(remaining: Int, delay: FiniteDuration): IO[Either[Throwable, TerminalRenewResult]] =
+                    service.renew(value).attempt.flatMap {
+                      case Left(failure) if remaining > 0 =>
+                        logger.warn(failure)(s"terminal.session.verification.retry sessionId=${value.id} remaining=$remaining") *>
+                          IO.sleep(delay) *> renewWithRetry(remaining - 1, delay * 2)
+                      case result => IO.pure(result)
+                    }
+                  val heartbeat = Stream.awakeEvery[IO](config.heartbeatInterval).evalMap(_ => renewWithRetry(2, 2.seconds).flatMap {
                     case Right(_: TerminalRenewResult.Renewed) => IO.pure(List.empty[WebSocketFrame])
                     case Right(result) =>
                       val reason = result match {

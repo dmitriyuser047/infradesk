@@ -5,9 +5,17 @@ SSH connections expose a Terminal tab to organization Owners through the indepen
 The connection must be active, have configured credentials and a confirmed pinned host key.
 A reported host-key mismatch blocks the UI until the connection is explicitly reviewed.
 
-Connect is explicit. Leaving the tab, navigation and Disconnect dispose the emulator,
-socket, observers and pending input. Reconnect opens a new shell, never resumes an old one.
-There is no automatic reconnect. Fullscreen uses the browser's Fullscreen API.
+Connect is explicit. Navigation detaches the viewport while the workspace keeps its shell
+and scrollback alive. Disconnect ends the socket and SSH shell; closing the dock tab
+releases the emulator. An unexpected transport loss retries a fresh SSH session up to
+three times with 1, 2 and 4 second delays. Manual Disconnect never retries. A new
+session clears the prior shell output after `ready`; until then, a status label marks it
+as previous output. Fullscreen uses the browser's Fullscreen API.
+
+The terminal has independent light and near-black themes. Only the theme choice is
+persisted in local storage. xterm provides mouse selection and scrollback. Copy and
+paste controls, a compact context menu and standard keyboard shortcuts operate on the
+emulator; clipboard text and terminal output are not stored by InfraDesk.
 
 The same-origin WebSocket path is
 `/api/v1/organizations/{organizationId}/connections/{connectionId}/terminal`.
@@ -42,7 +50,9 @@ Heartbeat is 15 seconds and lease duration is 45 seconds by default. Heartbeat v
 the originating auth session, active user, active Owner membership and unchanged active
 SSH connection. Logout/session revocation and changed access/settings close live terminals
 within the heartbeat bound. Heartbeats do not extend idle activity.
-Database validation failure closes with 1011 and releases SSH resources (fail closed).
+Heartbeat database errors are retried twice after 2 and 4 seconds. A revoked or missing
+session closes immediately; repeated validation failure closes with 1011 and releases
+SSH resources (fail closed).
 The periodic reaper runs once a minute, locks at most 100 expired rows with SKIP LOCKED,
 closes them as LEASE_EXPIRED and journals their closure in the same transaction.
 

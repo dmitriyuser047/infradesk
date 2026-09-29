@@ -11,12 +11,13 @@ function plural(count: number, one: string, few: string, many: string): string {
 export const ru: Messages = {
   terminal: {
     title: 'Терминал', connect: 'Подключиться', disconnect: 'Отключиться', fullscreen: 'На весь экран',
-    reconnect: 'Подключиться снова', close: 'Закрыть',
+    reconnect: 'Подключиться снова', close: 'Закрыть', copy: 'Копировать', paste: 'Вставить', selectAll: 'Выделить всё', clear: 'Очистить терминал',
+    theme: 'Тема терминала', light: 'Светлая', dark: 'Тёмная', history: 'Вывод предыдущей сессии',
     dock: 'Открытые терминалы',
     dockOpen: (name: string, state: string) => `Терминал ${name}, ${state}`,
     dockClose: (name: string) => `Закрыть терминал ${name}`,
     closeConfirm: (name: string) => `Закрыть SSH-сессию ${name}?`,
-    states: { idle: 'Не подключён', connecting: 'Подключение', connected: 'Подключён', closing: 'Отключение', closed: 'Отключён', error: 'Ошибка подключения' },
+    states: { idle: 'Не подключён', connecting: 'Подключение', reconnecting: 'Переподключение', connected: 'Подключён', closing: 'Отключение', closed: 'Отключён', error: 'Ошибка подключения' },
     inactive: 'Подключение неактивно.', untrusted: 'Подтвердите ключ SSH-сервера перед подключением.',
     missingCredentials: 'Учётные данные SSH не настроены.', mismatch: 'Ключ SSH-сервера изменился. Проверьте сервер перед подключением.',
     reasons: {

@@ -1,4 +1,4 @@
-export type TerminalState = 'idle' | 'connecting' | 'connected' | 'closing' | 'closed' | 'error'
+export type TerminalState = 'idle' | 'connecting' | 'reconnecting' | 'connected' | 'closing' | 'closed' | 'error'
 export const terminalProtocol = 'infradesk-terminal-v1'
 const chunkBytes = 16 * 1024
 const queueLimit = 256 * 1024

@@ -3,6 +3,20 @@ import type { FitAddon } from '@xterm/addon-fit'
 
 import { TerminalTransport, terminalUrl, type TerminalState } from '../terminal/terminalTransport'
 
+export type TerminalTheme = 'light' | 'dark'
+const themeKey = 'infradesk.terminal.theme'
+const darkTheme = {
+  background: '#0d0d0d', foreground: '#d4d4d4', cursor: '#ffffff', selectionBackground: '#565f78',
+  black: '#000000', red: '#cd3131', green: '#0dbc79', yellow: '#e5e510', blue: '#2472c8',
+  magenta: '#bc3fbc', cyan: '#11a8cd', white: '#e5e5e5', brightBlack: '#666666',
+  brightRed: '#f14c4c', brightGreen: '#23d18b', brightYellow: '#f5f543', brightBlue: '#3b8eea',
+  brightMagenta: '#d670d6', brightCyan: '#29b8db', brightWhite: '#ffffff',
+}
+
+function savedTheme(): TerminalTheme {
+  try { return localStorage.getItem(themeKey) === 'dark' ? 'dark' : 'light' } catch { return 'light' }
+}
+
 /** The emulator is loaded on the first connect only, so pages without a terminal never pay for it. */
 export interface EmulatorModules {
   Terminal: typeof Terminal
@@ -27,6 +41,7 @@ export interface TerminalSessionSnapshot {
   /** The server's id of the live session, from `ready`. Memory only; never a credential. */
   serverSessionId?: string
   createdAt: number
+  theme: TerminalTheme
 }
 
 export interface TerminalSessionDependencies {
@@ -61,20 +76,25 @@ export class TerminalSessionController {
   /** Each connect attempt; a slower, older one never overrides a newer one or a close. */
   private attempt = 0
   private closed = false
+  private retryTimer: ReturnType<typeof setTimeout> | undefined
+  private retries = 0
+  private manualDisconnect = false
+  private everReady = false
 
   constructor(organizationId: string, connectionId: string, connectionName: string, private deps: TerminalSessionDependencies) {
     this.element = document.createElement('div')
     this.element.className = 'terminal-host'
     this.current = {
       key: terminalSessionKey(organizationId, connectionId), organizationId, connectionId, connectionName,
-      state: 'idle', createdAt: Date.now(),
+      state: 'idle', createdAt: Date.now(), theme: savedTheme(),
     }
   }
 
   get snapshot(): TerminalSessionSnapshot { return this.current }
+  get hasHistory(): boolean { return this.everReady }
 
   get running(): boolean {
-    return this.current.state === 'connecting' || this.current.state === 'connected' || this.current.state === 'closing'
+    return this.current.state === 'connecting' || this.current.state === 'reconnecting' || this.current.state === 'connected' || this.current.state === 'closing'
   }
 
   rename(connectionName: string): void {
@@ -84,6 +104,9 @@ export class TerminalSessionController {
   /** Opens a new SSH session unless one is already running; the emulator and its history stay. */
   connect(): void {
     if (this.running || this.closed) return
+    this.manualDisconnect = false
+    this.retries = 0
+    clearTimeout(this.retryTimer)
     const attempt = ++this.attempt
     // A finished transport is gone for good; Disconnect during loading must not reach it.
     this.transport?.dispose()
@@ -107,14 +130,22 @@ export class TerminalSessionController {
         write: bytes => { if (this.transport === transport) this.emulator?.write(bytes) },
         ready: () => {
           if (this.transport !== transport) return
+          if (this.everReady) this.emulator?.clear()
+          this.everReady = true
           this.update({ serverSessionId: transport?.sessionId })
+          this.retries = 0
           this.fit()
           this.emulator?.focus()
         },
         state: (state, code) => {
           if (this.transport !== transport && transport !== undefined) return
+          if (state === 'connecting' && this.retries > 0) state = 'reconnecting'
           const ended = state === 'closed' || state === 'error'
-          this.update({ state, code, ...(ended ? { serverSessionId: undefined } : {}) })
+          if (ended && !this.manualDisconnect && this.shouldRetry(code) && this.retries < 3) {
+            this.scheduleRetry()
+          } else {
+            this.update({ state, code, ...(ended ? { serverSessionId: undefined } : {}) })
+          }
         },
       })
       this.transport = transport
@@ -127,9 +158,11 @@ export class TerminalSessionController {
 
   /** Ends the SSH session but keeps this terminal, its history and its place in the dock. */
   disconnect(): void {
+    this.manualDisconnect = true
+    clearTimeout(this.retryTimer)
     if (this.transport && this.running) {
       this.transport.disconnect()
-    } else if (this.current.state === 'connecting') {
+    } else if (this.current.state === 'connecting' || this.current.state === 'reconnecting') {
       // Still loading the emulator: the attempt is abandoned before any socket exists.
       this.attempt++
       this.update({ state: 'closed', code: 'CLIENT_CLOSE' })
@@ -139,6 +172,8 @@ export class TerminalSessionController {
   /** Ends the SSH session and releases the emulator. The controller is finished afterwards. */
   close(): void {
     this.closed = true
+    this.manualDisconnect = true
+    clearTimeout(this.retryTimer)
     this.attempt++
     const transport = this.transport
     this.transport = undefined
@@ -188,23 +223,72 @@ export class TerminalSessionController {
     this.emulator?.focus()
   }
 
+  get hasSelection(): boolean { return !!this.emulator?.hasSelection() }
+  copy(): void {
+    const value = this.emulator?.getSelection()
+    if (value) void navigator.clipboard?.writeText(value).catch(() => {})
+  }
+  paste(): void {
+    void navigator.clipboard?.readText().then(value => { if (this.current.state === 'connected') this.emulator?.paste(value) }).catch(() => {})
+  }
+  selectAll(): void { this.emulator?.selectAll() }
+  clear(): void { this.emulator?.clear() }
+  setTheme(theme: TerminalTheme): void {
+    if (theme === this.current.theme) return
+    try { localStorage.setItem(themeKey, theme) } catch { /* private browsing may disable storage */ }
+    this.update({ theme })
+    if (this.emulator) this.emulator.options.theme = this.colors(theme)
+  }
+
+  private colors(theme: TerminalTheme) {
+    if (theme === 'dark') return darkTheme
+    const colors = getComputedStyle(document.documentElement)
+    return {
+      background: colors.getPropertyValue('--surface').trim() || '#ffffff',
+      foreground: colors.getPropertyValue('--text-primary').trim() || '#202020',
+      cursor: colors.getPropertyValue('--text-primary').trim() || '#202020',
+      selectionBackground: '#a9c7ef',
+    }
+  }
+
+  private shouldRetry(code?: string): boolean {
+    return !code || ['TRANSPORT_CLOSED', 'TERMINAL_UNAVAILABLE', 'SESSION_VALIDATION_FAILED'].includes(code)
+  }
+
+  private scheduleRetry(): void {
+    const generation = ++this.attempt
+    const delay = 1000 * 2 ** this.retries++
+    this.transport?.dispose()
+    this.transport = undefined
+    this.update({ state: 'reconnecting', code: undefined, serverSessionId: undefined })
+    clearTimeout(this.retryTimer)
+    this.retryTimer = setTimeout(() => {
+      if (this.closed || this.manualDisconnect || generation !== this.attempt) return
+      this.openTransport()
+    }, delay)
+  }
+
   private ensureEmulator(modules: EmulatorModules): void {
     if (this.emulator) return
-    const colors = getComputedStyle(document.documentElement)
     const emulator = new modules.Terminal({
       cursorBlink: true, scrollback: 2000, fontSize: 13,
-      fontFamily: colors.getPropertyValue('--font-mono').trim(),
-      theme: {
-        background: colors.getPropertyValue('--surface').trim(),
-        foreground: colors.getPropertyValue('--text-primary').trim(),
-        cursor: colors.getPropertyValue('--text-primary').trim(),
-      },
+      fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim(),
+      theme: this.colors(this.current.theme),
     })
     const fit = new modules.FitAddon()
     emulator.loadAddon(fit)
     // Consume OSC clipboard/title requests. Remote output never drives browser side effects.
     const handlers = [0, 1, 2, 8, 52].map(id => emulator.parser.registerOscHandler(id, () => true))
     const input = emulator.onData(value => this.transport?.input(value))
+    emulator.attachCustomKeyEventHandler(event => {
+      if (event.type !== 'keydown') return true
+      const key = event.key.toLowerCase()
+      const mac = /Mac|iPhone|iPad/.test(navigator.platform)
+      if ((event.ctrlKey && event.shiftKey || mac && event.metaKey || event.ctrlKey && this.hasSelection) && key === 'c') {
+        if (typeof navigator.clipboard?.writeText === 'function') { this.copy(); return false }
+      }
+      return true
+    })
     this.cleanup = [...handlers.map(handler => () => handler.dispose()), () => input.dispose()]
     this.emulator = emulator
     this.fitAddon = fit

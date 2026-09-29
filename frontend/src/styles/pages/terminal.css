@@ -4,7 +4,17 @@
 .terminal-actions button { display: inline-flex; align-items: center; gap: var(--space-2); }
 .terminal-screen { height: 65vh; min-height: 320px; min-width: 0; overflow: hidden; padding: var(--space-2); border: 1px solid var(--border); background: var(--surface); }
 .terminal-screen .xterm { height: 100%; }
+.terminal-theme-label { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--font-size-small); }
+.terminal-theme-label select { max-width: 115px; }
+.terminal-stage { position: relative; }
+.terminal-theme-dark .terminal-screen { background: #0d0d0d; border-color: #333; }
+.terminal-history-label { position: absolute; right: 16px; bottom: 16px; padding: 5px 9px; border-radius: 4px; background: var(--surface); color: var(--text-secondary); border: 1px solid var(--border); pointer-events: none; font-size: var(--font-size-small); }
+.terminal-context-menu { position: fixed; z-index: 100; display: grid; min-width: 155px; padding: 4px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); box-shadow: 0 8px 24px #0003; }
+.terminal-context-menu button { border: 0; padding: 8px 10px; text-align: left; background: transparent; color: var(--text-primary); cursor: pointer; }
+.terminal-context-menu button:hover:not(:disabled) { background: var(--surface-muted); }
+.terminal-context-menu button:disabled { opacity: .5; cursor: default; }
 .terminal-panel:fullscreen { display: flex; flex-direction: column; padding: var(--space-3); }
+.terminal-panel:fullscreen .terminal-stage { display: flex; flex: 1; min-height: 0; }
 .terminal-panel:fullscreen .terminal-screen { flex: 1; min-height: 0; height: auto; }
 @media (max-width: 600px) { .terminal-screen { height: 60vh; min-height: 280px; } }
 .terminal-host { height: 100%; }

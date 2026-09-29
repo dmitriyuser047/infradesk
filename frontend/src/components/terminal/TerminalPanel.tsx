@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Maximize, Plug, RotateCcw, Unplug, X } from 'lucide-react'
+import { Clipboard, Copy, Eraser, Maximize, Plug, RotateCcw, Unplug, X } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import type { ConnectionResponse } from '../../types/connection'
 import { InlineAlert, StatusIndicator } from '../layout/WorkspacePrimitives'
@@ -31,9 +31,10 @@ export function TerminalPanel({ organizationId, connection, editLink }: {
   const controller = session ? workspace.get(organizationId, connection.id) : undefined
   const panel = useRef<HTMLDivElement>(null)
   const [fullscreenError, setFullscreenError] = useState(false)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const prerequisite = terminalPrerequisite(connection)
   const state: TerminalState = session?.state ?? 'idle'
-  const running = state === 'connecting' || state === 'connected' || state === 'closing'
+  const running = state === 'connecting' || state === 'reconnecting' || state === 'connected' || state === 'closing'
   const reason = session?.code ? labels.reasons[session.code as keyof typeof labels.reasons] ?? labels.unknownError : undefined
 
   useEffect(() => { controller?.rename(connection.name) }, [controller, connection.name])
@@ -44,6 +45,15 @@ export function TerminalPanel({ organizationId, connection, editLink }: {
     <div className="terminal-toolbar">
       <StatusIndicator label={labels.states[state]} tone={terminalStateTone(state)} />
       <div className="terminal-actions">
+        {controller ? <>
+          <button className="icon-button" type="button" title={labels.copy} aria-label={labels.copy} onClick={() => controller.copy()}><Copy size={16} /></button>
+          <button className="icon-button" type="button" title={labels.paste} aria-label={labels.paste} disabled={state !== 'connected'} onClick={() => controller.paste()}><Clipboard size={16} /></button>
+          <button className="icon-button" type="button" title={labels.clear} aria-label={labels.clear} onClick={() => controller.clear()}><Eraser size={16} /></button>
+          <label className="terminal-theme-label">{labels.theme}<select aria-label={labels.theme} value={session?.theme ?? 'light'}
+            onChange={event => controller.setTheme(event.target.value as 'light' | 'dark')}>
+            <option value="light">{labels.light}</option><option value="dark">{labels.dark}</option>
+          </select></label>
+        </> : null}
         {running ? <button className="secondary-button" type="button" onClick={() => controller?.disconnect()}>
           <Unplug size={16} />{labels.disconnect}</button> : null}
         {!session ? <button className="primary-button" type="button" disabled={!!prerequisite} onClick={connect}>
@@ -66,7 +76,18 @@ export function TerminalPanel({ organizationId, connection, editLink }: {
       action={editLink ? <Link className="secondary-button" to={editLink}>{t.common.edit}</Link> : undefined} /> : null}
     {reason && !running ? <InlineAlert tone={state === 'error' ? 'danger' : 'info'} title={reason} /> : null}
     {fullscreenError ? <InlineAlert tone="warning" title={labels.unknownError} /> : null}
-    {controller ? <TerminalViewport controller={controller} label={labels.title} />
+    {controller ? <div className={`terminal-stage terminal-theme-${session?.theme ?? 'light'}`}
+      onClick={() => { if (menu) setMenu(null) }}
+      onContextMenu={event => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY }) }}>
+      <TerminalViewport controller={controller} label={labels.title} />
+      {state !== 'connected' && controller.hasHistory ? <div className="terminal-history-label">{labels.history} · {labels.states[state]}</div> : null}
+      {menu ? <div className="terminal-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
+        <button type="button" role="menuitem" onClick={() => { controller.copy(); setMenu(null) }}>{labels.copy}</button>
+        <button type="button" role="menuitem" disabled={state !== 'connected'} onClick={() => { controller.paste(); setMenu(null) }}>{labels.paste}</button>
+        <button type="button" role="menuitem" onClick={() => { controller.selectAll(); setMenu(null) }}>{labels.selectAll}</button>
+        <button type="button" role="menuitem" onClick={() => { controller.clear(); setMenu(null) }}>{labels.clear}</button>
+      </div> : null}
+    </div>
       : <div className="terminal-screen" aria-label={labels.title} />}
   </div>
 }

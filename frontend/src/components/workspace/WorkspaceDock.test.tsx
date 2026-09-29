@@ -21,6 +21,7 @@ class Socket {
 const modules = {
   Terminal: class {
     cols = 80; rows = 24; parser = { registerOscHandler: () => ({ dispose() {} }) }
+    attachCustomKeyEventHandler() {}
     open() {} loadAddon() {} onData() { return { dispose() {} } } write() {} focus() {} dispose() {} resize() {}
   },
   FitAddon: class { fit() {} },
