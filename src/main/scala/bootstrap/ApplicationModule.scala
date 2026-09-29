@@ -405,10 +405,9 @@ object ApplicationModule {
         syncSessionRepository,
         connectionScheduleRepository
       ),
+      // One read of fixed size for the whole list, not three queries per connection.
       listConnections = ListConnections[ConnectionIO](
-        connectionRepository,
-        syncSessionRepository,
-        connectionScheduleRepository
+        connectionOverviewQuery
       ),
       sshConnectionManagement = new SshConnectionManagement[ConnectionIO](
         connectionRepository,

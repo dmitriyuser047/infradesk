@@ -13,7 +13,8 @@ import { ConfigurationRolloutPanel } from '../components/configuration/Configura
 import { AutomationPanel } from '../components/configuration/ConfigurationRules'
 import { AppShell } from '../components/layout/AppShell'
 import {
-  EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
+  EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceFormSection, WorkspaceHeader, WorkspaceSection,
+  WorkspaceTabs,
 } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
@@ -193,9 +194,8 @@ function DetailsForm({ organizationId, profile, onDone }: { organizationId: stri
     if (!name.trim() || name.trim().length > 255) return setError(t.invalidName)
     update.mutate({ name: name.trim(), description: description.trim() || null }, { onSuccess: onDone })
   }
-  return <form className="workspace-section configuration-details-form" onSubmit={submit} noValidate aria-describedby={ids.note}>
-    <div className="workspace-section-heading"><h2>{t.detailsTitle}</h2></div>
-    <p id={ids.note} className="section-description">{t.detailsNote}</p>
+  return <WorkspaceFormSection title={t.detailsTitle} description={t.detailsNote} descriptionId={ids.note}
+    contentClassName="configuration-details-form" onSubmit={submit} noValidate aria-describedby={ids.note}>
     <div className="configuration-details-grid">
       <label htmlFor={ids.name}>{t.name}<input id={ids.name} value={name} maxLength={255} onChange={event => setName(event.target.value)} /></label>
       <label htmlFor={ids.description} className="configuration-details-wide">{t.description}
@@ -207,5 +207,5 @@ function DetailsForm({ organizationId, profile, onDone }: { organizationId: stri
       <button type="button" className="secondary-button" onClick={onDone}>{t.cancel}</button>
       <button type="submit" className="primary-button" disabled={update.isPending}>{update.isPending ? t.savingDetails : t.saveDetails}</button>
     </div>
-  </form>
+  </WorkspaceFormSection>
 }

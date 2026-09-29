@@ -4,7 +4,7 @@ import { ApiError } from '../api/httpClient'
 import { useNotificationChannel, useSaveNotificationChannel } from '../api/notificationChannels'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
-import { InlineAlert, PageLoading, PageUnavailable, WorkspaceHeader } from '../components/layout/WorkspacePrimitives'
+import { InlineAlert, PageLoading, PageUnavailable, WorkspaceFormSection, WorkspaceHeader } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import type { EmailSecurity, IncidentReason, NotificationChannelResponse, NotificationChannelType, NotificationEventType, SaveNotificationChannelRequest } from '../types/notificationChannel'
@@ -77,7 +77,7 @@ function ChannelForm({ org, existing }: { org: string; existing?: NotificationCh
   const reasonOptions: [IncidentReason, string][] = [['THRESHOLD', t.threshold], ['NO_DATA', t.noData]]
   return <AppShell><div className="workspace-page notification-form-page">
     <WorkspaceHeader title={title} actions={<Link className="text-link" to={back}>{t.back}</Link>} />
-    <form className="workspace-section notification-form" onSubmit={submit} noValidate>
+    <WorkspaceFormSection contentClassName="notification-form" onSubmit={submit} noValidate>
       <div className="notification-form-grid">
         <label>{t.name}<input required value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
         <label>{t.type}<select value={type} onChange={event => setType(event.target.value as NotificationChannelType)}><option value="WEBHOOK">{t.webhook}</option><option value="TELEGRAM">{t.telegram}</option><option value="EMAIL">{t.email}</option></select></label>
@@ -99,7 +99,7 @@ function ChannelForm({ org, existing }: { org: string; existing?: NotificationCh
       {!existing ? <label className="notification-check"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />{t.enabledAtCreate}</label> : null}
       {error ? <InlineAlert tone="danger" title={error} /> : null}
       <div className="notification-form-actions"><Link className="secondary-button" to={back}>{i18n.t.common.cancel}</Link><button className="primary-button" type="submit" disabled={save.isPending}>{save.isPending ? t.saving : t.save}</button></div>
-    </form>
+    </WorkspaceFormSection>
   </div></AppShell>
 }
 

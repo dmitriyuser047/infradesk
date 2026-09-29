@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQueries } from '@tanstack/react-query'
+import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { Cable, Plus } from 'lucide-react'
 
@@ -10,6 +10,7 @@ import { ConnectionList } from '../components/connections/ConnectionList'
 import { filterConnections } from '../components/connections/connectionFilters'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
+import { useSlowPending } from '../components/layout/useSlowPending'
 import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
@@ -29,6 +30,12 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
   const i18n = useI18n()
   const t = i18n.t.connections
   const connectionsQuery = useConnections(organizationId)
+  const slowLoading = useSlowPending(connectionsQuery.isPending)
+  const queryClient = useQueryClient()
+  // A first load still in flight is not restarted by refetch(): drop it, then ask again.
+  const retryConnections = () => {
+    void queryClient.cancelQueries({ queryKey: ['connections', organizationId] }).then(() => connectionsQuery.refetch())
+  }
   const projectsQuery = useProjects(organizationId)
   const scopedProjectIds = [...new Set((connectionsQuery.data ?? []).flatMap(connection =>
     connection.scope.type === 'ENVIRONMENT' ? [connection.scope.projectId] : []))]
@@ -63,7 +70,10 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
               <option value="ACTIVE">{i18n.t.common.active}</option><option value="INACTIVE">{i18n.t.common.inactive}</option></select></label>
             <button className="secondary-button" type="button" onClick={() => connectionsQuery.refetch()}>{i18n.t.common.refresh}</button>
           </div>
-          {connectionsQuery.isPending ? <div className="connection-skeleton" aria-label={t.loading}><span /><span /><span /></div> : null}
+          {connectionsQuery.isPending && !slowLoading ? <div className="connection-skeleton" aria-label={t.loading}><span /><span /><span /></div> : null}
+          {slowLoading ? <InlineAlert tone="warning" title={t.slowLoading}
+            action={<button className="secondary-button" type="button" onClick={retryConnections}>{i18n.t.common.retry}</button>}>
+            {i18n.t.common.slowLoadingDetail}</InlineAlert> : null}
           {connectionsQuery.isError ? <InlineAlert tone="danger" title={t.loadError}
             action={<button className="secondary-button" type="button" onClick={() => connectionsQuery.refetch()}>{i18n.t.common.retry}</button>}>
             {describeError(connectionsQuery.error, i18n)}</InlineAlert> : null}

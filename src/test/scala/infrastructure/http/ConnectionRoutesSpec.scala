@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package infrastructure.http
 
-import application.connection.{GetConnection, ListConnections}
+import application.connection.{GetConnection, ListConnections, RepositoryConnectionOverviewQuery}
 import application.port.{SyncSessionClaim, ConnectionRepository, ConnectionScheduleRepository, SyncSessionRepository, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -181,7 +181,7 @@ final class ConnectionRoutesSpec extends FunSuite {
     val transactionRunner = new RecordingTransactionRunner
     val routes = new ConnectionRoutes[IO](
       GetConnection(connectionRepository, syncSessionRepository, connectionScheduleRepository),
-      ListConnections(connectionRepository, syncSessionRepository, connectionScheduleRepository),
+      ListConnections(RepositoryConnectionOverviewQuery(connectionRepository, syncSessionRepository, connectionScheduleRepository)),
       transactionRunner,
       support.AuthorizationFixtures.authorization
     )

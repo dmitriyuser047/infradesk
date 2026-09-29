@@ -243,6 +243,34 @@ describe('terminal workspace', () => {
     vi.useRealTimers()
   })
 
+  it('uses one socket per retry and resets the delay after a successful reconnect', async () => {
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    vi.useFakeTimers()
+    act(() => Socket.instances[0].onerror?.())
+    expect(Socket.instances[0].onclose).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(Socket.instances).toHaveLength(2)
+    act(() => Socket.instances[1].ready())
+    act(() => Socket.instances[1].onerror?.())
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(Socket.instances).toHaveLength(3)
+  })
+
+  it('cancels a pending retry when the terminal is closed', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    vi.useFakeTimers()
+    act(() => Socket.instances[0].onerror?.())
+    fireEvent.click(within(dock()!).getByRole('button', { name: 'Close terminal Finnish Node' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(8000) })
+    expect(Socket.instances).toHaveLength(1)
+    expect(FakeTerminal.instances[0].dispose).toHaveBeenCalledOnce()
+  })
+
   it('does not reconnect after manual disconnect', async () => {
     render(app(workspace))
     await connect()
@@ -291,6 +319,60 @@ describe('terminal workspace', () => {
     emulator.getSelection.mockReturnValue('selected output')
     expect(key(ctrlC)).toBe(false)
     expect(writeText).toHaveBeenCalledWith('selected output')
+    expect(key({ ...ctrlC, shiftKey: true })).toBe(false)
+    expect(key({ ...ctrlC, key: 'v', shiftKey: true })).toBe(true)
+  })
+
+  it('handles Cmd+C and leaves Cmd+V to xterm native paste on macOS', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { platform: 'MacIntel', userAgent: navigator.userAgent, clipboard: { writeText } })
+    render(app(workspace))
+    await connect()
+    const emulator = FakeTerminal.instances[0]
+    emulator.hasSelection.mockReturnValue(true)
+    emulator.getSelection.mockReturnValue('mac selection')
+    const key = emulator.attachCustomKeyEventHandler.mock.calls[0][0]
+    expect(key({ type: 'keydown', key: 'c', ctrlKey: false, shiftKey: false, metaKey: true })).toBe(false)
+    expect(writeText).toHaveBeenCalledWith('mac selection')
+    expect(key({ type: 'keydown', key: 'v', ctrlKey: false, shiftKey: false, metaKey: true })).toBe(true)
+  })
+
+  it('does not crash without navigator.clipboard and reports unavailable paste', async () => {
+    vi.stubGlobal('navigator', { platform: 'Win32', userAgent: navigator.userAgent, clipboard: undefined })
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    fireEvent.click(screen.getByRole('button', { name: 'Paste' }))
+    expect(await screen.findByText(/cannot read the clipboard here/)).toBeTruthy()
+  })
+
+  it('copies selected text through a temporary selection on HTTP when Clipboard API is absent', async () => {
+    vi.stubGlobal('navigator', { platform: 'Win32', userAgent: navigator.userAgent, clipboard: undefined })
+    const original = Object.getOwnPropertyDescriptor(document, 'execCommand')
+    const execCommand = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+    try {
+      render(app(workspace))
+      await connect()
+      const emulator = FakeTerminal.instances[0]
+      emulator.getSelection.mockReturnValue('selected output')
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+      expect(execCommand).toHaveBeenCalledWith('copy')
+      expect(document.querySelector('textarea[aria-hidden="true"]')).toBeNull()
+      expect(screen.queryByText(/could not copy/)).toBeNull()
+    } finally {
+      if (original) Object.defineProperty(document, 'execCommand', original)
+      else Reflect.deleteProperty(document, 'execCommand')
+    }
+  })
+
+  it('explains copy failure when HTTP browser has no Clipboard API or fallback', async () => {
+    vi.stubGlobal('navigator', { platform: 'Win32', userAgent: navigator.userAgent, clipboard: undefined })
+    render(app(workspace))
+    await connect()
+    FakeTerminal.instances[0].getSelection.mockReturnValue('selected output')
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(await screen.findByText('This browser could not copy the selection.')).toBeTruthy()
   })
 
   it('pastes multiline clipboard text through xterm', async () => {

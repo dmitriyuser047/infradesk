@@ -58,6 +58,7 @@ import serialization.resource.container.ContainerResourceDataCodec
 import serialization.resource.node.NodeResourceDataCodec
 import persistence.postgres.{
   PostgresAuditEventRepository,
+  PostgresConnectionOverviewQuery,
   PostgresHistoryEventQuery,
   PostgresIncidentListQuery,
   PostgresInfrastructureContextQuery,
@@ -121,6 +122,7 @@ final case class PersistenceComponents(
   projectRepository: ProjectRepository[ConnectionIO],
   environmentRepository: EnvironmentRepository[ConnectionIO],
   connectionRepository: ConnectionRepository[ConnectionIO],
+  connectionOverviewQuery: application.connection.ConnectionOverviewQuery[ConnectionIO],
   connectionScheduleRepository: ConnectionScheduleRepository[ConnectionIO],
   connectionSecretRepository: ConnectionSecretRepository[ConnectionIO],
   externalRefRepository: ExternalRefRepository[ConnectionIO],
@@ -181,6 +183,7 @@ object PersistenceModule {
 
   def build(xa: Transactor[IO], resourceTypes: ResourceDefinitionRegistry): PersistenceComponents = {
     val organizations = new PostgresOrganizationRepository
+    val connections = new PostgresConnectionRepository
     PersistenceComponents(
       terminalSessionRepository = new persistence.postgres.PostgresTerminalSessionRepository(new PostgresAuditEventRepository),
       transactionRunner = new DoobieTransactionRunner(xa),
@@ -204,7 +207,8 @@ object PersistenceModule {
       organizationProvisioning = organizations,
       projectRepository = new PostgresProjectRepository,
       environmentRepository = new PostgresEnvironmentRepository,
-      connectionRepository = new PostgresConnectionRepository,
+      connectionRepository = connections,
+      connectionOverviewQuery = new PostgresConnectionOverviewQuery(connections),
       connectionScheduleRepository = new PostgresConnectionScheduleRepository,
       connectionSecretRepository = new PostgresConnectionSecretRepository,
       externalRefRepository = new PostgresExternalRefRepository,

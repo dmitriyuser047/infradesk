@@ -3,7 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createAppQueryClient } from '../app/queryClient'
+import { createAppQueryClient, shouldRetryQuery } from '../app/queryClient'
 import { I18nProvider } from '../i18n'
 import type { NotificationChannelResponse, TestNotificationResponse } from '../types/notificationChannel'
 import { NotificationChannelsPage } from './NotificationChannelsPage'
@@ -63,7 +63,7 @@ describe('notification channels page', () => {
     const webhook: NotificationChannelResponse = { ...emailChannel, id: 'w', name: 'Automation', type: 'WEBHOOK', config: { credentialConfigured: true } }
     const telegram: NotificationChannelResponse = { ...emailChannel, id: 't', name: 'Ops Telegram', type: 'TELEGRAM', config: { credentialConfigured: true, chatId: '-100123' } }
     const { client, requests } = setup({ channels: [webhook, telegram, emailChannel] })
-    expect(client.getDefaultOptions().queries).toMatchObject({ retry: 1, refetchOnWindowFocus: false })
+    expect(client.getDefaultOptions().queries).toMatchObject({ retry: shouldRetryQuery, refetchOnWindowFocus: false })
     expect(await screen.findByText('Mail alerts')).toBeTruthy()
     expect(screen.getByText('Automation')).toBeTruthy()
     expect(screen.getByText('Ops Telegram')).toBeTruthy()

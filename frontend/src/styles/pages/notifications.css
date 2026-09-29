@@ -12,7 +12,7 @@
 .notification-test-error { color: var(--danger); }
 .notification-loading { padding: 24px 0; color: var(--text-secondary); }
 .notification-form-page { max-width: 900px; }
-.notification-form { display: grid; gap: 22px; padding: 22px; }
+.notification-form { gap: 22px; }
 .notification-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .notification-config { display: grid; gap: 14px; min-width: 0; padding-top: 16px; border-top: 1px solid var(--border); }
 .notification-config h2 { font-size: var(--font-size-section); }
@@ -27,7 +27,6 @@
 @media (max-width: 640px) {
   .notification-list { padding: 12px; }
   .notification-card { padding: 14px; }
-  .notification-form { padding: 16px; }
   .notification-form-grid { grid-template-columns: minmax(0, 1fr); }
   .notification-actions > * { flex: 1 1 auto; }
 }

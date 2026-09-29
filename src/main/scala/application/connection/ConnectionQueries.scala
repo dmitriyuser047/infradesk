@@ -44,12 +44,24 @@ final case class GetConnection[Tx[_]: Monad](
     } yield ConnectionOverview(connection, schedule, lastSync)
 }
 
-final case class ListConnections[Tx[_]: Monad](
+/** Every connection of an organization with its schedule and latest synchronization. A list is read
+  * in a fixed number of statements, however many connections it has: no SSH, no secret, no network.
+  */
+trait ConnectionOverviewQuery[Tx[_]] {
+  def listByOrganization(organizationId: UUID): Tx[List[ConnectionOverview]]
+}
+
+final case class ListConnections[Tx[_]](overviews: ConnectionOverviewQuery[Tx]) {
+  def execute(organizationId: UUID): Tx[List[ConnectionOverview]] = overviews.listByOrganization(organizationId)
+}
+
+/** The same overview assembled from the repositories one connection at a time: for in-memory tests. */
+final case class RepositoryConnectionOverviewQuery[Tx[_]: Monad](
   connectionRepository: ConnectionRepository[Tx],
   syncSessionRepository: SyncSessionRepository[Tx],
   connectionScheduleRepository: ConnectionScheduleRepository[Tx]
-) {
-  def execute(organizationId: UUID): Tx[List[ConnectionOverview]] =
+) extends ConnectionOverviewQuery[Tx] {
+  override def listByOrganization(organizationId: UUID): Tx[List[ConnectionOverview]] =
     connectionRepository.findByOrganization(organizationId).flatMap {
       _.traverse { connection =>
         for {

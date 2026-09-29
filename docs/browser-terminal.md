@@ -15,7 +15,10 @@ as previous output. Fullscreen uses the browser's Fullscreen API.
 The terminal has independent light and near-black themes. Only the theme choice is
 persisted in local storage. xterm provides mouse selection and scrollback. Copy and
 paste controls, a compact context menu and standard keyboard shortcuts operate on the
-emulator; clipboard text and terminal output are not stored by InfraDesk.
+emulator. On HTTP origins without the Clipboard API, Copy tries the browser's legacy
+selection copy during the click; Paste directs the user to a native keyboard paste if
+the browser will not let the page read the clipboard. Clipboard text and terminal
+output are not stored by InfraDesk.
 
 The same-origin WebSocket path is
 `/api/v1/organizations/{organizationId}/connections/{connectionId}/terminal`.
@@ -50,9 +53,11 @@ Heartbeat is 15 seconds and lease duration is 45 seconds by default. Heartbeat v
 the originating auth session, active user, active Owner membership and unchanged active
 SSH connection. Logout/session revocation and changed access/settings close live terminals
 within the heartbeat bound. Heartbeats do not extend idle activity.
-Heartbeat database errors are retried twice after 2 and 4 seconds. A revoked or missing
-session closes immediately; repeated validation failure closes with 1011 and releases
-SSH resources (fail closed).
+Heartbeat database errors are retried twice after 2 and 4 seconds, with each validation
+attempt bounded at 3 seconds. Configuration requires a lease covering one heartbeat,
+the 15-second worst-case retry window and five seconds of margin; activation starts a fresh lease after SSH
+setup. A revoked or missing session closes immediately; repeated validation failure
+closes with 1011 and releases SSH resources (fail closed).
 The periodic reaper runs once a minute, locks at most 100 expired rows with SKIP LOCKED,
 closes them as LEASE_EXPIRED and journals their closure in the same transaction.
 

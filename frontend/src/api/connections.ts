@@ -7,9 +7,10 @@ import { invalidateConnectionInfrastructure } from './infrastructure'
 import type { ConnectionResponse, SaveSshConnectionRequest, SshCredentialsRequest, SyncSessionResponse } from '../types/connection'
 import { requestVoid } from './httpClient'
 
-export function getConnections(organizationId: string): Promise<ConnectionResponse[]> {
+export function getConnections(organizationId: string, signal?: AbortSignal): Promise<ConnectionResponse[]> {
   return requestJson<ConnectionResponse[]>(
     `/api/v1/organizations/${encodeURIComponent(organizationId)}/connections`,
+    { signal },
   )
 }
 
@@ -25,7 +26,7 @@ export function getConnection(
 export function useConnections(organizationId: string | undefined) {
   return useQuery({
     queryKey: ['connections', organizationId],
-    queryFn: () => getConnections(requireId(organizationId)),
+    queryFn: ({ signal }) => getConnections(requireId(organizationId), signal),
     enabled: Boolean(organizationId),
   })
 }

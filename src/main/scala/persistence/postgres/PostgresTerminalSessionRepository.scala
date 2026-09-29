@@ -41,8 +41,8 @@ final class PostgresTerminalSessionRepository(audit: AuditEventRepository[Connec
     } yield result
   }
 
-  def activate(org: UUID, id: UUID, token: UUID, now: Instant): ConnectionIO[Boolean] =
-    sql"""update terminal_session set state = 'ACTIVE', opened_at = $now
+  def activate(org: UUID, id: UUID, token: UUID, now: Instant, until: Instant): ConnectionIO[Boolean] =
+    sql"""update terminal_session set state = 'ACTIVE', opened_at = $now, lease_expires_at = $until
       where organization_id = $org and id = $id and lease_token = $token
       and state = 'OPENING' and lease_expires_at > $now
       and exists (select 1 from auth_session a join user_account u on u.id = a.user_id

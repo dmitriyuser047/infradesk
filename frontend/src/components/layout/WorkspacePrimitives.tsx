@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type FormHTMLAttributes, type ReactNode } from 'react'
 import { AlertTriangle, ArrowLeft, Check, CheckCircle2, CircleAlert, Copy, Info, SearchX, type LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -71,6 +71,29 @@ export function WorkspaceSection({ title, description, actions, children, classN
     {description ? <p className="section-description">{description}</p> : null}
     <div className="section-content">{children}</div>
   </section>
+}
+
+/**
+ * A section card that is itself a form: the same heading, description and padded content as
+ * WorkspaceSection, so a form never lays its fields against the card edge. Without a title it is
+ * a plain padded card.
+ */
+export function WorkspaceFormSection({ title, description, descriptionId, actions, children, className = '', contentClassName = '',
+  headingId, ...form }: {
+  title?: string
+  description?: ReactNode
+  descriptionId?: string
+  actions?: ReactNode
+  children: ReactNode
+  className?: string
+  contentClassName?: string
+  headingId?: string
+} & Omit<FormHTMLAttributes<HTMLFormElement>, 'className' | 'children' | 'title'>) {
+  return <form className={`workspace-section ${className}`} {...form}>
+    {title ? <div className="workspace-section-heading"><h2 id={headingId}>{title}</h2>{actions}</div> : null}
+    {description ? <p id={descriptionId} className="section-description">{description}</p> : null}
+    <div className={`section-content ${contentClassName}`}>{children}</div>
+  </form>
 }
 
 export function WorkspaceTabs<T extends string>({ tabs, active, onChange }: {

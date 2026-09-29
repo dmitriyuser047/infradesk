@@ -4,6 +4,7 @@ import type { FitAddon } from '@xterm/addon-fit'
 import { TerminalTransport, terminalUrl, type TerminalState } from '../terminal/terminalTransport'
 
 export type TerminalTheme = 'light' | 'dark'
+export type ClipboardNotice = 'noSelection' | 'copyUnavailable' | 'pasteUnavailable'
 const themeKey = 'infradesk.terminal.theme'
 const darkTheme = {
   background: '#0d0d0d', foreground: '#d4d4d4', cursor: '#ffffff', selectionBackground: '#565f78',
@@ -42,6 +43,7 @@ export interface TerminalSessionSnapshot {
   serverSessionId?: string
   createdAt: number
   theme: TerminalTheme
+  clipboardNotice?: ClipboardNotice
 }
 
 export interface TerminalSessionDependencies {
@@ -224,12 +226,24 @@ export class TerminalSessionController {
   }
 
   get hasSelection(): boolean { return !!this.emulator?.hasSelection() }
-  copy(): void {
+  async copy(): Promise<void> {
     const value = this.emulator?.getSelection()
-    if (value) void navigator.clipboard?.writeText(value).catch(() => {})
+    if (!value) { this.update({ clipboardNotice: 'noSelection' }); return }
+    if (typeof navigator.clipboard?.writeText === 'function') {
+      try { await navigator.clipboard.writeText(value); this.update({ clipboardNotice: undefined }); return }
+      catch { /* The browser may deny clipboard access; try the user-gesture fallback. */ }
+    }
+    this.update({ clipboardNotice: this.copyWithSelection(value) ? undefined : 'copyUnavailable' })
   }
-  paste(): void {
-    void navigator.clipboard?.readText().then(value => { if (this.current.state === 'connected') this.emulator?.paste(value) }).catch(() => {})
+  async paste(): Promise<void> {
+    if (typeof navigator.clipboard?.readText !== 'function') {
+      this.update({ clipboardNotice: 'pasteUnavailable' }); return
+    }
+    try {
+      const value = await navigator.clipboard.readText()
+      if (this.current.state === 'connected') this.emulator?.paste(value)
+      this.update({ clipboardNotice: undefined })
+    } catch { this.update({ clipboardNotice: 'pasteUnavailable' }) }
   }
   selectAll(): void { this.emulator?.selectAll() }
   clear(): void { this.emulator?.clear() }
@@ -238,6 +252,26 @@ export class TerminalSessionController {
     try { localStorage.setItem(themeKey, theme) } catch { /* private browsing may disable storage */ }
     this.update({ theme })
     if (this.emulator) this.emulator.options.theme = this.colors(theme)
+  }
+
+  /** Legacy browser copy is available on many HTTP origins during a direct user gesture. */
+  private copyWithSelection(value: string): boolean {
+    if (typeof document.execCommand !== 'function') return false
+    const previousFocus = document.activeElement
+    const field = document.createElement('textarea')
+    field.value = value
+    field.readOnly = true
+    field.setAttribute('aria-hidden', 'true')
+    field.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0'
+    document.body.appendChild(field)
+    try {
+      field.select()
+      return document.execCommand('copy')
+    } catch { return false }
+    finally {
+      field.remove()
+      if (previousFocus instanceof HTMLElement) previousFocus.focus({ preventScroll: true })
+    }
   }
 
   private colors(theme: TerminalTheme) {
@@ -284,9 +318,13 @@ export class TerminalSessionController {
       if (event.type !== 'keydown') return true
       const key = event.key.toLowerCase()
       const mac = /Mac|iPhone|iPad/.test(navigator.platform)
-      if ((event.ctrlKey && event.shiftKey || mac && event.metaKey || event.ctrlKey && this.hasSelection) && key === 'c') {
-        if (typeof navigator.clipboard?.writeText === 'function') { this.copy(); return false }
+      const explicitCopy = event.ctrlKey && event.shiftKey && !event.metaKey || mac && event.metaKey && !event.ctrlKey
+      if (key === 'c' && (explicitCopy || event.ctrlKey && this.hasSelection)) {
+        void this.copy()
+        return false
       }
+      // Let xterm's textarea receive the native paste event. This also works on HTTP origins,
+      // where navigator.clipboard.readText is not exposed to the application.
       return true
     })
     this.cleanup = [...handlers.map(handler => () => handler.dispose()), () => input.dispose()]

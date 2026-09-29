@@ -13,24 +13,7 @@ import java.time.Instant
 import java.util.UUID
 
 final class PostgresSyncSessionRepository extends SyncSessionRepository[ConnectionIO] {
-
-  private final case class SyncSessionRow(
-    id: UUID,
-    organizationId: UUID,
-    connectionId: UUID,
-    startedAt: Instant,
-    recoverAfterAt: Instant,
-    finishedAt: Option[Instant],
-    status: String,
-    errorCode: Option[String],
-    errorMessage: Option[String]
-  ) {
-    def toDomain: Either[IllegalArgumentException, SyncSession] =
-      SyncSessionStatus.fromCode(status).map { typedStatus =>
-        SyncSession(id, organizationId, connectionId, startedAt, recoverAfterAt, finishedAt,
-          typedStatus, errorCode, errorMessage)
-      }
-  }
+  import PostgresSyncSessionRepository.SyncSessionRow
 
   override def findLatestByConnection(
     organizationId: UUID,
@@ -168,4 +151,24 @@ final class PostgresSyncSessionRepository extends SyncSessionRepository[Connecti
     else new IllegalStateException(
       s"Expected to $operation 1 sync_session row, affected: $rows"
     ).raiseError[ConnectionIO, Unit]
+}
+
+object PostgresSyncSessionRepository {
+  private[postgres] final case class SyncSessionRow(
+    id: UUID,
+    organizationId: UUID,
+    connectionId: UUID,
+    startedAt: Instant,
+    recoverAfterAt: Instant,
+    finishedAt: Option[Instant],
+    status: String,
+    errorCode: Option[String],
+    errorMessage: Option[String]
+  ) {
+    def toDomain: Either[IllegalArgumentException, SyncSession] =
+      SyncSessionStatus.fromCode(status).map { typedStatus =>
+        SyncSession(id, organizationId, connectionId, startedAt, recoverAfterAt, finishedAt,
+          typedStatus, errorCode, errorMessage)
+      }
+  }
 }

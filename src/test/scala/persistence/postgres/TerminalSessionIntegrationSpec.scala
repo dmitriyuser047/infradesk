@@ -18,10 +18,10 @@ final class TerminalSessionIntegrationSpec extends FunSuite {
     val session = s.session()
     for {
       claimed <- s.run(s.repo.claim(session, 4, 32))
-      wrongOrg <- s.run(s.repo.activate(UUID.randomUUID(), session.id, session.leaseToken, s.now))
-      wrongToken <- s.run(s.repo.activate(s.org, session.id, UUID.randomUUID(), s.now))
-      activated <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, s.now))
-      duplicate <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, s.now))
+      wrongOrg <- s.run(s.repo.activate(UUID.randomUUID(), session.id, session.leaseToken, s.now, s.now.plusSeconds(45)))
+      wrongToken <- s.run(s.repo.activate(s.org, session.id, UUID.randomUUID(), s.now, s.now.plusSeconds(45)))
+      activated <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, s.now, s.now.plusSeconds(45)))
+      duplicate <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, s.now, s.now.plusSeconds(45)))
       renewed <- s.run(s.repo.renew(s.org, session.id, session.leaseToken, s.now, s.now.plusSeconds(60)))
       lost <- s.run(s.repo.renew(s.org, session.id, UUID.randomUUID(), s.now, s.now.plusSeconds(60)))
       crossClose <- s.run(s.repo.closeOwned(UUID.randomUUID(), session.id, session.leaseToken, s.now, TerminalCloseReason.ClientClose))
@@ -34,6 +34,20 @@ final class TerminalSessionIntegrationSpec extends FunSuite {
       assertEquals(renewed, TerminalRenewResult.Renewed(s.now.plusSeconds(60)))
       assertEquals(lost, TerminalRenewResult.Lost)
       assertEquals(count, 2L)
+    }
+  } }
+
+  test("activation starts a fresh lease after SSH setup") { withSetup { s =>
+    val session = s.session()
+    val opened = s.now.plusSeconds(20)
+    val until = opened.plusSeconds(45)
+    for {
+      _ <- s.run(s.repo.claim(session, 4, 32))
+      activated <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, opened, until))
+      expiry <- s.run(sql"select lease_expires_at from terminal_session where id = ${session.id}".query[Instant].unique)
+    } yield {
+      assert(activated)
+      assertEquals(expiry, until)
     }
   } }
 
@@ -82,7 +96,7 @@ final class TerminalSessionIntegrationSpec extends FunSuite {
       }
       for {
         _ <- s.run(s.repo.claim(session, 4, 32))
-        _ <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, s.now))
+        _ <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, s.now, s.now.plusSeconds(45)))
         _ <- s.run(mutation)
         result <- s.run(s.repo.renew(s.org, session.id, session.leaseToken, s.now, s.now.plusSeconds(60)))
         again <- s.run(s.repo.renew(s.org, session.id, session.leaseToken, s.now, s.now.plusSeconds(60)))
@@ -102,7 +116,8 @@ final class TerminalSessionIntegrationSpec extends FunSuite {
       _ <- s.run(s.repo.claim(session, 4, 32))
       crossRevoke <- s.run(s.repo.revoke(otherOrg, session.id, s.now))
       crossRenew <- s.run(s.repo.renew(otherOrg, session.id, session.leaseToken, s.now, s.now.plusSeconds(60)))
-      expiredActivate <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, s.now.plusSeconds(45)))
+      expiredActivate <- s.run(s.repo.activate(s.org, session.id, session.leaseToken,
+        s.now.plusSeconds(45), s.now.plusSeconds(90)))
       expiredClose <- s.run(s.repo.closeOwned(s.org, session.id, session.leaseToken, s.now.plusSeconds(45), TerminalCloseReason.ClientClose))
       count <- s.auditCount(session.id)
     } yield {
@@ -116,7 +131,7 @@ final class TerminalSessionIntegrationSpec extends FunSuite {
     val session = s.session()
     for {
       _ <- s.run(s.repo.claim(session, 4, 32))
-      _ <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, s.now))
+      _ <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, s.now, s.now.plusSeconds(45)))
       first <- s.run(s.repo.revoke(s.org, session.id, s.now))
       second <- s.run(s.repo.revoke(s.org, session.id, s.now))
       count <- s.auditCount(session.id)
@@ -132,7 +147,8 @@ final class TerminalSessionIntegrationSpec extends FunSuite {
     }
     for {
       _ <- s.run(s.repo.claim(session, 4, 32))
-      result <- s.run(new PostgresTerminalSessionRepository(failedAudit).activate(s.org, session.id, session.leaseToken, s.now)).attempt
+      result <- s.run(new PostgresTerminalSessionRepository(failedAudit).activate(s.org, session.id,
+        session.leaseToken, s.now, s.now.plusSeconds(45))).attempt
       state <- s.run(sql"select state from terminal_session where id = ${session.id}".query[String].unique)
     } yield { assert(result.isLeft); assertEquals(state, "OPENING") }
   } }

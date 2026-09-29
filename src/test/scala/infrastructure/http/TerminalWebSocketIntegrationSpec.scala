@@ -422,7 +422,8 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
     val transitions = Ref.of[IO, Vector[String]](Vector.empty).unsafeRunSync()
     def claim(value: domain.terminal.TerminalSession, userLimit: Int, orgLimit: Int): IO[domain.terminal.TerminalClaimResult] =
       transitions.update(_ :+ "OPENING").as(domain.terminal.TerminalClaimResult.Claimed(value))
-    def activate(org: UUID, id: UUID, token: UUID, now: Instant): IO[Boolean] = transitions.update(_ :+ "ACTIVE").as(true)
+    def activate(org: UUID, id: UUID, token: UUID, now: Instant, until: Instant): IO[Boolean] =
+      transitions.update(_ :+ "ACTIVE").as(true)
     def renew(org: UUID, id: UUID, token: UUID, now: Instant, until: Instant): IO[domain.terminal.TerminalRenewResult] = renewal
     def closeOwned(org: UUID, id: UUID, token: UUID, now: Instant, reason: domain.terminal.TerminalCloseReason): IO[Boolean] =
       transitions.update(_ :+ reason.code).as(true)

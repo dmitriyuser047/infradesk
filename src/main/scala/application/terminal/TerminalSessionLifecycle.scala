@@ -26,7 +26,8 @@ final class TerminalSessionLifecycle[Tx[_]](
     }
 
   def activate(session: TerminalSession): IO[Boolean] = IO.realTimeInstant.flatMap(now =>
-    runner.run(sessions.activate(session.organizationId, session.id, session.leaseToken, now)))
+    runner.run(sessions.activate(session.organizationId, session.id, session.leaseToken,
+      now, now.plusMillis(leaseDuration.toMillis))))
 
   def renew(session: TerminalSession): IO[TerminalRenewResult] = IO.realTimeInstant.flatMap(now =>
     runner.run(sessions.renew(session.organizationId, session.id, session.leaseToken, now, now.plusMillis(leaseDuration.toMillis))))

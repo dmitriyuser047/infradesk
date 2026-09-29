@@ -10,7 +10,7 @@ import { describeError } from '../../i18n/errors'
 import type { ConfigurationProfile } from '../../types/configuration'
 import type { ConfigurationRule, Label, RuleSelector, SelectorPreview } from '../../types/configurationRule'
 import type { EnvironmentResponse } from '../../types/navigation'
-import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceFormSection, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { isTargetPath } from './configurationTargetSupport'
 import '../../styles/pages/configurations.css'
 
@@ -244,8 +244,8 @@ function RuleCreateForm({ organizationId, profile, onCancel }: {
   const listed = (revisions.data ?? []).map(item => item.revisionNumber)
   const options = listed.includes(revision) ? listed : [revision, ...listed]
 
-  return <form className="workspace-section configuration-editor" onSubmit={submit(false)} noValidate aria-labelledby={`${ids.name}-title`}>
-    <div className="workspace-section-heading"><h2 id={`${ids.name}-title`}>{t.createTitle}</h2></div>
+  return <WorkspaceFormSection title={t.createTitle} headingId={`${ids.name}-title`} contentClassName="configuration-editor"
+    onSubmit={submit(false)} noValidate aria-labelledby={`${ids.name}-title`}>
     <InlineAlert tone="info" title={t.notDeployedNote} />
     <div className="assignment-grid-fields">
       <div className="configuration-field"><label htmlFor={ids.name}>{t.name}</label>
@@ -287,7 +287,7 @@ function RuleCreateForm({ organizationId, profile, onCancel }: {
       <button type="button" className="primary-button" disabled={create.isPending || !preview.data} onClick={() => submit(true)()}>
         {t.createEnabled}</button>
     </div>
-  </form>
+  </WorkspaceFormSection>
 }
 
 /** The counts over every match and the first page of matched nodes, each with what would happen to it. */

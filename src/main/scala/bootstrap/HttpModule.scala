@@ -131,7 +131,7 @@ object HttpModule {
           authorization
         ).routes <+>
         new ConnectionRoutes(application.getConnection, application.listConnections,
-          transactionRunner, authorization).routes <+>
+          transactionRunner, authorization, loggers.readModels).routes <+>
         new SshConnectionMutationRoutes(application.sshConnectionManagement, authorization).routes <+>
         new ConnectionSyncRoutes(
           application.listConnectionSyncSessions,

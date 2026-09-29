@@ -54,7 +54,8 @@ function OrganizationContent({ organizationId }: { organizationId: string }) {
       <li><Layers aria-hidden size={18} /><div><strong>{t.hierarchy.environment}</strong><span>{t.hierarchy.environmentDetail}</span></div></li>
     </ol>
     {projectsQuery.isPending || organizationQuery.isPending
-      ? <div className="workspace-section"><div className="row-skeleton" aria-label={t.loadingProjects}><span /><span /><span /></div></div> : null}
+      ? <div className="workspace-section"><div className="section-content">
+        <div className="row-skeleton" aria-label={t.loadingProjects}><span /><span /><span /></div></div></div> : null}
     {projectsQuery.isError ? <InlineAlert tone="danger" title={t.unableToLoadProjects}
       action={<button type="button" className="secondary-button" onClick={() => projectsQuery.refetch()}>{i18n.t.common.retry}</button>}>
       {describeError(projectsQuery.error, i18n)}</InlineAlert> : null}

@@ -75,6 +75,7 @@ export function TerminalPanel({ organizationId, connection, editLink }: {
     {prerequisite ? <InlineAlert tone={prerequisite === 'mismatch' ? 'danger' : 'warning'} title={labels[prerequisite]}
       action={editLink ? <Link className="secondary-button" to={editLink}>{t.common.edit}</Link> : undefined} /> : null}
     {reason && !running ? <InlineAlert tone={state === 'error' ? 'danger' : 'info'} title={reason} /> : null}
+    {session?.clipboardNotice ? <InlineAlert tone="warning" title={labels[session.clipboardNotice]} /> : null}
     {fullscreenError ? <InlineAlert tone="warning" title={labels.unknownError} /> : null}
     {controller ? <div className={`terminal-stage terminal-theme-${session?.theme ?? 'light'}`}
       onClick={() => { if (menu) setMenu(null) }}

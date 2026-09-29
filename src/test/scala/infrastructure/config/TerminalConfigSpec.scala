@@ -12,12 +12,15 @@ final class TerminalConfigSpec extends FunSuite {
     assertEquals(c.maxOrganizationSessions, 32)
     assertEquals(c.heartbeatInterval, 15.seconds)
     assertEquals(c.leaseDuration, 45.seconds)
+    assertEquals(TerminalConfig.RenewWorstCase, 15.seconds)
+    assert(c.heartbeatInterval + TerminalConfig.RenewWorstCase < c.leaseDuration)
   }
   test("invalid heartbeat, lease and capacity settings fail startup") {
     List(
       Map("INFRADESK_TERMINAL_HEARTBEAT_SECONDS" -> "0"),
       Map("INFRADESK_TERMINAL_HEARTBEAT_SECONDS" -> "301"),
       Map("INFRADESK_TERMINAL_LEASE_SECONDS" -> "29"),
+      Map("INFRADESK_TERMINAL_HEARTBEAT_SECONDS" -> "1", "INFRADESK_TERMINAL_LEASE_SECONDS" -> "20"),
       Map("INFRADESK_TERMINAL_LEASE_SECONDS" -> "901"),
       Map("INFRADESK_TERMINAL_MAX_USER_SESSIONS" -> "0"),
       Map("INFRADESK_TERMINAL_MAX_ORGANIZATION_SESSIONS" -> "1025")
@@ -25,8 +28,8 @@ final class TerminalConfigSpec extends FunSuite {
   }
   test("bounded heartbeat and lease overrides are accepted") {
     val c = TerminalConfig.fromEnvironment(Map("INFRADESK_TERMINAL_HEARTBEAT_SECONDS" -> "1",
-      "INFRADESK_TERMINAL_LEASE_SECONDS" -> "3")).toOption.get
+      "INFRADESK_TERMINAL_LEASE_SECONDS" -> "21")).toOption.get
     assertEquals(c.heartbeatInterval, 1.second)
-    assertEquals(c.leaseDuration, 3.seconds)
+    assertEquals(c.leaseDuration, 21.seconds)
   }
 }

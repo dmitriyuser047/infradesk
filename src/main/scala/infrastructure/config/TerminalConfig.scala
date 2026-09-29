@@ -29,10 +29,17 @@ final case class TerminalConfig(
   require(maxUserSessions > 0 && maxUserSessions <= 256)
   require(maxOrganizationSessions > 0 && maxOrganizationSessions <= 1024)
   require(heartbeatInterval > Duration.Zero && heartbeatInterval <= 5.minutes)
-  require(leaseDuration >= heartbeatInterval * 2 && leaseDuration <= 15.minutes)
+  require(leaseDuration >= heartbeatInterval * 2 &&
+    leaseDuration >= heartbeatInterval + TerminalConfig.RenewWorstCase + TerminalConfig.RenewSafetyMargin &&
+    leaseDuration <= 15.minutes)
 }
 
 object TerminalConfig {
+  // Three bounded validation attempts plus the 2s and 4s pauses between them.
+  val RenewAttemptTimeout: FiniteDuration = 3.seconds
+  val RenewRetryDelays: List[FiniteDuration] = List(2.seconds, 4.seconds)
+  val RenewWorstCase: FiniteDuration = RenewAttemptTimeout * 3 + RenewRetryDelays.foldLeft(Duration.Zero: FiniteDuration)(_ + _)
+  val RenewSafetyMargin: FiniteDuration = 5.seconds
   val default: TerminalConfig = TerminalConfig()
 
   def fromEnvironment(values: Map[String, String]): Either[IllegalArgumentException, TerminalConfig] =
@@ -49,7 +56,8 @@ object TerminalConfig {
       userSessions <- bounded(values, "INFRADESK_TERMINAL_MAX_USER_SESSIONS", default.maxUserSessions, 1, 256)
       orgSessions <- bounded(values, "INFRADESK_TERMINAL_MAX_ORGANIZATION_SESSIONS", default.maxOrganizationSessions, 1, 1024)
       heartbeat <- bounded(values, "INFRADESK_TERMINAL_HEARTBEAT_SECONDS", default.heartbeatInterval.toSeconds.toInt, 1, 300)
-      lease <- bounded(values, "INFRADESK_TERMINAL_LEASE_SECONDS", default.leaseDuration.toSeconds.toInt, heartbeat * 2, 900)
+      lease <- bounded(values, "INFRADESK_TERMINAL_LEASE_SECONDS", default.leaseDuration.toSeconds.toInt,
+        math.max(heartbeat * 2, heartbeat + RenewWorstCase.toSeconds.toInt + RenewSafetyMargin.toSeconds.toInt), 900)
     } yield TerminalConfig(columns, rows, maxColumns, maxRows, frameBytes, controlBytes,
       idleSeconds.seconds, lifetimeSeconds.seconds, sessions, userSessions, orgSessions, heartbeat.seconds, lease.seconds)
 
