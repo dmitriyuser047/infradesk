@@ -36,7 +36,8 @@ object IntegrationBaseUrl {
     Try(new URI(raw)).toOption.filter { uri =>
       Set("http", "https").contains(Option(uri.getScheme).map(_.toLowerCase(java.util.Locale.ROOT)).getOrElse("")) &&
       uri.getHost != null && uri.getHost.nonEmpty && uri.getRawUserInfo == null &&
-      uri.getRawQuery == null && uri.getRawFragment == null && uri.getPort <= 65535 &&
+      // -1: no explicit port (the scheme's default). An explicit port must be 1-65535; 0 is not a port.
+      uri.getRawQuery == null && uri.getRawFragment == null && (uri.getPort == -1 || (uri.getPort >= 1 && uri.getPort <= 65535)) &&
       raw.length <= 2048 && !raw.exists(_.isControl)
     }.toRight(invalid).map { uri =>
       val path = Option(uri.getRawPath).getOrElse("").reverse.dropWhile(_ == '/').reverse

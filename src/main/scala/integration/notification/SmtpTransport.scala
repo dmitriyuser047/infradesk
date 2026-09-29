@@ -1,6 +1,7 @@
 package ru.bitec.app.ops
 package integration.notification
 
+import integration.http.{OutboundDestinationFailure, OutboundDestinationPolicy, OutboundDestinationRejected, OutboundDestinationUnresolvable}
 import application.notification.NotificationMessage
 import application.port.{EmailNotificationTransport, NotificationSendResult}
 import cats.effect.{IO, Resource}
@@ -62,7 +63,7 @@ final class SmtpTransport(
       .handleErrorWith {
         case _: TimeoutException => IO.pure(NotificationSendResult.RetryableFailure(Timeout))
         case error =>
-          val result = OutboundDestinationPolicy.classify(error).getOrElse(classifyError(error))
+          val result = NotificationDestinationFailures.classify(error).getOrElse(classifyError(error))
           val observed = result match {
             case NotificationSendResult.RetryableFailure(UnexpectedError) =>
               // Keep the API outcome bounded, but retain the real cause chain in server logs.

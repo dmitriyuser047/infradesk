@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package integration.remnawave
 
 import application.integration.IntegrationError
-import integration.notification.OutboundDestinationRejected
+import integration.http.OutboundDestinationRejected
 import java.net.{ConnectException, NoRouteToHostException, SocketTimeoutException, UnknownHostException}
 import java.util.concurrent.TimeoutException
 import javax.net.ssl.SSLException

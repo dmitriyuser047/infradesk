@@ -1,5 +1,5 @@
 package ru.bitec.app.ops
-package integration.notification
+package integration.http
 
 import cats.effect.unsafe.implicits.global
 import munit.FunSuite
@@ -76,19 +76,5 @@ final class OutboundDestinationPolicySpec extends FunSuite {
         Some(OutboundDestinationPolicy.ResolutionFailed))
       assert(elapsed < 1500.millis, clues(elapsed))
     } finally blackhole.close()
-  }
-
-  test("a forbidden or unresolvable destination classifies the exceptions transports throw") {
-    assertEquals(
-      OutboundDestinationPolicy.classify(new OutboundDestinationRejected("X")),
-      Some(application.port.NotificationSendResult.PermanentFailure("X")))
-    assertEquals(
-      OutboundDestinationPolicy.classify(new OutboundDestinationUnresolvable("Y")),
-      Some(application.port.NotificationSendResult.RetryableFailure("Y")))
-    // Wrapped one level deep, as Jakarta Mail wraps a socket failure in a MessagingException.
-    val wrapped = new jakarta.mail.MessagingException("failed", new OutboundDestinationRejected("Z"))
-    assertEquals(OutboundDestinationPolicy.classify(wrapped),
-      Some(application.port.NotificationSendResult.PermanentFailure("Z")))
-    assertEquals(OutboundDestinationPolicy.classify(new RuntimeException("unrelated")), None)
   }
 }

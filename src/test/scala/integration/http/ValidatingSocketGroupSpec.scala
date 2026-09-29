@@ -1,5 +1,5 @@
 package ru.bitec.app.ops
-package integration.notification
+package integration.http
 
 import cats.effect.{IO, Resource}
 import cats.effect.unsafe.implicits.global

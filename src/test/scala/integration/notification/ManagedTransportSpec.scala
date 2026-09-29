@@ -1,6 +1,7 @@
 package ru.bitec.app.ops
 package integration.notification
 
+import integration.http.{OutboundDestinationFailure, OutboundDestinationPolicy, ValidatingSocketGroup}
 import application.notification.{NotificationEvent, NotificationMessage}
 import application.port.NotificationSendResult
 import cats.effect.{IO, Ref, Resource}

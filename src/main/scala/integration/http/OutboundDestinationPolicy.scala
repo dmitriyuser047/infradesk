@@ -1,5 +1,5 @@
 package ru.bitec.app.ops
-package integration.notification
+package integration.http
 
 import cats.effect.IO
 import cats.syntax.all._
@@ -137,13 +137,5 @@ object OutboundDestinationPolicy {
     resolver.setTimeout(Duration.ofNanos(resolutionTimeout.toNanos))
     val lookup = LookupSession.defaultBuilder().resolver(resolver).build()
     new ResolvingOutboundDestinationPolicy(allowPrivateNetworks, lookup)
-  }
-
-  def classify(error: Throwable): Option[application.port.NotificationSendResult] = error match {
-    case rejected: OutboundDestinationRejected =>
-      Some(application.port.NotificationSendResult.PermanentFailure(rejected.code))
-    case unresolved: OutboundDestinationUnresolvable =>
-      Some(application.port.NotificationSendResult.RetryableFailure(unresolved.code))
-    case _ => Option(error.getCause).filter(_ ne error).flatMap(classify)
   }
 }

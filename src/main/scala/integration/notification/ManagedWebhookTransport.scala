@@ -38,7 +38,7 @@ final class ManagedWebhookTransport(
           .timeout(requestTimeout)
           .map(WebhookNotificationSender.classify)
           .handleError(error =>
-            OutboundDestinationPolicy.classify(error).getOrElse(WebhookNotificationSender.classifyError(error)))
+            NotificationDestinationFailures.classify(error).getOrElse(WebhookNotificationSender.classifyError(error)))
     }
 
   private def request(uri: Uri, event: NotificationEvent): Request[IO] =

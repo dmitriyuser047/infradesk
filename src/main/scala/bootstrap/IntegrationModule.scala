@@ -19,13 +19,12 @@ import domain.operation.ResourceOperationCode
 import cats.effect.{IO, Resource}
 import cats.syntax.all._
 import infrastructure.config.{AppConfig, IntegrationsConfig, NotificationConfig}
+import integration.http.{OutboundDestinationPolicy, ValidatingSocketGroup}
 import integration.notification.{
   ManagedWebhookTransport,
   NotificationChannelCipher,
-  OutboundDestinationPolicy,
   SmtpTransport,
   TelegramTransport,
-  ValidatingSocketGroup,
   WebhookNotificationSender
 }
 import fs2.io.net.Network

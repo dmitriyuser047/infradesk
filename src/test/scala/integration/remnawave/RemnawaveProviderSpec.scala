@@ -6,7 +6,7 @@ import bootstrap.IntegrationModule
 import cats.effect.{IO, Ref}
 import cats.effect.unsafe.implicits.global
 import domain.integration.{IntegrationBaseUrl, IntegrationCapability, IntegrationProviderType, RemnawaveCredential}
-import integration.notification.OutboundDestinationPolicy
+import integration.http.OutboundDestinationPolicy
 import integration.ssh.SecretEncryptionConfig
 import integration.secret.IntegrationCredentialCipher
 import infrastructure.config.IntegrationsConfig
@@ -88,6 +88,68 @@ final class RemnawaveProviderSpec extends FunSuite {
         case error: IntegrationError => error.code
       }
     assertEquals(timedOut, Some("INTEGRATION_TIMEOUT"))
+  }
+
+  test("an explicit base URL port must be 1-65535; no port means the scheme's default") {
+    List("https://panel.example.com", "https://panel.example.com:443", "http://panel.example.com:8080",
+      "http://panel.example.com:1", "http://panel.example.com:65535")
+      .foreach(raw => assert(IntegrationBaseUrl.parse(raw).isRight, raw))
+    List("http://panel.example.com:0", "https://panel.example.com:65536", "https://panel.example.com:99999")
+      .foreach(raw => assert(IntegrationBaseUrl.parse(raw).isLeft, raw))
+  }
+
+  /** A stats envelope padded with an extra field to exactly `size` bytes of UTF-8. */
+  private def envelopeOf(size: Int): String = {
+    val head = "{\"response\":{\"uptime\":12,\"users\":{\"totalUsers\":3}},\"padding\":\""
+    val tail = "\"}"
+    head + "x" * (size - head.length - tail.length) + tail
+  }
+
+  // Bounded from outside as well: a probe that never returns fails the test instead of hanging it.
+  private def probeWith(response: Response[IO]): Either[Option[String], Unit] =
+    new RemnawaveClient(Client.fromHttpApp(HttpApp[IO](_ => IO.pure(response))), 5.seconds).probe(base, credential)
+      .timeout(15.seconds).attempt.unsafeRunSync().left.map(error => Option(error).collect { case e: IntegrationError => e.code })
+
+  private val limit = RemnawaveClient.MaxResponseBytes
+
+  private def bounded(response: Response[IO]): Option[Int] =
+    RemnawaveClient.boundedBody(response).timeout(15.seconds).unsafeRunSync().map(_.length)
+
+  test("a response of exactly 64 KiB is accepted") {
+    assertEquals(limit, 65536)
+    assertEquals(bounded(Response[IO](Status.Ok).withEntity(envelopeOf(limit))), Some(limit))
+    assertEquals(probeWith(Response[IO](Status.Ok).withEntity(envelopeOf(limit))), Right(()))
+  }
+
+  test("a response one byte over 64 KiB is an invalid response, with or without Content-Length") {
+    // Announced: refused before the body is read.
+    assertEquals(probeWith(Response[IO](Status.Ok).withEntity(envelopeOf(limit + 1))),
+      Left(Some("INTEGRATION_INVALID_RESPONSE")))
+    // Not announced: refused after at most limit + 1 raw bytes.
+    val bytes = envelopeOf(limit + 1).getBytes("UTF-8")
+    val streamed = Response[IO](Status.Ok).withBodyStream(fs2.Stream.chunk(fs2.Chunk.array(bytes)).covary[IO])
+    assert(streamed.contentLength.isEmpty)
+    assertEquals(bounded(streamed), None)
+    assertEquals(probeWith(streamed), Left(Some("INTEGRATION_INVALID_RESPONSE")))
+  }
+
+  test("an endless body stops being read at the limit instead of filling memory") {
+    // Read through the bounded reader itself: the in-memory test client drains an unread body when
+    // it is released, which an endless one would never finish; the runtime client closes it.
+    val pulled = Ref.of[IO, Long](0).unsafeRunSync()
+    val block = fs2.Chunk.array(Array.fill[Byte](8192)('x'.toByte))
+    val endless = Response[IO](Status.Ok).withBodyStream(
+      fs2.Stream.repeatEval(pulled.update(_ + block.size).as(block)).flatMap(fs2.Stream.chunk))
+    assertEquals(bounded(endless), None)
+    assert(pulled.get.unsafeRunSync() <= limit + 8192L)
+  }
+
+  test("a small valid envelope succeeds; bytes that are not UTF-8 are an invalid response") {
+    assertEquals(probeWith(Response[IO](Status.Ok).withEntity("{\"response\":{\"uptime\":1,\"users\":{\"totalUsers\":0}}}")), Right(()))
+    val invalidUtf8 = "{\"response\":{\"uptime\":1,\"users\":{\"totalUsers\":0}},\"x\":\"".getBytes("UTF-8") ++
+      Array(0xff.toByte, 0xfe.toByte) ++ "\"}".getBytes("UTF-8")
+    assertEquals(probeWith(Response[IO](Status.Ok).withBodyStream(fs2.Stream.emits(invalidUtf8.toSeq))),
+      Left(Some("INTEGRATION_INVALID_RESPONSE")))
   }
 
   test("dedicated cipher encrypts both keys and binds them to id and tenant") {
