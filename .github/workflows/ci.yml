@@ -231,11 +231,15 @@ jobs:
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
           # Build a representative production V29 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V30 through V38 to the restored database before the backend reports itself ready.
+          # V30 through V39 to the restored database before the backend reports itself ready.
           # Remove the additive tables and Stage 21 index; earlier schema stays as in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          drop table integration_resource_binding;
+          drop table integration_inventory_object;
+          drop table integration_sync_session;
+          drop table integration_sync_state;
           drop table integration;
           drop table integration_secret;
           alter table configuration_assignment drop column source_rule_id;
@@ -264,14 +268,14 @@ jobs:
           drop table terminal_session;
           drop table account_security_event;
           drop index ix_incident_resource_opened;
-          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37', '38');
+          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37', '38', '39');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V30 through V38.
+          # recover the marker and let Flyway apply V30 through V39.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -292,7 +296,7 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "38"
+          test "${migrated}" = "39"
           # What V26 built survives the upgrade: the notification_delivery.context column was in the
           # dump and is still there after Flyway ran V29 on the restored database.
           delivery_context="$(docker compose -f compose.prod.yml exec -T postgres \
@@ -392,23 +396,52 @@ jobs:
             --command "select count(*) from pg_indexes where schemaname = current_schema() and indexname in ('ux_notification_delivery_legacy_event', 'ux_notification_delivery_managed_event')")"
           test "${delivery_indexes}" = "2"
           ./scripts/check-production.sh http://127.0.0.1:8081
-      - name: Verify production V37 backup upgrades to V38
+      - name: Verify production V38 backup upgrades to V39
         run: |
-          # Keep real V37 configuration data in the dump, then reverse only V38's additive
-          # changes. The new backend applies V38 after restore before it reports ready.
+          base=http://127.0.0.1:8081
+          org=00000000-0000-0000-0000-000000000020
+          psql_value() {
+            docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk \
+              --tuples-only --no-align --command "$1"
+          }
+          login() {
+            curl --silent --show-error --dump-header - --output /dev/null \
+              --header 'Content-Type: application/json' --header "Origin: ${base}" \
+              --data '{"email":"terminal-ci@example.test","password":"stage20-ci-admin-password"}' \
+              "${base}/api/v1/auth/login" | tr -d '\r' \
+              | awk 'tolower($1) == "set-cookie:" { split($2, part, ";"); print part[1]; exit }'
+          }
+          # Real V38 data: configuration management content and a Remnawave integration created
+          # through the API, so its credential is encrypted exactly as production stores it.
           docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
           insert into configuration_profile (id, organization_id, code, name, latest_revision_number, created_at, updated_at)
           values ('00000000-0000-0000-0000-000000000015', '00000000-0000-0000-0000-000000000020',
-            'v37-preserved', 'V37 preserved', 1, now(), now());
+            'v38-preserved', 'V38 preserved', 1, now(), now());
           insert into configuration_revision (id, organization_id, profile_id, revision_number, template_text, created_by_user_id, created_at)
           values ('00000000-0000-0000-0000-000000000016', '00000000-0000-0000-0000-000000000020',
-            '00000000-0000-0000-0000-000000000015', 1, 'v37-original-content',
+            '00000000-0000-0000-0000-000000000015', 1, 'v38-original-content',
             (select id from user_account where email = 'terminal-ci@example.test'), now());
           SQL
+          cookie="$(login)"
+          test -n "${cookie}"
+          created="$(curl --silent --show-error --fail --header "Cookie: ${cookie}" --header "Origin: ${base}" \
+            --header 'Content-Type: application/json' \
+            --data '{"name":"V38 Remnawave","providerType":"REMNAWAVE","baseUrl":"https://127.0.0.1:9","credentials":{"apiToken":"ci-v38-private-token","caddyApiKey":"ci-v38-caddy-key"}}' \
+            "${base}/api/v1/organizations/${org}/integrations")"
+          integration="$(node -p 'JSON.parse(process.argv[1]).id' "${created}")"
+          test -n "${integration}"
+          if printf '%s' "${created}" | grep -q 'ci-v38-private-token'; then exit 1; fi
+          plaintext="$(psql_value "select count(*) from integration_secret where position(convert_to('ci-v38-private-token', 'UTF8') in ciphertext) > 0")"
+          test "${plaintext}" = "0"
+          secret_before="$(psql_value "select md5(s.nonce || s.ciphertext) from integration i join integration_secret s on s.id = i.secret_id where i.id = '${integration}'")"
+          test -n "${secret_before}"
+          # Reverse only V39's additive changes, so the dump is what a V38 production holds.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
-          drop table integration;
-          drop table integration_secret;
+          drop table integration_resource_binding;
+          drop table integration_inventory_object;
+          drop table integration_sync_session;
+          drop table integration_sync_state;
           alter table audit_event drop constraint ck_audit_event_action;
           alter table audit_event add constraint ck_audit_event_action check (action in (
             'PROJECT_CREATED','ENVIRONMENT_CREATED','CONNECTION_CREATED','CONNECTION_UPDATED',
@@ -428,36 +461,45 @@ jobs:
             'CONFIGURATION_RULE_DISABLED','CONFIGURATION_RULE_ARCHIVED','CONFIGURATION_RULE_REVISION_PROMOTED',
             'CONFIGURATION_RULE_RESOURCE_EXCLUDED','CONFIGURATION_RULE_RESOURCE_INCLUDED',
             'CONFIGURATION_RULE_RECONCILE_REQUESTED',
-            'CONFIGURATION_ASSIGNMENT_ADOPTED','CONFIGURATION_ASSIGNMENT_DETACHED','RESOURCE_LABELS_UPDATED'
+            'CONFIGURATION_ASSIGNMENT_ADOPTED','CONFIGURATION_ASSIGNMENT_DETACHED','RESOURCE_LABELS_UPDATED',
+            'INTEGRATION_CREATED','INTEGRATION_UPDATED','INTEGRATION_ENABLED','INTEGRATION_DISABLED',
+            'INTEGRATION_DELETED','INTEGRATION_TEST_REQUESTED'
           ));
-          alter table audit_event drop constraint ck_audit_event_target_type;
-          alter table audit_event add constraint ck_audit_event_target_type check (target_type in (
-            'PROJECT','ENVIRONMENT','CONNECTION','MONITOR_RULE','RESOURCE','NOTIFICATION_CHANNEL','ACCOUNT',
-            'TERMINAL_SESSION','CONFIGURATION_PROFILE','CONFIGURATION_ASSIGNMENT','CONFIGURATION_DEPLOYMENT',
-            'CONFIGURATION_ROLLOUT','CONFIGURATION_ASSIGNMENT_RULE'
-          ));
-          delete from flyway_schema_history where version = '38';
+          delete from flyway_schema_history where version = '39';
           SQL
-          INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/v37-backups" ./scripts/backup-database.sh
-          dump="$(find "${RUNNER_TEMP}/v37-backups" -name 'infradesk-*.dump' -type f -print -quit)"
+          INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/v38-backups" ./scripts/backup-database.sh
+          dump="$(find "${RUNNER_TEMP}/v38-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
-            --command "insert into configuration_profile (id, organization_id, code, name, latest_revision_number, created_at, updated_at) values ('00000000-0000-0000-0000-000000000017', '00000000-0000-0000-0000-000000000020', 'after-v37-backup', 'After backup', 1, now(), now())"
+            --command "insert into configuration_profile (id, organization_id, code, name, latest_revision_number, created_at, updated_at) values ('00000000-0000-0000-0000-000000000017', '00000000-0000-0000-0000-000000000020', 'after-v38-backup', 'After backup', 1, now(), now())"
           ./scripts/restore-database.sh "${dump}"
           for _ in $(seq 1 60); do
-            if curl --silent --fail http://127.0.0.1:8081/ready > /dev/null; then break; fi
+            if curl --silent --fail "${base}/ready" > /dev/null; then break; fi
             sleep 5
           done
-          curl --silent --fail http://127.0.0.1:8081/ready > /dev/null
-          version="$(docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --tuples-only --no-align --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${version}" = "38"
-          tables="$(docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --tuples-only --no-align --command "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('integration', 'integration_secret')")"
-          test "${tables}" = "2"
-          preserved="$(docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --tuples-only --no-align --command "select count(*) from configuration_profile p join configuration_revision r on r.profile_id = p.id where p.code = 'v37-preserved' and r.template_text = 'v37-original-content'")"
-          test "${preserved}" = "1"
-          after="$(docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --tuples-only --no-align --command "select count(*) from configuration_profile where code = 'after-v37-backup'")"
-          test "${after}" = "0"
-          ./scripts/check-production.sh http://127.0.0.1:8081
+          curl --silent --fail "${base}/ready" > /dev/null
+          test "$(psql_value "select version from flyway_schema_history where success order by installed_rank desc limit 1")" = "39"
+          test "$(psql_value "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('integration', 'integration_secret', 'integration_sync_session', 'integration_inventory_object', 'integration_resource_binding', 'integration_sync_state')")" = "6"
+          test "$(psql_value "select count(*) from configuration_profile p join configuration_revision r on r.profile_id = p.id where p.code = 'v38-preserved' and r.template_text = 'v38-original-content'")" = "1"
+          test "$(psql_value "select count(*) from configuration_profile where code = 'after-v38-backup'")" = "0"
+          # The integration, its encrypted credential and a backfilled schedule survive the upgrade.
+          test "$(psql_value "select md5(s.nonce || s.ciphertext) from integration i join integration_secret s on s.id = i.secret_id where i.id = '${integration}' and i.name = 'V38 Remnawave' and i.caddy_api_key_configured")" = "${secret_before}"
+          test "$(psql_value "select count(*) from integration_sync_state where integration_id = '${integration}'")" = "1"
+          cookie="$(login)"
+          test -n "${cookie}"
+          detail="$(curl --silent --show-error --fail --header "Cookie: ${cookie}" \
+            "${base}/api/v1/organizations/${org}/integrations/${integration}")"
+          test "$(node -p 'const v = JSON.parse(process.argv[1]); v.credential.apiTokenConfigured && v.credential.caddyApiKeyConfigured && v.overview.inventory.nodes.active === 0' "${detail}")" = "true"
+          # The credential still decrypts with the deployment key: the request is refused only at
+          # the private destination, after decryption, never as an invalid credential.
+          tested="$(curl --silent --show-error --header "Cookie: ${cookie}" --header "Origin: ${base}" --request POST \
+            "${base}/api/v1/organizations/${org}/integrations/${integration}/test")"
+          printf '%s' "${tested}" | grep -q '"code":"INTEGRATION_DESTINATION_NOT_ALLOWED"'
+          synced="$(curl --silent --show-error --fail --header "Cookie: ${cookie}" --header "Origin: ${base}" --request POST \
+            "${base}/api/v1/organizations/${org}/integrations/${integration}/sync")"
+          test "$(node -p 'const v = JSON.parse(process.argv[1]); v.status + ":" + v.errorCode' "${synced}")" = "FAILED:INTEGRATION_DESTINATION_NOT_ALLOWED"
+          if printf '%s%s%s' "${detail}" "${tested}" "${synced}" | grep -q 'ci-v38-private-token\|ci-v38-caddy-key'; then exit 1; fi
+          ./scripts/check-production.sh "${base}"
       - name: Separate liveness from readiness while the database is down
         run: |
           docker compose -f compose.prod.yml stop postgres

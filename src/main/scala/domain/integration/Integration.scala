@@ -27,7 +27,9 @@ object IntegrationCapability {
 
 /** Non-secret URL. Parsed and normalized when written, then parsed again before any request. */
 final case class IntegrationBaseUrl private (value: String) {
-  def statsEndpoint: URI = URI.create(value + "/").resolve("api/system/stats")
+  def statsEndpoint: URI = endpoint("api/system/stats")
+  /** A fixed API path below the base URL; never built from provider or user input. */
+  def endpoint(path: String): URI = URI.create(value + "/").resolve(path)
 }
 object IntegrationBaseUrl {
   def parse(input: String): Either[IllegalArgumentException, IntegrationBaseUrl] = {

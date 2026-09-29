@@ -14,7 +14,29 @@ import scala.concurrent.duration._
 import scala.util.Try
 
 final case class HttpConfig(host: Host, port: Port)
-final case class IntegrationsConfig(requestTimeout: FiniteDuration, allowPrivateDestinations: Boolean)
+/** Automatic observation of enabled integrations. A claim must outlive the attempt it covers. */
+final case class IntegrationSyncConfig(
+  enabled: Boolean = true,
+  pollInterval: FiniteDuration = 5.seconds,
+  interval: FiniteDuration = 60.seconds,
+  batchSize: Int = 20,
+  maxConcurrency: Int = 3,
+  claimLease: FiniteDuration = 90.seconds,
+  attemptTimeout: FiniteDuration = 30.seconds
+) {
+  require(maxConcurrency > 0 && batchSize > 0, "Integration sync concurrency and batch size must be positive")
+  require(interval > Duration.Zero && pollInterval > Duration.Zero, "Integration sync intervals must be positive")
+  require(claimLease > attemptTimeout, "Integration sync claim lease must exceed the attempt timeout")
+}
+final case class IntegrationsConfig(
+  requestTimeout: FiniteDuration,
+  allowPrivateDestinations: Boolean,
+  sync: IntegrationSyncConfig = IntegrationSyncConfig(),
+  inventoryMaxResponseBytes: Int = 8 * 1024 * 1024,
+  inventoryMaxObjects: Int = 10000
+) {
+  require(inventoryMaxResponseBytes > 0 && inventoryMaxObjects > 0, "Inventory limits must be positive")
+}
 final case class SchedulerConfig(
   enabled: Boolean,
   pollInterval: FiniteDuration,
@@ -89,6 +111,10 @@ object AppConfig {
       notification <- parseNotification(values)
       integrationTimeout <- bounded(values, "INFRADESK_INTEGRATIONS_REQUEST_TIMEOUT_SECONDS", 10, 1, 120)
       integrationAllowPrivate <- parseBoolean(values, "INFRADESK_INTEGRATIONS_ALLOW_PRIVATE_DESTINATIONS")
+      integrationSync <- parseIntegrationSync(values)
+      inventoryMaxBytes <- bounded(values, "INFRADESK_INTEGRATIONS_INVENTORY_MAX_RESPONSE_BYTES", 8 * 1024 * 1024,
+        64 * 1024, 64 * 1024 * 1024)
+      inventoryMaxObjects <- bounded(values, "INFRADESK_INTEGRATIONS_INVENTORY_MAX_OBJECTS", 10000, 1, 100000)
       terminal <- TerminalConfig.fromEnvironment(values)
       configurationDeployment <- parseConfigurationDeployment(values)
       ruleEnabled <- parseBoolean(values, "INFRADESK_CONFIGURATION_RULES_ENABLED", default = true)
@@ -96,7 +122,21 @@ object AppConfig {
     } yield AppConfig(database, http, auth, loginRateLimit, SecurityEventSettings(securityEvents.seconds), bootstrap, secretEncryption, scheduler,
       notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment,
       ConfigurationRuleSettings(enabled = ruleEnabled, reconcileInterval = ruleInterval.seconds),
-      IntegrationsConfig(integrationTimeout.seconds, integrationAllowPrivate))
+      IntegrationsConfig(integrationTimeout.seconds, integrationAllowPrivate, integrationSync, inventoryMaxBytes,
+        inventoryMaxObjects))
+
+  private def parseIntegrationSync(values: Map[String, String]): Either[IllegalArgumentException, IntegrationSyncConfig] =
+    for {
+      enabled <- parseBoolean(values, "INFRADESK_INTEGRATIONS_SYNC_ENABLED", default = true)
+      poll <- bounded(values, "INFRADESK_INTEGRATIONS_SYNC_POLL_INTERVAL_SECONDS", 5, 1, 3600)
+      interval <- bounded(values, "INFRADESK_INTEGRATIONS_SYNC_INTERVAL_SECONDS", 60, 10, 86400)
+      batch <- bounded(values, "INFRADESK_INTEGRATIONS_SYNC_BATCH_SIZE", 20, 1, 500)
+      concurrency <- bounded(values, "INFRADESK_INTEGRATIONS_SYNC_MAX_CONCURRENCY", 3, 1, 32)
+      lease <- bounded(values, "INFRADESK_INTEGRATIONS_SYNC_CLAIM_LEASE_SECONDS", 90, 10, 3600)
+      attempt <- bounded(values, "INFRADESK_INTEGRATIONS_SYNC_ATTEMPT_TIMEOUT_SECONDS", 30, 5, 600)
+      _ <- Either.cond(lease > attempt, (), new IllegalArgumentException(
+        "Invalid INFRADESK_INTEGRATIONS_SYNC_CLAIM_LEASE_SECONDS: must exceed INFRADESK_INTEGRATIONS_SYNC_ATTEMPT_TIMEOUT_SECONDS"))
+    } yield IntegrationSyncConfig(enabled, poll.seconds, interval.seconds, batch, concurrency, lease.seconds, attempt.seconds)
 
   private def parseLoginRateLimit(
     values: Map[String, String]

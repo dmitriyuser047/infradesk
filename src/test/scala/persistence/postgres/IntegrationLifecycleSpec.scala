@@ -18,7 +18,7 @@ import org.typelevel.doobie.postgres.implicits._
 import java.util.{Base64, UUID}
 
 final class IntegrationLifecycleSpec extends FunSuite {
-  test("V38 integration lifecycle is tenant-scoped, encrypted, idempotent and audited") {
+  test("integration lifecycle is tenant-scoped, encrypted, idempotent and audited") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"))
     val org = UUID.randomUUID(); val foreign = UUID.randomUUID(); val user = UUID.randomUUID()
     val token = "stage24a-database-private-token"
@@ -31,7 +31,7 @@ final class IntegrationLifecycleSpec extends FunSuite {
       val audit = new AuditRecorder[ConnectionIO](new PostgresAuditEventRepository,
         new ConnectionIOIdGenerator, new ConnectionIOTimeProvider)
       val management = new IntegrationManagement[ConnectionIO](repository, secrets,
-        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, cipher, audit)
+        new ConnectionIOIdGenerator, new ConnectionIOTimeProvider, cipher, audit, new PostgresIntegrationSyncStateRepository)
       val actor = ActorContext(user, org)
       val setup: ConnectionIO[Unit] = for {
         _ <- sql"insert into organization (id, code, name) values ($org, ${org.toString}, 'Integrations')".update.run
@@ -75,7 +75,7 @@ final class IntegrationLifecycleSpec extends FunSuite {
         noSecret <- run.run(secrets.find(org, replaced.secretId))
         events <- run.run(sql"select action from audit_event where organization_id = $org".query[String].to[List])
       } yield {
-        assertEquals(schema, "38")
+        assertEquals(schema, "39")
         assert(!first.enabled)
         assertEquals(first.name, "Main")
         assertEquals(list.map(_.id), List(first.id))

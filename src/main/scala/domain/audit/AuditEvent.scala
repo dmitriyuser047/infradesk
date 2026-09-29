@@ -37,6 +37,9 @@ object AuditAction {
   case object IntegrationDisabled extends AuditAction { override val code: String = "INTEGRATION_DISABLED" }
   case object IntegrationDeleted extends AuditAction { override val code: String = "INTEGRATION_DELETED" }
   case object IntegrationTestRequested extends AuditAction { override val code: String = "INTEGRATION_TEST_REQUESTED" }
+  case object IntegrationSyncRequested extends AuditAction { override val code: String = "INTEGRATION_SYNC_REQUESTED" }
+  case object IntegrationResourceBound extends AuditAction { override val code: String = "INTEGRATION_RESOURCE_BOUND" }
+  case object IntegrationResourceUnbound extends AuditAction { override val code: String = "INTEGRATION_RESOURCE_UNBOUND" }
 
   /** A user changed their own password. The journal records that it happened, never the secret. */
   case object AccountPasswordChanged extends AuditAction { override val code: String = "ACCOUNT_PASSWORD_CHANGED" }
@@ -102,6 +105,9 @@ object AuditAction {
     IntegrationDisabled,
     IntegrationDeleted,
     IntegrationTestRequested,
+    IntegrationSyncRequested,
+    IntegrationResourceBound,
+    IntegrationResourceUnbound,
     AccountPasswordChanged,
     AccountProfileUpdated,
     AccountSessionRevoked,

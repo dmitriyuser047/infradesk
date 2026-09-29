@@ -28,6 +28,7 @@ interface Answers {
   operations?: string[]
   executions?: unknown[]
   history?: HistoryEventResponse[]
+  bindings?: unknown[]
 }
 
 /** Answers each read the page may make and records it; the shell's own data is seeded. */
@@ -41,6 +42,7 @@ function renderPage(answers: Answers, options: { locale?: Locale; cachedList?: R
       : path.endsWith('/operations') ? { operations: answers.operations ?? [], unavailableReason: null }
       : path.includes('/operation-executions') ? answers.executions ?? []
         : path.includes('/history-events') ? answers.history ?? []
+          : path.includes('/integration-bindings') ? { items: answers.bindings ?? [] }
           : path.includes('/monitor-rules') ? [] : path.includes('/metrics') ? [] : answers.resource
     if ((body as unknown) === 'fail') return Promise.resolve(new Response(JSON.stringify({ code: 'INTERNAL_ERROR', message: 'x' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }))
@@ -70,6 +72,23 @@ const tabNames = () => screen.getAllByRole('tab').map(tab => tab.textContent)
 
 describe('resource detail page', () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+  it('shows the Remnawave node bound to a NODE read-only, and asks nothing for other resource types', async () => {
+    const requests = renderPage({ resource: server, bindings: [{
+      integration: { id: 'integration', name: 'Main Remnawave', providerType: 'REMNAWAVE' },
+      object: { id: 'obj', objectType: 'NODE', externalId: 'uuid', displayName: 'Frankfurt', active: true,
+        firstSeenAt: '2026-09-29T10:00:00Z', lastSeenAt: '2026-09-29T10:00:00Z',
+        summary: { address: '203.0.113.10', port: 2222, state: 'CONNECTED', xrayVersion: '25.9.11', usersOnline: 4 } } }] })
+    expect(await screen.findByText('Main Remnawave')).toBeTruthy()
+    expect(screen.getByText('Frankfurt')).toBeTruthy()
+    expect(screen.getByText('203.0.113.10:2222')).toBeTruthy()
+    expect(screen.getByText('Observed read-only from Remnawave.')).toBeTruthy()
+    expect(requests).toContain('/resources/server/integration-bindings')
+    cleanup()
+    const containerRequests = renderPage({ resource: container })
+    await screen.findByRole('tab', { name: 'Overview' })
+    expect(containerRequests.some(path => path.includes('integration-bindings'))).toBe(false)
+  })
 
   it('makes one read each for the resource, its place in the infrastructure and its operations', async () => {
     const requests = renderPage({ resource: container, operations: ['CONTAINER_STOP'] })

@@ -1,7 +1,8 @@
 package ru.bitec.app.ops
 package application.integration
 
-import domain.integration.{IntegrationBaseUrl, IntegrationCapability, IntegrationCredential, IntegrationProviderType}
+import domain.integration.{IntegrationBaseUrl, IntegrationCapability, IntegrationCredential, IntegrationObservation,
+  IntegrationProviderType}
 import java.util.UUID
 
 final case class IntegrationRuntimeContext(id: UUID, organizationId: UUID,
@@ -13,6 +14,10 @@ trait IntegrationProvider[F[_]] {
   def displayName: String
   def capabilities: Set[IntegrationCapability]
   def testConnection(context: IntegrationRuntimeContext): F[IntegrationTestResult]
+  /** Reads one complete, sanitized snapshot of the provider's inventory. Read-only: no write request
+    * ever reaches the provider, and nothing here touches the database.
+    */
+  def observe(context: IntegrationRuntimeContext): F[IntegrationObservation]
 }
 
 final class IntegrationProviderRegistry[F[_]](providers: List[IntegrationProvider[F]]) {

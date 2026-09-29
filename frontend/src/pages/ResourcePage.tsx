@@ -38,6 +38,8 @@ import type { ResourceContextResponse } from '../types/infrastructure'
 import { MetricCode, type MetricObservationResponse } from '../types/metric'
 import type { ResourceResponse } from '../types/resource'
 import { ResourceOperationsPanel } from '../components/resources/ResourceOperationsPanel'
+import { ResourceIntegrationSection } from '../components/integrations/ResourceIntegrationSection'
+import { supportsIntegrationBinding } from '../components/integrations/integrationPresentation'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
 const Tabs = ['overview', 'monitoring', 'incidents', 'activity', 'configurations', 'operations'] as const
@@ -127,6 +129,9 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
     <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
       {active === 'overview' ? <>
         <Overview resource={resource} />
+        {/* A manual Remnawave binding, for those who manage integrations; others never request it. */}
+        {supportsIntegrationBinding(resource.resourceTypeCode) && permissions.can('manageIntegrations')
+          ? <ResourceIntegrationSection organizationId={organizationId} resourceId={resourceId} /> : null}
         <ResourceChildren organizationId={organizationId} query={contextQuery} linkQuery={linkQuery} />
       </> : null}
       {active === 'monitoring' ? <>

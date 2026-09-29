@@ -47,7 +47,8 @@ import application.context.{
   ListEnvironmentResourceSources
 }
 import application.incident.{GetIncidentDetail, ListConnectionIncidents, ListIncidents, ListResourceIncidents}
-import application.integration.{IntegrationManagement, TestIntegration}
+import application.integration.{IntegrationBindings, IntegrationManagement, IntegrationSync,
+  IntegrationSyncScheduler, IntegrationSyncSchedulerSettings, IntegrationSyncTransactions, TestIntegration}
 import application.overview.GetOperationsOverview
 import application.monitor.{CreateMonitorRule, EvaluateMonitorRules, ListMonitorRules, UpdateMonitorRule}
 import application.notification.{
@@ -148,6 +149,9 @@ final case class ApplicationComponents(
   integrationManagement: IntegrationManagement[ConnectionIO],
   testIntegration: TestIntegration[ConnectionIO],
   integrationProviderRegistry: application.integration.IntegrationProviderRegistry[IO],
+  integrationSync: IntegrationSync[ConnectionIO],
+  integrationBindings: IntegrationBindings[ConnectionIO],
+  integrationSyncScheduler: IntegrationSyncScheduler[ConnectionIO],
   testNotificationChannel: TestNotificationChannel,
   listHistoryEvents: ListHistoryEvents[ConnectionIO],
   getOperationsOverview: GetOperationsOverview[ConnectionIO],
@@ -335,7 +339,15 @@ object ApplicationModule {
 
     val integrationManagement = new IntegrationManagement[ConnectionIO](
       integrationRepository, integrationSecretRepository, transactionIdGenerator,
-      transactionTimeProvider, integrations.integrationCredentialCipher, auditRecorder)
+      transactionTimeProvider, integrations.integrationCredentialCipher, auditRecorder,
+      integrationSyncStateRepository)
+    val integrationSyncSettings = config.integrations.sync
+    val integrationSync = new IntegrationSync[ConnectionIO](
+      new IntegrationSyncTransactions[ConnectionIO](integrationRepository, integrationSecretRepository,
+        integrationSyncSessionRepository, integrationInventoryRepository, transactionIdGenerator,
+        transactionTimeProvider, auditRecorder),
+      transactionRunner, integrations.integrationCredentialCipher, integrations.integrationProviderRegistry,
+      loggers.integration, integrationSyncSettings.attemptTimeout, config.integrations.inventoryMaxObjects)
 
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
@@ -542,6 +554,16 @@ object ApplicationModule {
       testIntegration = new TestIntegration[ConnectionIO](integrationManagement, transactionRunner,
         integrations.integrationCredentialCipher, integrations.integrationProviderRegistry),
       integrationProviderRegistry = integrations.integrationProviderRegistry,
+      integrationSync = integrationSync,
+      integrationBindings = new IntegrationBindings[ConnectionIO](integrationRepository,
+        integrationInventoryRepository, integrationBindingRepository, transactionIdGenerator,
+        transactionTimeProvider, auditRecorder),
+      // Its own claims, lease and instance identity: never the connection scheduler's.
+      integrationSyncScheduler = new IntegrationSyncScheduler[ConnectionIO](integrationSync,
+        integrationSyncStateRepository, transactionRunner, timeProvider, loggers.integration,
+        IntegrationSyncSchedulerSettings(integrationSyncSettings.pollInterval, integrationSyncSettings.interval,
+          integrationSyncSettings.batchSize, integrationSyncSettings.maxConcurrency, integrationSyncSettings.claimLease),
+        UUID.randomUUID()),
       testNotificationChannel = new TestNotificationChannel(managedNotificationSender),
       listHistoryEvents = new ListHistoryEvents[ConnectionIO](historyEventQuery),
       getOperationsOverview = new GetOperationsOverview[ConnectionIO](

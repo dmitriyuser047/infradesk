@@ -100,6 +100,33 @@ final class AppConfigSpec extends FunSuite {
     assert(AppConfig.fromEnvironment(minimal + ("INFRADESK_INTEGRATIONS_REQUEST_TIMEOUT_SECONDS" -> "0")).isLeft)
   }
 
+  test("integration synchronization has bounded defaults and rejects unsafe values with their keys") {
+    val defaults = AppConfig.fromEnvironment(minimal).toOption.get.integrations
+    assertEquals(defaults.sync, IntegrationSyncConfig(enabled = true, 5.seconds, 60.seconds, 20, 3, 90.seconds, 30.seconds))
+    assertEquals(defaults.inventoryMaxResponseBytes, 8388608)
+    assertEquals(defaults.inventoryMaxObjects, 10000)
+    val configured = AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_INTEGRATIONS_SYNC_ENABLED" -> "false",
+      "INFRADESK_INTEGRATIONS_SYNC_POLL_INTERVAL_SECONDS" -> "2",
+      "INFRADESK_INTEGRATIONS_SYNC_INTERVAL_SECONDS" -> "120",
+      "INFRADESK_INTEGRATIONS_SYNC_BATCH_SIZE" -> "5",
+      "INFRADESK_INTEGRATIONS_SYNC_MAX_CONCURRENCY" -> "2",
+      "INFRADESK_INTEGRATIONS_SYNC_CLAIM_LEASE_SECONDS" -> "60",
+      "INFRADESK_INTEGRATIONS_SYNC_ATTEMPT_TIMEOUT_SECONDS" -> "20",
+      "INFRADESK_INTEGRATIONS_INVENTORY_MAX_RESPONSE_BYTES" -> "1048576",
+      "INFRADESK_INTEGRATIONS_INVENTORY_MAX_OBJECTS" -> "500"
+    )).toOption.get.integrations
+    assertEquals(configured.sync, IntegrationSyncConfig(enabled = false, 2.seconds, 120.seconds, 5, 2, 60.seconds, 20.seconds))
+    assertEquals((configured.inventoryMaxResponseBytes, configured.inventoryMaxObjects), (1048576, 500))
+    List("INFRADESK_INTEGRATIONS_SYNC_MAX_CONCURRENCY" -> "0", "INFRADESK_INTEGRATIONS_SYNC_INTERVAL_SECONDS" -> "0",
+      "INFRADESK_INTEGRATIONS_SYNC_BATCH_SIZE" -> "0", "INFRADESK_INTEGRATIONS_INVENTORY_MAX_RESPONSE_BYTES" -> "999999999",
+      "INFRADESK_INTEGRATIONS_INVENTORY_MAX_OBJECTS" -> "0", "INFRADESK_INTEGRATIONS_SYNC_ENABLED" -> "maybe",
+      "INFRADESK_INTEGRATIONS_SYNC_CLAIM_LEASE_SECONDS" -> "30").foreach { case (key, value) =>
+      val result = AppConfig.fromEnvironment(minimal + (key -> value))
+      assert(result.left.exists(_.getMessage.contains(key)), s"$key=$value")
+    }
+  }
+
   test("a webhook URL that is not an absolute http or https endpoint fails startup") {
     List(
       "ftp://hooks.example.test/infradesk",

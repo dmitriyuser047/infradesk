@@ -27,7 +27,7 @@ export function IntegrationsPage() {
 }
 
 function IntegrationList({ organizationId }: { organizationId: string }) {
-  const i18n = useI18n(); const t = i18n.t.integrations
+  const i18n = useI18n(); const t = i18n.t.integrations; const inventory = i18n.t.integrationInventory
   const location = useLocation()
   const permissions = useOrganizationPermissions(organizationId)
   const canManage = permissions.can('manageIntegrations')
@@ -51,15 +51,21 @@ function IntegrationList({ organizationId }: { organizationId: string }) {
       action={<Link className="primary-button" to={createPath}>{t.add}</Link>} /> : null}
     {query.data?.length ? <WorkspaceSection title={t.section}>
       <div className="notification-list">{query.data.map(item => <article className="notification-card" key={item.id}>
-        <div className="notification-card-heading"><div><h3>{item.name}</h3><span className="notification-type">Remnawave</span></div>
+        <div className="notification-card-heading"><div><h3><Link to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}${location.search}`}>
+          {item.name}</Link></h3><span className="notification-type">Remnawave</span></div>
           <span className={`status-indicator ${item.enabled ? 'status-success' : 'status-muted'}`}>{item.enabled ? t.enabled : t.disabled}</span></div>
         <dl className="notification-properties">
           <div><dt>{t.provider}</dt><dd>Remnawave</dd></div>
           <div><dt>{t.baseUrl}</dt><dd className="break-anywhere">{item.baseUrl}</dd></div>
           <div><dt>{t.credential}</dt><dd>{item.credential.apiTokenConfigured ? t.configured : t.missing}
             {item.credential.caddyApiKeyConfigured ? ` · ${t.caddyConfigured}` : ''}</dd></div>
+          {item.overview ? <div><dt>{inventory.tabs.overview}</dt><dd>{item.overview.lastSync
+            ? inventory.listSummary(item.overview.inventory.nodes.active, i18n.format.relative(item.overview.lastSync.startedAt))
+              + ` · ${inventory.status[item.overview.lastSync.status] ?? item.overview.lastSync.status}`
+            : inventory.never}</dd></div> : null}
         </dl>
         <div className="notification-actions">
+          <Link className="secondary-button" to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}${location.search}`}>{inventory.open}</Link>
           <Link className="secondary-button" to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}/edit${location.search}`}>{t.edit}</Link>
           <button className="secondary-button" disabled={lifecycle.isPending} onClick={() => lifecycle.mutate({ id: item.id, enabled: !item.enabled })}>
             {item.enabled ? t.disable : t.enable}</button>

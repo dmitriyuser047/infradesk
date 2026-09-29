@@ -20,10 +20,14 @@ export function useIntegrationProviders(org: string, enabled: boolean) {
     queryFn: () => requestJson<IntegrationProviderResponse[]>(`/api/v1/organizations/${encodeURIComponent(org)}/integration-providers`), enabled })
 }
 
+/** A write response has no overview; the one already known stays until the next read. */
 function updateCache(client: ReturnType<typeof useQueryClient>, org: string, value: IntegrationResponse) {
-  client.setQueryData(itemKey(org, value.id), value)
+  const merged = (old: IntegrationResponse | undefined) => ({ ...value, overview: value.overview ?? old?.overview })
+  client.setQueryData<IntegrationResponse>(itemKey(org, value.id), old => merged(old))
   client.setQueryData<IntegrationResponse[]>(listKey(org), old => old?.some(item => item.id === value.id)
-    ? old.map(item => item.id === value.id ? value : item) : old ? [...old, value] : old)
+    ? old.map(item => item.id === value.id ? merged(item) : item) : old ? [...old, value] : old)
+  // Enabling or disabling moves the next automatic run.
+  void client.invalidateQueries({ queryKey: ['integration-inventory', org, value.id] })
 }
 
 /** The token stays in a ref only until the request settles, never in mutation variables/cache. */

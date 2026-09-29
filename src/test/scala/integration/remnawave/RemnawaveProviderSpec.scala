@@ -34,11 +34,15 @@ final class RemnawaveProviderSpec extends FunSuite {
     assert(!RemnawaveCredential("bad\nheader", None).valid)
   }
 
-  test("registry rejects duplicate providers and advertises only implemented capability") {
+  test("registry rejects duplicate providers and advertises only read-only capabilities") {
     val provider = new RemnawaveProvider(new RemnawaveClient(Client.fromHttpApp(HttpApp.notFound[IO]), 1.second))
     val registry = new IntegrationProviderRegistry[IO](List(provider))
     assertEquals(registry.find(IntegrationProviderType.Remnawave), Some(provider))
-    assertEquals(provider.capabilities, Set[IntegrationCapability](IntegrationCapability.ConnectivityTest))
+    assertEquals(provider.capabilities, Set[IntegrationCapability](IntegrationCapability.ConnectivityTest,
+      IntegrationCapability.NodeDiscovery, IntegrationCapability.HostDiscovery,
+      IntegrationCapability.ConfigProfileDiscovery, IntegrationCapability.MetricsRead))
+    assert(!provider.capabilities.contains(IntegrationCapability.SafeActions))
+    assert(!provider.capabilities.contains(IntegrationCapability.ConfigProfileManagement))
     intercept[IllegalArgumentException](new IntegrationProviderRegistry[IO](List(provider, provider)))
   }
 

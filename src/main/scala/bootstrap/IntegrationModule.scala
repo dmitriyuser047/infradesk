@@ -121,14 +121,15 @@ object IntegrationModule {
     ) }
   }
 
-  /** One validated HTTP client for all product integration tests in this runtime. */
+  /** One validated HTTP client for every product integration call in this runtime. */
   def integrationProviders(config: IntegrationsConfig): Resource[IO, IntegrationProviderRegistry[IO]] = {
     val policy = OutboundDestinationPolicy.resolving(config.allowPrivateDestinations,
       config.requestTimeout)
     EmberClientBuilder.default[IO].withTimeout(config.requestTimeout)
       .withSocketGroup(new ValidatingSocketGroup(Network[IO], policy)).build.map { client =>
         new IntegrationProviderRegistry[IO](List(new RemnawaveProvider(
-          new RemnawaveClient(client, config.requestTimeout))))
+          new RemnawaveClient(client, config.requestTimeout, config.inventoryMaxResponseBytes,
+            config.inventoryMaxObjects))))
       }
   }
 

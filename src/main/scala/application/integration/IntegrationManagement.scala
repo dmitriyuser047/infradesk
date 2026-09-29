@@ -4,7 +4,7 @@ package application.integration
 import application.audit.AuditRecorder
 import application.auth.ActorContext
 import application.port.{IdGenerator, IntegrationCryptography, IntegrationRepository, IntegrationSecret,
-  IntegrationSecretRepository, TimeProvider}
+  IntegrationSecretRepository, IntegrationSyncStateRepository, TimeProvider}
 import cats.MonadThrow
 import cats.syntax.all._
 import domain.audit.{AuditAction, AuditTargetType}
@@ -23,7 +23,7 @@ final case class UpdateIntegrationCommand(name: String, baseUrl: String,
 final class IntegrationManagement[Tx[_]: MonadThrow](
   integrations: IntegrationRepository[Tx], secrets: IntegrationSecretRepository[Tx],
   ids: IdGenerator[Tx], time: TimeProvider[Tx], cipher: IntegrationCryptography,
-  audit: AuditRecorder[Tx]
+  audit: AuditRecorder[Tx], syncState: IntegrationSyncStateRepository[Tx]
 ) {
   def list(organizationId: UUID): Tx[List[Integration]] = integrations.listByOrganization(organizationId)
   def get(organizationId: UUID, id: UUID): Tx[Option[Integration]] = integrations.findById(organizationId, id)
@@ -40,6 +40,8 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
       enabled = false, secretId, command.credential.caddyApiKey.nonEmpty, now, now)
     _ <- secrets.save(cipher.encrypt(secretId, actor.organizationId, command.credential))
     _ <- integrations.save(integration)
+    // Every integration has a schedule; it is only claimed while the integration is enabled.
+    _ <- syncState.ensure(actor.organizationId, id, now)
     _ <- audit.record(actor, AuditAction.IntegrationCreated, AuditTargetType.Integration, Some(id))
   } yield integration
 
@@ -68,6 +70,8 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
         now <- time.now
         next = stored.copy(enabled = enabled, updatedAt = now)
         _ <- integrations.save(next)
+        // Enabling turns automatic observation on: the first run is due right away.
+        _ <- if (enabled) syncState.scheduleAt(actor.organizationId, id, now) else ().pure[Tx]
         action = if (enabled) AuditAction.IntegrationEnabled else AuditAction.IntegrationDisabled
         _ <- audit.record(actor, action, AuditTargetType.Integration, Some(id))
       } yield next

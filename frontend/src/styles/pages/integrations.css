@@ -1,0 +1,14 @@
+/* Integration detail: observed Remnawave inventory. */
+.integration-filter-bar { margin-bottom: var(--space-3); }
+.integration-filter-bar .compact-field { min-width: 160px; margin: 0; }
+.integration-grid td { white-space: nowrap; }
+.integration-grid td:first-child, .integration-grid td:nth-child(7) { white-space: normal; }
+.integration-row-actions { display: flex; gap: var(--space-2); align-items: center; }
+.integration-inline { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.integration-pager { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; justify-content: flex-end; margin-top: var(--space-3); }
+.integration-bind-dialog { width: min(100%, 560px); }
+.integration-bind-dialog .dialog-body { display: grid; gap: var(--space-3); }
+.integration-candidates { display: grid; gap: var(--space-1); max-height: 320px; overflow-y: auto; margin: 0; padding: 0; border: 0; }
+.integration-candidate { display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-2); border-radius: var(--radius-md); cursor: pointer; }
+.integration-candidate:hover { background: var(--surface-muted); }
+.integration-overview-line { margin: 0; color: var(--text-secondary); }
