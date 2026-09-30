@@ -159,6 +159,8 @@ final case class ApplicationComponents(
   integrationDesiredStateWorker: IntegrationDesiredStateWorker[ConnectionIO],
   integrationConfigProfiles: application.integration.IntegrationConfigProfiles[ConnectionIO],
   integrationConfigDeploymentWorker: application.integration.IntegrationConfigDeploymentWorker[ConnectionIO],
+  integrationConfigRollouts: application.integration.IntegrationConfigRollouts[ConnectionIO],
+  integrationConfigRolloutWorker: application.integration.IntegrationConfigRolloutWorker[ConnectionIO],
   integrationBindings: IntegrationBindings[ConnectionIO],
   integrationSyncScheduler: IntegrationSyncScheduler[ConnectionIO],
   testNotificationChannel: TestNotificationChannel,
@@ -349,6 +351,7 @@ object ApplicationModule {
     val integrationConfigRepository = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigProfileRepository(
       integration.secret.RemnawaveConfigCipher.fromConfig(config.secretEncryption))
     val integrationConfigDeployments = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigDeploymentRepository
+    val integrationConfigRollouts = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigRolloutRepository
     val integrationManagement = new IntegrationManagement[ConnectionIO](
       integrationRepository, integrationSecretRepository, transactionIdGenerator,
       transactionTimeProvider, integrations.integrationCredentialCipher, auditRecorder,
@@ -377,7 +380,7 @@ object ApplicationModule {
       integrationRepository, integrationInventoryRepository, integrationSecretRepository,
       integrations.integrationCredentialCipher, integrations.integrationProviderRegistry,
       configurationProfileRepository, configurationProfileQuery, integrationConfigRepository,
-      integrationConfigDeployments, transactionIdGenerator, transactionTimeProvider, auditRecorder,
+      integrationConfigDeployments, integrationConfigRollouts, transactionIdGenerator, transactionTimeProvider, auditRecorder,
       transactionRunner, integrationSyncStateRepository, loggers.integration)
     val integrationConfigDeploymentWorker = new application.integration.IntegrationConfigDeploymentWorker[ConnectionIO](
       integrationConfigDeployments, integrationConfigRepository, integrationRepository,
@@ -385,6 +388,17 @@ object ApplicationModule {
       integrations.integrationProviderRegistry, integrationSyncStateRepository, transactionRunner,
       timeProvider, loggers.integration, actionSettings.pollInterval, actionSettings.batchSize,
       actionSettings.maxConcurrency, config.integrations.requestTimeout, UUID.randomUUID())
+    val integrationConfigRolloutService = new application.integration.IntegrationConfigRollouts[ConnectionIO](
+      integrationRepository, integrationInventoryRepository, configurationProfileQuery,
+      integrationConfigRepository, integrationConfigDeployments, integrationConfigRollouts, transactionIdGenerator,
+      transactionTimeProvider, auditRecorder, integrationSyncStateRepository, transactionRunner,
+      config.integrations.configRolloutsOperational)
+    val rolloutSettings = config.integrations.configRollouts
+    val integrationConfigRolloutWorker = new application.integration.IntegrationConfigRolloutWorker[ConnectionIO](
+      integrationConfigRollouts, integrationRepository, integrationSyncStateRepository,
+      transactionRunner, timeProvider, loggers.integration, rolloutSettings.pollInterval,
+      rolloutSettings.batchSize, rolloutSettings.maxConcurrency, rolloutSettings.claimLease,
+      rolloutSettings.verifyTimeout, UUID.randomUUID())
 
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
@@ -607,6 +621,8 @@ object ApplicationModule {
           idleInterval = config.integrations.sync.interval * 5), UUID.randomUUID()),
       integrationConfigProfiles = integrationConfigProfiles,
       integrationConfigDeploymentWorker = integrationConfigDeploymentWorker,
+      integrationConfigRollouts = integrationConfigRolloutService,
+      integrationConfigRolloutWorker = integrationConfigRolloutWorker,
       integrationBindings = new IntegrationBindings[ConnectionIO](integrationRepository,
         integrationInventoryRepository, integrationBindingRepository, transactionIdGenerator,
         transactionTimeProvider, auditRecorder),

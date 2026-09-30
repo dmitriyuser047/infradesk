@@ -34,6 +34,7 @@ final class IntegrationConfigProfiles[Tx[_]: MonadThrow](integrations: Integrati
   credentialCipher: IntegrationCryptography, providers: IntegrationProviderRegistry[IO],
   profiles: ConfigurationProfileRepository[Tx], profileQuery: ConfigurationProfileQuery[Tx],
   configs: IntegrationConfigProfileRepository[Tx], deployments: IntegrationConfigDeploymentRepository[Tx],
+  rollouts: IntegrationConfigRolloutRepository[Tx],
   ids: IdGenerator[Tx], time: TimeProvider[Tx], audit: AuditRecorder[Tx],
   runner: TransactionRunner[IO, Tx], syncState: IntegrationSyncStateRepository[Tx], logger: Logger[IO]) {
 
@@ -205,6 +206,9 @@ final class IntegrationConfigProfiles[Tx[_]: MonadThrow](integrations: Integrati
           case _ => fail[String]("INTEGRATION_CONFIG_PROFILE_UNSUPPORTED", "Config profile observation is invalid")
         }
         binding <- configs.binding(actor.organizationId, integrationId, objectId).flatMap(_.liftTo[Tx](notFound))
+        activeRollout <- rollouts.hasActive(actor.organizationId, integrationId, Some(objectId))
+        _ <- MonadThrow[Tx].raiseWhen(activeRollout)(IntegrationError(
+          "INTEGRATION_CONFIG_ROLLOUT_ALREADY_RUNNING", "A guarded rollout is already active"))
         latest <- deployments.recentForBinding(actor.organizationId, binding.id, 1)
         _ <- MonadThrow[Tx].raiseWhen(latest.headOption.exists(d =>
           d.status == IntegrationConfigDeploymentStatus.Unknown &&

@@ -28,7 +28,9 @@ final case class IntegrationConfigDeployment(id: UUID, organizationId: UUID, int
   startedAt: Option[Instant] = None, recoverAfterAt: Option[Instant] = None,
   finishedAt: Option[Instant] = None, claimedBy: Option[UUID] = None,
   claimToken: Option[UUID] = None, errorCode: Option[String] = None,
-  errorMessage: Option[String] = None)
+  errorMessage: Option[String] = None,
+  source: IntegrationConfigDeploymentSource = IntegrationConfigDeploymentSource.Manual,
+  rolloutId: Option[UUID] = None)
 
 sealed trait IntegrationConfigStatus { def code: String }
 object IntegrationConfigStatus {

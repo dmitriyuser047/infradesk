@@ -279,10 +279,30 @@ in this contract.
 
 A timed-out or otherwise ambiguous PATCH is `UNKNOWN` and is never retried automatically. A fresh
 observation determines whether the profile is in sync, has local changes, or has remote drift.
-Deployments affect one existing profile at a time; there is no automatic remediation, profile
-creation/deletion/reordering, rollout, or canary deployment in this stage.
+Deployments affect one existing profile at a time; there is no automatic profile
+creation/deletion/reordering.
 
 Reading decrypted content and managing local revisions require `MANAGE_INTEGRATIONS` and
 `MANAGE_CONFIGURATIONS`; deployment additionally requires `EXECUTE_OPERATIONS`. The API returns
 raw config only from the point revision-content endpoint. Adoption, revision creation, and deploy
 requests are audited by IDs, without config content.
+
+### Guarded rollout
+
+Remnawave Config Profile updates are profile-wide: one PATCH applies the profile to every enabled
+node that uses it. InfraDesk does not emulate node-level canary by cloning profiles or moving nodes.
+
+Guarded rollout records a fresh atomic baseline, uses the same durable deployment engine, waits for
+a later successful observation, detects control-plane health regression and can restore the known
+immutable baseline revision. Rollback is attempted only after observation confirms the target hash;
+its own preflight refuses to overwrite unrelated remote changes. Automatic integration sync is a
+runtime prerequisite.
+
+| Variable | Default |
+|---|---:|
+| `INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_ENABLED` | `true` |
+| `INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_POLL_INTERVAL_SECONDS` | `2` |
+| `INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_BATCH_SIZE` | `20` |
+| `INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_MAX_CONCURRENCY` | `2` |
+| `INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_CLAIM_LEASE_SECONDS` | `30` |
+| `INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_VERIFY_TIMEOUT_SECONDS` | `180` |

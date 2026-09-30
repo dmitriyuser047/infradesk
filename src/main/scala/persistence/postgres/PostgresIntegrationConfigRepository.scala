@@ -3,11 +3,13 @@ package persistence.postgres
 
 import application.integration.IntegrationError
 import application.port.{IntegrationConfigDeploymentRepository, IntegrationConfigProfileRepository,
-  IntegrationSecureRevision}
+  IntegrationConfigRolloutRepository, IntegrationSecureRevision}
 import cats.effect.Sync
 import cats.syntax.all._
 import domain.integration.{IntegrationConfigDeployment, IntegrationConfigDeploymentStatus,
-  IntegrationConfigProfileBinding}
+  IntegrationConfigDeploymentSource, IntegrationConfigProfileBinding, IntegrationConfigRollout,
+  IntegrationConfigRolloutInspection, IntegrationConfigRolloutNodeHealth, IntegrationConfigRolloutPreview,
+  IntegrationConfigRolloutStatus}
 import integration.secret.{RemnawaveConfigCipher, RemnawaveSecurePayload}
 import org.typelevel.doobie.{ConnectionIO, Fragment}
 import org.typelevel.doobie.implicits._
@@ -77,18 +79,22 @@ private[postgres] object IntegrationConfigDeploymentRows {
     revisionNumber: Int, requestId: UUID, requestedByUserId: UUID, status: String,
     expectedRemoteSha256: String, desiredSha256: String, createdAt: Instant,
     startedAt: Option[Instant], recoverAfterAt: Option[Instant], finishedAt: Option[Instant],
-    claimedBy: Option[UUID], claimToken: Option[UUID], errorCode: Option[String], errorMessage: Option[String]) {
-    def toDomain: Either[IllegalArgumentException, IntegrationConfigDeployment] =
-      IntegrationConfigDeploymentStatus.fromCode(status).map(s => IntegrationConfigDeployment(id, organizationId,
+    claimedBy: Option[UUID], claimToken: Option[UUID], errorCode: Option[String], errorMessage: Option[String],
+    source: String, rolloutId: Option[UUID]) {
+    def toDomain: Either[IllegalArgumentException, IntegrationConfigDeployment] = for {
+      s <- IntegrationConfigDeploymentStatus.fromCode(status)
+      src <- IntegrationConfigDeploymentSource.fromCode(source)
+    } yield IntegrationConfigDeployment(id, organizationId,
         integrationId, inventoryObjectId, bindingId, configurationProfileId, configurationRevisionId,
         revisionNumber, requestId, requestedByUserId, s, expectedRemoteSha256, desiredSha256,
-        createdAt, startedAt, recoverAfterAt, finishedAt, claimedBy, claimToken, errorCode, errorMessage))
+        createdAt, startedAt, recoverAfterAt, finishedAt, claimedBy, claimToken, errorCode, errorMessage,
+        src, rolloutId)
   }
   val columns: Fragment = fr"""d.id, d.organization_id, d.integration_id, d.inventory_object_id,
     d.binding_id, d.configuration_profile_id, d.configuration_revision_id, d.revision_number,
     d.request_id, d.requested_by_user_id, d.status, d.expected_remote_sha256, d.desired_sha256,
     d.created_at, d.started_at, d.recover_after_at, d.finished_at, d.claimed_by, d.claim_token,
-    d.error_code, d.error_message"""
+    d.error_code, d.error_message, d.source, d.rollout_id"""
 }
 
 final class PostgresIntegrationConfigDeploymentRepository extends IntegrationConfigDeploymentRepository[ConnectionIO] {
@@ -102,11 +108,13 @@ final class PostgresIntegrationConfigDeploymentRepository extends IntegrationCon
     sql"""insert into integration_config_deployment
       (id, organization_id, integration_id, inventory_object_id, binding_id,
        configuration_profile_id, configuration_revision_id, revision_number,
-       request_id, requested_by_user_id, status, expected_remote_sha256, desired_sha256, created_at)
+       request_id, requested_by_user_id, status, expected_remote_sha256, desired_sha256, created_at,
+       source, rollout_id)
       values (${value.id}, ${value.organizationId}, ${value.integrationId}, ${value.inventoryObjectId},
         ${value.bindingId}, ${value.configurationProfileId}, ${value.configurationRevisionId},
         ${value.revisionNumber}, ${value.requestId}, ${value.requestedByUserId}, 'QUEUED',
-        ${value.expectedRemoteSha256}, ${value.desiredSha256}, ${value.createdAt})
+        ${value.expectedRemoteSha256}, ${value.desiredSha256}, ${value.createdAt},
+        ${value.source.code}, ${value.rolloutId})
       on conflict do nothing""".update.run.flatMap {
       case 1 => (value, true).pure[ConnectionIO]
       case _ => findByRequest(value.organizationId, value.requestId).flatMap {

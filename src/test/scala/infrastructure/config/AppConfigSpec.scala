@@ -128,7 +128,8 @@ final class AppConfigSpec extends FunSuite {
       val result = AppConfig.fromEnvironment(minimal ++ Map(
         "INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED" -> desired.toString,
         "INFRADESK_INTEGRATIONS_SYNC_ENABLED" -> sync.toString,
-        "INFRADESK_INTEGRATIONS_ACTIONS_ENABLED" -> actions.toString))
+        "INFRADESK_INTEGRATIONS_ACTIONS_ENABLED" -> actions.toString,
+        "INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_ENABLED" -> "false"))
       val valid = !desired || (sync && actions)
       assertEquals(result.isRight, valid, s"desired=$desired sync=$sync actions=$actions")
       result match {
@@ -149,6 +150,7 @@ final class AppConfigSpec extends FunSuite {
     assertEquals(defaults.inventoryMaxObjects, 10000)
     val configured = AppConfig.fromEnvironment(minimal ++ Map(
       "INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED" -> "false",
+      "INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_ENABLED" -> "false",
       "INFRADESK_INTEGRATIONS_SYNC_ENABLED" -> "false",
       "INFRADESK_INTEGRATIONS_SYNC_POLL_INTERVAL_SECONDS" -> "2",
       "INFRADESK_INTEGRATIONS_SYNC_INTERVAL_SECONDS" -> "120",
@@ -168,6 +170,23 @@ final class AppConfigSpec extends FunSuite {
       val result = AppConfig.fromEnvironment(minimal + (key -> value))
       assert(result.left.exists(_.getMessage.contains(key)), s"$key=$value")
     }
+  }
+
+  test("guarded config rollouts require automatic integration synchronization") {
+    val defaults = AppConfig.fromEnvironment(minimal).toOption.get.integrations.configRollouts
+    assertEquals(defaults, IntegrationConfigRolloutsConfig(enabled = true, 2.seconds, 20, 2,
+      30.seconds, 180.seconds))
+    val invalid = AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED" -> "false",
+      "INFRADESK_INTEGRATIONS_SYNC_ENABLED" -> "false",
+      "INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_ENABLED" -> "true"))
+    assert(invalid.left.exists(_.getMessage.contains("INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_ENABLED")))
+    val disabled = AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED" -> "false",
+      "INFRADESK_INTEGRATIONS_SYNC_ENABLED" -> "false",
+      "INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_ENABLED" -> "false"))
+    assert(disabled.isRight)
+    assertEquals(disabled.toOption.get.integrations.configRolloutsOperational, false)
   }
 
   test("a webhook URL that is not an absolute http or https endpoint fails startup") {

@@ -69,6 +69,7 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       SecretEncryptionConfig.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" ->
         Base64.getEncoder.encodeToString(Array.fill[Byte](32)(7)))).toOption.get))
     val configDeployments = new PostgresIntegrationConfigDeploymentRepository
+    val configRollouts = new PostgresIntegrationConfigRolloutRepository
     @volatile var remoteConfig: Json = parse("""{"privateKey":"SUPER-SECRET-PRIVATE-KEY","a":1}""").toOption.get
     @volatile var configPatchCalls = 0
     @volatile var configGetCalls = 0
@@ -120,10 +121,17 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
     val registry = new IntegrationProviderRegistry[IO](List(provider))
     val configProfiles = new IntegrationConfigProfiles[ConnectionIO](integrations, inventory, secrets, cipher,
       registry, new PostgresConfigurationProfileRepository, new PostgresConfigurationProfileQuery,
-      configRepository, configDeployments, ids, time, audit, run, states, NoOpLogger[IO])
+      configRepository, configDeployments, configRollouts, ids, time, audit, run, states, NoOpLogger[IO])
     val configWorker = new IntegrationConfigDeploymentWorker[ConnectionIO](configDeployments,
       configRepository, integrations, inventory, secrets, cipher, registry, states, run,
       new SystemTimeProvider, NoOpLogger[IO], 1.second, 20, 2, 2.seconds, UUID.randomUUID())
+    val configRolloutService = new IntegrationConfigRollouts[ConnectionIO](integrations, inventory,
+      new PostgresConfigurationProfileQuery, configRepository, configDeployments, configRollouts,
+      ids, time, audit, states, run, operational = true)
+    def configRolloutWorker(verifyTimeout: FiniteDuration = 1.second) =
+      new IntegrationConfigRolloutWorker[ConnectionIO](configRollouts, integrations, states, run,
+        new SystemTimeProvider, NoOpLogger[IO], 1.second, 20, 2, 30.seconds,
+        verifyTimeout, UUID.randomUUID())
     def desiredStates(desiredStateOperational: Boolean = true) = new IntegrationDesiredStates[ConnectionIO](
       integrations, inventory, desiredRepository, registry, ids, time, audit, desiredStateOperational)
     /** Has the repository and a clock, and nothing that could reach a provider. */
@@ -331,6 +339,131 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       val history = w.run.run(w.configDeployments.recent(w.org, integration.id, objectId, 1)).unsafeRunSync()
       assertEquals(history.head.status, IntegrationConfigDeploymentStatus.Unknown)
       assertEquals(history.head.errorCode, Some("INTEGRATION_CONFIG_DEPLOYMENT_RESULT_UNKNOWN"))
+    }
+  }
+
+  test("guarded config rollout uses one profile PATCH, verifies a fresh snapshot and safely rolls back regression") {
+    withWorld { w =>
+      val external = UUID.randomUUID().toString
+      val initial = w.remoteConfig
+      val target = parse("""{"privateKey":"SUPER-SECRET-PRIVATE-KEY","a":24}""").toOption.get
+      def profileFor(config: Json) = ObservedIntegrationObject(IntegrationObjectType.ConfigProfile, external,
+        "Guarded", RemnawaveConfigProfileSummary(1, Instant.parse("2026-08-01T00:00:00Z"),
+          Instant.now(), List("rollout-a", "rollout-b"), Nil, Some(CanonicalJson.sha256(config))))
+      def rolloutNode(id: String, connected: Boolean) = ObservedIntegrationObject(IntegrationObjectType.Node,
+        id, id, RemnawaveNodeSummary("203.0.113.1", Some(443), connected, isConnecting = false,
+          isDisabled = false, None, None, None, 0L, false, None, None, 0L, "DE", None, None,
+          None, Some(external), Nil, None, None))
+      def observed(config: Json, firstConnected: Boolean = true, secondConnected: Boolean = true) =
+        snapshot(profileFor(config), rolloutNode("rollout-a", firstConnected),
+          rolloutNode("rollout-b", secondConnected))
+
+      val integration = w.create("Guarded rollout")
+      w.run.run(w.management.setEnabled(w.actor, integration.id, enabled = true)).unsafeRunSync()
+      w.observation = IO.pure(observed(initial)); w.manual(integration.id)
+      val objectId = w.objects(integration.id).find(_._1 == external).get._5
+      w.configProfiles.adopt(w.actor, integration.id, objectId,
+        AdoptIntegrationConfigProfile("guarded", "Guarded", None)).unsafeRunSync()
+      Thread.sleep(10); w.manual(integration.id)
+      w.configProfiles.appendRevision(w.actor, integration.id, objectId, target).unsafeRunSync()
+      val preview = w.configRolloutService.preview(w.org, integration.id, objectId, 2).unsafeRunSync()
+      assertEquals((preview.affectedNodes, preview.preexistingUnhealthyNodes), (2, 0))
+
+      val cancelled = w.configRolloutService.start(w.actor, integration.id, objectId, 2,
+        UUID.randomUUID(), automaticRollback = true).unsafeRunSync()
+      assertEquals(w.configRolloutService.cancel(w.actor, integration.id, objectId, cancelled.id)
+        .unsafeRunSync().status, IntegrationConfigRolloutStatus.Cancelled)
+      assertEquals(w.configRolloutService.cancel(w.actor, integration.id, objectId, cancelled.id)
+        .unsafeRunSync().status, IntegrationConfigRolloutStatus.Cancelled)
+      assertEquals(w.configPatchCalls, 0)
+      val requestId = UUID.randomUUID()
+      val requested = w.configRolloutService.start(w.actor, integration.id, objectId, 2,
+        requestId, automaticRollback = true).unsafeRunSync()
+      assertEquals(requested.status, IntegrationConfigRolloutStatus.Preparing)
+      assertEquals(w.configRolloutService.start(w.actor, integration.id, objectId, 2,
+        requestId, automaticRollback = true).unsafeRunSync().id, requested.id)
+      assertEquals(w.configPatchCalls, 0, "the HTTP request creates durable intent only")
+      assertEquals(w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 2, UUID.randomUUID())
+        .attempt.unsafeRunSync().left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_CONFIG_ROLLOUT_ALREADY_RUNNING"))
+      assertEquals(w.configRolloutService.start(w.actor, integration.id, objectId, 2, UUID.randomUUID(), true)
+        .attempt.unsafeRunSync().left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_CONFIG_ROLLOUT_ALREADY_RUNNING"))
+      assertEquals(w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("Guarded rollout", "https://changed.example.test", None)))
+        .attempt.unsafeRunSync().left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_ACTION_ALREADY_RUNNING"))
+      val credentialEdit = w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("Guarded rollout", integration.baseUrl.value,
+          Some(RemnawaveCredential("new-token", None))))).attempt.unsafeRunSync()
+      val delete = w.run.run(w.management.delete(w.actor, integration.id)).attempt.unsafeRunSync()
+      List(credentialEdit, delete).foreach(result => assertEquals(
+        result.left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_ACTION_ALREADY_RUNNING")))
+      assertEquals(w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("Guarded rollout renamed", integration.baseUrl.value, None)))
+        .unsafeRunSync().name, "Guarded rollout renamed")
+      val durableRow = w.run.run(sql"select row_to_json(r)::text from integration_config_rollout r where id=${requested.id}"
+        .query[String].unique).unsafeRunSync()
+      assert(!durableRow.contains("SUPER-SECRET-PRIVATE-KEY"))
+      assert(!durableRow.contains("new-token"))
+      Thread.sleep(10); w.manual(integration.id)
+      val worker = w.configRolloutWorker(100.millis)
+      val claimAt = Instant.now()
+      val tokenA = UUID.randomUUID(); val tokenB = UUID.randomUUID()
+      val claimedA = w.run.run(w.configRollouts.recoverAndClaim(UUID.randomUUID(), tokenA,
+        claimAt, claimAt.plusMillis(10), 1)).unsafeRunSync().head
+      val claimedB = w.run.run(w.configRollouts.recoverAndClaim(UUID.randomUUID(), tokenB,
+        claimAt.plusMillis(20), claimAt.plusSeconds(30), 1)).unsafeRunSync().head
+      assertEquals(w.run.run(w.configRollouts.prepare(claimedA, tokenA, UUID.randomUUID(),
+        UUID.randomUUID(), claimAt.plusMillis(21))).unsafeRunSync(), false)
+      assertEquals(w.run.run(w.configRollouts.prepare(claimedB, tokenB, UUID.randomUUID(),
+        UUID.randomUUID(), claimAt.plusMillis(22))).unsafeRunSync(), true)
+      assertEquals(w.run.run(w.configRollouts.find(w.org, requested.id)).unsafeRunSync().map(_.status),
+        Some(IntegrationConfigRolloutStatus.Applying))
+      assertEquals(w.run.run(sql"select count(*) from integration_config_deployment where rollout_id=${requested.id}"
+        .query[Long].unique).unsafeRunSync(), 1L, "two workers create one target deployment")
+      w.configWorker.tick.unsafeRunSync()
+      assertEquals(w.configPatchCalls, 1)
+      worker.tick.unsafeRunSync()
+      assertEquals(w.run.run(w.configRollouts.find(w.org, requested.id)).unsafeRunSync().map(_.status),
+        Some(IntegrationConfigRolloutStatus.Verifying))
+
+      w.observation = IO.pure(observed(target, secondConnected = false))
+      Thread.sleep(130); w.manual(integration.id); worker.tick.unsafeRunSync()
+      val rollingBack = w.run.run(w.configRollouts.find(w.org, requested.id)).unsafeRunSync().get
+      assertEquals(rollingBack.status, IntegrationConfigRolloutStatus.RollbackApplying)
+      assert(rollingBack.rollbackDeploymentId.nonEmpty)
+      w.configWorker.tick.unsafeRunSync()
+      assertEquals(w.configPatchCalls, 2, "one target PATCH and one rollback PATCH")
+      worker.tick.unsafeRunSync()
+      w.observation = IO.pure(observed(initial)); Thread.sleep(10); w.manual(integration.id)
+      worker.tick.unsafeRunSync()
+      val finished = w.run.run(w.configRollouts.find(w.org, requested.id)).unsafeRunSync().get
+      assertEquals(finished.status, IntegrationConfigRolloutStatus.RolledBack)
+      assertEquals(w.remoteConfig, initial)
+      val sources = w.run.run(sql"""select source from integration_config_deployment
+        where rollout_id=${requested.id} order by created_at""".query[String].to[List]).unsafeRunSync()
+      assertEquals(sources, List("ROLLOUT_TARGET", "ROLLOUT_ROLLBACK"))
+
+      val recovery = w.configRolloutService.start(w.actor, integration.id, objectId, 2,
+        UUID.randomUUID(), automaticRollback = true).unsafeRunSync()
+      w.observation = IO.pure(observed(initial, secondConnected = false))
+      Thread.sleep(10); w.manual(integration.id)
+      val recoveryWorker = w.configRolloutWorker(2.seconds)
+      recoveryWorker.tick.unsafeRunSync(); w.configWorker.tick.unsafeRunSync(); recoveryWorker.tick.unsafeRunSync()
+      w.observation = IO.pure(observed(target, firstConnected = false, secondConnected = false))
+      Thread.sleep(10); w.manual(integration.id); recoveryWorker.tick.unsafeRunSync()
+      assertEquals(w.run.run(w.configRollouts.find(w.org, recovery.id)).unsafeRunSync().map(_.status),
+        Some(IntegrationConfigRolloutStatus.Verifying), "a transient regression waits inside the window")
+      assertEquals(w.configPatchCalls, 3, "a transient observation creates no rollback deployment")
+      w.observation = IO.pure(observed(target, firstConnected = true, secondConnected = false))
+      Thread.sleep(10); w.manual(integration.id); recoveryWorker.tick.unsafeRunSync()
+      assertEquals(w.run.run(w.configRollouts.find(w.org, recovery.id)).unsafeRunSync().map(_.status),
+        Some(IntegrationConfigRolloutStatus.Succeeded))
+      val health = w.run.run(w.configRollouts.nodeHealth(w.org, recovery.id)).unsafeRunSync()
+      assertEquals(health.count(_.result == "PREEXISTING_UNHEALTHY"), 1)
+      assertEquals(health.count(_.result == "REGRESSION"), 0)
     }
   }
 

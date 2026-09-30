@@ -8,6 +8,7 @@ export interface ConfigDeployment {
   id: string; requestId: string; revisionNumber: number; status: DeploymentStatus
   requestedByUserId: string; createdAt: string; startedAt: string | null; finishedAt: string | null
   expectedRemoteSha256: string; desiredSha256: string; errorCode: string | null
+  source: 'MANUAL' | 'ROLLOUT_TARGET' | 'ROLLOUT_ROLLBACK'; rolloutId: string | null
 }
 export interface ManagedConfigProfile {
   bindingId: string
@@ -26,6 +27,26 @@ export interface ConfigPreview {
   revisionNumber: number; localSha256: string; remoteSha256: string; remoteUpdatedAt: string | null
   changed: boolean; diff: { text: string; truncated: boolean; approximate: boolean;
     addedLines: number; removedLines: number }
+}
+export type ConfigRolloutStatus = 'PREPARING' | 'APPLYING' | 'VERIFYING' | 'ROLLBACK_APPLYING' |
+  'ROLLBACK_VERIFYING' | 'SUCCEEDED' | 'ROLLED_BACK' | 'FAILED' | 'UNKNOWN' | 'CANCELLED'
+export interface ConfigRolloutPreview {
+  baselineRevisionNumber: number; targetRevisionNumber: number; baselineSha256: string; targetSha256: string
+  affectedNodes: number; healthyNodes: number; preexistingUnhealthyNodes: number
+  automaticRollbackSupported: boolean; nodeCanarySupported: false
+}
+export interface ConfigRolloutNode {
+  externalId: string; displayName: string; before: string; after: string | null
+  result: 'HEALTHY' | 'REGRESSION' | 'PREEXISTING_UNHEALTHY'
+}
+export interface ConfigRollout {
+  id: string; requestId: string; status: ConfigRolloutStatus; automaticRollback: boolean
+  baselineRevisionNumber: number | null; targetRevisionNumber: number
+  baselineSha256: string | null; targetSha256: string
+  targetDeploymentId: string | null; rollbackDeploymentId: string | null
+  createdAt: string; startedAt: string | null; finishedAt: string | null
+  verificationDeadlineAt: string | null; errorCode: string | null; errorMessage: string | null
+  affectedNodes: number; healthyNodes: number; preexistingUnhealthyNodes: number; nodes: ConfigRolloutNode[]
 }
 
 const base = (org: string, integration: string, object: string) =>
@@ -104,4 +125,36 @@ export function useConfigDeployments(org: string, integration: string, object: s
       .then(value => value.items),
     refetchInterval: query => query.state.data?.some(value => value.status === 'QUEUED' || value.status === 'RUNNING')
       ? 1500 : false })
+}
+
+export function previewConfigRollout(org: string, integration: string, object: string, revision: number) {
+  return requestJson<ConfigRolloutPreview>(`${base(org, integration, object)}/revisions/${revision}/rollout-preview`,
+    { method: 'POST' })
+}
+
+export function useStartConfigRollout(org: string, integration: string, object: string) {
+  const refresh = useRefresh(org, integration, object)
+  const client = useQueryClient()
+  return useMutation({ mutationFn: ({ revision, requestId, automaticRollback }: {
+    revision: number; requestId: string; automaticRollback: boolean
+  }) => requestJson<ConfigRollout>(`${base(org, integration, object)}/revisions/${revision}/rollouts`,
+    { method: 'POST', body: JSON.stringify({ requestId, automaticRollback }) }),
+  onSuccess: async () => { await refresh(); await client.invalidateQueries({
+    queryKey: [...key(org, integration, object), 'rollouts'] }) } })
+}
+
+export function useConfigRollouts(org: string, integration: string, object: string, enabled: boolean) {
+  return useQuery({ queryKey: [...key(org, integration, object), 'rollouts'], enabled,
+    queryFn: () => requestJson<{ items: ConfigRollout[] }>(`${base(org, integration, object)}/rollouts?limit=50`)
+      .then(value => value.items),
+    refetchInterval: query => query.state.data?.some(value => ![
+      'SUCCEEDED', 'ROLLED_BACK', 'FAILED', 'UNKNOWN', 'CANCELLED'].includes(value.status)) ? 1500 : false })
+}
+
+export function useConfigRollout(org: string, integration: string, object: string,
+  rolloutId: string | null, enabled: boolean) {
+  return useQuery({ queryKey: [...key(org, integration, object), 'rollout', rolloutId], enabled: enabled && !!rolloutId,
+    queryFn: () => requestJson<ConfigRollout>(`${base(org, integration, object)}/rollouts/${rolloutId}`),
+    refetchInterval: query => query.state.data && ![
+      'SUCCEEDED', 'ROLLED_BACK', 'FAILED', 'UNKNOWN', 'CANCELLED'].includes(query.state.data.status) ? 1500 : false })
 }

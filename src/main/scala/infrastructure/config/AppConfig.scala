@@ -37,18 +37,26 @@ final case class IntegrationDesiredStateConfig(enabled: Boolean = true, pollInte
   batchSize: Int = 50, maxConcurrency: Int = 4, claimLease: FiniteDuration = 30.seconds) {
   require(pollInterval > Duration.Zero && batchSize > 0 && maxConcurrency > 0 && claimLease > Duration.Zero)
 }
+final case class IntegrationConfigRolloutsConfig(enabled: Boolean = true,
+  pollInterval: FiniteDuration = 2.seconds, batchSize: Int = 20, maxConcurrency: Int = 2,
+  claimLease: FiniteDuration = 30.seconds, verifyTimeout: FiniteDuration = 180.seconds) {
+  require(pollInterval > Duration.Zero && batchSize > 0 && maxConcurrency > 0 &&
+    claimLease > Duration.Zero && verifyTimeout > Duration.Zero)
+}
 final case class IntegrationsConfig(
   requestTimeout: FiniteDuration,
   allowPrivateDestinations: Boolean,
   sync: IntegrationSyncConfig = IntegrationSyncConfig(),
   actions: IntegrationActionsConfig = IntegrationActionsConfig(),
   desiredState: IntegrationDesiredStateConfig = IntegrationDesiredStateConfig(),
+  configRollouts: IntegrationConfigRolloutsConfig = IntegrationConfigRolloutsConfig(),
   inventoryMaxResponseBytes: Int = 8 * 1024 * 1024,
   inventoryMaxObjects: Int = 10000
 ) {
   require(inventoryMaxResponseBytes > 0 && inventoryMaxObjects > 0, "Inventory limits must be positive")
 
   val desiredStateOperational: Boolean = desiredState.enabled && sync.enabled && actions.enabled
+  val configRolloutsOperational: Boolean = configRollouts.enabled && sync.enabled
 }
 final case class SchedulerConfig(
   enabled: Boolean,
@@ -127,9 +135,13 @@ object AppConfig {
       integrationSync <- parseIntegrationSync(values)
       integrationActions <- parseIntegrationActions(values)
       integrationDesiredState <- parseIntegrationDesiredState(values)
+      integrationConfigRollouts <- parseIntegrationConfigRollouts(values)
       _ <- Either.cond(!integrationDesiredState.enabled || (integrationSync.enabled && integrationActions.enabled),
         (), new IllegalArgumentException("INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED requires " +
           "INFRADESK_INTEGRATIONS_SYNC_ENABLED=true and INFRADESK_INTEGRATIONS_ACTIONS_ENABLED=true"))
+      _ <- Either.cond(!integrationConfigRollouts.enabled || integrationSync.enabled, (),
+        new IllegalArgumentException("INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_ENABLED requires " +
+          "INFRADESK_INTEGRATIONS_SYNC_ENABLED=true"))
       inventoryMaxBytes <- bounded(values, "INFRADESK_INTEGRATIONS_INVENTORY_MAX_RESPONSE_BYTES", 8 * 1024 * 1024,
         64 * 1024, 64 * 1024 * 1024)
       inventoryMaxObjects <- bounded(values, "INFRADESK_INTEGRATIONS_INVENTORY_MAX_OBJECTS", 10000, 1, 100000)
@@ -141,7 +153,19 @@ object AppConfig {
       notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment,
       ConfigurationRuleSettings(enabled = ruleEnabled, reconcileInterval = ruleInterval.seconds),
       IntegrationsConfig(integrationTimeout.seconds, integrationAllowPrivate, integrationSync,
-        integrationActions, integrationDesiredState, inventoryMaxBytes, inventoryMaxObjects))
+        integrationActions, integrationDesiredState, integrationConfigRollouts, inventoryMaxBytes, inventoryMaxObjects))
+
+  private def parseIntegrationConfigRollouts(
+    values: Map[String, String]): Either[IllegalArgumentException, IntegrationConfigRolloutsConfig] =
+    for {
+      enabled <- parseBoolean(values, "INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_ENABLED", default = true)
+      poll <- bounded(values, "INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_POLL_INTERVAL_SECONDS", 2, 1, 3600)
+      batch <- bounded(values, "INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_BATCH_SIZE", 20, 1, 500)
+      concurrency <- bounded(values, "INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_MAX_CONCURRENCY", 2, 1, 32)
+      lease <- bounded(values, "INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_CLAIM_LEASE_SECONDS", 30, 5, 3600)
+      verify <- bounded(values, "INFRADESK_INTEGRATIONS_CONFIG_ROLLOUTS_VERIFY_TIMEOUT_SECONDS", 180, 10, 3600)
+    } yield IntegrationConfigRolloutsConfig(enabled, poll.seconds, batch, concurrency,
+      lease.seconds, verify.seconds)
 
   private def parseIntegrationDesiredState(
     values: Map[String, String]): Either[IllegalArgumentException, IntegrationDesiredStateConfig] =

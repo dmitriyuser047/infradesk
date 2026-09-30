@@ -12,7 +12,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("V41 configuration, integration and desired-state data survive migration to V43") {
+  test("V43 configuration, integration and desired-state data survive migration to V44") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
     val base = DatabaseConfig.fromEnvironment(sys.env).fold(throw _, identity)
@@ -35,12 +35,15 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
     sql(maintenanceUrl, s"CREATE DATABASE $databaseName")
     try {
       val flyway = Flyway.configure().dataSource(testConfig.url, testConfig.user, testConfig.password)
-        .locations("classpath:db/migration").target("41").load()
-      assertEquals(flyway.migrate().migrationsExecuted, 41)
+        .locations("classpath:db/migration").target("43").load()
+      assertEquals(flyway.migrate().migrationsExecuted, 43)
       val org = UUID.randomUUID(); val integration = UUID.randomUUID(); val secret = UUID.randomUUID()
       val user = UUID.randomUUID(); val project = UUID.randomUUID(); val environment = UUID.randomUUID()
       val resource = UUID.randomUUID(); val session = UUID.randomUUID(); val inventory = UUID.randomUUID()
       val profile = UUID.randomUUID(); val revision = UUID.randomUUID(); val desired = UUID.randomUUID()
+      val configObject = UUID.randomUUID(); val remoteProfile = UUID.randomUUID()
+      val remoteRevision = UUID.randomUUID(); val configBinding = UUID.randomUUID()
+      val configDeployment = UUID.randomUUID(); val remoteHash = "a" * 64
       sql(testConfig.url, s"insert into organization (id, code, name) values ('$org', 'upgrade-test', 'Upgrade test')")
       sql(testConfig.url, s"insert into user_account (id, email, password_hash, display_name, created_at, updated_at) " +
         s"values ('$user', '$user@example.test', 'x', 'Upgrade actor', now(), now())")
@@ -70,6 +73,27 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         s"object_type, external_id, display_name, summary_version, summary, is_active, first_seen_at, last_seen_at, " +
         s"last_seen_sync_session_id, created_at, updated_at) values ('$inventory', '$org', '$integration', " +
         s"'NODE', '${UUID.randomUUID()}', 'Upgrade node', 1, '{}'::jsonb, true, now(), now(), '$session', now(), now())")
+      sql(testConfig.url, s"insert into integration_inventory_object (id, organization_id, integration_id, " +
+        s"object_type, external_id, display_name, summary_version, summary, is_active, first_seen_at, last_seen_at, " +
+        s"last_seen_sync_session_id, created_at, updated_at) values ('$configObject', '$org', '$integration', " +
+        s"'CONFIG_PROFILE', '${UUID.randomUUID()}', 'Remote config', 1, '{}'::jsonb, true, now(), now(), '$session', now(), now())")
+      sql(testConfig.url, s"insert into configuration_profile (id, organization_id, code, name, kind, " +
+        s"latest_revision_number, created_at, updated_at) values ('$remoteProfile', '$org', 'remote-preserved', " +
+        s"'Remote preserved', 'REMNAWAVE_CONFIG', 1, now(), now())")
+      sql(testConfig.url, s"insert into configuration_revision (id, organization_id, profile_id, revision_number, " +
+        s"template_text, created_by_user_id, created_at) values ('$remoteRevision', '$org', '$remoteProfile', 1, '', '$user', now())")
+      sql(testConfig.url, s"insert into configuration_revision_secure_payload (revision_id, organization_id, " +
+        s"profile_id, purpose, nonce, ciphertext, content_sha256, created_at) values ('$remoteRevision', '$org', " +
+        s"'$remoteProfile', 'infradesk/configuration/remnawave/v1', decode('000102030405060708090a0b','hex'), " +
+        s"decode('00112233445566778899aabbccddeeff0011','hex'), '$remoteHash', now())")
+      sql(testConfig.url, s"insert into integration_config_profile_binding (id, organization_id, integration_id, " +
+        s"inventory_object_id, configuration_profile_id, created_by_user_id, created_at, updated_at) values " +
+        s"('$configBinding', '$org', '$integration', '$configObject', '$remoteProfile', '$user', now(), now())")
+      sql(testConfig.url, s"insert into integration_config_deployment (id, organization_id, integration_id, " +
+        s"inventory_object_id, binding_id, configuration_profile_id, configuration_revision_id, revision_number, " +
+        s"request_id, requested_by_user_id, status, expected_remote_sha256, desired_sha256, created_at, finished_at) " +
+        s"values ('$configDeployment', '$org', '$integration', '$configObject', '$configBinding', '$remoteProfile', " +
+        s"'$remoteRevision', 1, '${UUID.randomUUID()}', '$user', 'SUCCEEDED', '$remoteHash', '$remoteHash', now(), now())")
       sql(testConfig.url, s"insert into integration_resource_binding (id, organization_id, integration_id, " +
         s"inventory_object_id, resource_id, created_by_user_id, created_at, updated_at) values " +
         s"('${UUID.randomUUID()}', '$org', '$integration', '$inventory', '$resource', '$user', now(), now())")
@@ -85,8 +109,8 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         "'SUCCEEDED', now(), now(), now())")
       val result = DatabaseMigrator.migrate(testConfig,
         Slf4jLogger.getLoggerFromName[IO]("test.database.migrator")).unsafeRunSync()
-      assertEquals(result.migrationsApplied, 2)
-      assertEquals(result.currentVersion, "43")
+      assertEquals(result.migrationsApplied, 1)
+      assertEquals(result.currentVersion, "44")
       val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
       try {
         val statement = connection.createStatement()
@@ -98,7 +122,7 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
             "and s.ciphertext = decode('00112233445566778899aabbccddeeff0011', 'hex')), " +
             s"(select count(*) from integration_sync_state where integration_id = '$integration' " +
             "and consecutive_failures = 0 and claim_token is null), " +
-            "(select count(*) from flyway_schema_history where version = '43' and success), " +
+            "(select count(*) from flyway_schema_history where version = '44' and success), " +
             s"(select count(*) from integration_inventory_object where id = '$inventory' and display_name = 'Upgrade node'), " +
             s"(select count(*) from integration_resource_binding where inventory_object_id = '$inventory'), " +
             s"(select count(*) from integration_sync_session where id = '$session' and status = 'COMPLETED'), " +
@@ -106,7 +130,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
             s"(select count(*) from integration_desired_state where id = '$desired' and desired_state = 'ENABLED'), " +
             s"(select count(*) from integration_action_execution where integration_id = '$integration' " +
             "and source = 'MANUAL' and desired_state_id_snapshot is null and desired_state_version_snapshot is null), " +
-            s"(select count(*) from configuration_revision where id = '$revision' and template_text = 'original-template')")
+            s"(select count(*) from configuration_revision where id = '$revision' and template_text = 'original-template'), " +
+            s"(select count(*) from integration_config_deployment where id = '$configDeployment' and source = 'MANUAL' and rollout_id is null), " +
+            "(select count(*) from information_schema.tables where table_schema = current_schema() and table_name in " +
+            "('integration_config_rollout','integration_config_rollout_node_baseline'))")
           try {
             assert(rows.next())
             assertEquals(rows.getInt(1), 1)
@@ -120,13 +147,15 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
             assertEquals(rows.getInt(9), 1)
             assertEquals(rows.getInt(10), 1)
             assertEquals(rows.getInt(11), 1)
+            assertEquals(rows.getInt(12), 1)
+            assertEquals(rows.getInt(13), 2)
           } finally rows.close()
         } finally statement.close()
       } finally connection.close()
     } finally sql(maintenanceUrl, s"DROP DATABASE $databaseName WITH (FORCE)")
   }
 
-  test("Flyway applies V1 through V43 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V44 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -154,10 +183,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 43)
-        assertEquals(first.currentVersion, "43")
+        assertEquals(first.migrationsApplied, 44)
+        assertEquals(first.currentVersion, "44")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "43")
+        assertEquals(second.currentVersion, "44")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()

@@ -2,11 +2,12 @@ package ru.bitec.app.ops
 package infrastructure.http
 
 import application.configuration.ConfigurationError
-import application.integration.{AdoptIntegrationConfigProfile, IntegrationConfigProfiles, IntegrationError}
+import application.integration.{AdoptIntegrationConfigProfile, IntegrationConfigProfiles,
+  IntegrationConfigRollouts, IntegrationError}
 import cats.effect.IO
 import cats.syntax.all._
 import domain.auth.OrganizationPermission
-import domain.integration.IntegrationConfigDeployment
+import domain.integration.{IntegrationConfigDeployment, IntegrationConfigRollout}
 import infrastructure.http.dto.{ApiErrorResponse, HttpJsonCodecs}
 import io.circe.Json
 import io.circe.parser.parse
@@ -22,6 +23,7 @@ import scala.util.Try
 
 /** Point reads of decrypted config and explicit mutations require both configuration and integration rights. */
 final class IntegrationConfigProfileRoutes[Tx[_]](service: IntegrationConfigProfiles[Tx],
+  rolloutService: IntegrationConfigRollouts[Tx],
   authorization: OrganizationAuthorization) {
   import HttpJsonCodecs._
 
@@ -146,7 +148,86 @@ final class IntegrationConfigProfileRoutes[Tx[_]](service: IntegrationConfigProf
         else service.history(ctx.organizationId, id, objectId, limit).flatMap(rows =>
           Ok(Json.obj("items" -> Json.arr(rows.map(deployment): _*))))
       }
+
+    case request @ POST -> Root / "api" / "v1" / "organizations" / org / "integrations" / integration /
+        "inventory" / "objects" / obj / "config-management" / "revisions" / revision / "rollout-preview" =>
+      access(request, org, integration, obj, deploy = false) { (ctx, id, objectId) =>
+        revision.toIntOption.filter(_ > 0).fold(BadRequest(invalid)) { number =>
+          rolloutService.preview(ctx.organizationId, id, objectId, number).flatMap(value => Ok(Json.obj(
+            "baselineRevisionNumber" -> Json.fromInt(value.baselineRevisionNumber),
+            "targetRevisionNumber" -> Json.fromInt(value.targetRevisionNumber),
+            "baselineSha256" -> value.baselineSha256.asJson,
+            "targetSha256" -> value.targetSha256.asJson,
+            "affectedNodes" -> Json.fromInt(value.affectedNodes),
+            "healthyNodes" -> Json.fromInt(value.healthyNodes),
+            "preexistingUnhealthyNodes" -> Json.fromInt(value.preexistingUnhealthyNodes),
+            "automaticRollbackSupported" -> value.automaticRollbackSupported.asJson,
+            "nodeCanarySupported" -> value.nodeCanarySupported.asJson)))
+        }
+      }
+
+    case request @ POST -> Root / "api" / "v1" / "organizations" / org / "integrations" / integration /
+        "inventory" / "objects" / obj / "config-management" / "revisions" / revision / "rollouts" =>
+      access(request, org, integration, obj, deploy = true) { (ctx, id, objectId) =>
+        revision.toIntOption.filter(_ > 0).fold(BadRequest(invalid)) { number => body(request).flatMap { json =>
+          val c = json.hcursor
+          (c.get[String]("requestId").toOption.flatMap(uuid), c.get[Boolean]("automaticRollback").toOption) match {
+            case (Some(requestId), Some(automaticRollback)) =>
+              rolloutService.start(ctx.actor, id, objectId, number, requestId, automaticRollback)
+                .flatMap(value => Accepted(rollout(value, Nil)))
+            case _ => BadRequest(invalid)
+          }
+        }}
+      }
+
+    case request @ GET -> Root / "api" / "v1" / "organizations" / org / "integrations" / integration /
+        "inventory" / "objects" / obj / "config-management" / "rollouts" / rolloutId =>
+      access(request, org, integration, obj, deploy = false) { (ctx, id, objectId) =>
+        uuid(rolloutId).fold(BadRequest(invalid)) { rid => rolloutService.get(ctx.organizationId, rid).flatMap {
+          case (value, nodes) if value.integrationId == id && value.inventoryObjectId == objectId => Ok(rollout(value, nodes))
+          case _ => NotFound(missing)
+        }}
+      }
+
+    case request @ GET -> Root / "api" / "v1" / "organizations" / org / "integrations" / integration /
+        "inventory" / "objects" / obj / "config-management" / "rollouts" =>
+      access(request, org, integration, obj, deploy = false) { (ctx, id, objectId) =>
+        val limit = request.params.get("limit").flatMap(_.toIntOption).getOrElse(50)
+        if (limit < 1 || limit > 100) BadRequest(invalid)
+        else rolloutService.history(ctx.organizationId, id, objectId, limit).flatMap(values =>
+          Ok(Json.obj("items" -> Json.arr(values.map(value => rollout(value, Nil)): _*))))
+      }
+
+    case request @ POST -> Root / "api" / "v1" / "organizations" / org / "integrations" / integration /
+        "inventory" / "objects" / obj / "config-management" / "rollouts" / rolloutId / "cancel" =>
+      access(request, org, integration, obj, deploy = true) { (ctx, id, objectId) =>
+        uuid(rolloutId).fold(BadRequest(invalid)) { rid =>
+          rolloutService.cancel(ctx.actor, id, objectId, rid).flatMap(value => Ok(rollout(value, Nil)))
+        }
+      }
   }
+
+  private def rollout(value: IntegrationConfigRollout,
+    nodes: List[domain.integration.IntegrationConfigRolloutNodeHealth]): Json = Json.obj(
+    "id" -> value.id.toString.asJson, "requestId" -> value.requestId.toString.asJson,
+    "status" -> value.status.code.asJson, "automaticRollback" -> value.automaticRollback.asJson,
+    "baselineRevisionNumber" -> value.baselineRevisionNumber.asJson,
+    "targetRevisionNumber" -> Json.fromInt(value.targetRevisionNumber),
+    "baselineSha256" -> value.baselineSha256.asJson, "targetSha256" -> value.targetSha256.asJson,
+    "targetDeploymentId" -> value.targetDeploymentId.map(_.toString).asJson,
+    "rollbackDeploymentId" -> value.rollbackDeploymentId.map(_.toString).asJson,
+    "createdAt" -> value.createdAt.toString.asJson, "startedAt" -> value.startedAt.map(_.toString).asJson,
+    "finishedAt" -> value.finishedAt.map(_.toString).asJson,
+    "verificationDeadlineAt" -> value.verificationDeadlineAt.map(_.toString).asJson,
+    "errorCode" -> value.errorCode.asJson, "errorMessage" -> value.errorMessage.asJson,
+    "affectedNodes" -> Json.fromInt(if (nodes.nonEmpty) nodes.size else value.affectedNodeCount),
+    "healthyNodes" -> Json.fromInt(if (nodes.nonEmpty) nodes.count(_.result == "HEALTHY")
+      else value.baselineHealthyNodeCount),
+    "preexistingUnhealthyNodes" -> Json.fromInt(if (nodes.nonEmpty)
+      nodes.count(_.result == "PREEXISTING_UNHEALTHY") else value.preexistingUnhealthyNodeCount),
+    "nodes" -> Json.arr(nodes.map(n => Json.obj("externalId" -> n.externalId.asJson,
+      "displayName" -> n.displayName.asJson, "before" -> n.before.asJson,
+      "after" -> n.after.asJson, "result" -> n.result.asJson)): _*))
 
   private def deployment(value: IntegrationConfigDeployment): Json = Json.obj(
     "id" -> value.id.toString.asJson, "requestId" -> value.requestId.toString.asJson,
@@ -157,7 +238,9 @@ final class IntegrationConfigProfileRoutes[Tx[_]](service: IntegrationConfigProf
     "finishedAt" -> value.finishedAt.map(_.toString).asJson,
     "expectedRemoteSha256" -> value.expectedRemoteSha256.asJson,
     "desiredSha256" -> value.desiredSha256.asJson,
-    "errorCode" -> value.errorCode.asJson)
+    "errorCode" -> value.errorCode.asJson,
+    "source" -> value.source.code.asJson,
+    "rolloutId" -> value.rolloutId.map(_.toString).asJson)
 
   private def access(request: Request[IO], org: String, integration: String, obj: String, deploy: Boolean)(
     next: (OrganizationAccessContext, UUID, UUID) => IO[Response[IO]]): IO[Response[IO]] =
@@ -192,11 +275,15 @@ final class IntegrationConfigProfileRoutes[Tx[_]](service: IntegrationConfigProf
 
   private def respond(action: IO[Response[IO]]): IO[Response[IO]] = action.handleErrorWith {
     case error: IntegrationError => error.code match {
-      case "INTEGRATION_CONFIG_PROFILE_NOT_FOUND" | "INTEGRATION_NOT_FOUND" =>
+      case "INTEGRATION_CONFIG_PROFILE_NOT_FOUND" | "INTEGRATION_CONFIG_ROLLOUT_NOT_FOUND" |
+          "INTEGRATION_NOT_FOUND" =>
         NotFound(ApiErrorResponse(error.code, error.getMessage))
       case "INTEGRATION_CONFIG_PROFILE_ALREADY_MANAGED" | "INTEGRATION_CONFIG_PROFILE_CHANGED" |
           "INTEGRATION_CONFIG_DEPLOYMENT_ALREADY_RUNNING" | "CONFIG_DEPLOYMENT_REQUEST_ID_CONFLICT" |
-          "INTEGRATION_CONFIG_REQUIRES_REFRESH" | "INTEGRATION_CONFIG_PROFILE_INACTIVE" =>
+          "INTEGRATION_CONFIG_REQUIRES_REFRESH" | "INTEGRATION_CONFIG_PROFILE_INACTIVE" |
+          "INTEGRATION_CONFIG_ROLLOUT_ALREADY_RUNNING" | "INTEGRATION_CONFIG_ROLLOUT_REQUEST_ID_CONFLICT" |
+          "INTEGRATION_CONFIG_ROLLOUT_CANNOT_CANCEL" | "INTEGRATION_CONFIG_ALREADY_APPLIED" |
+          "INTEGRATION_CONFIG_REMOTE_DRIFT" =>
         Conflict(ApiErrorResponse(error.code, error.getMessage))
       case "INVALID_REQUEST" | "INVALID_INTEGRATION_CONFIG" => BadRequest(ApiErrorResponse(error.code, error.getMessage))
       case _ => UnprocessableEntity(ApiErrorResponse(error.code, error.getMessage))

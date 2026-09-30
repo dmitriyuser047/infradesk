@@ -22,7 +22,7 @@ const integration = { id: 'one', name: 'Panel', providerType: 'REMNAWAVE', baseU
   createdAt: '', updatedAt: '', managementMode: 'OBSERVE' }
 
 function setup(entry = `${route}?tab=profiles`, role: 'OWNER' | 'MEMBER' = 'OWNER', adopted = false,
-  loseDeployResponse = false) {
+  loseDeployResponse = false, loseRolloutResponse = false) {
   const calls: { url: string; method: string; body?: Record<string, unknown> }[] = []
   let managed = adopted
   let revision = 1
@@ -62,6 +62,21 @@ function setup(entry = `${route}?tab=profiles`, role: 'OWNER' | 'MEMBER' = 'OWNE
       return json(latestDeployment, 202)
     }
     if (url === `${path}/deployments?limit=50`) return json({ items: latestDeployment ? [latestDeployment] : [] })
+    if (url === `${path}/rollouts?limit=50`) return json({ items: [] })
+    if (url === `${path}/revisions/${revision}/rollout-preview` && method === 'POST') return json({
+      baselineRevisionNumber: 1, targetRevisionNumber: revision, baselineSha256: 'a'.repeat(64),
+      targetSha256: 'b'.repeat(64), affectedNodes: 2, healthyNodes: 1,
+      preexistingUnhealthyNodes: 1, automaticRollbackSupported: true, nodeCanarySupported: false })
+    if (url === `${path}/revisions/${revision}/rollouts` && method === 'POST') {
+      if (loseRolloutResponse) throw new TypeError('Network response lost')
+      return json({
+      id: 'rollout', requestId: body!.requestId, status: 'PREPARING', automaticRollback: body!.automaticRollback,
+      baselineRevisionNumber: null, targetRevisionNumber: revision, baselineSha256: null,
+      targetSha256: 'b'.repeat(64), targetDeploymentId: null, rollbackDeploymentId: null,
+      createdAt: '2026-09-30T10:00:00Z', startedAt: null, finishedAt: null,
+      verificationDeadlineAt: null, errorCode: null, errorMessage: null, affectedNodes: 0,
+      healthyNodes: 0, preexistingUnhealthyNodes: 0, nodes: [] }, 202)
+    }
     throw new Error(`Unexpected ${method} ${url}`)
   }))
   render(<I18nProvider initialLocale="en"><QueryClientProvider client={createAppQueryClient()}>
@@ -123,6 +138,25 @@ describe('Remnawave config management', () => {
     expect(calls.some(call => call.url.includes('/integrations/one'))).toBe(false)
   })
 
+  it('explains profile-wide guarded rollout and starts it with automatic rollback', async () => {
+    const calls = setup(`${route}/config-profiles/profile`, 'OWNER', true)
+    expect(await screen.findByText(/PRIVATE-CONTENT/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Guarded rollout' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm guarded rollout' })
+    expect(within(dialog).getByText(/all enabled nodes/)).toBeTruthy()
+    expect(within(dialog).getByText(/Affected nodes: 2/)).toBeTruthy()
+    expect(within(dialog).getByText(/already unhealthy/)).toBeTruthy()
+    expect(within(dialog).getByText(/Node-level canary is unavailable/)).toBeTruthy()
+    const checkbox = within(dialog).getByRole('checkbox') as HTMLInputElement
+    expect(checkbox.checked).toBe(true)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start rollout' }))
+    await waitFor(() => expect(calls.some(call => call.url === `${path}/revisions/1/rollouts`)).toBe(true))
+    const start = calls.find(call => call.url === `${path}/revisions/1/rollouts`)
+    expect(start?.body?.automaticRollback).toBe(true)
+    expect(typeof start?.body?.requestId).toBe('string')
+    expect(screen.queryByRole('combobox', { name: /canary/i })).toBeNull()
+  })
+
   it('reuses an unresolved deployment request ID after a page reload', async () => {
     const entry = `${route}/config-profiles/profile`
     const first = setup(entry, 'OWNER', true, true)
@@ -139,5 +173,23 @@ describe('Remnawave config management', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Check the same request' }))
     await waitFor(() => expect(second.some(call => call.url === `${path}/revisions/1/deploy`)).toBe(true))
     expect(second.find(call => call.url === `${path}/revisions/1/deploy`)?.body?.requestId).toBe(firstId)
+  })
+
+  it('reuses an unresolved rollout request ID after a page reload', async () => {
+    const entry = `${route}/config-profiles/profile`
+    const first = setup(entry, 'OWNER', true, false, true)
+    expect(await screen.findByText(/PRIVATE-CONTENT/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Guarded rollout' }))
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Confirm guarded rollout' }))
+      .getByRole('button', { name: 'Start rollout' }))
+    await waitFor(() => expect(first.some(call => call.url === `${path}/revisions/1/rollouts`)).toBe(true))
+    const firstId = first.find(call => call.url === `${path}/revisions/1/rollouts`)?.body?.requestId
+    expect(firstId).toBe(window.sessionStorage.getItem('integration-config-rollout-request:org:one:profile:1'))
+    cleanup()
+    const second = setup(entry, 'OWNER', true)
+    expect(await screen.findByText(/PRIVATE-CONTENT/)).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: 'Check the same rollout request' }))
+    await waitFor(() => expect(second.some(call => call.url === `${path}/revisions/1/rollouts`)).toBe(true))
+    expect(second.find(call => call.url === `${path}/revisions/1/rollouts`)?.body?.requestId).toBe(firstId)
   })
 })

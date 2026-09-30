@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { createRequestId } from '../app/requestId'
 import { getConfigRevision, previewConfigRevision, useConfigDeployments, useConfigRevisions,
-  useCreateConfigRevision, useDeployConfigRevision, useManagedConfigProfile,
-  type ConfigPreview, type ConfigRevisionContent, type ConfigStatus } from '../api/integrationConfigProfiles'
+  previewConfigRollout, useConfigRollouts, useCreateConfigRevision, useDeployConfigRevision,
+  useManagedConfigProfile, useStartConfigRollout, type ConfigPreview, type ConfigRevisionContent,
+  type ConfigRolloutPreview, type ConfigStatus } from '../api/integrationConfigProfiles'
 import { useIntegrationInventory } from '../api/integrationInventory'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
@@ -55,9 +56,11 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
   const remote = inventory.data?.items.find(item => item.id === object)
   const revisions = useConfigRevisions(org, integration, object, Boolean(managed.data))
   const deployments = useConfigDeployments(org, integration, object, Boolean(managed.data))
+  const rollouts = useConfigRollouts(org, integration, object, Boolean(managed.data))
   const create = useCreateConfigRevision(org, integration, object)
   const deploy = useDeployConfigRevision(org, integration, object)
-  const [tab, setTab] = useState<'configuration' | 'revisions' | 'deployments'>('configuration')
+  const rollout = useStartConfigRollout(org, integration, object)
+  const [tab, setTab] = useState<'configuration' | 'revisions' | 'deployments' | 'rollouts'>('configuration')
   const [selected, setSelected] = useState<number | null>(null)
   const [content, setContent] = useState<ConfigRevisionContent | null>(null)
   const [contentError, setContentError] = useState<unknown>(null)
@@ -68,13 +71,21 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
   const [previewError, setPreviewError] = useState<unknown>(null)
   const [previewing, setPreviewing] = useState(false)
   const [confirm, setConfirm] = useState(false)
+  const [rolloutConfirm, setRolloutConfirm] = useState(false)
+  const [rolloutPreview, setRolloutPreview] = useState<ConfigRolloutPreview | null>(null)
+  const [rolloutPreviewError, setRolloutPreviewError] = useState<unknown>(null)
+  const [rolloutPreviewing, setRolloutPreviewing] = useState(false)
+  const [automaticRollback, setAutomaticRollback] = useState(true)
   const [pendingRequest, setPendingRequest] = useState<{ revision: number; id: string } | null>(null)
+  const [pendingRolloutRequest, setPendingRolloutRequest] = useState<{ revision: number; id: string } | null>(null)
   const back = { label: ru ? 'Интеграция' : 'Integration',
     to: `/organizations/${org}/integrations/${integration}?tab=profiles` }
   const revision = selected ?? managed.data?.profile.latestRevisionNumber ?? null
   const chosen = revision
   const requestKey = chosen === null ? null :
     `integration-config-deploy-request:${org}:${integration}:${object}:${chosen}`
+  const rolloutRequestKey = chosen === null ? null :
+    `integration-config-rollout-request:${org}:${integration}:${object}:${chosen}`
 
   useEffect(() => {
     if (chosen === null || requestKey === null) return
@@ -89,6 +100,18 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
     storeDeployRequest(`integration-config-deploy-request:${org}:${integration}:${object}:${pendingRequest.revision}`, null)
     setPendingRequest(null)
   }, [deployments.data, pendingRequest, org, integration, object])
+
+  useEffect(() => {
+    if (!rolloutRequestKey || !rollouts.data) return
+    const requestId = savedDeployRequest(rolloutRequestKey)
+    if (!requestId) { setPendingRolloutRequest(null); return }
+    const found = rollouts.data.find(item => item.requestId === requestId)
+    if (found && ['SUCCEEDED', 'ROLLED_BACK', 'FAILED', 'UNKNOWN', 'CANCELLED'].includes(found.status)) {
+      storeDeployRequest(rolloutRequestKey, null)
+      setPendingRolloutRequest(null)
+    } else if (found) setPendingRolloutRequest(null)
+    else if (chosen !== null) setPendingRolloutRequest({ revision: chosen, id: requestId })
+  }, [rollouts.data, rolloutRequestKey, chosen])
 
   useEffect(() => {
     if (!canRead || revision === null) return
@@ -148,6 +171,21 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
       onError: () => { void deployments.refetch() },
     })
   }
+  const previewRollout = () => {
+    setRolloutPreviewing(true); setRolloutPreviewError(null); setRolloutPreview(null)
+    void previewConfigRollout(org, integration, object, chosenRevision).then(value => {
+      setRolloutPreview(value); setRolloutConfirm(true)
+    }, setRolloutPreviewError).finally(() => setRolloutPreviewing(false))
+  }
+  const startRollout = () => {
+    if (!rolloutRequestKey) return
+    const requestId = savedDeployRequest(rolloutRequestKey) ?? createRequestId()
+    storeDeployRequest(rolloutRequestKey, requestId); setRolloutConfirm(false)
+    rollout.mutate({ revision: chosenRevision, requestId, automaticRollback }, {
+      onSuccess: () => { setPendingRolloutRequest(null); setTab('rollouts') },
+      onError: () => { setPendingRolloutRequest({ revision: chosenRevision, id: requestId }); void rollouts.refetch() },
+    })
+  }
 
   return <AppShell><div className="workspace-page integration-page">
     <WorkspaceHeader title={remote?.displayName ?? value.profile.name} back={back}
@@ -179,6 +217,7 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
       { id: 'configuration', label: ru ? 'Конфигурация' : 'Configuration' },
       { id: 'revisions', label: ru ? 'Ревизии' : 'Revisions' },
       { id: 'deployments', label: ru ? 'Развёртывания' : 'Deployments' },
+      { id: 'rollouts', label: 'Rollouts' },
     ]} active={tab} onChange={next => setTab(next as typeof tab)} />
     {tab === 'configuration' ? <WorkspaceSection title={ru ? `Ревизия ${chosenRevision}` : `Revision ${chosenRevision}`}>
       <div className="integration-row-actions">
@@ -189,6 +228,11 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
         {canDeploy ? <button className="primary-button" type="button" disabled={busy || editing || !content ||
           value.status === 'WAITING_REFRESH' || value.status === 'UNAVAILABLE'} onClick={() => setConfirm(true)}>
           {ru ? 'Развернуть' : 'Deploy'}</button> : null}
+        {canDeploy ? <button className="primary-button" type="button" disabled={busy || editing || !content ||
+          rolloutPreviewing || rollouts.data?.some(item => ![
+            'SUCCEEDED', 'ROLLED_BACK', 'FAILED', 'UNKNOWN', 'CANCELLED'].includes(item.status))}
+          onClick={previewRollout}>{rolloutPreviewing ? i18n.t.common.loading :
+            ru ? 'Безопасное развёртывание' : 'Guarded rollout'}</button> : null}
       </div>
       {contentError ? <InlineAlert tone="danger" title={ru ? 'Ошибка загрузки' : 'Load failed'}>
         {describeError(contentError, i18n)}</InlineAlert> : null}
@@ -217,6 +261,17 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
           <button type="button" className="text-button" onClick={deploySelected} disabled={deploy.isPending}>
             {ru ? 'Проверить тот же запрос' : 'Check the same request'}</button>
         </InlineAlert> : null}
+      {rolloutPreviewError || rollout.isError ? <InlineAlert tone="danger"
+        title={ru ? 'Запрос rollout не выполнен' : 'Rollout request failed'}>
+        {describeError(rolloutPreviewError ?? rollout.error, i18n)}
+      </InlineAlert> : null}
+      {pendingRolloutRequest ? <InlineAlert tone="warning"
+        title={ru ? 'Результат запроса rollout неизвестен' : 'Rollout request result is unknown'}>
+        {ru ? 'Повторная проверка использует тот же request ID.' :
+          'Check the request again with the same request ID.'}
+        <button type="button" className="text-button" onClick={startRollout} disabled={rollout.isPending}>
+          {ru ? 'Проверить тот же запрос' : 'Check the same rollout request'}</button>
+      </InlineAlert> : null}
     </WorkspaceSection> : null}
     {tab === 'revisions' ? <WorkspaceSection title={ru ? 'Ревизии' : 'Revisions'}>
       {revisions.data?.map(item => <button key={item.revisionNumber} className="secondary-button" type="button"
@@ -231,6 +286,30 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
           <td>{item.status}</td><td>{i18n.format.dateTime(item.createdAt)}</td><td>{item.errorCode ?? '—'}</td>
         </tr>)}</tbody></table></div>
     </WorkspaceSection> : null}
+    {tab === 'rollouts' ? <WorkspaceSection title={ru ? 'Безопасные rollout' : 'Guarded rollout history'}>
+      <p>{ru ? 'Remnawave применяет изменения Config Profile ко всем включённым узлам этого профиля.' :
+        'Remnawave applies Config Profile changes to all enabled nodes using this profile.'}</p>
+      <p className="muted-copy">{ru ? 'Node-level canary недоступен: rollout выполняется для всего профиля.' :
+        'Node-level canary is unavailable for this provider. Rollout is profile-wide.'}</p>
+      {rollouts.data?.[0] ? <ol>
+        <li>{rollouts.data[0].status === 'PREPARING' ? '•' : '✓'} Preparing fresh baseline</li>
+        <li>{rollouts.data[0].baselineRevisionNumber ? '✓' : '•'} Baseline revision {rollouts.data[0].baselineRevisionNumber ?? '—'}</li>
+        <li>{['APPLYING', 'VERIFYING', 'ROLLBACK_APPLYING', 'ROLLBACK_VERIFYING', 'SUCCEEDED', 'ROLLED_BACK', 'FAILED', 'UNKNOWN']
+          .includes(rollouts.data[0].status) ? '✓' : '•'} Applying revision {rollouts.data[0].targetRevisionNumber}</li>
+        <li>{['VERIFYING', 'ROLLBACK_APPLYING', 'ROLLBACK_VERIFYING', 'SUCCEEDED', 'ROLLED_BACK', 'FAILED', 'UNKNOWN']
+          .includes(rollouts.data[0].status) ? '✓' : '•'} Waiting for fresh observation</li>
+        <li>{['ROLLBACK_APPLYING', 'ROLLBACK_VERIFYING', 'ROLLED_BACK'].includes(rollouts.data[0].status) ? '✕' : '•'} Verifying {rollouts.data[0].affectedNodes} nodes</li>
+        {['ROLLBACK_APPLYING', 'ROLLBACK_VERIFYING', 'ROLLED_BACK'].includes(rollouts.data[0].status) ?
+          <li>{rollouts.data[0].status === 'ROLLED_BACK' ? '✓' : '•'} Restoring revision {rollouts.data[0].baselineRevisionNumber}</li> : null}
+      </ol> : null}
+      <div className="table-scroll"><table className="data-grid"><thead><tr>
+        <th>{ru ? 'Ревизии' : 'Revisions'}</th><th>{ru ? 'Статус' : 'Status'}</th>
+        <th>{ru ? 'Авто rollback' : 'Auto rollback'}</th><th>{ru ? 'Ошибка' : 'Error'}</th></tr></thead>
+        <tbody>{rollouts.data?.map(item => <tr key={item.id}>
+          <td>{item.baselineRevisionNumber ?? '—'} → {item.targetRevisionNumber}</td><td>{item.status}</td>
+          <td>{item.automaticRollback ? 'On' : 'Off'}</td><td>{item.errorCode ?? '—'}</td>
+        </tr>)}</tbody></table></div>
+    </WorkspaceSection> : null}
     {confirm ? <div className="dialog-backdrop" role="presentation"><section role="dialog" aria-modal="true"
       aria-label={ru ? 'Подтвердить развёртывание' : 'Confirm deployment'} className="monitor-rule-dialog integration-bind-dialog">
       <div className="dialog-heading"><h2>{ru ? `Развернуть ревизию ${chosenRevision}?` : `Deploy revision ${chosenRevision}?`}</h2></div>
@@ -241,6 +320,29 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
       <div className="dialog-actions"><button className="secondary-button" type="button" onClick={() => setConfirm(false)}>
         {i18n.t.common.cancel}</button><button className="primary-button" type="button" onClick={deploySelected}>
         {ru ? 'Развернуть' : 'Deploy'}</button></div></section></div> : null}
+    {rolloutConfirm && rolloutPreview ? <div className="dialog-backdrop" role="presentation"><section role="dialog"
+      aria-modal="true" aria-label="Confirm guarded rollout" className="monitor-rule-dialog integration-bind-dialog">
+      <div className="dialog-heading"><h2>{ru ? `Guarded rollout ревизии ${chosenRevision}?` :
+        `Guarded rollout revision ${chosenRevision}?`}</h2></div>
+      <div className="dialog-body">
+        <p>{ru ? 'Remnawave применит Config Profile ко всем включённым узлам, использующим этот профиль.' :
+          'Remnawave applies a Config Profile update to all enabled nodes using this profile.'}</p>
+        <p>{ru ? 'Затронуто узлов' : 'Affected nodes'}: {rolloutPreview.affectedNodes}</p>
+        {rolloutPreview.preexistingUnhealthyNodes > 0 ? <InlineAlert tone="warning"
+          title={`${rolloutPreview.preexistingUnhealthyNodes} nodes were already unhealthy before rollout.`} /> : null}
+        <p>{ru ? 'InfraDesk проверит их состояние после обновления.' :
+          'InfraDesk will verify their state after the update.'}</p>
+        <label><input type="checkbox" checked={automaticRollback}
+          onChange={event => setAutomaticRollback(event.target.checked)} /> {' '}
+          {ru ? `Восстановить ревизию ${rolloutPreview.baselineRevisionNumber} при подтверждённой регрессии` :
+            `Restore revision ${rolloutPreview.baselineRevisionNumber} if a health regression is confirmed`}</label>
+        <p className="muted-copy">{ru ? 'Node-level canary недоступен.' :
+          'Node-level canary is unavailable for this provider.'}</p>
+      </div><div className="dialog-actions"><button className="secondary-button" type="button"
+        onClick={() => setRolloutConfirm(false)}>{i18n.t.common.cancel}</button>
+        <button className="primary-button" type="button" onClick={startRollout} disabled={rollout.isPending}>
+          {ru ? 'Начать rollout' : 'Start rollout'}</button></div>
+    </section></div> : null}
     <p className="muted-copy"><Link to={back.to}>{ru ? 'Вернуться к интеграции' : 'Back to integration'}</Link></p>
   </div></AppShell>
 }
