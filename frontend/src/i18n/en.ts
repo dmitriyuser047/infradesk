@@ -70,6 +70,9 @@ export const en = {
     tryLater: 'Please try again shortly.',
     codes: {
       INTEGRATION_ACTION_ALREADY_RUNNING: 'A node action is still queued or running. Wait for it to finish before changing the endpoint, the credentials or deleting the integration.',
+      INTEGRATION_MANAGEMENT_ACTIVE: 'This integration manages selected nodes. Switch it back to Observe before changing the endpoint or the credentials.',
+      INTEGRATION_MANAGEMENT_REQUIRES_SYNC: 'Managing nodes requires automatic synchronization. Switch back to Observe before disabling the integration.',
+      INTEGRATION_ACTION_CONFLICTS_WITH_DESIRED_STATE: 'This action works against the node’s desired state. Change the desired state instead.',
       INTEGRATION_CONFIGURATION_CHANGED: 'The integration endpoint or credentials changed during synchronization. Run Sync now again.',
       CONFIGURATION_PROFILE_NOT_FOUND: 'Configuration not found.',
       CONFIGURATION_ASSIGNMENT_NOT_FOUND: 'Configuration assignment not found.',

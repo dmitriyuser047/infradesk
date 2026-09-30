@@ -238,15 +238,18 @@ final class PostgresIntegrationInventoryQuery extends IntegrationInventoryQuery[
       filter.state.map(value => fr"o.summary ->> 'state' = ${value.code}")
     ).flatten
     val where = fr"where" ++ conditions.reduce(_ ++ fr"and" ++ _)
-    val items = (fr"select" ++ objectColumns ++ fr""", r.id, r.code, r.name, e.id, e.name, p.id, p.name
-       from integration_inventory_object o
+    // The binding and the desired state of every row come with the page: nothing is read per row.
+    val items = (fr"select" ++ objectColumns ++ fr", r.id, r.code, r.name, e.id, e.name, p.id, p.name," ++
+      IntegrationDesiredStateSql.viewColumns ++ fr"""
+       from integration_inventory_object o""" ++ IntegrationDesiredStateSql.viewJoins ++ fr"""
        left join integration_resource_binding b on b.inventory_object_id = o.id and b.organization_id = o.organization_id
        left join resource r on r.id = b.resource_id and r.organization_id = b.organization_id
        left join environment e on e.id = r.environment_id and e.organization_id = r.organization_id
        left join project p on p.id = e.project_id and p.organization_id = e.organization_id""" ++ where ++
       fr"order by o.display_name, o.id limit ${filter.limit} offset ${filter.offset}")
-      .query[(ObjectRow, BoundRow)].to[List]
-      .flatMap(_.traverse { case (row, bound) => row.toDomain.liftTo[ConnectionIO].map(InventoryItem(_, bound.toView)) })
+      .query[(ObjectRow, BoundRow, IntegrationDesiredStateSql.ViewRow)].to[List]
+      .flatMap(_.traverse { case (row, bound, desired) =>
+        row.toDomain.liftTo[ConnectionIO].map(InventoryItem(_, bound.toView, desired.toView)) })
     val total = (fr"select count(*) from integration_inventory_object o" ++ where).query[Long].unique
     (items, total).mapN(InventoryPage(_, _))
   }
@@ -257,7 +260,9 @@ final class PostgresIntegrationInventoryQuery extends IntegrationInventoryQuery[
               where c.organization_id = i.organization_id and c.integration_id = i.id and c.status = 'COMPLETED'),
            st.next_run_at,
            coalesce(n.nodes_active, 0), coalesce(n.nodes_inactive, 0), coalesce(n.hosts_active, 0),
-           coalesce(n.hosts_inactive, 0), coalesce(n.profiles_active, 0), coalesce(n.profiles_inactive, 0)
+           coalesce(n.hosts_inactive, 0), coalesce(n.profiles_active, 0), coalesce(n.profiles_inactive, 0),
+           coalesce(m.managed, 0), coalesce(m.compliant, 0), coalesce(m.drifted, 0), coalesce(m.applying, 0),
+           coalesce(m.attention, 0)
          from integration i
          left join integration_sync_state st on st.organization_id = i.organization_id and st.integration_id = i.id
          left join lateral (
@@ -273,13 +278,26 @@ final class PostgresIntegrationInventoryQuery extends IntegrationInventoryQuery[
                   count(*) filter (where o.object_type = 'CONFIG_PROFILE' and not o.is_active) as profiles_inactive
            from integration_inventory_object o
            where o.organization_id = i.organization_id and o.integration_id = i.id) n on true
+         left join lateral (
+           select count(*) as managed,
+                  count(*) filter (where x.status = 'COMPLIANT') as compliant,
+                  count(*) filter (where x.status = 'DRIFTED') as drifted,
+                  count(*) filter (where x.status in ('APPLYING', 'WAITING_REFRESH')) as applying,
+                  count(*) filter (where x.status in ('REMEDIATION_FAILED', 'UNAVAILABLE')) as attention
+           from (select""" ++ IntegrationDesiredStateSql.status ++ fr""" as status
+                 from integration_desired_state d
+                 join integration_inventory_object o on o.id = d.inventory_object_id
+                   and o.integration_id = d.integration_id and o.organization_id = d.organization_id
+                 left join integration_action_execution la on la.id = d.last_action_execution_id
+                   and la.organization_id = d.organization_id
+                 where d.organization_id = i.organization_id and d.integration_id = i.id) x) m on true
          where i.organization_id = $organizationId""")
       .query[OverviewRow].to[List]
       .flatMap(_.traverse(row => row.session.toSession.traverse(_.toDomain).liftTo[ConnectionIO].map { last =>
         row.integrationId -> IntegrationOverview(row.integrationId, last, row.lastSuccessfulSyncAt, row.nextRunAt,
           IntegrationInventorySummary(InventoryTypeCounts(row.counts.nodesActive, row.counts.nodesInactive),
             InventoryTypeCounts(row.counts.hostsActive, row.counts.hostsInactive),
-            InventoryTypeCounts(row.counts.profilesActive, row.counts.profilesInactive)))
+            InventoryTypeCounts(row.counts.profilesActive, row.counts.profilesInactive)), row.desired)
       }))
       .map(_.toMap)
 
@@ -296,15 +314,21 @@ final class PostgresIntegrationInventoryQuery extends IntegrationInventoryQuery[
       fr"order by r.name, r.id limit $limit").query[BindingCandidate].to[List]
 
   override def resourceContexts(organizationId: UUID, resourceId: UUID): ConnectionIO[List[ResourceIntegrationContext]] =
-    (fr"select i.id, i.name, i.provider_type," ++ objectColumns ++ fr"""
+    (fr"select i.id, i.name, i.provider_type, i.management_mode," ++ objectColumns ++ fr"," ++
+      IntegrationDesiredStateSql.viewColumns ++ fr"""
        from integration_resource_binding b
        join integration_inventory_object o on o.id = b.inventory_object_id and o.organization_id = b.organization_id
-       join integration i on i.id = b.integration_id and i.organization_id = b.organization_id
+       join integration i on i.id = b.integration_id and i.organization_id = b.organization_id""" ++
+      IntegrationDesiredStateSql.viewJoins ++ fr"""
        where b.organization_id = $organizationId and b.resource_id = $resourceId
-       order by i.name, i.id, o.display_name, o.id""").query[(UUID, String, String, ObjectRow)].to[List]
-      .flatMap(_.traverse { case (id, name, provider, row) =>
-        (for { p <- IntegrationProviderType.fromCode(provider); o <- row.toDomain }
-          yield ResourceIntegrationContext(id, name, p, o)).liftTo[ConnectionIO]
+       order by i.name, i.id, o.display_name, o.id""")
+      .query[(UUID, String, String, String, ObjectRow, IntegrationDesiredStateSql.ViewRow)].to[List]
+      .flatMap(_.traverse { case (id, name, provider, mode, row, desired) =>
+        (for {
+          p <- IntegrationProviderType.fromCode(provider)
+          m <- IntegrationManagementMode.fromCode(mode)
+          o <- row.toDomain
+        } yield ResourceIntegrationContext(id, name, p, o, m, desired.toView)).liftTo[ConnectionIO]
       })
 }
 
@@ -335,5 +359,6 @@ object PostgresIntegrationInventoryQuery {
     hostsInactive: Long, profilesActive: Long, profilesInactive: Long)
 
   private[postgres] final case class OverviewRow(integrationId: UUID, session: OptionalSession,
-    lastSuccessfulSyncAt: Option[Instant], nextRunAt: Option[Instant], counts: OverviewCounts)
+    lastSuccessfulSyncAt: Option[Instant], nextRunAt: Option[Instant], counts: OverviewCounts,
+    desired: DesiredStateCounts)
 }

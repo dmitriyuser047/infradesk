@@ -83,7 +83,11 @@ export function NodeActionControls({ organizationId, integrationId, node }: {
   const unknown = (current?.status === 'UNKNOWN' ? current : null) ??
     history.data?.find(value => value.inventoryObjectId === node.id && value.status === 'UNKNOWN')
   const requiresRefresh = unknown?.finishedAt && Date.parse(node.lastSeenAt) <= Date.parse(unknown.finishedAt)
-  const choices: IntegrationActionCode[] = node.summary.isDisabled ? ['NODE_ENABLE'] : ['NODE_DISABLE', 'NODE_RESTART']
+  // A one-shot action that works against the node's desired state is not offered; the backend refuses it anyway.
+  const desired = node.desiredState?.state
+  const observedChoices: IntegrationActionCode[] = node.summary.isDisabled ? ['NODE_ENABLE'] : ['NODE_DISABLE', 'NODE_RESTART']
+  const choices = observedChoices.filter(action =>
+    !(desired === 'ENABLED' && action === 'NODE_DISABLE') && !(desired === 'DISABLED' && action === 'NODE_ENABLE'))
   const label = (action: IntegrationActionCode) => action === 'NODE_ENABLE' ? t.enable : action === 'NODE_DISABLE' ? t.disable : t.restart
   const submit = () => {
     if (!pendingAction || submitting.current) return

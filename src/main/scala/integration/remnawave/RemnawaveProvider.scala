@@ -6,14 +6,14 @@ import cats.effect.IO
 import domain.integration.{IntegrationActionCode, IntegrationActionRemoteOutcome, IntegrationCapability,
   IntegrationObservation, IntegrationProviderType, RemnawaveCredential}
 
-/** Remnawave, observed read-only: a connectivity check and one inventory snapshot. */
+/** Remnawave: a connectivity check, one inventory snapshot, and one node action at a time. */
 final class RemnawaveProvider(client: RemnawaveClient) extends IntegrationProvider[IO] {
   override val providerType: IntegrationProviderType = IntegrationProviderType.Remnawave
   override val displayName = "Remnawave"
   override val capabilities: Set[IntegrationCapability] = Set(
     IntegrationCapability.ConnectivityTest, IntegrationCapability.NodeDiscovery, IntegrationCapability.HostDiscovery,
     IntegrationCapability.ConfigProfileDiscovery, IntegrationCapability.MetricsRead,
-    IntegrationCapability.SafeActions)
+    IntegrationCapability.SafeActions, IntegrationCapability.DesiredState)
 
   override def testConnection(context: IntegrationRuntimeContext): IO[IntegrationTestResult] =
     credentialOf(context).flatMap(credential => IO.monotonic.flatMap(started =>

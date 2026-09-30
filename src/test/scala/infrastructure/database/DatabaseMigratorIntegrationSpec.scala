@@ -12,7 +12,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("V39 configuration and integration data survive migration to V40") {
+  test("V40 configuration and integration data survive migration to V41") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
     val base = DatabaseConfig.fromEnvironment(sys.env).fold(throw _, identity)
@@ -35,8 +35,8 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
     sql(maintenanceUrl, s"CREATE DATABASE $databaseName")
     try {
       val flyway = Flyway.configure().dataSource(testConfig.url, testConfig.user, testConfig.password)
-        .locations("classpath:db/migration").target("39").load()
-      assertEquals(flyway.migrate().migrationsExecuted, 39)
+        .locations("classpath:db/migration").target("40").load()
+      assertEquals(flyway.migrate().migrationsExecuted, 40)
       val org = UUID.randomUUID(); val integration = UUID.randomUUID(); val secret = UUID.randomUUID()
       val user = UUID.randomUUID(); val project = UUID.randomUUID(); val environment = UUID.randomUUID()
       val resource = UUID.randomUUID(); val session = UUID.randomUUID(); val inventory = UUID.randomUUID()
@@ -69,10 +69,16 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       sql(testConfig.url, s"insert into integration_resource_binding (id, organization_id, integration_id, " +
         s"inventory_object_id, resource_id, created_by_user_id, created_at, updated_at) values " +
         s"('${UUID.randomUUID()}', '$org', '$integration', '$inventory', '$resource', '$user', now(), now())")
+      // Action history written by V40: it must come out of the upgrade as a manual action.
+      sql(testConfig.url, s"insert into integration_action_execution (id, organization_id, integration_id, " +
+        s"inventory_object_id, request_id, action_code, external_id_snapshot, display_name_snapshot, " +
+        s"requested_by_user_id, status, created_at, finished_at, updated_at) values ('${UUID.randomUUID()}', '$org', " +
+        s"'$integration', '$inventory', '${UUID.randomUUID()}', 'NODE_RESTART', 'x', 'Upgrade node', '$user', " +
+        "'SUCCEEDED', now(), now(), now())")
       val result = DatabaseMigrator.migrate(testConfig,
         Slf4jLogger.getLoggerFromName[IO]("test.database.migrator")).unsafeRunSync()
       assertEquals(result.migrationsApplied, 1)
-      assertEquals(result.currentVersion, "40")
+      assertEquals(result.currentVersion, "41")
       val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
       try {
         val statement = connection.createStatement()
@@ -84,10 +90,15 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
             "and s.ciphertext = decode('00112233445566778899aabbccddeeff0011', 'hex')), " +
             s"(select count(*) from integration_sync_state where integration_id = '$integration' " +
             "and consecutive_failures = 0 and claim_token is null), " +
-            "(select count(*) from flyway_schema_history where version = '40' and success), " +
+            "(select count(*) from flyway_schema_history where version = '41' and success), " +
             s"(select count(*) from integration_inventory_object where id = '$inventory' and display_name = 'Upgrade node'), " +
             s"(select count(*) from integration_resource_binding where inventory_object_id = '$inventory'), " +
-            s"(select count(*) from integration_sync_session where id = '$session' and status = 'COMPLETED')")
+            s"(select count(*) from integration_sync_session where id = '$session' and status = 'COMPLETED'), " +
+            // An upgrade never turns automation on: every integration observes, nothing is managed.
+            s"(select count(*) from integration where id = '$integration' and management_mode = 'OBSERVE'), " +
+            "(select count(*) from integration_desired_state), " +
+            s"(select count(*) from integration_action_execution where integration_id = '$integration' " +
+            "and source = 'MANUAL' and desired_state_id_snapshot is null and desired_state_version_snapshot is null)")
           try {
             assert(rows.next())
             assertEquals(rows.getInt(1), 1)
@@ -97,13 +108,16 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
             assertEquals(rows.getInt(5), 1)
             assertEquals(rows.getInt(6), 1)
             assertEquals(rows.getInt(7), 1)
+            assertEquals(rows.getInt(8), 1)
+            assertEquals(rows.getInt(9), 0)
+            assertEquals(rows.getInt(10), 1)
           } finally rows.close()
         } finally statement.close()
       } finally connection.close()
     } finally sql(maintenanceUrl, s"DROP DATABASE $databaseName WITH (FORCE)")
   }
 
-  test("Flyway applies V1 through V40 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V41 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -131,10 +145,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 40)
-        assertEquals(first.currentVersion, "40")
+        assertEquals(first.migrationsApplied, 41)
+        assertEquals(first.currentVersion, "41")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "40")
+        assertEquals(second.currentVersion, "41")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()

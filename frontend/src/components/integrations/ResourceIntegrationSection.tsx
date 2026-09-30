@@ -4,6 +4,7 @@ import { useI18n } from '../../i18n'
 import { NodeActionControls } from './NodeActionControls'
 import { InlineAlert, PropertyGrid, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { nodeStateTones } from './integrationPresentation'
+import { DesiredStateControl, useDesiredStateCopy } from './DesiredStateControls'
 
 /**
  * What Remnawave reports about the node this resource was bound to by hand. Read-only: it is the
@@ -12,6 +13,7 @@ import { nodeStateTones } from './integrationPresentation'
  */
 export function ResourceIntegrationSection({ organizationId, resourceId }: { organizationId: string; resourceId: string }) {
   const i18n = useI18n(); const t = i18n.t.integrationInventory
+  const desiredCopy = useDesiredStateCopy()
   const query = useResourceIntegrationBindings(organizationId, resourceId, true)
   if (query.isPending || (query.isSuccess && query.data.length === 0)) return null
   if (query.isError) return <InlineAlert tone="warning" title={t.loadError}
@@ -30,6 +32,10 @@ export function ResourceIntegrationSection({ organizationId, resourceId }: { org
       { label: t.version, value: object.summary.xrayVersion ?? '—' },
       { label: t.users, value: i18n.format.number(object.summary.usersOnline) },
       { label: t.lastSeen, value: i18n.format.dateTime(object.lastSeenAt) },
+      // What Remnawave reports and what was asked for are shown side by side, never merged.
+      { label: desiredCopy.observed, value: desiredCopy.state[object.summary.isDisabled ? 'DISABLED' : 'ENABLED'] },
+      { label: desiredCopy.desired, value: <DesiredStateControl organizationId={organizationId}
+        integrationId={integration.id} managementMode={integration.managementMode} node={object} /> },
     ]} />
     <NodeActionControls organizationId={organizationId} integrationId={integration.id} node={object} />
   </WorkspaceSection>)}</>

@@ -34,7 +34,8 @@ final case class PreparedIntegrationSync(integration: Integration, secret: Integ
 final class IntegrationSyncTransactions[Tx[_]: MonadThrow](
   integrations: IntegrationRepository[Tx], secrets: IntegrationSecretRepository[Tx],
   sessions: IntegrationSyncSessionRepository[Tx], inventory: IntegrationInventoryRepository[Tx],
-  ids: IdGenerator[Tx], time: TimeProvider[Tx], audit: AuditRecorder[Tx]
+  ids: IdGenerator[Tx], time: TimeProvider[Tx], audit: AuditRecorder[Tx],
+  desired: IntegrationDesiredStateRepository[Tx]
 ) {
   import IntegrationSync._
 
@@ -73,11 +74,17 @@ final class IntegrationSyncTransactions[Tx[_]: MonadThrow](
       _ <- Either.cond(current.exists(value => value.baseUrl == prepared.integration.baseUrl &&
         value.secretId == prepared.integration.secretId), (), ConfigurationChanged).liftTo[Tx]
       now <- time.now
-      deactivated <- inventory.applySnapshot(session.organizationId, session.integrationId, session.id, observation, now)
+      // Objects are seen as of the moment this observation began, not the moment it is stored: an
+      // action that finished while the provider was being read is not yet observed by it.
+      deactivated <- inventory.applySnapshot(session.organizationId, session.integrationId, session.id, observation,
+        session.startedAt)
       counts = IntegrationSyncCounts(observation.count(IntegrationObjectType.Node),
         observation.count(IntegrationObjectType.Host), observation.count(IntegrationObjectType.ConfigProfile), deactivated)
       completed <- sessions.complete(session.organizationId, session.id, now, counts)
       _ <- if (completed) ().pure[Tx] else (StaleSessionRetired: Throwable).raiseError[Tx, Unit]
+      // A new observation exists: every desired state of the integration is due for a decision. A
+      // failed synchronization never reaches this line, so it never nudges.
+      _ <- desired.nudge(session.organizationId, session.integrationId, now)
     } yield session.copy(finishedAt = Some(now), status = IntegrationSyncStatus.Completed, counts = Some(counts))
   }
 

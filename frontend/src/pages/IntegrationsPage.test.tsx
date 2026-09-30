@@ -10,7 +10,8 @@ import { IntegrationFormPage, IntegrationsPage } from './IntegrationsPage'
 
 const existing: IntegrationResponse = { id: 'one', name: 'Main Remnawave', providerType: 'REMNAWAVE',
   baseUrl: 'https://panel.example.test', enabled: false,
-  credential: { apiTokenConfigured: true, caddyApiKeyConfigured: false }, createdAt: '', updatedAt: '' }
+  credential: { apiTokenConfigured: true, caddyApiKeyConfigured: false }, createdAt: '', updatedAt: '',
+  managementMode: 'OBSERVE' }
 type Call = { url: string; method: string; body?: Record<string, unknown> }
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value),
   { status, headers: { 'Content-Type': 'application/json' } })

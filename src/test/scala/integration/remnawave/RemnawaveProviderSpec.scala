@@ -42,7 +42,7 @@ final class RemnawaveProviderSpec extends FunSuite {
     assertEquals(provider.capabilities, Set[IntegrationCapability](IntegrationCapability.ConnectivityTest,
       IntegrationCapability.NodeDiscovery, IntegrationCapability.HostDiscovery,
       IntegrationCapability.ConfigProfileDiscovery, IntegrationCapability.MetricsRead,
-      IntegrationCapability.SafeActions))
+      IntegrationCapability.SafeActions, IntegrationCapability.DesiredState))
     assert(!provider.capabilities.contains(IntegrationCapability.ConfigProfileManagement))
     intercept[IllegalArgumentException](new IntegrationProviderRegistry[IO](List(provider, provider)))
   }

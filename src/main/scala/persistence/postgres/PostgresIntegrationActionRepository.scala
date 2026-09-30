@@ -15,18 +15,27 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
   private final case class Row(id: UUID, org: UUID, integration: UUID, obj: UUID, request: UUID,
     action: String, externalId: String, name: String, user: UUID, status: String, created: Instant,
     started: Option[Instant], recover: Option[Instant], finished: Option[Instant], owner: Option[UUID],
-    token: Option[UUID], error: Option[String], message: Option[String], updated: Instant) {
+    token: Option[UUID], error: Option[String], message: Option[String], updated: Instant, source: String,
+    desiredStateId: Option[UUID], desiredStateVersion: Option[Long]) {
     def domain: ConnectionIO[IntegrationActionExecution] =
-      (IntegrationActionCode.fromCode(action), IntegrationActionStatus.fromCode(status)) match {
-        case (Some(a), Some(s)) => IntegrationActionExecution(id, org, integration,
+      (IntegrationActionCode.fromCode(action), IntegrationActionStatus.fromCode(status),
+        IntegrationActionSource.fromCode(source)) match {
+        case (Some(a), Some(s), Some(src)) => IntegrationActionExecution(id, org, integration,
           IntegrationActionTarget(obj, IntegrationObjectType.Node, externalId, name), request, a, user,
-          s, created, started, recover, finished, owner, token, error, message, updated).pure[ConnectionIO]
+          s, created, started, recover, finished, owner, token, error, message, updated, None, src,
+          desiredStateId, desiredStateVersion).pure[ConnectionIO]
         case _ => new IllegalStateException("Invalid integration action row").raiseError[ConnectionIO, IntegrationActionExecution]
       }
   }
   private val columns: Fragment = fr"""id, organization_id, integration_id, inventory_object_id, request_id,
     action_code, external_id_snapshot, display_name_snapshot, requested_by_user_id, status, created_at,
-    started_at, recover_after_at, finished_at, claimed_by, claim_token, error_code, error_message, updated_at"""
+    started_at, recover_after_at, finished_at, claimed_by, claim_token, error_code, error_message, updated_at,
+    source, desired_state_id_snapshot, desired_state_version_snapshot"""
+  // The same columns for a statement that calls the table `a`.
+  private val returning: Fragment = fr"""a.id, a.organization_id, a.integration_id, a.inventory_object_id,
+    a.request_id, a.action_code, a.external_id_snapshot, a.display_name_snapshot, a.requested_by_user_id, a.status,
+    a.created_at, a.started_at, a.recover_after_at, a.finished_at, a.claimed_by, a.claim_token, a.error_code,
+    a.error_message, a.updated_at, a.source, a.desired_state_id_snapshot, a.desired_state_version_snapshot"""
 
   override def insertOrFind(value: IntegrationActionExecution): ConnectionIO[(IntegrationActionExecution, Boolean)] = {
     val target = value.target
@@ -98,7 +107,7 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
       order by created_at, id for update skip locked limit $limit)
       update integration_action_execution a set status = 'RUNNING', claimed_by = $owner,
       claim_token = $token, started_at = $at, recover_after_at = $recoverAfter, updated_at = $at
-      from selected where a.id = selected.id returning a.*""").query[Row].to[List]
+      from selected where a.id = selected.id returning""" ++ returning).query[Row].to[List]
     claimed <- rows.traverse(_.domain)
   } yield (recovered, claimed)
 

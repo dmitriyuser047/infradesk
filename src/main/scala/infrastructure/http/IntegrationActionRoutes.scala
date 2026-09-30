@@ -97,7 +97,8 @@ final class IntegrationActionRoutes(actions: IntegrationActions[ConnectionIO],
       if (code == "INTEGRATION_NOT_FOUND" || code == "INTEGRATION_OBJECT_NOT_FOUND")
         NotFound(ApiErrorResponse(code, error.getMessage))
       else if (code == "INTEGRATION_ACTION_ALREADY_RUNNING" || code == "INTEGRATION_ACTION_REQUEST_ID_CONFLICT" ||
-        code == "INTEGRATION_ACTION_REQUIRES_REFRESH") Conflict(ApiErrorResponse(code, error.getMessage))
+        code == "INTEGRATION_ACTION_REQUIRES_REFRESH" ||
+        code == "INTEGRATION_ACTION_CONFLICTS_WITH_DESIRED_STATE") Conflict(ApiErrorResponse(code, error.getMessage))
       else UnprocessableEntity(ApiErrorResponse(code, error.getMessage))
     case _ => InternalServerError(ApiErrorResponse("INTERNAL_ERROR", "Internal server error"))
   }
@@ -115,5 +116,9 @@ final class IntegrationActionRoutes(actions: IntegrationActions[ConnectionIO],
     "createdAt" -> value.createdAt.asJson,
     "startedAt" -> value.startedAt.asJson,
     "finishedAt" -> value.finishedAt.asJson,
-    "errorCode" -> value.errorCode.asJson)
+    "errorCode" -> value.errorCode.asJson,
+    // Why the action exists, so history answers "who disabled this node?" without the logs.
+    "source" -> value.source.code.asJson,
+    "desiredStateId" -> value.desiredStateId.asJson,
+    "desiredStateVersion" -> value.desiredStateVersion.asJson)
 }

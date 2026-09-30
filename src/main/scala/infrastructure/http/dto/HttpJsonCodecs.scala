@@ -106,9 +106,9 @@ object HttpJsonCodecs {
     Encoder.forProduct2("apiTokenConfigured", "caddyApiKeyConfigured")(v =>
       (v.apiTokenConfigured, v.caddyApiKeyConfigured))
   implicit val integrationResponseEncoder: Encoder[IntegrationResponse] =
-    Encoder.forProduct8("id", "name", "providerType", "baseUrl", "enabled", "credential",
-      "createdAt", "updatedAt")(v => (v.id, v.name, v.providerType, v.baseUrl, v.enabled,
-      v.credential, v.createdAt, v.updatedAt))
+    Encoder.forProduct9("id", "name", "providerType", "baseUrl", "enabled", "credential",
+      "createdAt", "updatedAt", "managementMode")(v => (v.id, v.name, v.providerType, v.baseUrl, v.enabled,
+      v.credential, v.createdAt, v.updatedAt, v.managementMode))
   implicit val integrationProviderResponseEncoder: Encoder[IntegrationProviderResponse] =
     Encoder.forProduct3("type", "displayName", "capabilities")(v =>
       (v.`type`, v.displayName, v.capabilities))

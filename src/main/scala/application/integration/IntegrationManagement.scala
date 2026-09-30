@@ -9,7 +9,8 @@ import application.port.{IdGenerator, IntegrationActionRepository, IntegrationCr
 import cats.MonadThrow
 import cats.syntax.all._
 import domain.audit.{AuditAction, AuditTargetType}
-import domain.integration.{Integration, IntegrationBaseUrl, IntegrationProviderType, RemnawaveCredential}
+import domain.integration.{Integration, IntegrationBaseUrl, IntegrationManagementMode, IntegrationProviderType,
+  RemnawaveCredential}
 import java.util.UUID
 
 final case class IntegrationError(code: String, override val getMessage: String)
@@ -53,6 +54,11 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
     _ <- command.credential.traverse_(validCredential).liftTo[Tx]
     stored <- load(actor.organizationId, id)
     targetChanged = stored.baseUrl != url || command.credential.nonEmpty
+    // A desired state belongs to the panel it was set for: it never follows the integration to
+    // another endpoint or credential. Return to OBSERVE first, which removes the intents.
+    _ <- Either.cond(!(targetChanged && managed(stored)), (), IntegrationError(
+      IntegrationDesiredStates.ManagementActive, "Endpoint and credentials cannot change while nodes are managed"))
+      .liftTo[Tx]
     _ <- if (targetChanged) requireNoActive(actor.organizationId, id) else ().pure[Tx]
     replacement <- command.credential.traverse(credential =>
       ids.nextId.map(secretId => cipher.encrypt(secretId, actor.organizationId, credential)))
@@ -71,6 +77,9 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
   def setEnabled(actor: ActorContext, id: UUID, enabled: Boolean): Tx[Integration] =
     load(actor.organizationId, id).flatMap { stored =>
       if (stored.enabled == enabled) stored.pure[Tx]
+      // Desired state cannot be kept without fresh observations.
+      else if (!enabled && managed(stored)) IntegrationError(IntegrationDesiredStates.RequiresSync,
+        "Automatic synchronization cannot be disabled while nodes are managed").raiseError[Tx, Integration]
       else for {
         now <- time.now
         next = stored.copy(enabled = enabled, updatedAt = now)
@@ -104,6 +113,8 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
     actions.hasActive(org, id).flatMap(active => Either.cond(!active, (),
       IntegrationError("INTEGRATION_ACTION_ALREADY_RUNNING", "An action is already active"))
       .liftTo[Tx])
+  private def managed(value: Integration): Boolean =
+    value.managementMode == IntegrationManagementMode.ManagedSelected
   private def notFound = IntegrationError("INTEGRATION_NOT_FOUND", "Integration was not found")
   private def invalid = IntegrationError("INVALID_REQUEST", "Invalid integration configuration")
   private def validName(value: String): Either[IntegrationError, String] =

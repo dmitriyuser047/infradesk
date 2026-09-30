@@ -227,10 +227,6 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
       }
     }
 
-  private def toResponse(value: Integration): IntegrationResponse =
-    IntegrationResponse(value.id, value.name, value.providerType.code, value.baseUrl.value,
-      value.enabled, IntegrationCredentialStatus(apiTokenConfigured = true,
-        value.caddyApiKeyConfigured), value.createdAt, value.updatedAt)
 
   private def withOrganization(raw: String, expected: UUID)(next: UUID => IO[Response[IO]]): IO[Response[IO]] =
     Try(UUID.fromString(raw)).toOption match {
@@ -261,6 +257,11 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
       case "INTEGRATION_CREDENTIAL_MISSING" | "INTEGRATION_CREDENTIAL_INVALID" =>
         UnprocessableEntity(ApiErrorResponse(error.code, "Integration credential is unusable"))
       case "INTEGRATION_TIMEOUT" => GatewayTimeout(ApiErrorResponse(error.code, "Integration request timed out"))
+      // A managed integration keeps its endpoint, its credential and its automatic observation.
+      case "INTEGRATION_MANAGEMENT_ACTIVE" =>
+        Conflict(ApiErrorResponse(error.code, "Endpoint and credentials cannot change while nodes are managed"))
+      case "INTEGRATION_MANAGEMENT_REQUIRES_SYNC" =>
+        Conflict(ApiErrorResponse(error.code, "Managing nodes requires automatic synchronization"))
       case code if code.startsWith("INTEGRATION_") &&
         !Set("INTEGRATION_CREDENTIAL_MISSING", "INTEGRATION_CREDENTIAL_INVALID").contains(code) =>
         BadGateway(ApiErrorResponse(code, "Integration check failed"))
@@ -274,6 +275,11 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
 }
 
 object IntegrationRoutes {
+  def toResponse(value: Integration): IntegrationResponse =
+    IntegrationResponse(value.id, value.name, value.providerType.code, value.baseUrl.value,
+      value.enabled, IntegrationCredentialStatus(apiTokenConfigured = true,
+        value.caddyApiKeyConfigured), value.createdAt, value.updatedAt, value.managementMode.code)
+
   final case class BindingRequest(resourceId: UUID)
   implicit val bindingRequestDecoder: Decoder[BindingRequest] = Decoder.forProduct1("resourceId")(BindingRequest.apply)
 

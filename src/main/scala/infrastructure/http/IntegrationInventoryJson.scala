@@ -30,7 +30,21 @@ object IntegrationInventoryJson {
     "lastSync" -> value.lastSync.fold(Json.Null)(session),
     "lastSuccessfulSyncAt" -> value.lastSuccessfulSyncAt.asJson,
     "nextRunAt" -> value.nextRunAt.asJson,
-    "inventory" -> summary(value.inventory))
+    "inventory" -> summary(value.inventory),
+    "desiredState" -> Json.obj(
+      "managed" -> value.desired.managed.asJson,
+      "compliant" -> value.desired.compliant.asJson,
+      "drifted" -> value.desired.drifted.asJson,
+      "applying" -> value.desired.applying.asJson,
+      "needsAttention" -> value.desired.needsAttention.asJson))
+
+  def desiredState(value: DesiredStateView): Json = Json.obj(
+    "id" -> value.id.asJson,
+    "state" -> value.state.code.asJson,
+    "version" -> value.version.asJson,
+    "status" -> value.status.code.asJson,
+    "lastActionExecutionId" -> value.lastActionExecutionId.asJson,
+    "updatedAt" -> value.updatedAt.asJson)
 
   def summary(value: IntegrationInventorySummary): Json = {
     def counts(c: InventoryTypeCounts) = Json.obj("active" -> c.active.asJson, "inactive" -> c.inactive.asJson)
@@ -52,7 +66,8 @@ object IntegrationInventoryJson {
     "binding" -> value.binding.fold(Json.Null)(bound => Json.obj(
       "resource" -> Json.obj("id" -> bound.id.asJson, "code" -> bound.code.asJson, "name" -> bound.name.asJson),
       "environment" -> Json.obj("id" -> bound.environmentId.asJson, "name" -> bound.environmentName.asJson),
-      "project" -> Json.obj("id" -> bound.projectId.asJson, "name" -> bound.projectName.asJson)))))
+      "project" -> Json.obj("id" -> bound.projectId.asJson, "name" -> bound.projectName.asJson))),
+    "desiredState" -> value.desiredState.fold(Json.Null)(desiredState)))
 
   def page(value: InventoryPage[InventoryItem], limit: Int, offset: Int): Json = Json.obj(
     "items" -> value.items.map(item).asJson,
@@ -76,6 +91,7 @@ object IntegrationInventoryJson {
 
   def resourceContext(value: ResourceIntegrationContext): Json = Json.obj(
     "integration" -> Json.obj("id" -> value.integrationId.asJson, "name" -> value.integrationName.asJson,
-      "providerType" -> value.providerType.code.asJson),
-    "object" -> inventoryObject(value.obj))
+      "providerType" -> value.providerType.code.asJson, "managementMode" -> value.managementMode.code.asJson),
+    "object" -> inventoryObject(value.obj).deepMerge(Json.obj(
+      "desiredState" -> value.desiredState.fold(Json.Null)(desiredState))))
 }

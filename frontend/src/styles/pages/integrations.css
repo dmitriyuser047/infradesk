@@ -2,7 +2,11 @@
 .integration-filter-bar { margin-bottom: var(--space-3); }
 .integration-filter-bar .compact-field { min-width: 160px; margin: 0; }
 .integration-grid td { white-space: nowrap; }
-.integration-grid td:first-child, .integration-grid td:nth-child(7) { white-space: normal; }
+.integration-grid td:first-child, .integration-grid td:nth-child(8) { white-space: normal; }
+.integration-desired { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.integration-counters { display: flex; flex-wrap: wrap; gap: var(--space-5); margin: var(--space-3) 0 0; }
+.integration-counters dt { color: var(--text-secondary); font-size: .85em; }
+.integration-counters dd { margin: 0; font-weight: 600; }
 .integration-row-actions { display: flex; gap: var(--space-2); align-items: center; }
 .integration-inline { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
 .integration-pager { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; justify-content: flex-end; margin-top: var(--space-3); }

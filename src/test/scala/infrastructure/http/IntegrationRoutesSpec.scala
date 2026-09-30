@@ -91,7 +91,8 @@ final class IntegrationRoutesSpec extends FunSuite {
     val provider = new IntegrationProvider[IO] {
       override val providerType = IntegrationProviderType.Remnawave
       override val displayName = "Remnawave"
-      override val capabilities: Set[IntegrationCapability] = Set(IntegrationCapability.ConnectivityTest)
+      override val capabilities: Set[IntegrationCapability] =
+        Set(IntegrationCapability.ConnectivityTest, IntegrationCapability.DesiredState)
       override def executeAction(context: IntegrationRuntimeContext, externalId: String,
         action: domain.integration.IntegrationActionCode): IO[domain.integration.IntegrationActionRemoteOutcome] =
         IO.raiseError(new IllegalStateException)
@@ -107,13 +108,18 @@ final class IntegrationRoutesSpec extends FunSuite {
     val registry = new IntegrationProviderRegistry[IO](List(provider))
     val runner = new TransactionRunner[IO, IO] { override def run[A](program: IO[A]): IO[A] = program }
     val sync = new IntegrationSync[IO](new IntegrationSyncTransactions[IO](integrations, secrets, memory.sessions,
-      memory.inventory, new SystemIdGenerator, new SystemTimeProvider, audit), runner, cipher, registry,
+      memory.inventory, new SystemIdGenerator, new SystemTimeProvider, audit, support.NoDesiredStates), runner, cipher,
+      registry,
       NoOpLogger[IO], 5.seconds, 100)
     val bindings = new IntegrationBindings[IO](integrations, memory.inventory, memory.bindings,
       new SystemIdGenerator, new SystemTimeProvider, audit)
-    val routes = new IntegrationRoutes[IO](management, new TestIntegration[IO](management, runner, cipher, registry),
-      registry, runner, AuthorizationFixtures.authorization, sync, bindings, memory.query, memory.sessions)
-      .routes.orNotFound
+    val desiredStates = new application.integration.IntegrationDesiredStates[IO](integrations, memory.inventory,
+      support.NoDesiredStates, registry, new SystemIdGenerator, new SystemTimeProvider, audit, subsystemEnabled = true)
+    val routes = cats.syntax.semigroupk.toSemigroupKOps(new IntegrationRoutes[IO](management,
+      new TestIntegration[IO](management, runner, cipher, registry), registry, runner,
+      AuthorizationFixtures.authorization, sync, bindings, memory.query, memory.sessions).routes)
+      .combineK(new IntegrationDesiredStateRoutes[IO](desiredStates, runner, AuthorizationFixtures.authorization,
+        NoOpLogger[IO]).routes).orNotFound
 
     def request(method: Method, path: String, body: Option[String] = None,
       role: OrganizationRole = OrganizationRole.Owner) = {
@@ -243,6 +249,47 @@ final class IntegrationRoutesSpec extends FunSuite {
     assertEquals(put("""{"name":"Renamed","baseUrl":"https://other.example.test"}""").status, Status.Ok)
     assert(f.memory.objects.nonEmpty && f.memory.objects.forall(!_.isActive))
     assertEquals(f.call(Method.DELETE, s"$root/$id").status, Status.NoContent)
+  }
+
+  test("management mode: explicit, needs automatic sync, and freezes endpoint, credential and observation") {
+    val f = new World
+    val id = f.created()
+    val modePath = s"$root/$id/management-mode"
+    def mode(value: String, role: OrganizationRole = OrganizationRole.Owner) =
+      f.call(Method.PUT, modePath, Some(s"""{"mode":"$value"}"""), role)
+    def codeOf(response: _root_.org.http4s.Response[IO]) = response.as[Json].unsafeRunSync().hcursor.get[String]("code")
+    assertEquals(f.call(Method.GET, s"$root/$id").as[Json].unsafeRunSync().hcursor.get[String]("managementMode"),
+      Right("OBSERVE"))
+    // Intent leads to remote writes: a member can neither switch the mode nor set or remove a desired state.
+    val objectPath = s"$root/$id/inventory/objects/${UUID.randomUUID()}/desired-state"
+    assertEquals(mode("MANAGED_SELECTED", OrganizationRole.Member).status, Status.Forbidden)
+    assertEquals(f.call(Method.PUT, objectPath, Some("""{"state":"ENABLED"}"""), OrganizationRole.Member).status,
+      Status.Forbidden)
+    assertEquals(f.call(Method.DELETE, objectPath, role = OrganizationRole.Member).status, Status.Forbidden)
+    assertEquals(mode("FULL_MANAGED").status, Status.BadRequest)
+    assertEquals(f.call(Method.PUT, objectPath, Some("""{"state":"RESTARTED"}""")).status, Status.BadRequest)
+    // A disabled integration has no fresh observations to manage against.
+    val early = mode("MANAGED_SELECTED")
+    assertEquals(early.status, Status.Conflict)
+    assertEquals(codeOf(early), Right("INTEGRATION_MANAGEMENT_REQUIRES_SYNC"))
+    assertEquals(f.call(Method.POST, s"$root/$id/enable").status, Status.Ok)
+    val managed = mode("MANAGED_SELECTED")
+    assertEquals(managed.status, Status.Ok)
+    assertEquals(managed.as[Json].unsafeRunSync().hcursor.get[String]("managementMode"), Right("MANAGED_SELECTED"))
+    assertEquals(f.actions.count(_ == "INTEGRATION_MANAGEMENT_MODE_CHANGED"), 1)
+    assertEquals(mode("MANAGED_SELECTED").status, Status.Ok)
+    assertEquals(f.actions.count(_ == "INTEGRATION_MANAGEMENT_MODE_CHANGED"), 1)
+    // Setting a desired state on something that is not in the inventory.
+    assertEquals(f.call(Method.PUT, objectPath, Some("""{"state":"ENABLED"}""")).status, Status.NotFound)
+    val disable = f.call(Method.POST, s"$root/$id/disable")
+    assertEquals((disable.status, codeOf(disable)), (Status.Conflict, Right("INTEGRATION_MANAGEMENT_REQUIRES_SYNC")))
+    val moved = f.call(Method.PUT, s"$root/$id", Some("""{"name":"Main","baseUrl":"https://other.example.test"}"""))
+    assertEquals((moved.status, codeOf(moved)), (Status.Conflict, Right("INTEGRATION_MANAGEMENT_ACTIVE")))
+    assertEquals(f.call(Method.PUT, s"$root/$id", Some("""{"name":"Renamed","baseUrl":"https://panel.example.test"}""")).status,
+      Status.Ok)
+    assertEquals(mode("OBSERVE").status, Status.Ok)
+    assertEquals(f.call(Method.POST, s"$root/$id/disable").status, Status.Ok)
+    assertEquals(f.observations, 0)
   }
 
   test("a snapshot naming one object twice is rejected as a whole") {

@@ -7,9 +7,21 @@ export interface IntegrationResponse {
   credential: { apiTokenConfigured: boolean; caddyApiKeyConfigured: boolean }
   createdAt: string
   updatedAt: string
+  /** OBSERVE unless the owner explicitly opted into managing selected nodes. */
+  managementMode: IntegrationManagementMode
   /** Present on list and detail responses; create and update responses do not carry it. */
   overview?: IntegrationOverview
 }
+
+export type IntegrationManagementMode = 'OBSERVE' | 'MANAGED_SELECTED'
+export type DesiredNodeState = 'ENABLED' | 'DISABLED'
+export type DesiredStateStatus = 'COMPLIANT' | 'DRIFTED' | 'APPLYING' | 'WAITING_REFRESH' | 'REMEDIATION_FAILED' | 'UNAVAILABLE'
+/** A person's persistent intent for one node, with the status derived from observation. */
+export interface DesiredStateView {
+  id: string; state: DesiredNodeState; version: number; status: DesiredStateStatus
+  lastActionExecutionId: string | null; updatedAt: string
+}
+export interface DesiredStateCounts { managed: number; compliant: number; drifted: number; applying: number; needsAttention: number }
 
 export interface IntegrationProviderResponse {
   type: 'REMNAWAVE'
@@ -41,6 +53,8 @@ export interface IntegrationActionExecution {
   displayName: string; requestedByUserId: string; requestedByName: string | null; action: IntegrationActionCode
   status: IntegrationActionStatus; createdAt: string; startedAt: string | null
   finishedAt: string | null; errorCode: string | null
+  /** A person's one-shot request, or the reconciliation of a desired state (and which version). */
+  source: 'MANUAL' | 'DESIRED_STATE'; desiredStateId: string | null; desiredStateVersion: number | null
 }
 export interface InventoryTypeCounts { active: number; inactive: number }
 export interface IntegrationOverview {
@@ -48,6 +62,7 @@ export interface IntegrationOverview {
   lastSuccessfulSyncAt: string | null
   nextRunAt: string | null
   inventory: { nodes: InventoryTypeCounts; hosts: InventoryTypeCounts; configProfiles: InventoryTypeCounts }
+  desiredState: DesiredStateCounts
 }
 
 export type RemnawaveNodeState = 'CONNECTED' | 'CONNECTING' | 'DISCONNECTED' | 'DISABLED'
@@ -84,10 +99,12 @@ export interface InventoryObject<S> {
   lastSeenAt: string
   summary: S
   binding?: BoundResource | null
+  /** Null for a node nobody manages. */
+  desiredState?: DesiredStateView | null
 }
 export interface InventoryPage<S> { items: InventoryObject<S>[]; total: number; limit: number; offset: number }
 export interface BindingCandidate { id: string; code: string; name: string; environment: NamedRef; project: NamedRef }
 export interface ResourceIntegrationBinding {
-  integration: { id: string; name: string; providerType: 'REMNAWAVE' }
+  integration: { id: string; name: string; providerType: 'REMNAWAVE'; managementMode: IntegrationManagementMode }
   object: InventoryObject<RemnawaveNodeSummary>
 }

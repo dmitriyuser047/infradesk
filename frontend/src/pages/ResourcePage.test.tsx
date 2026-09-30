@@ -75,14 +75,21 @@ describe('resource detail page', () => {
 
   it('shows the Remnawave node bound to a NODE read-only, and asks nothing for other resource types', async () => {
     const requests = renderPage({ resource: server, bindings: [{
-      integration: { id: 'integration', name: 'Main Remnawave', providerType: 'REMNAWAVE' },
+      integration: { id: 'integration', name: 'Main Remnawave', providerType: 'REMNAWAVE', managementMode: 'MANAGED_SELECTED' },
       object: { id: 'obj', objectType: 'NODE', externalId: 'uuid', displayName: 'Frankfurt', active: true,
         firstSeenAt: '2026-09-29T10:00:00Z', lastSeenAt: '2026-09-29T10:00:00Z',
-        summary: { address: '203.0.113.10', port: 2222, state: 'CONNECTED', xrayVersion: '25.9.11', usersOnline: 4 } } }] })
+        summary: { address: '203.0.113.10', port: 2222, state: 'CONNECTED', isDisabled: false, xrayVersion: '25.9.11', usersOnline: 4 },
+        desiredState: { id: 'desired', state: 'ENABLED', version: 2, status: 'COMPLIANT', lastActionExecutionId: null,
+          updatedAt: '2026-09-29T10:00:00Z' } } }] })
     expect(await screen.findByText('Main Remnawave')).toBeTruthy()
     expect(screen.getByText('Frankfurt')).toBeTruthy()
     expect(screen.getByText('203.0.113.10:2222')).toBeTruthy()
     expect(screen.getByText('Observed read-only from Remnawave.')).toBeTruthy()
+    // Observed and desired state side by side, with the compliance spelled out.
+    expect(screen.getByText('Observed').nextElementSibling?.textContent).toBe('Enabled')
+    expect(screen.getByText('Desired state').nextElementSibling?.textContent).toContain('Enabled')
+    expect(screen.getByText('Compliant')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Change desired state' })).toBeTruthy()
     expect(requests).toContain('/resources/server/integration-bindings')
     cleanup()
     const containerRequests = renderPage({ resource: container })

@@ -60,7 +60,8 @@ final class IntegrationSyncSchedulerSpec extends FunSuite {
     val runner = new TransactionRunner[IO, IO] { override def run[A](program: IO[A]): IO[A] = program }
     val txTime: TimeProvider[IO] = time
     val sync = new IntegrationSync[IO](new IntegrationSyncTransactions[IO](repository, secretRepository,
-      memory.sessions, memory.inventory, new SystemIdGenerator, txTime, TestAuditRecorder(journal)), runner, cipher,
+      memory.sessions, memory.inventory, new SystemIdGenerator, txTime, TestAuditRecorder(journal),
+      support.NoDesiredStates), runner, cipher,
       new IntegrationProviderRegistry[IO](List(provider)), NoOpLogger[IO], 2.seconds, 100)
     val settings = IntegrationSyncSchedulerSettings(1.second, 60.seconds, batchSize = 10, maxConcurrency = 2,
       claimLease = 90.seconds)

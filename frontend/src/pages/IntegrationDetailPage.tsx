@@ -16,11 +16,12 @@ import {
 } from '../components/layout/WorkspacePrimitives'
 import { nodeStateTones, sessionTones, useSyncErrorText } from '../components/integrations/integrationPresentation'
 import { NodeActionControls } from '../components/integrations/NodeActionControls'
+import { DesiredStateControl, ManagementSection, useDesiredStateCopy } from '../components/integrations/DesiredStateControls'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import type {
-  InventoryObject, IntegrationOverview, IntegrationSyncSession, RemnawaveConfigProfileSummary,
-  RemnawaveHostSummary, RemnawaveNodeSummary,
+  InventoryObject, IntegrationManagementMode, IntegrationOverview, IntegrationResponse, IntegrationSyncSession,
+  RemnawaveConfigProfileSummary, RemnawaveHostSummary, RemnawaveNodeSummary,
 } from '../types/integration'
 import { InvalidRoutePage } from './InvalidRoutePage'
 import '../styles/pages/integrations.css'
@@ -95,8 +96,9 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
       { id: 'actions', label: i18n.locale === 'ru' ? 'Действия' : 'Actions' }]}
     active={active} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
-      {active === 'overview' ? <OverviewTab organizationId={organizationId} integrationId={integrationId} enabled={integration.enabled} /> : null}
-      {active === 'nodes' ? <NodesTab organizationId={organizationId} integrationId={integrationId} /> : null}
+      {active === 'overview' ? <OverviewTab organizationId={organizationId} integration={integration} /> : null}
+      {active === 'nodes' ? <NodesTab organizationId={organizationId} integrationId={integrationId}
+        managementMode={integration.managementMode} /> : null}
       {active === 'hosts' ? <HostsTab organizationId={organizationId} integrationId={integrationId} /> : null}
       {active === 'profiles' ? <ProfilesTab organizationId={organizationId} integrationId={integrationId} /> : null}
       {active === 'history' ? <HistoryTab organizationId={organizationId} integrationId={integrationId} /> : null}
@@ -105,15 +107,17 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
   </div></AppShell>
 }
 
-function OverviewTab({ organizationId, integrationId, enabled }: { organizationId: string; integrationId: string; enabled: boolean }) {
+function OverviewTab({ organizationId, integration }: { organizationId: string; integration: IntegrationResponse }) {
   const i18n = useI18n(); const t = i18n.t.integrationInventory
+  const integrationId = integration.id; const enabled = integration.enabled
   const summary = useIntegrationSummary(organizationId, integrationId, true)
   const errorText = useSyncErrorText()
   if (summary.isPending) return <p role="status">{i18n.t.common.loading}</p>
   if (summary.isError) return <LoadError error={summary.error} retry={() => summary.refetch()} />
   const value: IntegrationOverview = summary.data
   const last = value.lastSync
-  return <WorkspaceSection title={t.tabs.overview} description={t.readOnly}>
+  return <><ManagementSection organizationId={organizationId} integration={integration} counts={value.desiredState} />
+  <WorkspaceSection title={t.tabs.overview}>
     <PropertyGrid columns={2} items={[
       { label: t.lastSync, value: last ? <span className="integration-inline">
         <StatusIndicator label={t.status[last.status] ?? last.status} tone={sessionTones[last.status]} />
@@ -125,7 +129,7 @@ function OverviewTab({ organizationId, integrationId, enabled }: { organizationI
       { label: t.tabs.hosts, value: t.counts(value.inventory.hosts.active, value.inventory.hosts.inactive) },
       { label: t.tabs.profiles, value: t.counts(value.inventory.configProfiles.active, value.inventory.configProfiles.inactive) },
     ]} />
-  </WorkspaceSection>
+  </WorkspaceSection></>
 }
 
 function useInventoryParams() {
@@ -201,8 +205,11 @@ function formatBytes(value: number | null, format: (value: number) => string): s
   return `${format(Math.round(amount * 10) / 10)} ${units[unit]}`
 }
 
-function NodesTab({ organizationId, integrationId }: { organizationId: string; integrationId: string }) {
+function NodesTab({ organizationId, integrationId, managementMode }: {
+  organizationId: string; integrationId: string; managementMode: IntegrationManagementMode
+}) {
   const i18n = useI18n(); const t = i18n.t.integrationInventory
+  const desiredCopy = useDesiredStateCopy()
   const [binding, setBinding] = useState<InventoryObject<RemnawaveNodeSummary> | null>(null)
   const unbind = useUnbindNode(organizationId, integrationId)
   const orgPath = `/organizations/${encodeURIComponent(organizationId)}`
@@ -211,7 +218,7 @@ function NodesTab({ organizationId, integrationId }: { organizationId: string; i
     <InventoryTable<RemnawaveNodeSummary> kind="nodes" organizationId={organizationId} integrationId={integrationId}
       title={t.tabs.nodes} emptyTitle={t.emptyNodes} withState
       head={<tr><th>{t.name}</th><th>{t.address}</th><th>{t.state}</th><th>{t.version}</th><th>{t.users}</th>
-        <th>{t.traffic}</th><th>{t.resource}</th><th>{t.actions}</th></tr>}
+        <th>{t.traffic}</th><th>{desiredCopy.desired}</th><th>{t.resource}</th><th>{t.actions}</th></tr>}
       row={item => <tr key={item.id} className={item.active ? undefined : 'row-quiet'}>
         <td><strong>{item.displayName}</strong>{!item.active ? <> <StatusIndicator label={t.gone} /></> : null}</td>
         <td className="property-technical">{hostPort(item.summary.address, item.summary.port)}</td>
@@ -219,6 +226,8 @@ function NodesTab({ organizationId, integrationId }: { organizationId: string; i
         <td>{item.summary.xrayVersion ?? '—'}</td>
         <td>{i18n.format.number(item.summary.usersOnline)}</td>
         <td>{formatBytes(item.summary.trafficUsedBytes, i18n.format.number)}</td>
+        <td><DesiredStateControl organizationId={organizationId} integrationId={integrationId}
+          managementMode={managementMode} node={item} /></td>
         <td>{item.binding ? <Link to={`${orgPath}/environments/${encodeURIComponent(item.binding.environment.id)}/resources/${encodeURIComponent(item.binding.resource.id)}`}>
           {item.binding.resource.name}</Link> : <span className="muted-copy">{t.notBound}</span>}
           {item.binding ? <div className="muted-copy">{item.binding.project.name} · {item.binding.environment.name}</div> : null}</td>
@@ -244,10 +253,15 @@ function ActionsTab({ organizationId, integrationId }: { organizationId: string;
     {actions.data?.length === 0 ? <EmptyWorkspaceState compact title={ru ? 'Действий пока нет' : 'No actions yet'} /> : null}
     {actions.data?.length ? <div className="table-scroll"><table className="data-grid integration-grid">
       <thead><tr><th>{ru ? 'Время' : 'Time'}</th><th>{ru ? 'Узел' : 'Node'}</th><th>{ru ? 'Действие' : 'Action'}</th>
+        <th>{ru ? 'Источник' : 'Source'}</th>
         <th>{ru ? 'Пользователь' : 'Requested by'}</th><th>{ru ? 'Статус' : 'Status'}</th>
         <th>{ru ? 'Длительность' : 'Duration'}</th><th>{ru ? 'Ошибка' : 'Error'}</th></tr></thead>
       <tbody>{actions.data.map(value => <tr key={value.id}>
         <td>{i18n.format.dateTime(value.createdAt)}</td><td>{value.displayName}</td><td>{value.action}</td>
+        {/* Why the action exists: a person's request, or a desired state and the version it executed. */}
+        <td>{value.source === 'DESIRED_STATE'
+          ? `${ru ? 'Желаемое состояние' : 'Desired state'}${value.desiredStateVersion ? ` v${value.desiredStateVersion}` : ''}`
+          : ru ? 'Вручную' : 'Manual'}</td>
         <td>{value.requestedByName ?? value.requestedByUserId}</td>
         <td>{value.status === 'UNKNOWN' ? ru ? 'Результат неизвестен' : 'Result unknown' : value.status}</td>
         <td>{value.startedAt && value.finishedAt ? i18n.format.duration(Math.max(0,

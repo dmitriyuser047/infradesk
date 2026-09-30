@@ -49,7 +49,8 @@ import application.context.{
 import application.incident.{GetIncidentDetail, ListConnectionIncidents, ListIncidents, ListResourceIncidents}
 import application.integration.{IntegrationBindings, IntegrationManagement, IntegrationSync,
   IntegrationSyncScheduler, IntegrationSyncSchedulerSettings, IntegrationSyncTransactions, TestIntegration,
-  IntegrationActions, IntegrationActionWorker}
+  IntegrationActions, IntegrationActionWorker, IntegrationDesiredStates, IntegrationDesiredStateSettings,
+  IntegrationDesiredStateWorker}
 import application.overview.GetOperationsOverview
 import application.monitor.{CreateMonitorRule, EvaluateMonitorRules, ListMonitorRules, UpdateMonitorRule}
 import application.notification.{
@@ -154,6 +155,8 @@ final case class ApplicationComponents(
   integrationActions: IntegrationActions[ConnectionIO],
   integrationActionWorker: IntegrationActionWorker[ConnectionIO],
   integrationActionsEnabled: Boolean,
+  integrationDesiredStates: IntegrationDesiredStates[ConnectionIO],
+  integrationDesiredStateWorker: IntegrationDesiredStateWorker[ConnectionIO],
   integrationBindings: IntegrationBindings[ConnectionIO],
   integrationSyncScheduler: IntegrationSyncScheduler[ConnectionIO],
   testNotificationChannel: TestNotificationChannel,
@@ -349,12 +352,14 @@ object ApplicationModule {
     val integrationSync = new IntegrationSync[ConnectionIO](
       new IntegrationSyncTransactions[ConnectionIO](integrationRepository, integrationSecretRepository,
         integrationSyncSessionRepository, integrationInventoryRepository, transactionIdGenerator,
-        transactionTimeProvider, auditRecorder),
+        transactionTimeProvider, auditRecorder, integrationDesiredStateRepository),
       transactionRunner, integrations.integrationCredentialCipher, integrations.integrationProviderRegistry,
       loggers.integration, integrationSyncSettings.attemptTimeout, config.integrations.inventoryMaxObjects)
     val integrationActions = new IntegrationActions[ConnectionIO](integrationRepository,
       integrationInventoryRepository, integrationActionRepository, integrationSecretRepository,
-      integrations.integrationProviderRegistry, transactionIdGenerator, transactionTimeProvider, auditRecorder)
+      integrations.integrationProviderRegistry, transactionIdGenerator, transactionTimeProvider, auditRecorder,
+      integrationDesiredStateRepository)
+    val desiredStateSettings = config.integrations.desiredState
     val actionSettings = config.integrations.actions
     val integrationActionWorker = new IntegrationActionWorker[ConnectionIO](integrationActionRepository,
       integrationRepository, integrationSecretRepository, integrations.integrationCredentialCipher,
@@ -571,6 +576,16 @@ object ApplicationModule {
       integrationActions = integrationActions,
       integrationActionWorker = integrationActionWorker,
       integrationActionsEnabled = actionSettings.enabled,
+      integrationDesiredStates = new IntegrationDesiredStates[ConnectionIO](integrationRepository,
+        integrationInventoryRepository, integrationDesiredStateRepository, integrations.integrationProviderRegistry,
+        transactionIdGenerator, transactionTimeProvider, auditRecorder, desiredStateSettings.enabled),
+      // Desired state and execution stay apart: this worker is given no provider, client or credential.
+      integrationDesiredStateWorker = new IntegrationDesiredStateWorker[ConnectionIO](
+        integrationDesiredStateRepository, transactionRunner, timeProvider, loggers.integration,
+        IntegrationDesiredStateSettings(desiredStateSettings.pollInterval, desiredStateSettings.batchSize,
+          desiredStateSettings.maxConcurrency, desiredStateSettings.claimLease,
+          // Observations nudge reconciliation; this is only the fallback for a missed nudge.
+          idleInterval = config.integrations.sync.interval * 5), UUID.randomUUID()),
       integrationBindings = new IntegrationBindings[ConnectionIO](integrationRepository,
         integrationInventoryRepository, integrationBindingRepository, transactionIdGenerator,
         transactionTimeProvider, auditRecorder),

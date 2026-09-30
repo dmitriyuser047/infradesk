@@ -11,6 +11,7 @@ final case class UpdateIntegrationRequest(name: String, baseUrl: String,
   credentials: Option[RemnawaveCredentialRequest])
 final case class IntegrationCredentialStatus(apiTokenConfigured: Boolean, caddyApiKeyConfigured: Boolean)
 final case class IntegrationResponse(id: UUID, name: String, providerType: String, baseUrl: String,
-  enabled: Boolean, credential: IntegrationCredentialStatus, createdAt: Instant, updatedAt: Instant)
+  enabled: Boolean, credential: IntegrationCredentialStatus, createdAt: Instant, updatedAt: Instant,
+  managementMode: String)
 final case class IntegrationProviderResponse(`type`: String, displayName: String, capabilities: List[String])
 final case class IntegrationTestResponse(ok: Boolean, providerType: String, latencyMs: Long)

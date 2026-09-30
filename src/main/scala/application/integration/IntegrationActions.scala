@@ -19,7 +19,8 @@ import scala.concurrent.duration.FiniteDuration
 final class IntegrationActions[Tx[_]: MonadThrow](integrations: IntegrationRepository[Tx],
   inventory: IntegrationInventoryRepository[Tx], actions: IntegrationActionRepository[Tx],
   secrets: IntegrationSecretRepository[Tx], providers: IntegrationProviderRegistry[IO],
-  ids: IdGenerator[Tx], time: TimeProvider[Tx], audit: AuditRecorder[Tx]) {
+  ids: IdGenerator[Tx], time: TimeProvider[Tx], audit: AuditRecorder[Tx],
+  desired: IntegrationDesiredStateRepository[Tx]) {
 
   def request(actor: ActorContext, integrationId: UUID, objectId: UUID, requestId: UUID,
     action: IntegrationActionCode): Tx[IntegrationActionExecution] =
@@ -56,6 +57,11 @@ final class IntegrationActions[Tx[_]: MonadThrow](integrations: IntegrationRepos
     }
     _ <- Either.cond(if (action == IntegrationActionCode.NodeEnable) disabled else !disabled, (),
       IntegrationError("INTEGRATION_ACTION_UNSUPPORTED", "Action is unavailable for observed state")).liftTo[Tx]
+    // A one-shot request never works against a persistent intent; restart contradicts neither state.
+    intent <- desired.find(actor.organizationId, integrationId, objectId)
+    _ <- Either.cond(!intent.exists(value => IntegrationDesiredNodeState.contradicts(value.state, action)), (),
+      IntegrationError(IntegrationDesiredStates.ActionConflict, "Action conflicts with the node's desired state"))
+      .liftTo[Tx]
     _ <- secrets.find(actor.organizationId, integration.secretId).flatMap(_.liftTo[Tx](
       IntegrationError("INTEGRATION_CREDENTIAL_MISSING", "Integration credential is missing"))).void
     unknown <- actions.latestUnknownFinishedAt(actor.organizationId, integrationId, objectId)

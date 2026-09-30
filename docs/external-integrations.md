@@ -1,4 +1,4 @@
-# External integrations: Stages 24A–24C
+# External integrations: Stages 24A–24D
 
 Organization owners can open **Integrations**, add a Remnawave panel, save its API token and
 optional Caddy API key, test the connection, then enable it. New integrations are disabled.
@@ -152,5 +152,103 @@ failure (network error or 5xx) the dialog can only check the same request again 
 cancelled and replaced by a new ID — and it is resolved as soon as the action history shows that
 request ID.
 
-Traffic reset, forced restart, bulk actions, desired state and automatic remediation remain out
-of scope.
+Traffic reset, forced restart and bulk actions remain out of scope. Desired state and its
+reconciliation are Stage 24D, below.
+
+## Stage 24D: desired state of selected nodes
+
+**Two modes, one of them the default.** Every integration is `OBSERVE`: InfraDesk observes
+Remnawave and allows manual actions, and never changes a node on its own. An owner can opt an
+integration into `MANAGED_SELECTED`; then only the nodes a person explicitly chooses get a
+desired state (`ENABLED` or `DISABLED`), and every other node stays observation-only. There is no
+mode that manages everything discovered. An upgrade never changes the mode: existing integrations
+stay `OBSERVE`.
+
+- `MANAGED_SELECTED` needs fresh observations, so it requires an enabled integration
+  (`INTEGRATION_MANAGEMENT_REQUIRES_SYNC`), and a managed integration cannot be disabled.
+- While managed, the base URL and the credential cannot change (`INTEGRATION_MANAGEMENT_ACTIVE`);
+  the name can. A desired state never follows an integration to another panel: switch to
+  `OBSERVE`, change the endpoint, synchronize, and opt in again.
+- Switching back to `OBSERVE` removes every desired state of the integration in one transaction
+  and sends nothing to Remnawave: nodes stay as they are.
+- The database holds these rules too: a desired state references its integration together with
+  the mode `MANAGED_SELECTED`, and a managed integration must be enabled.
+
+**Intent is separate from observation and from execution.** `integration_desired_state` holds
+the intent with a `version` that changes only when the intent does. The observed state stays in
+the inventory and is written only by synchronization; a successful action never edits it. The
+status of a managed node is derived, never stored:
+
+| Status | Meaning |
+| --- | --- |
+| `UNAVAILABLE` | Remnawave no longer reports the node |
+| `APPLYING` | the latest remediation is queued or running |
+| `WAITING_REFRESH` | it succeeded or its result is unknown, and no observation began after it finished |
+| `REMEDIATION_FAILED` | it failed, and no observation began after it finished |
+| `COMPLIANT` | observed state equals desired state |
+| `DRIFTED` | observed state differs |
+
+An object's `lastSeenAt` is the moment its observation *began*, so an action that finished while
+the provider was being read is not considered observed by that read.
+
+**The reconciler cannot talk to Remnawave.** `IntegrationDesiredStateWorker` is given a
+repository and a clock: no provider, HTTP client or credential. Where observed and desired state
+differ it creates a `QUEUED` `integration_action_execution` with `source = DESIRED_STATE` and the
+intent's id and version; `NODE_ENABLE` or `NODE_DISABLE`, never a restart. The Stage 24C action
+worker performs the write, its completion nudges a synchronization, and the snapshot that
+synchronization applies makes the integration's desired states due again:
+
+`reconcile → action → action worker → sync nudge → sync → inventory → reconcile`
+
+**At most one action per observation.** Creating an action records the observation it was
+decided on (`last_attempt_observation_at`). A further action needs an observation that is newer
+than that one and that began after the previous action finished. So an `UNKNOWN` result is never
+retried blindly, a `FAILED` one never loops, and however often the reconciler runs between two
+observations it creates one action. A person changing the intent resets this: the new version is
+decided against the current observation.
+
+**Bounded and fenced.** A wave claims up to a batch of due intents with `FOR UPDATE SKIP LOCKED`
+and a lease, reading the intent, the observed node and its actions in the same statement; one
+statement creates the actions for the whole batch; one releases the claim. The number of SQL
+round trips follows the number of batches, not of nodes. The create statement only acts for an
+intent that still has this claim token, this version and this observation, in an integration
+that is still enabled and managed, with no active action on the node; anything else is fenced
+out. It takes the same integration row lock as intent changes, action requests, edits and
+snapshots.
+
+**Manual actions.** For a managed node a one-shot action that works against the intent is
+refused (`409 INTEGRATION_ACTION_CONFLICTS_WITH_DESIRED_STATE`): Disable on a node wanted
+enabled, Enable on a node wanted disabled. Restart and actions in the direction of the intent
+follow the 24C rules. Unmanaged nodes are unchanged. While an action on a node is queued or
+running, its desired state cannot be changed or removed and the integration cannot return to
+`OBSERVE` (`409 INTEGRATION_ACTION_ALREADY_RUNNING`); there is no cancellation.
+
+**API.** Reading needs `MANAGE_INTEGRATIONS`; every mutation needs `MANAGE_INTEGRATIONS` and
+`EXECUTE_OPERATIONS`. No handler creates an action or contacts Remnawave.
+
+- `PUT .../integrations/{integrationId}/management-mode` with `{"mode": "OBSERVE" | "MANAGED_SELECTED"}`
+- `PUT .../integrations/{integrationId}/inventory/objects/{objectId}/desired-state` with
+  `{"state": "ENABLED" | "DISABLED"}`; setting the same state again changes nothing
+- `DELETE .../integrations/{integrationId}/inventory/objects/{objectId}/desired-state`
+
+Integration responses carry `managementMode`, the overview carries counters of managed nodes,
+node listings carry each node's `desiredState` (or `null`), and action history carries `source`,
+`desiredStateId` and `desiredStateVersion`. User changes are audited as
+`INTEGRATION_MANAGEMENT_MODE_CHANGED`, `INTEGRATION_DESIRED_STATE_SET` and
+`INTEGRATION_DESIRED_STATE_REMOVED`; automatic actions are not audited as user actions — the
+action history is their journal, and it names who set the intent.
+
+| Variable | Default |
+| --- | --- |
+| `INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED` | `true` |
+| `INFRADESK_INTEGRATIONS_DESIRED_STATE_POLL_INTERVAL_SECONDS` | `5` |
+| `INFRADESK_INTEGRATIONS_DESIRED_STATE_BATCH_SIZE` | `50` |
+| `INFRADESK_INTEGRATIONS_DESIRED_STATE_MAX_CONCURRENCY` | `4` |
+| `INFRADESK_INTEGRATIONS_DESIRED_STATE_CLAIM_LEASE_SECONDS` | `30` |
+
+With the subsystem disabled no integration can enter `MANAGED_SELECTED`
+(`INTEGRATION_DESIRED_STATE_DISABLED`); observing integrations are unaffected.
+
+Out of scope: managing every node automatically, desired state for hosts or config profiles,
+creating or deleting nodes, automatic restart, traffic reset, config profile editing or rollout,
+and remediation triggered by monitoring or incidents.

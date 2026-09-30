@@ -23,6 +23,19 @@ object IntegrationCapability {
   case object MetricsRead extends IntegrationCapability { val code = "METRICS_READ" }
   case object SafeActions extends IntegrationCapability { val code = "SAFE_ACTIONS" }
   case object ConfigProfileManagement extends IntegrationCapability { val code = "CONFIG_PROFILE_MANAGEMENT" }
+  case object DesiredState extends IntegrationCapability { val code = "DESIRED_STATE" }
+}
+
+/** Whether InfraDesk only observes an integration or also keeps the state of explicitly selected
+  * nodes. There is deliberately no mode that manages everything it discovers.
+  */
+sealed trait IntegrationManagementMode { def code: String }
+object IntegrationManagementMode {
+  case object Observe extends IntegrationManagementMode { val code = "OBSERVE" }
+  case object ManagedSelected extends IntegrationManagementMode { val code = "MANAGED_SELECTED" }
+  val All: List[IntegrationManagementMode] = List(Observe, ManagedSelected)
+  def fromCode(code: String): Either[IllegalArgumentException, IntegrationManagementMode] =
+    All.find(_.code == code).toRight(new IllegalArgumentException("Unknown integration management mode"))
 }
 
 /** Non-secret URL. Parsed and normalized when written, then parsed again before any request. */
@@ -66,5 +79,6 @@ final case class Integration(
   secretId: UUID,
   caddyApiKeyConfigured: Boolean,
   createdAt: Instant,
-  updatedAt: Instant
+  updatedAt: Instant,
+  managementMode: IntegrationManagementMode = IntegrationManagementMode.Observe
 )

@@ -163,3 +163,22 @@ final class InMemoryIntegrationInventory {
       IO.pure(Nil)
   }
 }
+
+/** For tests of integrations that manage no nodes: there is never a desired state. */
+object NoDesiredStates extends IntegrationDesiredStateRepository[IO] {
+  override def find(organizationId: UUID, integrationId: UUID, inventoryObjectId: UUID): IO[Option[IntegrationDesiredState]] =
+    IO.pure(None)
+  override def save(value: IntegrationDesiredState, at: Instant): IO[Unit] = IO.raiseError(new UnsupportedOperationException)
+  override def delete(organizationId: UUID, integrationId: UUID, inventoryObjectId: UUID): IO[Int] = IO.pure(0)
+  override def deleteAll(organizationId: UUID, integrationId: UUID): IO[Int] = IO.pure(0)
+  override def activeActionExists(organizationId: UUID, integrationId: UUID, inventoryObjectId: Option[UUID]): IO[Boolean] =
+    IO.pure(false)
+  override def view(organizationId: UUID, integrationId: UUID, inventoryObjectId: UUID): IO[Option[DesiredStateView]] =
+    IO.pure(None)
+  override def nudge(organizationId: UUID, integrationId: UUID, at: Instant): IO[Int] = IO.pure(0)
+  override def claim(owner: UUID, token: UUID, now: Instant, until: Instant, limit: Int): IO[List[DesiredStateCandidate]] =
+    IO.pure(Nil)
+  override def createActions(token: UUID, now: Instant, intents: List[DesiredStateIntent]): IO[List[CreatedDesiredAction]] =
+    IO.pure(Nil)
+  override def release(token: UUID, claimedAt: Instant, nextReconcileAt: Instant): IO[Int] = IO.pure(0)
+}

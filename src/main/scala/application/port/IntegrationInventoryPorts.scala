@@ -67,20 +67,24 @@ final case class InventoryPage[A](items: List[A], total: Long)
 
 final case class BoundResourceView(id: UUID, code: String, name: String, environmentId: UUID,
   environmentName: String, projectId: UUID, projectName: String)
-final case class InventoryItem(obj: IntegrationInventoryObject, binding: Option[BoundResourceView])
+final case class InventoryItem(obj: IntegrationInventoryObject, binding: Option[BoundResourceView],
+  desiredState: Option[DesiredStateView] = None)
 
 final case class InventoryTypeCounts(active: Long, inactive: Long)
 final case class IntegrationInventorySummary(nodes: InventoryTypeCounts, hosts: InventoryTypeCounts,
   configProfiles: InventoryTypeCounts)
 
 final case class IntegrationOverview(integrationId: UUID, lastSync: Option[IntegrationSyncSession],
-  lastSuccessfulSyncAt: Option[Instant], nextRunAt: Option[Instant], inventory: IntegrationInventorySummary)
+  lastSuccessfulSyncAt: Option[Instant], nextRunAt: Option[Instant], inventory: IntegrationInventorySummary,
+  desired: DesiredStateCounts = DesiredStateCounts.Empty)
 
 final case class BindingCandidate(id: UUID, code: String, name: String, environmentId: UUID,
   environmentName: String, projectId: UUID, projectName: String)
 
 final case class ResourceIntegrationContext(integrationId: UUID, integrationName: String,
-  providerType: IntegrationProviderType, obj: IntegrationInventoryObject)
+  providerType: IntegrationProviderType, obj: IntegrationInventoryObject,
+  managementMode: IntegrationManagementMode = IntegrationManagementMode.Observe,
+  desiredState: Option[DesiredStateView] = None)
 
 trait IntegrationInventoryQuery[F[_]] {
   def list(organizationId: UUID, integrationId: UUID, objectType: IntegrationObjectType,

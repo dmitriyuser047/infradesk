@@ -23,27 +23,27 @@ import java.time.Instant
 import java.util.{Base64, UUID}
 import scala.concurrent.duration._
 
-final class IntegrationInventoryIntegrationSpec extends FunSuite {
+final class IntegrationInventoryIntegrationSpec extends FunSuite with IntegrationDesiredStateTests {
   override val munitTimeout: Duration = 120.seconds
   private val NodeType = UUID.fromString("10000000-0000-0000-0000-000000000001")
   private val ContainerType = UUID.fromString("10000000-0000-0000-0000-000000000002")
-  private val cipher = IntegrationCredentialCipher.fromConfig(SecretEncryptionConfig.fromEnvironment(Map(
+  private[postgres] val cipher = IntegrationCredentialCipher.fromConfig(SecretEncryptionConfig.fromEnvironment(Map(
     "INFRADESK_SECRET_MASTER_KEY_BASE64" -> Base64.getEncoder.encodeToString(Array.fill[Byte](32)(7)))).toOption.get)
 
-  private def node(uuid: String, name: String, disabled: Boolean = false, address: String = "203.0.113.1") =
+  private[postgres] def node(uuid: String, name: String, disabled: Boolean = false, address: String = "203.0.113.1") =
     ObservedIntegrationObject(IntegrationObjectType.Node, uuid, name, RemnawaveNodeSummary(address, Some(2222),
       isConnected = !disabled, isConnecting = false, isDisabled = disabled, None, Some("25.1"), None, 0L,
       trafficTrackingActive = false, None, None, 0L, "DE", None, None, None, None, List("eu"), None, None))
-  private val host = ObservedIntegrationObject(IntegrationObjectType.Host, "host-1", "Main host",
+  private[postgres] val host = ObservedIntegrationObject(IntegrationObjectType.Host, "host-1", "Main host",
     RemnawaveHostSummary("vpn.example.test", 443, isDisabled = false, isHidden = false, Some("profile-1"), None,
       List("node-a"), Nil, "TLS", None))
   private val profile = ObservedIntegrationObject(IntegrationObjectType.ConfigProfile, "profile-1", "Default",
     RemnawaveConfigProfileSummary(1, Instant.parse("2026-08-01T00:00:00Z"), Instant.parse("2026-09-01T00:00:00Z"),
       List("node-a"), List(RemnawaveInboundSummary("inbound-1", "VLESS", "vless", Some("tcp"), None, Some(443)))))
-  private def snapshot(objects: ObservedIntegrationObject*) =
+  private[postgres] def snapshot(objects: ObservedIntegrationObject*) =
     IntegrationObservation(objects.toList, IntegrationObjectType.All.toSet)
 
-  private final class World(val xa: org.typelevel.doobie.hikari.HikariTransactor[IO]) {
+  private[postgres] final class World(val xa: org.typelevel.doobie.hikari.HikariTransactor[IO]) {
     val org = UUID.randomUUID(); val foreign = UUID.randomUUID(); val user = UUID.randomUUID()
     val project = UUID.randomUUID(); val environment = UUID.randomUUID()
     val foreignProject = UUID.randomUUID(); val foreignEnvironment = UUID.randomUUID()
@@ -70,7 +70,8 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite {
     val provider: IntegrationProvider[IO] = new IntegrationProvider[IO] {
       override val providerType = IntegrationProviderType.Remnawave
       override val displayName = "Remnawave"
-      override val capabilities: Set[IntegrationCapability] = Set(IntegrationCapability.SafeActions)
+      override val capabilities: Set[IntegrationCapability] =
+        Set(IntegrationCapability.SafeActions, IntegrationCapability.DesiredState)
       override def testConnection(context: IntegrationRuntimeContext) = IO.raiseError(new IllegalStateException)
       override def observe(context: IntegrationRuntimeContext) = observation
       override def executeAction(context: IntegrationRuntimeContext, externalId: String,
@@ -78,11 +79,25 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite {
         IO { remoteActionCalls += 1 } *> remoteOutcome
     }
     val sync = new IntegrationSync[ConnectionIO](new IntegrationSyncTransactions[ConnectionIO](integrations, secrets,
-      sessions, inventory, ids, time, audit), run, cipher, new IntegrationProviderRegistry[IO](List(provider)),
+      sessions, inventory, ids, time, audit, new PostgresIntegrationDesiredStateRepository), run, cipher,
+      new IntegrationProviderRegistry[IO](List(provider)),
       NoOpLogger[IO], 10.seconds, 1000)
     val bindings = new IntegrationBindings[ConnectionIO](integrations, inventory, bindingRepository, ids, time, audit)
     val actionService = new IntegrationActions[ConnectionIO](integrations, inventory, actionRepository,
-      secrets, new IntegrationProviderRegistry[IO](List(provider)), ids, time, audit)
+      secrets, new IntegrationProviderRegistry[IO](List(provider)), ids, time, audit,
+      new PostgresIntegrationDesiredStateRepository)
+
+    val desiredRepository = new PostgresIntegrationDesiredStateRepository
+    val registry = new IntegrationProviderRegistry[IO](List(provider))
+    def desiredStates(enabled: Boolean = true) = new IntegrationDesiredStates[ConnectionIO](integrations, inventory,
+      desiredRepository, registry, ids, time, audit, enabled)
+    /** Has the repository and a clock, and nothing that could reach a provider. */
+    def desiredWorker(batch: Int = 50, concurrency: Int = 1) = new IntegrationDesiredStateWorker[ConnectionIO](
+      desiredRepository, run, new SystemTimeProvider, NoOpLogger[IO],
+      IntegrationDesiredStateSettings(1.second, batch, concurrency, 30.seconds, 1.hour), UUID.randomUUID())
+    def actionWorker(batch: Int = 50) = new IntegrationActionWorker[ConnectionIO](actionRepository, integrations,
+      secrets, cipher, registry, run, new SystemTimeProvider, NoOpLogger[IO], 1.second, batch = batch,
+      concurrency = 4, requestTimeout = 2.seconds, owner = UUID.randomUUID())
 
     def create(name: String): Integration = run.run(management.create(actor, CreateIntegrationCommand(name,
       IntegrationProviderType.Remnawave, "https://panel.example.test", RemnawaveCredential("tok", None)))).unsafeRunSync()
@@ -131,7 +146,7 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite {
       sql"delete from organization where id in ($org, $foreign)".update.run.void)
   }
 
-  private def withWorld(body: World => Unit): Unit = {
+  private[postgres] def withWorld(body: World => Unit): Unit = {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"))
     PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
       val world = new World(xa)

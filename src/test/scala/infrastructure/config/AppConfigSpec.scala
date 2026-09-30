@@ -100,6 +100,25 @@ final class AppConfigSpec extends FunSuite {
     assert(AppConfig.fromEnvironment(minimal + ("INFRADESK_INTEGRATIONS_REQUEST_TIMEOUT_SECONDS" -> "0")).isLeft)
   }
 
+  test("desired state reconciliation has bounded defaults and rejects unsafe values with their keys") {
+    val defaults = AppConfig.fromEnvironment(minimal).toOption.get.integrations.desiredState
+    assertEquals(defaults, IntegrationDesiredStateConfig(enabled = true, 5.seconds, 50, 4, 30.seconds))
+    val configured = AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED" -> "false",
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_POLL_INTERVAL_SECONDS" -> "9",
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_BATCH_SIZE" -> "10",
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_MAX_CONCURRENCY" -> "2",
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_CLAIM_LEASE_SECONDS" -> "45")).toOption.get.integrations.desiredState
+    assertEquals(configured, IntegrationDesiredStateConfig(enabled = false, 9.seconds, 10, 2, 45.seconds))
+    List("INFRADESK_INTEGRATIONS_DESIRED_STATE_BATCH_SIZE" -> "0",
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_MAX_CONCURRENCY" -> "0",
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_POLL_INTERVAL_SECONDS" -> "0",
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_CLAIM_LEASE_SECONDS" -> "1",
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED" -> "sometimes").foreach { case (key, value) =>
+      assert(AppConfig.fromEnvironment(minimal + (key -> value)).left.exists(_.getMessage.contains(key)), s"$key=$value")
+    }
+  }
+
   test("integration synchronization has bounded defaults and rejects unsafe values with their keys") {
     val defaults = AppConfig.fromEnvironment(minimal).toOption.get.integrations
     assertEquals(defaults.sync, IntegrationSyncConfig(enabled = true, 5.seconds, 60.seconds, 20, 3, 90.seconds, 30.seconds))
