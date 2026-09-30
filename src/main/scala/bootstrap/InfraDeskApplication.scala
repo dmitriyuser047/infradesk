@@ -77,7 +77,7 @@ object InfraDeskApplication {
         val integrationWorkers =
           (if (config.integrations.sync.enabled) List(application.integrationSyncScheduler.run) else Nil) ++
             (if (config.integrations.actions.enabled) List(application.integrationActionWorker.run) else Nil) ++
-            (if (config.integrations.desiredState.enabled) List(application.integrationDesiredStateWorker.run) else Nil)
+            (if (config.integrations.desiredStateOperational) List(application.integrationDesiredStateWorker.run) else Nil)
         val workers = schedulerWorkers ++ notificationWorkers ++ configurationWorkers ++ ruleWorkers ++
           integrationWorkers ++ List(
           application.cleanupLoginThrottle.run,

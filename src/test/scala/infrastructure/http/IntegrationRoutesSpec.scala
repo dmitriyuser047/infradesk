@@ -114,7 +114,7 @@ final class IntegrationRoutesSpec extends FunSuite {
     val bindings = new IntegrationBindings[IO](integrations, memory.inventory, memory.bindings,
       new SystemIdGenerator, new SystemTimeProvider, audit)
     val desiredStates = new application.integration.IntegrationDesiredStates[IO](integrations, memory.inventory,
-      support.NoDesiredStates, registry, new SystemIdGenerator, new SystemTimeProvider, audit, subsystemEnabled = true)
+      support.NoDesiredStates, registry, new SystemIdGenerator, new SystemTimeProvider, audit, desiredStateOperational = true)
     val routes = cats.syntax.semigroupk.toSemigroupKOps(new IntegrationRoutes[IO](management,
       new TestIntegration[IO](management, runner, cipher, registry), registry, runner,
       AuthorizationFixtures.authorization, sync, bindings, memory.query, memory.sessions).routes)

@@ -578,7 +578,7 @@ object ApplicationModule {
       integrationActionsEnabled = actionSettings.enabled,
       integrationDesiredStates = new IntegrationDesiredStates[ConnectionIO](integrationRepository,
         integrationInventoryRepository, integrationDesiredStateRepository, integrations.integrationProviderRegistry,
-        transactionIdGenerator, transactionTimeProvider, auditRecorder, desiredStateSettings.enabled),
+        transactionIdGenerator, transactionTimeProvider, auditRecorder, config.integrations.desiredStateOperational),
       // Desired state and execution stay apart: this worker is given no provider, client or credential.
       integrationDesiredStateWorker = new IntegrationDesiredStateWorker[ConnectionIO](
         integrationDesiredStateRepository, transactionRunner, timeProvider, loggers.integration,

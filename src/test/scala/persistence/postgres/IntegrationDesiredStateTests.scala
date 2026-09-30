@@ -89,7 +89,7 @@ trait IntegrationDesiredStateTests extends FunSuite { self: IntegrationInventory
         .attempt.unsafeRunSync()), Some("INTEGRATION_MANAGEMENT_REQUIRES_SYNC"))
 
       val s = new Scenario(w, "Mode", "a" -> false, "b" -> true)
-      assertEquals(code(w.run.run(w.desiredStates(enabled = false).setMode(w.actor, s.id,
+      assertEquals(code(w.run.run(w.desiredStates(desiredStateOperational = false).setMode(w.actor, s.id,
         IntegrationManagementMode.ManagedSelected)).attempt.unsafeRunSync()), Some("INTEGRATION_DESIRED_STATE_DISABLED"))
       assertEquals(code(s.set("a", Enabled)), Some("INTEGRATION_MANAGEMENT_MODE_REQUIRED"))
       assertEquals(s.manage().managementMode, IntegrationManagementMode.ManagedSelected)

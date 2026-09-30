@@ -119,12 +119,36 @@ final class AppConfigSpec extends FunSuite {
     }
   }
 
+  test("desired state requires both deployment synchronization and action workers") {
+    for {
+      desired <- List(false, true)
+      sync <- List(false, true)
+      actions <- List(false, true)
+    } {
+      val result = AppConfig.fromEnvironment(minimal ++ Map(
+        "INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED" -> desired.toString,
+        "INFRADESK_INTEGRATIONS_SYNC_ENABLED" -> sync.toString,
+        "INFRADESK_INTEGRATIONS_ACTIONS_ENABLED" -> actions.toString))
+      val valid = !desired || (sync && actions)
+      assertEquals(result.isRight, valid, s"desired=$desired sync=$sync actions=$actions")
+      result match {
+        case Right(config) =>
+          assertEquals(config.integrations.desiredStateOperational, desired && sync && actions)
+        case Left(error) =>
+          assert(error.getMessage.contains("INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED"))
+          assert(error.getMessage.contains("INFRADESK_INTEGRATIONS_SYNC_ENABLED"))
+          assert(error.getMessage.contains("INFRADESK_INTEGRATIONS_ACTIONS_ENABLED"))
+      }
+    }
+  }
+
   test("integration synchronization has bounded defaults and rejects unsafe values with their keys") {
     val defaults = AppConfig.fromEnvironment(minimal).toOption.get.integrations
     assertEquals(defaults.sync, IntegrationSyncConfig(enabled = true, 5.seconds, 60.seconds, 20, 3, 90.seconds, 30.seconds))
     assertEquals(defaults.inventoryMaxResponseBytes, 8388608)
     assertEquals(defaults.inventoryMaxObjects, 10000)
     val configured = AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED" -> "false",
       "INFRADESK_INTEGRATIONS_SYNC_ENABLED" -> "false",
       "INFRADESK_INTEGRATIONS_SYNC_POLL_INTERVAL_SECONDS" -> "2",
       "INFRADESK_INTEGRATIONS_SYNC_INTERVAL_SECONDS" -> "120",

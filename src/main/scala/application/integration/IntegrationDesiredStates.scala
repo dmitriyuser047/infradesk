@@ -21,7 +21,7 @@ import scala.concurrent.duration.FiniteDuration
 final class IntegrationDesiredStates[Tx[_]: MonadThrow](integrations: IntegrationRepository[Tx],
   inventory: IntegrationInventoryRepository[Tx], desired: IntegrationDesiredStateRepository[Tx],
   providers: IntegrationProviderRegistry[IO], ids: IdGenerator[Tx], time: TimeProvider[Tx],
-  audit: AuditRecorder[Tx], subsystemEnabled: Boolean) {
+  audit: AuditRecorder[Tx], desiredStateOperational: Boolean) {
   import IntegrationDesiredStates._
 
   /** Opting in is explicit and needs automatic observation. Going back to OBSERVE removes every
@@ -33,7 +33,8 @@ final class IntegrationDesiredStates[Tx[_]: MonadThrow](integrations: Integratio
       else for {
         _ <- mode match {
           case IntegrationManagementMode.ManagedSelected => for {
-            _ <- Either.cond(subsystemEnabled, (), error(SubsystemDisabled, "Desired state is disabled")).liftTo[Tx]
+            _ <- Either.cond(desiredStateOperational, (), error(SubsystemDisabled,
+              "Desired state is unavailable for this deployment")).liftTo[Tx]
             _ <- supported(stored).liftTo[Tx]
             _ <- Either.cond(stored.enabled, (), error(RequiresSync,
               "Managing nodes requires automatic synchronization")).liftTo[Tx]

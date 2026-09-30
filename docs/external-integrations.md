@@ -246,6 +246,10 @@ action history is their journal, and it names who set the intent.
 | `INFRADESK_INTEGRATIONS_DESIRED_STATE_MAX_CONCURRENCY` | `4` |
 | `INFRADESK_INTEGRATIONS_DESIRED_STATE_CLAIM_LEASE_SECONDS` | `30` |
 
+Desired-state reconciliation requires both integration synchronization
+(`INFRADESK_INTEGRATIONS_SYNC_ENABLED=true`) and integration actions
+(`INFRADESK_INTEGRATIONS_ACTIONS_ENABLED=true`). Invalid combinations fail startup.
+
 With the subsystem disabled no integration can enter `MANAGED_SELECTED`
 (`INTEGRATION_DESIRED_STATE_DISABLED`); observing integrations are unaffected.
 

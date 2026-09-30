@@ -89,8 +89,8 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
 
     val desiredRepository = new PostgresIntegrationDesiredStateRepository
     val registry = new IntegrationProviderRegistry[IO](List(provider))
-    def desiredStates(enabled: Boolean = true) = new IntegrationDesiredStates[ConnectionIO](integrations, inventory,
-      desiredRepository, registry, ids, time, audit, enabled)
+    def desiredStates(desiredStateOperational: Boolean = true) = new IntegrationDesiredStates[ConnectionIO](
+      integrations, inventory, desiredRepository, registry, ids, time, audit, desiredStateOperational)
     /** Has the repository and a clock, and nothing that could reach a provider. */
     def desiredWorker(batch: Int = 50, concurrency: Int = 1) = new IntegrationDesiredStateWorker[ConnectionIO](
       desiredRepository, run, new SystemTimeProvider, NoOpLogger[IO],

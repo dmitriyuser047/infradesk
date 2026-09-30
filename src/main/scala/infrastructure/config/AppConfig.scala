@@ -47,6 +47,8 @@ final case class IntegrationsConfig(
   inventoryMaxObjects: Int = 10000
 ) {
   require(inventoryMaxResponseBytes > 0 && inventoryMaxObjects > 0, "Inventory limits must be positive")
+
+  val desiredStateOperational: Boolean = desiredState.enabled && sync.enabled && actions.enabled
 }
 final case class SchedulerConfig(
   enabled: Boolean,
@@ -125,6 +127,9 @@ object AppConfig {
       integrationSync <- parseIntegrationSync(values)
       integrationActions <- parseIntegrationActions(values)
       integrationDesiredState <- parseIntegrationDesiredState(values)
+      _ <- Either.cond(!integrationDesiredState.enabled || (integrationSync.enabled && integrationActions.enabled),
+        (), new IllegalArgumentException("INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED requires " +
+          "INFRADESK_INTEGRATIONS_SYNC_ENABLED=true and INFRADESK_INTEGRATIONS_ACTIONS_ENABLED=true"))
       inventoryMaxBytes <- bounded(values, "INFRADESK_INTEGRATIONS_INVENTORY_MAX_RESPONSE_BYTES", 8 * 1024 * 1024,
         64 * 1024, 64 * 1024 * 1024)
       inventoryMaxObjects <- bounded(values, "INFRADESK_INTEGRATIONS_INVENTORY_MAX_OBJECTS", 10000, 1, 100000)
