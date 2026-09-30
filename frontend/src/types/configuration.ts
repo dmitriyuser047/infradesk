@@ -19,6 +19,7 @@ export interface ConfigurationActor {
 /** A profile's metadata. Its content lives in revisions and never appears in a list. */
 export interface ConfigurationProfile {
   id: string
+  kind: 'FILE_TEMPLATE' | 'REMNAWAVE_CONFIG'
   code: string
   name: string
   description: string | null

@@ -20,7 +20,7 @@ const v1: ConfigurationRevision = { revisionNumber: 1, template: 'server {{ doma
 const v2: ConfigurationRevision = { revisionNumber: 2, template: 'server {{ domain }} {{ server_id }}', createdAt: '2026-09-22T10:00:00Z', createdBy: owner,
   variables: [{ name: 'domain', type: 'STRING', required: true, defaultValue: 'vpn.example', description: null },
     { name: 'server_id', type: 'STRING', required: true, defaultValue: null, description: null }] }
-const profile: ConfigurationProfile = { id: 'p1', code: 'xray-default', name: 'Xray Default', description: null, archived: false,
+const profile: ConfigurationProfile = { id: 'p1', kind: 'FILE_TEMPLATE', code: 'xray-default', name: 'Xray Default', description: null, archived: false,
   latestRevisionNumber: 2, latestRevisionCreatedAt: v2.createdAt, createdAt: v1.createdAt, updatedAt: v2.createdAt }
 
 function rule(overrides: Partial<ConfigurationRule> = {}): ConfigurationRule {

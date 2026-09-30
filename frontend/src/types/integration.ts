@@ -85,6 +85,7 @@ export interface RemnawaveInboundSummary {
 }
 export interface RemnawaveConfigProfileSummary {
   viewPosition: number; createdAt: string; updatedAt: string
+  configSha256: string | null
   nodeUuids: string[]; inbounds: RemnawaveInboundSummary[]
 }
 export interface NamedRef { id: string; name: string }

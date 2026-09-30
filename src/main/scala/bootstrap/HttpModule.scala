@@ -24,6 +24,7 @@ import infrastructure.http.{
   IntegrationRoutes,
   IntegrationActionRoutes,
   IntegrationDesiredStateRoutes,
+  IntegrationConfigProfileRoutes,
   MonitorRuleRoutes,
   NavigationRoutes,
   NotificationChannelRoutes,
@@ -174,6 +175,7 @@ object HttpModule {
           transactionRunner, authorization, application.integrationActionsEnabled, loggers.integration).routes <+>
         new IntegrationDesiredStateRoutes(application.integrationDesiredStates, transactionRunner, authorization,
           loggers.integration).routes <+>
+        new IntegrationConfigProfileRoutes(application.integrationConfigProfiles, authorization).routes <+>
         new AuditRoutes(application.listAuditEvents, transactionRunner, authorization).routes <+>
         new HistoryRoutes(application.listHistoryEvents, persistence.resourceRepository,
           transactionRunner, authorization).routes <+>

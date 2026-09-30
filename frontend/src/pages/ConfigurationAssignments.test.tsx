@@ -31,7 +31,7 @@ const v2: ConfigurationRevision = {
 }
 
 function profile(overrides: Partial<ConfigurationProfile> = {}): ConfigurationProfile {
-  return { id: 'p1', code: 'nginx-main', name: 'Nginx main', description: null, archived: false, latestRevisionNumber: 2,
+  return { id: 'p1', kind: 'FILE_TEMPLATE', code: 'nginx-main', name: 'Nginx main', description: null, archived: false, latestRevisionNumber: 2,
     latestRevisionCreatedAt: v2.createdAt, createdAt: v1.createdAt, updatedAt: v2.createdAt, ...overrides }
 }
 

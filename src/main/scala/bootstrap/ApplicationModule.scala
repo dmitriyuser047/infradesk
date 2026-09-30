@@ -157,6 +157,8 @@ final case class ApplicationComponents(
   integrationActionsEnabled: Boolean,
   integrationDesiredStates: IntegrationDesiredStates[ConnectionIO],
   integrationDesiredStateWorker: IntegrationDesiredStateWorker[ConnectionIO],
+  integrationConfigProfiles: application.integration.IntegrationConfigProfiles[ConnectionIO],
+  integrationConfigDeploymentWorker: application.integration.IntegrationConfigDeploymentWorker[ConnectionIO],
   integrationBindings: IntegrationBindings[ConnectionIO],
   integrationSyncScheduler: IntegrationSyncScheduler[ConnectionIO],
   testNotificationChannel: TestNotificationChannel,
@@ -366,6 +368,22 @@ object ApplicationModule {
       integrations.integrationProviderRegistry, transactionRunner, timeProvider, loggers.integration,
       actionSettings.pollInterval, actionSettings.batchSize, actionSettings.maxConcurrency,
       config.integrations.requestTimeout, UUID.randomUUID())
+
+    val integrationConfigRepository = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigProfileRepository(
+      integration.secret.RemnawaveConfigCipher.fromConfig(config.secretEncryption))
+    val integrationConfigDeployments = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigDeploymentRepository
+    val integrationConfigProfiles = new application.integration.IntegrationConfigProfiles[ConnectionIO](
+      integrationRepository, integrationInventoryRepository, integrationSecretRepository,
+      integrations.integrationCredentialCipher, integrations.integrationProviderRegistry,
+      configurationProfileRepository, configurationProfileQuery, integrationConfigRepository,
+      integrationConfigDeployments, transactionIdGenerator, transactionTimeProvider, auditRecorder,
+      transactionRunner, integrationSyncStateRepository, loggers.integration)
+    val integrationConfigDeploymentWorker = new application.integration.IntegrationConfigDeploymentWorker[ConnectionIO](
+      integrationConfigDeployments, integrationConfigRepository, integrationRepository,
+      integrationInventoryRepository, integrationSecretRepository, integrations.integrationCredentialCipher,
+      integrations.integrationProviderRegistry, integrationSyncStateRepository, transactionRunner,
+      timeProvider, loggers.integration, actionSettings.pollInterval, actionSettings.batchSize,
+      actionSettings.maxConcurrency, config.integrations.requestTimeout, UUID.randomUUID())
 
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
@@ -586,6 +604,8 @@ object ApplicationModule {
           desiredStateSettings.maxConcurrency, desiredStateSettings.claimLease,
           // Observations nudge reconciliation; this is only the fallback for a missed nudge.
           idleInterval = config.integrations.sync.interval * 5), UUID.randomUUID()),
+      integrationConfigProfiles = integrationConfigProfiles,
+      integrationConfigDeploymentWorker = integrationConfigDeploymentWorker,
       integrationBindings = new IntegrationBindings[ConnectionIO](integrationRepository,
         integrationInventoryRepository, integrationBindingRepository, transactionIdGenerator,
         transactionTimeProvider, auditRecorder),

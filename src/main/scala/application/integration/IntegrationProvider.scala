@@ -4,10 +4,23 @@ package application.integration
 import domain.integration.{IntegrationActionCode, IntegrationActionRemoteOutcome, IntegrationBaseUrl,
   IntegrationCapability, IntegrationCredential, IntegrationObservation, IntegrationProviderType}
 import java.util.UUID
+import java.time.Instant
+import io.circe.Json
 
 final case class IntegrationRuntimeContext(id: UUID, organizationId: UUID,
   baseUrl: IntegrationBaseUrl, credential: IntegrationCredential)
 final case class IntegrationTestResult(ok: Boolean, providerType: IntegrationProviderType, latencyMs: Long)
+
+/** Full config exists only during an explicit operation. Inventory and list DTOs contain hashes. */
+final case class IntegrationConfigProfileDocument(externalId: String, config: Json, updatedAt: Option[Instant]) {
+  override def toString: String = s"IntegrationConfigProfileDocument($externalId,<redacted>,$updatedAt)"
+}
+
+trait IntegrationConfigProfileTransport[F[_]] {
+  def fetchConfigProfile(context: IntegrationRuntimeContext, externalId: String): F[IntegrationConfigProfileDocument]
+  def updateConfigProfile(context: IntegrationRuntimeContext, externalId: String,
+    config: Json, desiredSha256: String): F[domain.integration.IntegrationActionRemoteOutcome]
+}
 
 trait IntegrationProvider[F[_]] {
   def providerType: IntegrationProviderType
@@ -20,6 +33,7 @@ trait IntegrationProvider[F[_]] {
   def observe(context: IntegrationRuntimeContext): F[IntegrationObservation]
   def executeAction(context: IntegrationRuntimeContext, externalId: String,
     action: IntegrationActionCode): F[IntegrationActionRemoteOutcome]
+  def configProfiles: Option[IntegrationConfigProfileTransport[F]] = None
 }
 
 final class IntegrationProviderRegistry[F[_]](providers: List[IntegrationProvider[F]]) {

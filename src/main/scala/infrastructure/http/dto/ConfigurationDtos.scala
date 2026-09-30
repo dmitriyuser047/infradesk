@@ -111,6 +111,7 @@ object ConfigurationDtos {
         "code" -> Json.fromString(profile.code),
         "name" -> Json.fromString(profile.name),
         "description" -> profile.description.fold(Json.Null)(Json.fromString),
+        "kind" -> Json.fromString(profile.kind.code),
         "archived" -> Json.fromBoolean(profile.archived),
         "latestRevisionNumber" -> Json.fromInt(profile.latestRevisionNumber),
         "latestRevisionCreatedAt" -> latestRevisionCreatedAt.fold(Json.Null)(instantEncoder(_)),

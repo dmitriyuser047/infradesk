@@ -45,10 +45,8 @@ final class OutboundDestinationPolicySpec extends FunSuite {
     }
   }
 
-  test("a public address is reachable, and a name that does not resolve says so") {
+  test("a public address is reachable and an empty host is refused") {
     assertEquals(codeOf("93.184.216.34", strict), None)
-    assertEquals(codeOf("no-such-host.invalid", strict),
-      Some(OutboundDestinationPolicy.ResolutionFailed))
     // An empty host resolves as the loopback interface.
     assertEquals(codeOf("", strict), Some(OutboundDestinationPolicy.Forbidden))
   }

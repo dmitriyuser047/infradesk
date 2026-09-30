@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package integration.remnawave
 
 import cats.syntax.all._
+import domain.configuration.CanonicalJson
 import domain.integration._
 import io.circe.{ACursor, HCursor, Json}
 import io.circe.parser.parse
@@ -115,8 +116,10 @@ object RemnawaveInventory {
     updated <- instant(c.downField("updatedAt"))
     nodes <- list(c.downField("nodes"))(node => uuid(node.downField("uuid")))
     inbounds <- list(c.downField("inbounds"))(inboundOf)
+    config <- c.downField("config").focus.filter(_.isObject)
   } yield ObservedIntegrationObject(IntegrationObjectType.ConfigProfile, id, name,
-    RemnawaveConfigProfileSummary(position, created, updated, nodes, inbounds))
+    RemnawaveConfigProfileSummary(position, created, updated, nodes, inbounds,
+      Some(CanonicalJson.sha256(config))))
 
   // Only identity and addressing of an inbound; its raw definition is never read.
   private def inboundOf(c: ACursor): Option[RemnawaveInboundSummary] = for {

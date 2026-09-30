@@ -253,6 +253,33 @@ Desired-state reconciliation requires both integration synchronization
 With the subsystem disabled no integration can enter `MANAGED_SELECTED`
 (`INTEGRATION_DESIRED_STATE_DISABLED`); observing integrations are unaffected.
 
-Out of scope: managing every node automatically, desired state for hosts or config profiles,
-creating or deleting nodes, automatic restart, traffic reset, config profile editing or rollout,
-and remediation triggered by monitoring or incidents.
+Out of scope for node desired state: managing every node automatically, desired state for hosts or
+config profiles, creating or deleting nodes, automatic restart, traffic reset, and remediation
+triggered by monitoring or incidents.
+
+## Remnawave Config Profile Management
+
+An owner can adopt an existing observed Config Profile. InfraDesk reads its full document with
+`GET /api/config-profiles/{uuid}` and imports its config as revision 1 of an existing
+`ConfigurationProfile` with kind `REMNAWAVE_CONFIG`. Revision JSON is canonicalized, hashed, and
+encrypted at rest with a purpose-separated AES-GCM key and tenant/profile/revision-bound AAD.
+Ordinary inventory and profile lists carry only a SHA-256 hash, never the config body. File-template
+profiles and their assignments remain separate.
+
+Editing creates another immutable, numbered revision; it never writes to Remnawave. Preview reads
+the current remote document and shows a bounded diff against a selected local revision. Explicit
+deployment creates a durable `QUEUED` intent. The deployment worker reads the remote profile again
+and refuses to PATCH if its hash changed since the last observation. A successful preflight sends
+`PATCH /api/config-profiles` with `uuid` and `config` only, then nudges ordinary integration sync.
+GET followed by PATCH narrows the race window; Remnawave does not provide atomic compare-and-swap
+in this contract.
+
+A timed-out or otherwise ambiguous PATCH is `UNKNOWN` and is never retried automatically. A fresh
+observation determines whether the profile is in sync, has local changes, or has remote drift.
+Deployments affect one existing profile at a time; there is no automatic remediation, profile
+creation/deletion/reordering, rollout, or canary deployment in this stage.
+
+Reading decrypted content and managing local revisions require `MANAGE_INTEGRATIONS` and
+`MANAGE_CONFIGURATIONS`; deployment additionally requires `EXECUTE_OPERATIONS`. The API returns
+raw config only from the point revision-content endpoint. Adoption, revision creation, and deploy
+requests are audited by IDs, without config content.

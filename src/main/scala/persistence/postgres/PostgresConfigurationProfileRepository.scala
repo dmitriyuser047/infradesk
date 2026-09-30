@@ -10,7 +10,7 @@ import application.port.{
   ConfigurationRevisionView
 }
 import cats.syntax.all._
-import domain.configuration.{ConfigurationProfile, ConfigurationRevision, ConfigurationValueType, ConfigurationVariableDefinition}
+import domain.configuration.{ConfigurationProfile, ConfigurationProfileKind, ConfigurationRevision, ConfigurationValueType, ConfigurationVariableDefinition}
 import org.typelevel.doobie.{ConnectionIO, Fragment, Update}
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
@@ -28,10 +28,10 @@ final class PostgresConfigurationProfileRepository extends ConfigurationProfileR
   override def insertProfile(profile: ConfigurationProfile): ConnectionIO[Boolean] =
     sql"""
       insert into configuration_profile (
-        id, organization_id, code, name, description, archived, latest_revision_number, created_at, updated_at
+        id, organization_id, code, name, description, archived, latest_revision_number, created_at, updated_at, kind
       ) values (
         ${profile.id}, ${profile.organizationId}, ${profile.code}, ${profile.name}, ${profile.description},
-        ${profile.archived}, ${profile.latestRevisionNumber}, ${profile.createdAt}, ${profile.updatedAt}
+        ${profile.archived}, ${profile.latestRevisionNumber}, ${profile.createdAt}, ${profile.updatedAt}, ${profile.kind.code}
       )
       on conflict on constraint uq_configuration_profile_organization_code do nothing
     """.update.run.map(_ == 1)
@@ -148,7 +148,7 @@ object PostgresConfigurationProfileRepository {
 
   private[postgres] val profileColumns: Fragment = fr"""
     p.id, p.organization_id, p.code, p.name, p.description, p.archived, p.latest_revision_number,
-    p.created_at, p.updated_at
+    p.created_at, p.updated_at, p.kind
   """
 
   private[postgres] final case class ProfileRow(
@@ -160,10 +160,12 @@ object PostgresConfigurationProfileRepository {
     archived: Boolean,
     latestRevisionNumber: Int,
     createdAt: Instant,
-    updatedAt: Instant
+    updatedAt: Instant,
+    kind: String
   ) {
     def toDomain: ConfigurationProfile =
-      ConfigurationProfile(id, organizationId, code, name, description, archived, latestRevisionNumber, createdAt, updatedAt)
+      ConfigurationProfile(id, organizationId, code, name, description, archived, latestRevisionNumber, createdAt, updatedAt,
+        ConfigurationProfileKind.fromCode(kind).fold(throw _, identity))
   }
 
   private[postgres] final case class VariableRow(

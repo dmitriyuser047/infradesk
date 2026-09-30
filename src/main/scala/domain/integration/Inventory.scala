@@ -78,7 +78,8 @@ final case class RemnawaveConfigProfileSummary(
   createdAt: Instant,
   updatedAt: Instant,
   nodeUuids: List[String],
-  inbounds: List[RemnawaveInboundSummary]
+  inbounds: List[RemnawaveInboundSummary],
+  configSha256: Option[String] = None
 ) extends IntegrationObjectSummary
 
 /** One object as the provider reported it in a snapshot, before persistence. */

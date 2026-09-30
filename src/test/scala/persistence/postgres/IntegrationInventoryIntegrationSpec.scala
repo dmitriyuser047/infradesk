@@ -9,15 +9,19 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.integration._
+import domain.configuration.CanonicalJson
 import infrastructure.database.{ConnectionIOIdGenerator, ConnectionIOTimeProvider, DoobieTransactionRunner}
 import infrastructure.runtime.SystemTimeProvider
 import integration.secret.IntegrationCredentialCipher
+import integration.secret.RemnawaveConfigCipher
 import integration.ssh.SecretEncryptionConfig
 import munit.FunSuite
 import org.typelevel.doobie.ConnectionIO
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 import org.typelevel.log4cats.noop.NoOpLogger
+import io.circe.Json
+import io.circe.parser.parse
 
 import java.time.Instant
 import java.util.{Base64, UUID}
@@ -61,6 +65,29 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
     val bindingRepository = new PostgresIntegrationBindingRepository
     val query = new PostgresIntegrationInventoryQuery
     val actionRepository = new PostgresIntegrationActionRepository
+    val configRepository = new PostgresIntegrationConfigProfileRepository(RemnawaveConfigCipher.fromConfig(
+      SecretEncryptionConfig.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" ->
+        Base64.getEncoder.encodeToString(Array.fill[Byte](32)(7)))).toOption.get))
+    val configDeployments = new PostgresIntegrationConfigDeploymentRepository
+    @volatile var remoteConfig: Json = parse("""{"privateKey":"SUPER-SECRET-PRIVATE-KEY","a":1}""").toOption.get
+    @volatile var configPatchCalls = 0
+    @volatile var configGetCalls = 0
+    @volatile var configWriteOutcome: IntegrationActionRemoteOutcome = IntegrationActionRemoteOutcome.Succeeded
+    @volatile var remoteDocumentId: Option[String] = None
+    @volatile var beforeConfigFetch: IO[Unit] = IO.unit
+    val configTransport = new IntegrationConfigProfileTransport[IO] {
+      override def fetchConfigProfile(context: IntegrationRuntimeContext, externalId: String) =
+        beforeConfigFetch *> IO {
+          configGetCalls += 1
+          IntegrationConfigProfileDocument(remoteDocumentId.getOrElse(externalId), remoteConfig, None)
+        }
+      override def updateConfigProfile(context: IntegrationRuntimeContext, externalId: String,
+        config: Json, desiredSha256: String) = IO {
+        configPatchCalls += 1
+        if (configWriteOutcome == IntegrationActionRemoteOutcome.Succeeded) remoteConfig = config
+        configWriteOutcome
+      }
+    }
     val management = new IntegrationManagement[ConnectionIO](integrations, secrets, ids, time, cipher, audit, states,
       actionRepository, inventory)
     @volatile var observation: IO[IntegrationObservation] = IO.pure(snapshot())
@@ -71,7 +98,9 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       override val providerType = IntegrationProviderType.Remnawave
       override val displayName = "Remnawave"
       override val capabilities: Set[IntegrationCapability] =
-        Set(IntegrationCapability.SafeActions, IntegrationCapability.DesiredState)
+        Set(IntegrationCapability.SafeActions, IntegrationCapability.DesiredState,
+          IntegrationCapability.ConfigProfileManagement)
+      override def configProfiles: Option[IntegrationConfigProfileTransport[IO]] = Some(configTransport)
       override def testConnection(context: IntegrationRuntimeContext) = IO.raiseError(new IllegalStateException)
       override def observe(context: IntegrationRuntimeContext) = observation
       override def executeAction(context: IntegrationRuntimeContext, externalId: String,
@@ -89,6 +118,12 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
 
     val desiredRepository = new PostgresIntegrationDesiredStateRepository
     val registry = new IntegrationProviderRegistry[IO](List(provider))
+    val configProfiles = new IntegrationConfigProfiles[ConnectionIO](integrations, inventory, secrets, cipher,
+      registry, new PostgresConfigurationProfileRepository, new PostgresConfigurationProfileQuery,
+      configRepository, configDeployments, ids, time, audit, run, states, NoOpLogger[IO])
+    val configWorker = new IntegrationConfigDeploymentWorker[ConnectionIO](configDeployments,
+      configRepository, integrations, inventory, secrets, cipher, registry, states, run,
+      new SystemTimeProvider, NoOpLogger[IO], 1.second, 20, 2, 2.seconds, UUID.randomUUID())
     def desiredStates(desiredStateOperational: Boolean = true) = new IntegrationDesiredStates[ConnectionIO](
       integrations, inventory, desiredRepository, registry, ids, time, audit, desiredStateOperational)
     /** Has the repository and a clock, and nothing that could reach a provider. */
@@ -137,6 +172,9 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       for {
         _ <- sql"delete from audit_event where organization_id = $id".update.run
         _ <- sql"delete from integration where organization_id = $id".update.run
+        _ <- sql"delete from configuration_revision_secure_payload where organization_id = $id".update.run
+        _ <- sql"delete from configuration_revision where organization_id = $id".update.run
+        _ <- sql"delete from configuration_profile where organization_id = $id".update.run
         _ <- sql"delete from integration_secret where organization_id = $id".update.run
         _ <- sql"delete from resource where organization_id = $id".update.run
         _ <- sql"delete from environment where organization_id = $id".update.run
@@ -152,6 +190,205 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       val world = new World(xa)
       (world.setUp *> IO.blocking(body(world))).guarantee(world.cleanUp)
     }.unsafeRunSync()
+  }
+
+  test("managed config adoption, encrypted revisions and preflight-protected durable deployment") {
+    withWorld { w =>
+      val external = UUID.randomUUID().toString
+      def observed(config: Json) = ObservedIntegrationObject(IntegrationObjectType.ConfigProfile,
+        external, "Default", RemnawaveConfigProfileSummary(1, Instant.parse("2026-08-01T00:00:00Z"),
+          Instant.parse("2026-09-01T00:00:00Z"), List("node-a"), Nil, Some(CanonicalJson.sha256(config))))
+      val initial = w.remoteConfig
+      val integration = w.create("Config management")
+      w.observation = IO.pure(snapshot(observed(initial)))
+      w.manual(integration.id)
+      val objectId = w.objects(integration.id).head._5
+      val adopted = w.configProfiles.adopt(w.actor, integration.id, objectId,
+        AdoptIntegrationConfigProfile("remnawave-main", "Main Remnawave", None)).unsafeRunSync()
+      assertEquals(adopted.kind.code, "REMNAWAVE_CONFIG")
+      assertEquals(adopted.latestRevisionNumber, 1)
+      val (template, ciphertext) = w.run.run(sql"""select r.template_text, s.ciphertext
+        from configuration_revision r join configuration_revision_secure_payload s on s.revision_id = r.id
+        where r.profile_id = ${adopted.id}""".query[(String, Array[Byte])].unique).unsafeRunSync()
+      assertEquals(template, "")
+      assert(!new String(ciphertext, "UTF-8").contains("SUPER-SECRET-PRIVATE-KEY"))
+      val imported = w.configProfiles.revisionContent(w.org, integration.id, objectId, 1).unsafeRunSync()
+      assertEquals(imported.contentSha256, CanonicalJson.sha256(initial))
+      assert(imported.canonicalJson.contains("SUPER-SECRET-PRIVATE-KEY"))
+      assertEquals(w.configProfiles.adopt(w.actor, integration.id, objectId,
+        AdoptIntegrationConfigProfile("duplicate", "Duplicate", None)).attempt.unsafeRunSync()
+        .left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_CONFIG_PROFILE_ALREADY_MANAGED"))
+      assertEquals(w.configProfiles.managed(w.org, integration.id, objectId).unsafeRunSync().get.status,
+        IntegrationConfigStatus.WaitingRefresh)
+      w.manual(integration.id)
+      assertEquals(w.configProfiles.managed(w.org, integration.id, objectId).unsafeRunSync().get.status,
+        IntegrationConfigStatus.InSync)
+
+      val next = parse("""{"a":2,"privateKey":"SUPER-SECRET-PRIVATE-KEY"}""").toOption.get
+      assertEquals(w.configProfiles.appendRevision(w.actor, integration.id, objectId, next).unsafeRunSync(), 2)
+      assertEquals(w.configProfiles.managed(w.org, integration.id, objectId).unsafeRunSync().get.status,
+        IntegrationConfigStatus.LocalChanges)
+      val preview = w.configProfiles.preview(w.org, integration.id, objectId, 2).unsafeRunSync()
+      assert(preview.changed)
+      assertEquals(preview.remoteSha256, CanonicalJson.sha256(initial))
+      val requestId = UUID.randomUUID()
+      val queued = w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 2, requestId).unsafeRunSync()
+      assertEquals(queued.status, IntegrationConfigDeploymentStatus.Queued)
+      assertEquals(w.configPatchCalls, 0)
+      assertEquals(w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 2, requestId).unsafeRunSync().id,
+        queued.id)
+      assertEquals(w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 1, requestId).attempt.unsafeRunSync()
+        .left.toOption.collect { case e: IntegrationError => e.code }, Some("CONFIG_DEPLOYMENT_REQUEST_ID_CONFLICT"))
+      assertEquals(w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 2,
+        UUID.randomUUID()).attempt.unsafeRunSync().left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_CONFIG_DEPLOYMENT_ALREADY_RUNNING"))
+      val targetEdit = w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("Config management", "https://other.example.test", None))).attempt.unsafeRunSync()
+      val credentialEdit = w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("Config management", "https://panel.example.test",
+          Some(RemnawaveCredential("new-token", None))))).attempt.unsafeRunSync()
+      val delete = w.run.run(w.management.delete(w.actor, integration.id)).attempt.unsafeRunSync()
+      List(targetEdit, credentialEdit, delete).foreach(result =>
+        assertEquals(result.left.toOption.collect { case e: IntegrationError => e.code },
+          Some("INTEGRATION_ACTION_ALREADY_RUNNING")))
+      assertEquals(w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("Renamed", "https://panel.example.test", None))).unsafeRunSync().name, "Renamed")
+      w.configWorker.tick.unsafeRunSync()
+      assertEquals(w.configPatchCalls, 1)
+      assertEquals(w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("After deploy", "https://panel.example.test", None))).unsafeRunSync().name,
+        "After deploy")
+      val succeeded = w.run.run(w.configDeployments.recent(w.org, integration.id, objectId, 1)).unsafeRunSync().head
+      assertEquals(succeeded.status, IntegrationConfigDeploymentStatus.Succeeded)
+      assertEquals(w.configProfiles.managed(w.org, integration.id, objectId).unsafeRunSync().get.status,
+        IntegrationConfigStatus.WaitingRefresh)
+      // PATCH never rewrites the inventory. Only the ordinary synchronization observes the result.
+      assertEquals(w.run.run(w.inventory.findObject(w.org, integration.id, objectId, false)).unsafeRunSync()
+        .get.summary.asInstanceOf[RemnawaveConfigProfileSummary].configSha256, Some(CanonicalJson.sha256(initial)))
+      w.observation = IO.pure(snapshot(observed(next)))
+      w.manual(integration.id)
+      assertEquals(w.configProfiles.managed(w.org, integration.id, objectId).unsafeRunSync().get.status,
+        IntegrationConfigStatus.InSync)
+
+      // A remote edit after the last observation must stop the next queued write before PATCH.
+      val conflict = w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 2,
+        UUID.randomUUID()).unsafeRunSync()
+      w.remoteConfig = parse("""{"a":3,"privateKey":"SUPER-SECRET-PRIVATE-KEY"}""").toOption.get
+      w.configWorker.tick.unsafeRunSync()
+      val failed = w.run.run(w.configDeployments.findByRequest(w.org, conflict.requestId)).unsafeRunSync().get
+      assertEquals(failed.status, IntegrationConfigDeploymentStatus.Failed)
+      assertEquals(failed.errorCode, Some("INTEGRATION_CONFIG_REMOTE_CHANGED"))
+      assertEquals(w.configPatchCalls, 1)
+      val externalEdit = w.remoteConfig
+      w.observation = IO.pure(snapshot(observed(externalEdit)))
+      w.manual(integration.id)
+      val ambiguous = w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 2,
+        UUID.randomUUID()).unsafeRunSync()
+      w.configWriteOutcome = IntegrationActionRemoteOutcome.OutcomeUnknown("INTEGRATION_CONFIG_DEPLOYMENT_RESULT_UNKNOWN")
+      w.configWorker.tick.unsafeRunSync()
+      assertEquals(w.run.run(w.configDeployments.findByRequest(w.org, ambiguous.requestId)).unsafeRunSync()
+        .map(_.status), Some(IntegrationConfigDeploymentStatus.Unknown))
+      assertEquals(w.configPatchCalls, 2)
+      w.configWorker.tick.unsafeRunSync()
+      assertEquals(w.configPatchCalls, 2, "an ambiguous PATCH is never automatically repeated")
+      assertEquals(w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 2,
+        UUID.randomUUID()).attempt.unsafeRunSync().left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_CONFIG_REQUIRES_REFRESH"))
+    }
+  }
+
+  test("a stale config deployment becomes UNKNOWN and cannot be replayed or completed by its old claim") {
+    withWorld { w =>
+      val external = UUID.randomUUID().toString
+      val observed = ObservedIntegrationObject(IntegrationObjectType.ConfigProfile, external, "Default",
+        RemnawaveConfigProfileSummary(1, Instant.parse("2026-08-01T00:00:00Z"),
+          Instant.parse("2026-09-01T00:00:00Z"), Nil, Nil, Some(CanonicalJson.sha256(w.remoteConfig))))
+      val integration = w.create("Stale config")
+      w.observation = IO.pure(snapshot(observed)); w.manual(integration.id)
+      val objectId = w.objects(integration.id).head._5
+      w.configProfiles.adopt(w.actor, integration.id, objectId,
+        AdoptIntegrationConfigProfile("stale-config", "Stale", None)).unsafeRunSync()
+      w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 1, UUID.randomUUID()).unsafeRunSync()
+      val now = Instant.now()
+      val token = UUID.randomUUID()
+      val claimed = w.run.run(w.configDeployments.recoverAndClaim(UUID.randomUUID(), token,
+        now, now.plusSeconds(1), 1)).unsafeRunSync()._2.head
+      assertEquals(claimed.status, IntegrationConfigDeploymentStatus.Running)
+      val recovered = w.run.run(w.configDeployments.recoverAndClaim(UUID.randomUUID(), UUID.randomUUID(),
+        now.plusSeconds(2), now.plusSeconds(3), 1)).unsafeRunSync()
+      assertEquals(recovered._1, List((w.org, integration.id)))
+      assertEquals(recovered._2, Nil)
+      assertEquals(w.run.run(w.configDeployments.complete(claimed, token, now.plusSeconds(3),
+        "SUCCEEDED", None, None)).unsafeRunSync(), false)
+      w.configWorker.tick.unsafeRunSync()
+      assertEquals(w.configPatchCalls, 0)
+      val history = w.run.run(w.configDeployments.recent(w.org, integration.id, objectId, 1)).unsafeRunSync()
+      assertEquals(history.head.status, IntegrationConfigDeploymentStatus.Unknown)
+      assertEquals(history.head.errorCode, Some("INTEGRATION_CONFIG_DEPLOYMENT_RESULT_UNKNOWN"))
+    }
+  }
+
+  test("config adoption rejects foreign, wrong-type, inactive and changed remote targets") {
+    withWorld { w =>
+      val external = UUID.randomUUID().toString
+      val observed = ObservedIntegrationObject(IntegrationObjectType.ConfigProfile, external, "Default",
+        RemnawaveConfigProfileSummary(1, Instant.parse("2026-08-01T00:00:00Z"),
+          Instant.parse("2026-09-01T00:00:00Z"), Nil, Nil, Some(CanonicalJson.sha256(w.remoteConfig))))
+      val integration = w.create("Adoption checks")
+      w.observation = IO.pure(snapshot(observed, node("node-a", "Node")))
+      w.manual(integration.id)
+      val objects = w.objects(integration.id)
+      val profileId = objects.find(_._1 == external).get._5
+      val nodeId = objects.find(_._1 == "node-a").get._5
+      val command = AdoptIntegrationConfigProfile("adoption-check", "Adoption check", None)
+      def code(result: Either[Throwable, domain.configuration.ConfigurationProfile]) =
+        result.left.toOption.collect { case e: IntegrationError => e.code }
+      assertEquals(code(w.configProfiles.adopt(ActorContext(w.user, w.foreign), integration.id,
+        profileId, command).attempt.unsafeRunSync()), Some("INTEGRATION_NOT_FOUND"))
+      assertEquals(code(w.configProfiles.adopt(w.actor, integration.id, nodeId, command)
+        .attempt.unsafeRunSync()), Some("INTEGRATION_CONFIG_PROFILE_UNSUPPORTED"))
+      w.remoteDocumentId = Some(UUID.randomUUID().toString)
+      assertEquals(code(w.configProfiles.adopt(w.actor, integration.id, profileId, command)
+        .attempt.unsafeRunSync()), Some("INTEGRATION_CONFIG_PROFILE_CHANGED"))
+      w.remoteDocumentId = None
+      w.beforeConfigFetch = w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("Adoption checks", "https://changed.example.test", None))).void
+      assertEquals(code(w.configProfiles.adopt(w.actor, integration.id, profileId, command)
+        .attempt.unsafeRunSync()), Some("INTEGRATION_CONFIG_PROFILE_CHANGED"))
+      w.beforeConfigFetch = IO.unit
+      assertEquals(w.run.run(sql"select count(*) from configuration_profile where organization_id = ${w.org}"
+        .query[Long].unique).unsafeRunSync(), 0L)
+      w.observation = IO.pure(snapshot(observed)); w.manual(integration.id)
+      w.observation = IO.pure(snapshot()); w.manual(integration.id)
+      assertEquals(code(w.configProfiles.adopt(w.actor, integration.id, profileId, command)
+        .attempt.unsafeRunSync()), Some("INTEGRATION_CONFIG_PROFILE_INACTIVE"))
+    }
+  }
+
+  test("concurrent managed config revisions receive consecutive immutable numbers") {
+    withWorld { w =>
+      val external = UUID.randomUUID().toString
+      val observed = ObservedIntegrationObject(IntegrationObjectType.ConfigProfile, external, "Default",
+        RemnawaveConfigProfileSummary(1, Instant.parse("2026-08-01T00:00:00Z"),
+          Instant.parse("2026-09-01T00:00:00Z"), Nil, Nil, Some(CanonicalJson.sha256(w.remoteConfig))))
+      val integration = w.create("Revision race")
+      w.observation = IO.pure(snapshot(observed)); w.manual(integration.id)
+      val objectId = w.objects(integration.id).head._5
+      w.configProfiles.adopt(w.actor, integration.id, objectId,
+        AdoptIntegrationConfigProfile("revision-race", "Revision race", None)).unsafeRunSync()
+      val inputs = List(2, 3).map(number => Json.obj("a" -> Json.fromInt(number)))
+      val created = inputs.parTraverse(config => w.configProfiles.appendRevision(w.actor,
+        integration.id, objectId, config)).unsafeRunSync()
+      assertEquals(created.sorted, List(2, 3))
+      assertEquals(w.configProfiles.revisionContent(w.org, integration.id, objectId, 1).unsafeRunSync()
+        .contentSha256, CanonicalJson.sha256(w.remoteConfig))
+      assertEquals(w.configProfiles.revisions(w.org, integration.id, objectId, None, 10).unsafeRunSync()
+        .map(_.revisionNumber).sorted, List(1, 2, 3))
+      val count = w.run.run(sql"select count(*) from configuration_revision_secure_payload where organization_id = ${w.org}"
+        .query[Long].unique).unsafeRunSync()
+      assertEquals(count, 3L)
+    }
   }
 
   test("snapshots are reconciled: insert, keep unchanged rows, update, deactivate, reactivate with the same id") {

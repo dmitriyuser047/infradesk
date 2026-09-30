@@ -47,6 +47,15 @@ final case class ConfigurationVariableDefinition(
 /** A value given for a variable, as text; its type is the definition's. */
 final case class ConfigurationVariableValue(name: String, value: String)
 
+sealed trait ConfigurationProfileKind { def code: String }
+object ConfigurationProfileKind {
+  case object FileTemplate extends ConfigurationProfileKind { val code = "FILE_TEMPLATE" }
+  case object RemnawaveConfig extends ConfigurationProfileKind { val code = "REMNAWAVE_CONFIG" }
+  val All: List[ConfigurationProfileKind] = List(FileTemplate, RemnawaveConfig)
+  def fromCode(code: String): Either[IllegalArgumentException, ConfigurationProfileKind] =
+    All.find(_.code == code).toRight(new IllegalArgumentException("Unknown configuration profile kind"))
+}
+
 /** A reusable definition of desired configuration, owned by an organization.
   *
   * It holds metadata only. Its content lives in immutable revisions; `latestRevisionNumber` is
@@ -62,7 +71,8 @@ final case class ConfigurationProfile(
   archived: Boolean,
   latestRevisionNumber: Int,
   createdAt: Instant,
-  updatedAt: Instant
+  updatedAt: Instant,
+  kind: ConfigurationProfileKind = ConfigurationProfileKind.FileTemplate
 )
 
 /** One immutable version of a profile's content. Once written it is never changed. */

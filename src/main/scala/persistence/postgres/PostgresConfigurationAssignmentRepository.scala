@@ -54,12 +54,14 @@ final class PostgresConfigurationAssignmentRepository extends ConfigurationAssig
       case Some((code, _)) if code != "NODE" => (TargetUnsupported: ConfigurationAssignmentEligibility).pure[ConnectionIO]
       case Some((_, false)) => (TargetInactive: ConfigurationAssignmentEligibility).pure[ConnectionIO]
       case Some(_) =>
-        sql"""select archived from configuration_profile
+        sql"""select archived, kind from configuration_profile
                where organization_id = $organizationId and id = $profileId for update"""
-          .query[Boolean].option.flatMap {
+          .query[(Boolean, String)].option.flatMap {
             case None => (ProfileMissing: ConfigurationAssignmentEligibility).pure[ConnectionIO]
-            case Some(true) => (ProfileArchived: ConfigurationAssignmentEligibility).pure[ConnectionIO]
-            case Some(false) =>
+            case Some((_, kind)) if kind != "FILE_TEMPLATE" =>
+              (ProfileWrongKind: ConfigurationAssignmentEligibility).pure[ConnectionIO]
+            case Some((true, _)) => (ProfileArchived: ConfigurationAssignmentEligibility).pure[ConnectionIO]
+            case Some((false, _)) =>
               sql"""select 1 from configuration_revision
                      where organization_id = $organizationId and profile_id = $profileId
                        and revision_number = $revisionNumber""".query[Int].option.map {

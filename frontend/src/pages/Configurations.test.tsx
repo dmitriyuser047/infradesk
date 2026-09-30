@@ -23,7 +23,7 @@ function revision(number: number, text = template): ConfigurationRevision {
 
 function profile(overrides: Partial<ConfigurationProfile> = {}): ConfigurationProfile {
   return {
-    id: 'vpn', code: 'vpn-production', name: 'VPN Production Nodes', description: null, archived: false,
+    id: 'vpn', kind: 'FILE_TEMPLATE', code: 'vpn-production', name: 'VPN Production Nodes', description: null, archived: false,
     latestRevisionNumber: 1, latestRevisionCreatedAt: '2026-09-21T10:00:00Z', createdAt: '2026-09-21T10:00:00Z',
     updatedAt: '2026-09-21T10:00:00Z', ...overrides,
   }

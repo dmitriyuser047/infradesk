@@ -15,7 +15,7 @@ import application.port.{
 import cats.{Monad, MonadThrow}
 import cats.syntax.all._
 import domain.audit.{AuditAction, AuditTargetType}
-import domain.configuration.{ConfigurationLimits, ConfigurationProfile, ConfigurationRevision, ValidatedConfiguration}
+import domain.configuration.{ConfigurationLimits, ConfigurationProfile, ConfigurationProfileKind, ConfigurationRevision, ValidatedConfiguration}
 
 import java.util.UUID
 
@@ -27,11 +27,13 @@ object ConfigurationError {
   val RevisionNotFoundCode = "CONFIGURATION_REVISION_NOT_FOUND"
   val CodeExistsCode = "CONFIGURATION_PROFILE_CODE_EXISTS"
   val ArchivedCode = "CONFIGURATION_PROFILE_ARCHIVED"
+  val WrongKindCode = "CONFIGURATION_PROFILE_KIND_UNSUPPORTED"
   val InvalidMetadataCode = "INVALID_CONFIGURATION_PROFILE"
 
   val notFound: ConfigurationError = ConfigurationError(NotFoundCode, "Configuration profile was not found")
   val codeExists: ConfigurationError = ConfigurationError(CodeExistsCode, "A configuration profile with this code already exists")
   val archived: ConfigurationError = ConfigurationError(ArchivedCode, "The configuration profile is archived")
+  val wrongKind: ConfigurationError = ConfigurationError(WrongKindCode, "This profile does not contain a file template")
   def invalidMetadata(field: String): ConfigurationError = ConfigurationError(InvalidMetadataCode, s"Invalid $field")
 }
 
@@ -94,6 +96,7 @@ final class ConfigurationProfileManagement[Tx[_]: MonadThrow](
   def appendRevision(actor: ActorContext, profileId: UUID, content: ValidatedConfiguration): Tx[ConfigurationRevision] =
     for {
       profile <- locked(actor.organizationId, profileId)
+      _ <- MonadThrow[Tx].raiseUnless(profile.kind == ConfigurationProfileKind.FileTemplate)(ConfigurationError.wrongKind)
       _ <- (if (profile.archived) MonadThrow[Tx].raiseError[Unit](ConfigurationError.archived) else ().pure[Tx])
       revisionId <- ids.nextId
       now <- time.now

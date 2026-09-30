@@ -27,6 +27,7 @@ object ConfigurationAssignmentEligibility {
   case object TargetInactive extends ConfigurationAssignmentEligibility
   case object ProfileMissing extends ConfigurationAssignmentEligibility
   case object ProfileArchived extends ConfigurationAssignmentEligibility
+  case object ProfileWrongKind extends ConfigurationAssignmentEligibility
   case object RevisionMissing extends ConfigurationAssignmentEligibility
 }
 

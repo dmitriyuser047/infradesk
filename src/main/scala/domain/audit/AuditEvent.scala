@@ -44,6 +44,9 @@ object AuditAction {
   case object IntegrationManagementModeChanged extends AuditAction { override val code: String = "INTEGRATION_MANAGEMENT_MODE_CHANGED" }
   case object IntegrationDesiredStateSet extends AuditAction { override val code: String = "INTEGRATION_DESIRED_STATE_SET" }
   case object IntegrationDesiredStateRemoved extends AuditAction { override val code: String = "INTEGRATION_DESIRED_STATE_REMOVED" }
+  case object IntegrationConfigProfileAdopted extends AuditAction { override val code: String = "INTEGRATION_CONFIG_PROFILE_ADOPTED" }
+  case object IntegrationConfigRevisionCreated extends AuditAction { override val code: String = "INTEGRATION_CONFIG_REVISION_CREATED" }
+  case object IntegrationConfigDeploymentRequested extends AuditAction { override val code: String = "INTEGRATION_CONFIG_DEPLOYMENT_REQUESTED" }
 
   /** A user changed their own password. The journal records that it happened, never the secret. */
   case object AccountPasswordChanged extends AuditAction { override val code: String = "ACCOUNT_PASSWORD_CHANGED" }
@@ -116,6 +119,9 @@ object AuditAction {
     IntegrationManagementModeChanged,
     IntegrationDesiredStateSet,
     IntegrationDesiredStateRemoved,
+    IntegrationConfigProfileAdopted,
+    IntegrationConfigRevisionCreated,
+    IntegrationConfigDeploymentRequested,
     AccountPasswordChanged,
     AccountProfileUpdated,
     AccountSessionRevoked,

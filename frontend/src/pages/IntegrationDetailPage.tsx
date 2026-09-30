@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { RefreshCw, Search } from 'lucide-react'
 import { ApiError } from '../api/httpClient'
 import { useIntegration, useTestIntegration } from '../api/integrations'
 import { useIntegrationActions } from '../api/integrationActions'
+import { useAdoptConfigProfile, useManagedConfigProfile } from '../api/integrationConfigProfiles'
 import {
   useBindingCandidates, useBindNode, useIntegrationInventory, useIntegrationSummary, useIntegrationSyncSessions,
   useSyncIntegration, useUnbindNode, type InventoryKind, type InventoryParams,
@@ -17,6 +19,7 @@ import {
 import { nodeStateTones, sessionTones, useSyncErrorText } from '../components/integrations/integrationPresentation'
 import { NodeActionControls } from '../components/integrations/NodeActionControls'
 import { DesiredStateControl, ManagementSection, useDesiredStateCopy } from '../components/integrations/DesiredStateControls'
+import { statusText } from './IntegrationConfigProfilePage'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import type {
@@ -332,16 +335,65 @@ function HostsTab({ organizationId, integrationId }: { organizationId: string; i
 
 function ProfilesTab({ organizationId, integrationId }: { organizationId: string; integrationId: string }) {
   const i18n = useI18n(); const text = i18n.t.integrationInventory
+  const permissions = useOrganizationPermissions(organizationId)
+  const canManageConfig = permissions.can('manageIntegrations') && permissions.can('manageConfigurations')
   return <InventoryTable<RemnawaveConfigProfileSummary> kind="config-profiles" organizationId={organizationId}
     integrationId={integrationId} title={text.tabs.profiles} emptyTitle={text.emptyProfiles}
-    head={<tr><th>{text.name}</th><th>{text.inbounds}</th><th>{text.nodes}</th><th>{text.updated}</th></tr>}
+    head={<tr><th>{text.name}</th><th>{text.inbounds}</th><th>{text.nodes}</th><th>{text.updated}</th>
+      <th>{i18n.locale === 'ru' ? 'Управление' : 'Management'}</th><th>{i18n.locale === 'ru' ? 'Статус' : 'Status'}</th></tr>}
     row={item => <tr key={item.id} className={item.active ? undefined : 'row-quiet'}>
       <td><strong>{item.displayName}</strong>{!item.active ? <> <StatusIndicator label={text.gone} /></> : null}</td>
       <td>{item.summary.inbounds.length === 0 ? '—' : item.summary.inbounds.map(inbound =>
         [inbound.tag, inbound.type, inbound.port].filter(value => value !== null).join(' ')).join(', ')}</td>
       <td>{item.summary.nodeUuids.length}</td>
       <td>{i18n.format.dateTime(item.summary.updatedAt)}</td>
+      <ProfileManagementCell organizationId={organizationId} integrationId={integrationId} item={item}
+        enabled={canManageConfig} />
     </tr>} />
+}
+
+function ProfileManagementCell({ organizationId, integrationId, item, enabled }: {
+  organizationId: string; integrationId: string; item: InventoryObject<RemnawaveConfigProfileSummary>; enabled: boolean
+}) {
+  const i18n = useI18n(); const ru = i18n.locale === 'ru'
+  const managed = useManagedConfigProfile(organizationId, integrationId, item.id, enabled)
+  const adopt = useAdoptConfigProfile(organizationId, integrationId, item.id)
+  const [open, setOpen] = useState(false)
+  const [code, setCode] = useState('')
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const page = `/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(integrationId)}` +
+    `/config-profiles/${encodeURIComponent(item.id)}`
+  const start = () => {
+    setCode(item.displayName.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64))
+    setName(item.displayName); setDescription(''); setOpen(true)
+  }
+  return <><td>{!enabled ? '—' : managed.isPending ? i18n.t.common.loading : managed.data ?
+    <><span>{managed.data.profile.name} · {ru ? 'Ревизия' : 'Revision'} {managed.data.profile.latestRevisionNumber}</span>{' '}
+      <Link to={page}>{ru ? 'Открыть' : 'Open'}</Link></> :
+    <><span>{ru ? 'Не управляется' : 'Not managed'}</span>{' '}
+      {item.active ? <button className="secondary-button" type="button" onClick={start}>
+        {ru ? 'Принять' : 'Adopt'}</button> : null}</>}
+    {managed.isError ? <span role="alert">{describeError(managed.error, i18n)}</span> : null}</td>
+    <td>{managed.data ? statusText[managed.data.status][ru ? 0 : 1] : '—'}</td>
+    {open ? createPortal(<div className="dialog-backdrop" role="presentation"><section className="monitor-rule-dialog integration-bind-dialog"
+      role="dialog" aria-modal="true" aria-label={ru ? 'Принять профиль Remnawave' : 'Adopt Remnawave profile'}>
+      <div className="dialog-heading"><h2>{ru ? 'Принять профиль Remnawave' : 'Adopt Remnawave profile'}</h2>
+        <button className="dialog-close" type="button" aria-label={i18n.t.common.close} onClick={() => setOpen(false)}>×</button></div>
+      <div className="dialog-body"><p>{item.displayName}</p>
+        <label className="field">{ru ? 'Код InfraDesk' : 'InfraDesk code'}<input value={code} onChange={event => setCode(event.target.value)} /></label>
+        <label className="field">{ru ? 'Имя' : 'Name'}<input value={name} onChange={event => setName(event.target.value)} /></label>
+        <label className="field">{ru ? 'Описание' : 'Description'}<input value={description}
+          onChange={event => setDescription(event.target.value)} /></label>
+        <p className="muted-copy">{ru ? 'Текущая конфигурация будет импортирована как неизменяемая ревизия 1 и зашифрована при хранении.' :
+          'The current configuration will be imported as immutable revision 1 and encrypted at rest.'}</p>
+        {adopt.isError ? <InlineAlert tone="danger" title={describeError(adopt.error, i18n)} /> : null}</div>
+      <div className="dialog-actions"><button className="secondary-button" type="button" onClick={() => setOpen(false)}>
+        {i18n.t.common.cancel}</button><button className="primary-button" type="button"
+        disabled={adopt.isPending || !code.trim() || !name.trim()}
+        onClick={() => adopt.mutate({ code, name, description: description || null }, { onSuccess: () => setOpen(false) })}>
+        {ru ? 'Принять' : 'Adopt'}</button></div></section></div>, document.body) : null}
+  </>
 }
 
 function HistoryTab({ organizationId, integrationId }: { organizationId: string; integrationId: string }) {

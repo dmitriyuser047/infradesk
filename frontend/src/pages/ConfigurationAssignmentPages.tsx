@@ -139,7 +139,8 @@ function ProfileChooser({ organizationId, value, onChange }: { organizationId: s
     <label htmlFor={id} className="visually-hidden">{t.profile}</label>
     <select id={id} value={value} onChange={event => onChange(event.target.value)}>
       <option value="">{t.chooseProfile}</option>
-      {(profiles.data ?? []).map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+      {(profiles.data ?? []).filter(profile => profile.kind === 'FILE_TEMPLATE').map(profile =>
+        <option key={profile.id} value={profile.id}>{profile.name}</option>)}
     </select>
   </>
 }

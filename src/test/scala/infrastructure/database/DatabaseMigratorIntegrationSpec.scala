@@ -12,7 +12,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("V40 configuration and integration data survive migration to V41") {
+  test("V41 configuration, integration and desired-state data survive migration to V42") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
     val base = DatabaseConfig.fromEnvironment(sys.env).fold(throw _, identity)
@@ -35,11 +35,12 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
     sql(maintenanceUrl, s"CREATE DATABASE $databaseName")
     try {
       val flyway = Flyway.configure().dataSource(testConfig.url, testConfig.user, testConfig.password)
-        .locations("classpath:db/migration").target("40").load()
-      assertEquals(flyway.migrate().migrationsExecuted, 40)
+        .locations("classpath:db/migration").target("41").load()
+      assertEquals(flyway.migrate().migrationsExecuted, 41)
       val org = UUID.randomUUID(); val integration = UUID.randomUUID(); val secret = UUID.randomUUID()
       val user = UUID.randomUUID(); val project = UUID.randomUUID(); val environment = UUID.randomUUID()
       val resource = UUID.randomUUID(); val session = UUID.randomUUID(); val inventory = UUID.randomUUID()
+      val profile = UUID.randomUUID(); val revision = UUID.randomUUID(); val desired = UUID.randomUUID()
       sql(testConfig.url, s"insert into organization (id, code, name) values ('$org', 'upgrade-test', 'Upgrade test')")
       sql(testConfig.url, s"insert into user_account (id, email, password_hash, display_name, created_at, updated_at) " +
         s"values ('$user', '$user@example.test', 'x', 'Upgrade actor', now(), now())")
@@ -49,8 +50,11 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       sql(testConfig.url, s"insert into resource (id, organization_id, environment_id, resource_type_id, code, name) " +
         s"values ('$resource', '$org', '$environment', '10000000-0000-0000-0000-000000000001', 'node', 'Node')")
       sql(testConfig.url, s"insert into configuration_profile (id, organization_id, code, name, " +
-        s"latest_revision_number, created_at, updated_at) values ('${UUID.randomUUID()}', '$org', " +
+        s"latest_revision_number, created_at, updated_at) values ('$profile', '$org', " +
         "'preserved', 'Preserved profile', 1, now(), now())")
+      sql(testConfig.url, s"insert into configuration_revision (id, organization_id, profile_id, revision_number, " +
+        s"template_text, created_by_user_id, created_at) values ('$revision', '$org', '$profile', 1, " +
+        s"'original-template', '$user', now())")
       sql(testConfig.url, s"insert into integration_secret (id, organization_id, kind, nonce, ciphertext, created_at) " +
         s"values ('$secret', '$org', 'INTEGRATION_CREDENTIAL', decode('000102030405060708090a0b', 'hex'), " +
         "decode('00112233445566778899aabbccddeeff0011', 'hex'), now())")
@@ -69,7 +73,11 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       sql(testConfig.url, s"insert into integration_resource_binding (id, organization_id, integration_id, " +
         s"inventory_object_id, resource_id, created_by_user_id, created_at, updated_at) values " +
         s"('${UUID.randomUUID()}', '$org', '$integration', '$inventory', '$resource', '$user', now(), now())")
-      // Action history written by V40: it must come out of the upgrade as a manual action.
+      sql(testConfig.url, s"update integration set management_mode = 'MANAGED_SELECTED' where id = '$integration'")
+      sql(testConfig.url, s"insert into integration_desired_state (id, organization_id, integration_id, " +
+        s"inventory_object_id, desired_state, version, set_by_user_id, created_at, updated_at, next_reconcile_at) " +
+        s"values ('$desired', '$org', '$integration', '$inventory', 'ENABLED', 1, '$user', now(), now(), now())")
+      // Manual action history written by V41 remains manual after the upgrade.
       sql(testConfig.url, s"insert into integration_action_execution (id, organization_id, integration_id, " +
         s"inventory_object_id, request_id, action_code, external_id_snapshot, display_name_snapshot, " +
         s"requested_by_user_id, status, created_at, finished_at, updated_at) values ('${UUID.randomUUID()}', '$org', " +
@@ -78,27 +86,27 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       val result = DatabaseMigrator.migrate(testConfig,
         Slf4jLogger.getLoggerFromName[IO]("test.database.migrator")).unsafeRunSync()
       assertEquals(result.migrationsApplied, 1)
-      assertEquals(result.currentVersion, "41")
+      assertEquals(result.currentVersion, "42")
       val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
       try {
         val statement = connection.createStatement()
         try {
           val rows = statement.executeQuery("select (select count(*) from configuration_profile " +
-            "where code = 'preserved'), " +
+            "where code = 'preserved' and kind = 'FILE_TEMPLATE'), " +
             s"(select count(*) from integration i join integration_secret s on s.id = i.secret_id " +
             s"where i.id = '$integration' and i.enabled and i.caddy_api_key_configured " +
             "and s.ciphertext = decode('00112233445566778899aabbccddeeff0011', 'hex')), " +
             s"(select count(*) from integration_sync_state where integration_id = '$integration' " +
             "and consecutive_failures = 0 and claim_token is null), " +
-            "(select count(*) from flyway_schema_history where version = '41' and success), " +
+            "(select count(*) from flyway_schema_history where version = '42' and success), " +
             s"(select count(*) from integration_inventory_object where id = '$inventory' and display_name = 'Upgrade node'), " +
             s"(select count(*) from integration_resource_binding where inventory_object_id = '$inventory'), " +
             s"(select count(*) from integration_sync_session where id = '$session' and status = 'COMPLETED'), " +
-            // An upgrade never turns automation on: every integration observes, nothing is managed.
-            s"(select count(*) from integration where id = '$integration' and management_mode = 'OBSERVE'), " +
-            "(select count(*) from integration_desired_state), " +
+            s"(select count(*) from integration where id = '$integration' and management_mode = 'MANAGED_SELECTED'), " +
+            s"(select count(*) from integration_desired_state where id = '$desired' and desired_state = 'ENABLED'), " +
             s"(select count(*) from integration_action_execution where integration_id = '$integration' " +
-            "and source = 'MANUAL' and desired_state_id_snapshot is null and desired_state_version_snapshot is null)")
+            "and source = 'MANUAL' and desired_state_id_snapshot is null and desired_state_version_snapshot is null), " +
+            s"(select count(*) from configuration_revision where id = '$revision' and template_text = 'original-template')")
           try {
             assert(rows.next())
             assertEquals(rows.getInt(1), 1)
@@ -109,15 +117,16 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
             assertEquals(rows.getInt(6), 1)
             assertEquals(rows.getInt(7), 1)
             assertEquals(rows.getInt(8), 1)
-            assertEquals(rows.getInt(9), 0)
+            assertEquals(rows.getInt(9), 1)
             assertEquals(rows.getInt(10), 1)
+            assertEquals(rows.getInt(11), 1)
           } finally rows.close()
         } finally statement.close()
       } finally connection.close()
     } finally sql(maintenanceUrl, s"DROP DATABASE $databaseName WITH (FORCE)")
   }
 
-  test("Flyway applies V1 through V41 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V42 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -145,10 +154,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 41)
-        assertEquals(first.currentVersion, "41")
+        assertEquals(first.migrationsApplied, 42)
+        assertEquals(first.currentVersion, "42")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "41")
+        assertEquals(second.currentVersion, "42")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()

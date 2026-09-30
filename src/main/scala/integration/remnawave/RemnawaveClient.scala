@@ -3,6 +3,8 @@ package integration.remnawave
 
 import cats.effect.IO
 import cats.syntax.all._
+import application.integration.IntegrationConfigProfileDocument
+import domain.configuration.CanonicalJson
 import domain.integration.{IntegrationActionCode, IntegrationActionRemoteOutcome, IntegrationBaseUrl,
   IntegrationObjectType, IntegrationObservation, RemnawaveCredential}
 import org.http4s.{Header, Method, Request, Response, Uri}
@@ -15,6 +17,8 @@ import java.nio.charset.{CodingErrorAction, StandardCharsets}
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
 import io.circe.parser.parse
+import io.circe.Json
+import java.time.Instant
 
 /** Remnawave API client. Observation stays read-only; explicit actions use one POST each.
   */
@@ -42,6 +46,62 @@ final class RemnawaveClient(client: Client[IO], requestTimeout: FiniteDuration,
       else IO.pure(IntegrationObservation(objects, IntegrationObjectType.All.toSet))
     }
   }
+
+  /** Explicit full read. The normal listing remains the only request made during observation. */
+  def fetchConfigProfile(baseUrl: IntegrationBaseUrl, credential: RemnawaveCredential,
+    externalId: String): IO[IntegrationConfigProfileDocument] =
+    validProfileId(externalId).fold(invalidResponse[IntegrationConfigProfileDocument]) { id =>
+      get(baseUrl.endpoint(s"$ConfigProfilesPath/$id"), credential, ConfigProfileMaxResponseBytes)
+        .flatMap(body => decodeConfigProfile(body, id).fold(invalidResponse[IntegrationConfigProfileDocument])(IO.pure))
+    }
+
+  /** One PATCH. Anything ambiguous after the request may have left this process is UNKNOWN. */
+  def updateConfigProfile(baseUrl: IntegrationBaseUrl, credential: RemnawaveCredential,
+    externalId: String, config: Json, desiredSha256: String): IO[IntegrationActionRemoteOutcome] = {
+    import IntegrationActionRemoteOutcome._
+    validProfileId(externalId) match {
+      case None => IO.pure(DefinitelyFailed("INTEGRATION_CONFIG_PROFILE_INVALID"))
+      case Some(_) if !credential.valid => IO.pure(DefinitelyFailed("INTEGRATION_CREDENTIAL_INVALID"))
+      case Some(_) if !config.isObject => IO.pure(DefinitelyFailed("INTEGRATION_CONFIG_INVALID"))
+      case Some(id) =>
+        IO.fromEither(Uri.fromString(baseUrl.endpoint(ConfigProfilesPath).toASCIIString)
+          .leftMap(_ => RemnawaveErrors.error("INTEGRATION_CONFIG_PROFILE_INVALID"))).flatMap { uri =>
+          val payload = Json.obj("uuid" -> Json.fromString(id), "config" -> config).noSpaces
+          val request = Request[IO](Method.PATCH, uri).withEntity(payload)
+            .putHeaders(Header.Raw(CIString("Authorization"), s"Bearer ${credential.apiToken}"),
+              Header.Raw(CIString("Content-Type"), "application/json"))
+          val authenticated = credential.caddyApiKey.fold(request)(key =>
+            request.putHeaders(Header.Raw(CIString("X-Api-Key"), key)))
+          client.run(authenticated).use { response =>
+            val code = response.status.code
+            if (code == 400) IO.pure(DefinitelyFailed("INTEGRATION_CONFIG_REJECTED"))
+            else if (code == 401) IO.pure(DefinitelyFailed("INTEGRATION_AUTH_FAILED"))
+            else if (code == 403) IO.pure(DefinitelyFailed("INTEGRATION_FORBIDDEN"))
+            else if (code == 404) IO.pure(DefinitelyFailed("INTEGRATION_ENDPOINT_NOT_FOUND"))
+            else if (!response.status.isSuccess) IO.pure(OutcomeUnknown("INTEGRATION_CONFIG_DEPLOYMENT_RESULT_UNKNOWN"))
+            else boundedBody(response, ConfigProfileMaxResponseBytes).map { body =>
+              val matches = body.flatMap(decodeConfigProfile(_, id))
+                .exists(doc => CanonicalJson.sha256(doc.config) == desiredSha256)
+              if (matches) Succeeded else OutcomeUnknown("INTEGRATION_CONFIG_DEPLOYMENT_RESULT_UNKNOWN")
+            }
+          }
+        }.timeout(requestTimeout).handleError(error => definiteBeforeWrite(error)
+          .map(DefinitelyFailed.apply).getOrElse(OutcomeUnknown("INTEGRATION_CONFIG_DEPLOYMENT_RESULT_UNKNOWN")))
+    }
+  }
+
+  private def validProfileId(value: String): Option[String] =
+    Try(java.util.UUID.fromString(value)).toOption.map(_.toString).filter(_ == value)
+
+  private def decodeConfigProfile(body: String, expectedId: String): Option[IntegrationConfigProfileDocument] =
+    parse(body).toOption.flatMap { document =>
+      val c = document.hcursor.downField("response")
+      for {
+        uuid <- c.get[String]("uuid").toOption.filter(_ == expectedId)
+        config <- c.downField("config").focus.filter(_.isObject)
+        updated <- c.get[String]("updatedAt").toOption.flatMap(value => Try(Instant.parse(value)).toOption)
+      } yield IntegrationConfigProfileDocument(uuid, config, Some(updated))
+    }
 
   /** A timeout or disconnect can happen after the write reached Remnawave. Never retry here. */
   def action(baseUrl: IntegrationBaseUrl, credential: RemnawaveCredential, externalId: String,
@@ -120,6 +180,7 @@ object RemnawaveClient {
   val NodesPath = "api/nodes"
   val HostsPath = "api/hosts"
   val ConfigProfilesPath = "api/config-profiles"
+  val ConfigProfileMaxResponseBytes: Int = 512 * 1024
 
   /** The body as strict UTF-8, or None when it is larger than the limit or not valid UTF-8.
     *

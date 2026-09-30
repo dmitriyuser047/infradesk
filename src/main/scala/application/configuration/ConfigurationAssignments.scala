@@ -26,6 +26,7 @@ import domain.configuration.{
   ConfigurationDesiredState,
   ConfigurationLimits,
   ConfigurationProfile,
+  ConfigurationProfileKind,
   ConfigurationRenderError,
   ConfigurationRevision,
   ConfigurationTargetPath,
@@ -63,6 +64,8 @@ object ConfigurationAssignmentError {
     ConfigurationAssignmentError(ConfigurationError.RevisionNotFoundCode, "Configuration revision was not found")
   val profileArchived: ConfigurationAssignmentError =
     ConfigurationAssignmentError(ConfigurationError.ArchivedCode, "The configuration profile is archived")
+  val profileWrongKind: ConfigurationAssignmentError = ConfigurationAssignmentError(
+    ConfigurationError.WrongKindCode, "Only file template profiles can be assigned to resources")
   def invalid(field: String): ConfigurationAssignmentError = ConfigurationAssignmentError(InvalidCode, s"Invalid $field")
   /** A rule owns this assignment's profile, revision and path; detach it or change the rule instead. */
   val managed: ConfigurationAssignmentError =
@@ -197,12 +200,14 @@ final class ConfigurationAssignments[F[_]: MonadThrow, Tx[_]: MonadThrow](
     case ConfigurationAssignmentEligibility.TargetInactive => MonadThrow[Tx].raiseError(targetInactive)
     case ConfigurationAssignmentEligibility.ProfileMissing => MonadThrow[Tx].raiseError(profileNotFound)
     case ConfigurationAssignmentEligibility.ProfileArchived => MonadThrow[Tx].raiseError(profileArchived)
+    case ConfigurationAssignmentEligibility.ProfileWrongKind => MonadThrow[Tx].raiseError(profileWrongKind)
     case ConfigurationAssignmentEligibility.RevisionMissing => MonadThrow[Tx].raiseError(revisionNotFound)
   }
 
   private def revisionOf(organizationId: UUID, profileId: UUID, revisionNumber: Int): Tx[(ConfigurationProfile, ConfigurationRevision)] =
     for {
       profile <- profiles.find(organizationId, profileId).flatMap(_.liftTo[Tx](profileNotFound))
+      _ <- MonadThrow[Tx].raiseUnless(profile.kind == ConfigurationProfileKind.FileTemplate)(profileWrongKind)
       revision <- profiles.findRevision(organizationId, profileId, revisionNumber).flatMap(_.liftTo[Tx](revisionNotFound))
     } yield (profile, revision.revision)
 

@@ -23,6 +23,8 @@ object ConfigurationRuleError {
   val Disabled: ConfigurationRuleError = ConfigurationRuleError("CONFIGURATION_RULE_DISABLED", "The rule is disabled")
   val ProfileArchived: ConfigurationRuleError = ConfigurationRuleError("CONFIGURATION_RULE_PROFILE_ARCHIVED", "The profile is archived")
   val ProfileNotFound: ConfigurationRuleError = ConfigurationRuleError(ConfigurationError.NotFoundCode, "Configuration profile was not found")
+  val ProfileWrongKind: ConfigurationRuleError = ConfigurationRuleError(ConfigurationError.WrongKindCode,
+    "This profile does not contain a file template")
   val RevisionNotFound: ConfigurationRuleError =
     ConfigurationRuleError(ConfigurationError.RevisionNotFoundCode, "Configuration revision was not found")
   val ResourceNotFound: ConfigurationRuleError = ConfigurationRuleError("RESOURCE_NOT_FOUND", "Resource was not found")
@@ -335,6 +337,7 @@ final class ConfigurationAssignmentRules[F[_]: MonadThrow, Tx[_]: MonadThrow](
   private def revisionOf(organizationId: UUID, profileId: UUID, revisionNumber: Int): Tx[(ConfigurationProfile, ConfigurationRevision)] =
     for {
       profile <- profiles.find(organizationId, profileId).flatMap(_.liftTo[Tx](ProfileNotFound))
+      _ <- MonadThrow[Tx].raiseUnless(profile.kind == ConfigurationProfileKind.FileTemplate)(ProfileWrongKind)
       revision <- profiles.findRevision(organizationId, profileId, revisionNumber).flatMap(_.liftTo[Tx](RevisionNotFound))
     } yield (profile, revision.revision)
 

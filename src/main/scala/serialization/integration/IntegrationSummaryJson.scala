@@ -52,6 +52,7 @@ object IntegrationSummaryJson {
       "createdAt" -> profile.createdAt.toString.asJson,
       "updatedAt" -> profile.updatedAt.toString.asJson,
       "nodeUuids" -> profile.nodeUuids.asJson,
+      "configSha256" -> profile.configSha256.asJson,
       "inbounds" -> profile.inbounds.map(inbound => Json.obj(
         "uuid" -> inbound.uuid.asJson,
         "tag" -> inbound.tag.asJson,
@@ -113,6 +114,7 @@ object IntegrationSummaryJson {
     created <- c.get[java.time.Instant]("createdAt")
     updated <- c.get[java.time.Instant]("updatedAt")
     nodes <- c.get[List[String]]("nodeUuids")
+    hash <- c.get[Option[String]]("configSha256")
     inbounds <- c.downField("inbounds").values.toList.flatten.traverse { value =>
       val i = value.hcursor
       for {
@@ -124,5 +126,5 @@ object IntegrationSummaryJson {
         port <- i.get[Option[Int]]("port")
       } yield RemnawaveInboundSummary(uuid, tag, kind, network, security, port)
     }
-  } yield RemnawaveConfigProfileSummary(position, created, updated, nodes, inbounds)
+  } yield RemnawaveConfigProfileSummary(position, created, updated, nodes, inbounds, hash)
 }

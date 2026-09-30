@@ -231,7 +231,7 @@ jobs:
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
           # Build a representative production V29 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V30 through V41 to the restored database before the backend reports itself ready.
+          # V30 through V42 to the restored database before the backend reports itself ready.
           # Remove the additive tables and Stage 21 index; earlier schema stays as in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
@@ -277,7 +277,7 @@ jobs:
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V30 through V41.
+          # recover the marker and let Flyway apply V30 through V42.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -398,7 +398,7 @@ jobs:
             --command "select count(*) from pg_indexes where schemaname = current_schema() and indexname in ('ux_notification_delivery_legacy_event', 'ux_notification_delivery_managed_event')")"
           test "${delivery_indexes}" = "2"
           ./scripts/check-production.sh http://127.0.0.1:8081
-      - name: Verify production V40 backup upgrades to V41
+      - name: Verify production V41 backup upgrades to V42
         run: |
           base=http://127.0.0.1:8081
           org=00000000-0000-0000-0000-000000000020
@@ -413,7 +413,7 @@ jobs:
               "${base}/api/v1/auth/login" | tr -d '\r' \
               | awk 'tolower($1) == "set-cookie:" { split($2, part, ";"); print part[1]; exit }'
           }
-          # Real V40 data: configuration management content and a Remnawave integration created
+          # Real V41 data: configuration management content and a Remnawave integration created
           # through the API, so its credential is encrypted exactly as production stores it.
           docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
           insert into configuration_profile (id, organization_id, code, name, latest_revision_number, created_at, updated_at)
@@ -437,7 +437,7 @@ jobs:
           test "${plaintext}" = "0"
           secret_before="$(psql_value "select md5(s.nonce || s.ciphertext) from integration i join integration_secret s on s.id = i.secret_id where i.id = '${integration}'")"
           test -n "${secret_before}"
-          # A V40 snapshot, manual binding, sync history and action history must survive the V41 migration.
+          # The V41 snapshot, manual binding, sync history and action history must survive V42.
           docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<SQL
           insert into project (id, organization_id, code, name) values
             ('90000000-0000-0000-0000-000000000002', '${org}', 'v40-upgrade', 'V40 upgrade');
@@ -471,18 +471,15 @@ jobs:
               '90000000-0000-0000-0000-000000000008', 'V40 observed node',
               (select id from user_account where email = 'terminal-ci@example.test'), 'SUCCEEDED', now(), now(), now());
           SQL
-          # Reverse only V41's additive changes, so the dump is what a V40 production holds.
+          # Reverse only V42's additive changes, so the dump is what a V41 production holds.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
-          drop table integration_desired_state;
-          drop index ix_integration_action_object;
-          alter table integration_action_execution drop constraint ck_integration_action_source_snapshot;
-          alter table integration_action_execution drop column source;
-          alter table integration_action_execution drop column desired_state_id_snapshot;
-          alter table integration_action_execution drop column desired_state_version_snapshot;
-          alter table integration drop constraint uq_integration_id_org_mode;
-          alter table integration drop constraint ck_integration_managed_requires_sync;
-          alter table integration drop column management_mode;
+          drop table integration_config_deployment;
+          drop table integration_config_profile_binding;
+          drop table configuration_revision_secure_payload;
+          alter table configuration_revision drop constraint uq_configuration_revision_scope_profile;
+          alter table configuration_profile drop constraint uq_configuration_profile_scope_kind;
+          alter table configuration_profile drop column kind;
           alter table audit_event drop constraint ck_audit_event_action;
           alter table audit_event add constraint ck_audit_event_action check (action in (
             'PROJECT_CREATED','ENVIRONMENT_CREATED','CONNECTION_CREATED','CONNECTION_UPDATED',
@@ -506,9 +503,10 @@ jobs:
             'INTEGRATION_CREATED','INTEGRATION_UPDATED','INTEGRATION_ENABLED','INTEGRATION_DISABLED',
             'INTEGRATION_DELETED','INTEGRATION_TEST_REQUESTED',
             'INTEGRATION_SYNC_REQUESTED','INTEGRATION_RESOURCE_BOUND','INTEGRATION_RESOURCE_UNBOUND',
-            'INTEGRATION_ACTION_REQUESTED'
+            'INTEGRATION_ACTION_REQUESTED',
+            'INTEGRATION_MANAGEMENT_MODE_CHANGED','INTEGRATION_DESIRED_STATE_SET','INTEGRATION_DESIRED_STATE_REMOVED'
           ));
-          delete from flyway_schema_history where version = '41';
+          delete from flyway_schema_history where version = '42';
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/v40-backups" ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/v40-backups" -name 'infradesk-*.dump' -type f -print -quit)"
@@ -521,7 +519,9 @@ jobs:
             sleep 5
           done
           curl --silent --fail "${base}/ready" > /dev/null
-          test "$(psql_value "select version from flyway_schema_history where success order by installed_rank desc limit 1")" = "41"
+          test "$(psql_value "select version from flyway_schema_history where success order by installed_rank desc limit 1")" = "42"
+          test "$(psql_value "select count(*) from configuration_profile where code = 'v40-preserved' and kind = 'FILE_TEMPLATE'")" = "1"
+          test "$(psql_value "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('configuration_revision_secure_payload','integration_config_profile_binding','integration_config_deployment')")" = "3"
           test "$(psql_value "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('integration', 'integration_secret', 'integration_sync_session', 'integration_inventory_object', 'integration_resource_binding', 'integration_sync_state', 'integration_action_execution', 'integration_desired_state')")" = "8"
           test "$(psql_value "select count(*) from configuration_profile p join configuration_revision r on r.profile_id = p.id where p.code = 'v40-preserved' and r.template_text = 'v40-original-content'")" = "1"
           test "$(psql_value "select count(*) from configuration_profile where code = 'after-v40-backup'")" = "0"

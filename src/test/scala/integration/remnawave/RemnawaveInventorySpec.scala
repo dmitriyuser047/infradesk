@@ -5,6 +5,7 @@ import application.integration.{IntegrationError, IntegrationRuntimeContext}
 import cats.effect.{IO, Ref}
 import cats.effect.unsafe.implicits.global
 import domain.integration._
+import domain.configuration.CanonicalJson
 import io.circe.Json
 import io.circe.parser.parse
 import munit.FunSuite
@@ -156,6 +157,7 @@ final class RemnawaveInventorySpec extends FunSuite {
       case ObservedIntegrationObject(_, _, _, s: RemnawaveConfigProfileSummary) => s }.get
     assertEquals(profileSummary.inbounds.map(i => (i.tag, i.inboundType)), List(("VLESS_TCP", "vless")))
     assertEquals((profileSummary.viewPosition, profileSummary.nodeUuids), (1, List(nodeA)))
+    assertEquals(profileSummary.configSha256, Some(CanonicalJson.sha256(profile.hcursor.downField("config").focus.get)))
     val stored = observation.objects.map(value => IntegrationSummaryJson.encode(value.summary).noSpaces).mkString +
       observation.toString
     List(proxyUrl, "proxy-secret", rawInbound, xrayConfig, "xhttpExtraParams", "muxParams", "sockoptParams",

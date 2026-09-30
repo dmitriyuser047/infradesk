@@ -76,8 +76,11 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
       .query[Option[Instant]].unique
 
   override def hasActive(org: UUID, integration: UUID): ConnectionIO[Boolean] =
-    sql"""select exists(select 1 from integration_action_execution where organization_id = $org
-      and integration_id = $integration and status in ('QUEUED', 'RUNNING'))""".query[Boolean].unique
+    sql"""select
+      exists(select 1 from integration_action_execution where organization_id = $org
+        and integration_id = $integration and status in ('QUEUED', 'RUNNING'))
+      or exists(select 1 from integration_config_deployment where organization_id = $org
+        and integration_id = $integration and status in ('QUEUED', 'RUNNING'))""".query[Boolean].unique
 
   override def recoverAndClaim(owner: UUID, token: UUID, at: Instant, recoverAfter: Instant,
     limit: Int): ConnectionIO[(Int, List[IntegrationActionExecution])] = for {
