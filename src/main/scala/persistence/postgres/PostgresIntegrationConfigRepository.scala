@@ -23,8 +23,14 @@ final class PostgresIntegrationConfigProfileRepository(cipher: RemnawaveConfigCi
     ConnectionIO[Option[IntegrationConfigProfileBinding]] =
     sql"""select id, organization_id, integration_id, inventory_object_id, configuration_profile_id,
         created_by_user_id, created_at, updated_at from integration_config_profile_binding
-        where organization_id = $org and integration_id = $integrationId and inventory_object_id = $objectId"""
+        where organization_id = $org and integration_id = $integrationId and inventory_object_id = $objectId
+          and detached_at is null"""
       .query[IntegrationConfigProfileBinding].option
+
+  override def detachAll(org: UUID, integrationId: UUID, at: Instant): ConnectionIO[Unit] =
+    sql"""update integration_config_profile_binding set detached_at = $at, updated_at = $at
+      where organization_id = $org and integration_id = $integrationId and detached_at is null"""
+      .update.run.void
 
   override def insertBinding(value: IntegrationConfigProfileBinding): ConnectionIO[Boolean] =
     sql"""insert into integration_config_profile_binding (id, organization_id, integration_id,
@@ -117,9 +123,16 @@ final class PostgresIntegrationConfigDeploymentRepository extends IntegrationCon
       order by d.created_at desc, d.id desc limit $limit""")
       .query[Row].to[List].flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
 
-  override def latestSucceededHash(org: UUID, integrationId: UUID, objectId: UUID): ConnectionIO[Option[String]] =
+  override def recentForBinding(org: UUID, bindingId: UUID,
+    limit: Int): ConnectionIO[List[IntegrationConfigDeployment]] =
+    (fr"select" ++ columns ++ fr"""from integration_config_deployment d
+      where d.organization_id = $org and d.binding_id = $bindingId
+      order by d.created_at desc, d.id desc limit $limit""")
+      .query[Row].to[List].flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
+
+  override def latestSucceededHash(org: UUID, bindingId: UUID): ConnectionIO[Option[String]] =
     sql"""select desired_sha256 from integration_config_deployment
-      where organization_id = $org and integration_id = $integrationId and inventory_object_id = $objectId
+      where organization_id = $org and binding_id = $bindingId
         and status = 'SUCCEEDED' order by finished_at desc, id desc limit 1""".query[String].option
 
   override def hasActive(org: UUID, integrationId: UUID): ConnectionIO[Boolean] =

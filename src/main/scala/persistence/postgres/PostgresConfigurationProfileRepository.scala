@@ -79,17 +79,20 @@ final class PostgresConfigurationProfileRepository extends ConfigurationProfileR
 /** One statement per list, joined with what the page needs to name its rows. */
 final class PostgresConfigurationProfileQuery extends ConfigurationProfileQuery[ConnectionIO] {
 
-  override def list(organizationId: UUID, archived: Boolean, limit: Int): ConnectionIO[List[ConfigurationProfileSummary]] =
+  override def list(organizationId: UUID, archived: Boolean, limit: Int,
+    kind: Option[ConfigurationProfileKind] = None): ConnectionIO[List[ConfigurationProfileSummary]] = {
+    val kindFilter = kind.fold(fr"")(value => fr"and p.kind = ${value.code}")
     (fr"select" ++ profileColumns ++ fr""", r.created_at
       from configuration_profile p
       join configuration_revision r
         on r.profile_id = p.id and r.organization_id = p.organization_id
        and r.revision_number = p.latest_revision_number
       where p.organization_id = $organizationId and p.archived = $archived
-      order by lower(p.name), p.id
+    """ ++ kindFilter ++ fr"""order by lower(p.name), p.id
       limit $limit
     """).query[(ProfileRow, Instant)].to[List]
       .map(_.map { case (row, latestCreatedAt) => ConfigurationProfileSummary(row.toDomain, latestCreatedAt) })
+  }
 
   override def find(organizationId: UUID, id: UUID): ConnectionIO[Option[ConfigurationProfile]] =
     (fr"select" ++ profileColumns ++ fr"from configuration_profile p where p.organization_id = $organizationId and p.id = $id")

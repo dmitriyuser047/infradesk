@@ -4,7 +4,8 @@ package infrastructure.http
 import application.integration.{IntegrationBindings, IntegrationError, IntegrationManagement, IntegrationProvider,
   IntegrationProviderRegistry, IntegrationRuntimeContext, IntegrationSync, IntegrationSyncTransactions,
   IntegrationTestResult, TestIntegration}
-import application.port.{BindableResource, IntegrationActionRepository, IntegrationRepository, IntegrationSecret,
+import application.port.{BindableResource, IntegrationActionRepository, IntegrationConfigProfileRepository,
+  IntegrationRepository, IntegrationSecureRevision, IntegrationSecret,
   IntegrationSecretRepository, TransactionRunner}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -81,8 +82,21 @@ final class IntegrationRoutesSpec extends FunSuite {
       override def complete(value: IntegrationActionExecution, token: UUID, at: Instant,
         status: String, errorCode: Option[String], errorMessage: Option[String]): IO[Boolean] = IO.pure(false)
     }
+    val configProfiles = new IntegrationConfigProfileRepository[IO] {
+      override def binding(organizationId: UUID, integrationId: UUID, objectId: UUID):
+        IO[Option[IntegrationConfigProfileBinding]] = IO.pure(None)
+      override def detachAll(organizationId: UUID, integrationId: UUID, at: Instant): IO[Unit] = IO.unit
+      override def insertBinding(value: IntegrationConfigProfileBinding): IO[Boolean] = IO.pure(false)
+      override def insertSecureRevision(revisionId: UUID, organizationId: UUID, profileId: UUID,
+        canonicalJson: String, at: Instant): IO[Unit] = IO.unit
+      override def secureRevision(organizationId: UUID, profileId: UUID,
+        revisionNumber: Int): IO[Option[IntegrationSecureRevision]] = IO.pure(None)
+      override def revisionHash(organizationId: UUID, profileId: UUID, revisionNumber: Int): IO[Option[String]] =
+        IO.pure(None)
+    }
     val management = new IntegrationManagement[IO](integrations, secrets, new SystemIdGenerator,
-      new SystemTimeProvider, cipher, audit, memory.syncState, actionRepository, memory.inventory)
+      new SystemTimeProvider, cipher, audit, memory.syncState, actionRepository, memory.inventory,
+      configProfiles, (_, _) => IO.pure(false))
     var auditedBeforeProbe = false
     var auditedBeforeObserve = false
     var observations = 0

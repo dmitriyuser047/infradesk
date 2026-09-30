@@ -44,7 +44,7 @@ function ConfigurationsContent({ organizationId }: { organizationId: string }) {
     return <div className="workspace-page"><WorkspaceHeader title={t.title} subtitle={t.subtitle} />
       <InlineAlert tone="danger" title={t.accessDenied} /></div>
   }
-  const profiles = query.data?.filter(profile => profile.kind === 'FILE_TEMPLATE')
+  const profiles = query.data
   return <div className="workspace-page">
     <WorkspaceHeader title={t.title} subtitle={t.subtitle} actions={canManage ? create : null} />
     <WorkspaceSection title={t.section} actions={profiles ? <span className="resource-count">{profiles.length}</span> : null}>

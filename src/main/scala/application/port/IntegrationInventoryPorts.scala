@@ -68,7 +68,11 @@ final case class InventoryPage[A](items: List[A], total: Long)
 final case class BoundResourceView(id: UUID, code: String, name: String, environmentId: UUID,
   environmentName: String, projectId: UUID, projectName: String)
 final case class InventoryItem(obj: IntegrationInventoryObject, binding: Option[BoundResourceView],
-  desiredState: Option[DesiredStateView] = None)
+  desiredState: Option[DesiredStateView] = None,
+  configManagement: Option[ConfigManagementSummary] = None)
+
+final case class ConfigManagementSummary(configurationProfileId: UUID, name: String,
+  revisionNumber: Int, status: String)
 
 final case class InventoryTypeCounts(active: Long, inactive: Long)
 final case class IntegrationInventorySummary(nodes: InventoryTypeCounts, hosts: InventoryTypeCounts,

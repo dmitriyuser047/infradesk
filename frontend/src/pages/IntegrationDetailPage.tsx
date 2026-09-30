@@ -5,7 +5,7 @@ import { RefreshCw, Search } from 'lucide-react'
 import { ApiError } from '../api/httpClient'
 import { useIntegration, useTestIntegration } from '../api/integrations'
 import { useIntegrationActions } from '../api/integrationActions'
-import { useAdoptConfigProfile, useManagedConfigProfile } from '../api/integrationConfigProfiles'
+import { useAdoptConfigProfile } from '../api/integrationConfigProfiles'
 import {
   useBindingCandidates, useBindNode, useIntegrationInventory, useIntegrationSummary, useIntegrationSyncSessions,
   useSyncIntegration, useUnbindNode, type InventoryKind, type InventoryParams,
@@ -356,7 +356,7 @@ function ProfileManagementCell({ organizationId, integrationId, item, enabled }:
   organizationId: string; integrationId: string; item: InventoryObject<RemnawaveConfigProfileSummary>; enabled: boolean
 }) {
   const i18n = useI18n(); const ru = i18n.locale === 'ru'
-  const managed = useManagedConfigProfile(organizationId, integrationId, item.id, enabled)
+  const managed = item.configManagement
   const adopt = useAdoptConfigProfile(organizationId, integrationId, item.id)
   const [open, setOpen] = useState(false)
   const [code, setCode] = useState('')
@@ -368,14 +368,14 @@ function ProfileManagementCell({ organizationId, integrationId, item, enabled }:
     setCode(item.displayName.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64))
     setName(item.displayName); setDescription(''); setOpen(true)
   }
-  return <><td>{!enabled ? '—' : managed.isPending ? i18n.t.common.loading : managed.data ?
-    <><span>{managed.data.profile.name} · {ru ? 'Ревизия' : 'Revision'} {managed.data.profile.latestRevisionNumber}</span>{' '}
+  return <><td>{!enabled ? '—' : managed ?
+    <><span>{managed.name} · {ru ? 'Ревизия' : 'Revision'} {managed.revisionNumber}</span>{' '}
       <Link to={page}>{ru ? 'Открыть' : 'Open'}</Link></> :
     <><span>{ru ? 'Не управляется' : 'Not managed'}</span>{' '}
       {item.active ? <button className="secondary-button" type="button" onClick={start}>
         {ru ? 'Принять' : 'Adopt'}</button> : null}</>}
-    {managed.isError ? <span role="alert">{describeError(managed.error, i18n)}</span> : null}</td>
-    <td>{managed.data ? statusText[managed.data.status][ru ? 0 : 1] : '—'}</td>
+    </td>
+    <td>{managed ? statusText[managed.status][ru ? 0 : 1] : '—'}</td>
     {open ? createPortal(<div className="dialog-backdrop" role="presentation"><section className="monitor-rule-dialog integration-bind-dialog"
       role="dialog" aria-modal="true" aria-label={ru ? 'Принять профиль Remnawave' : 'Adopt Remnawave profile'}>
       <div className="dialog-heading"><h2>{ru ? 'Принять профиль Remnawave' : 'Adopt Remnawave profile'}</h2>

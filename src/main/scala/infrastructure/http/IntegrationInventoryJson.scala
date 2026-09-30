@@ -67,7 +67,12 @@ object IntegrationInventoryJson {
       "resource" -> Json.obj("id" -> bound.id.asJson, "code" -> bound.code.asJson, "name" -> bound.name.asJson),
       "environment" -> Json.obj("id" -> bound.environmentId.asJson, "name" -> bound.environmentName.asJson),
       "project" -> Json.obj("id" -> bound.projectId.asJson, "name" -> bound.projectName.asJson))),
-    "desiredState" -> value.desiredState.fold(Json.Null)(desiredState)))
+    "desiredState" -> value.desiredState.fold(Json.Null)(desiredState),
+    "configManagement" -> value.configManagement.fold(Json.Null)(managed => Json.obj(
+      "configurationProfileId" -> managed.configurationProfileId.asJson,
+      "name" -> managed.name.asJson,
+      "revisionNumber" -> managed.revisionNumber.asJson,
+      "status" -> managed.status.asJson))))
 
   def page(value: InventoryPage[InventoryItem], limit: Int, offset: Int): Json = Json.obj(
     "items" -> value.items.map(item).asJson,

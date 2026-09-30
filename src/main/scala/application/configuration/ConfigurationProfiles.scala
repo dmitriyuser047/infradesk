@@ -149,8 +149,9 @@ final case class ConfigurationProfileDetail(profile: ConfigurationProfile, lates
   */
 final class ConfigurationProfileQueries[Tx[_]: Monad](query: ConfigurationProfileQuery[Tx]) {
 
-  def list(organizationId: UUID, archived: Boolean, limit: Int): Tx[List[ConfigurationProfileSummary]] =
-    query.list(organizationId, archived, limit)
+  def list(organizationId: UUID, archived: Boolean, limit: Int,
+    kind: Option[ConfigurationProfileKind] = None): Tx[List[ConfigurationProfileSummary]] =
+    query.list(organizationId, archived, limit, kind)
 
   /** Two statements for a profile: meant for one read-only snapshot, so they cannot disagree. */
   def detail(organizationId: UUID, profileId: UUID): Tx[Option[ConfigurationProfileDetail]] =

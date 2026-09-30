@@ -32,7 +32,8 @@ final class ConfigurationAssignmentRuleRoutesIntegrationSpec extends FunSuite {
       if (!broken) w.profileQuery
       else new ConfigurationProfileQuery[ConnectionIO] {
         private def boom[A]: ConnectionIO[A] = new IllegalStateException("template=secret-value").raiseError[ConnectionIO, A]
-        def list(organizationId: UUID, archived: Boolean, limit: Int) = boom
+        def list(organizationId: UUID, archived: Boolean, limit: Int,
+          kind: Option[domain.configuration.ConfigurationProfileKind]) = boom
         def find(organizationId: UUID, id: UUID) = boom
         def listRevisions(organizationId: UUID, profileId: UUID, before: Option[Int], limit: Int) = boom
         def findRevision(organizationId: UUID, profileId: UUID, revisionNumber: Int) = boom

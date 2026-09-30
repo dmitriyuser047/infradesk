@@ -253,7 +253,8 @@ final class ConfigurationAssignmentRoutesSpec extends FunSuite {
     }
 
     private val profiles = new ConfigurationProfileQuery[IO] {
-      def list(organizationId: UUID, archived: Boolean, limit: Int) = IO(List.empty[ConfigurationProfileSummary])
+      def list(organizationId: UUID, archived: Boolean, limit: Int,
+        kind: Option[domain.configuration.ConfigurationProfileKind]) = IO(List.empty[ConfigurationProfileSummary])
       def find(organizationId: UUID, id: UUID) = IO(Option.when(organizationId == Org && id == Profile)(profile))
       def listRevisions(organizationId: UUID, profileId: UUID, before: Option[Int], limit: Int) = IO(List.empty[ConfigurationRevisionSummary])
       def findRevision(organizationId: UUID, profileId: UUID, revisionNumber: Int) = IO(

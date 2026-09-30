@@ -10,7 +10,8 @@ object CanonicalJson {
   def render(value: Json): String = value.fold(
     "null",
     boolean => if (boolean) "true" else "false",
-    number => number.toBigDecimal.map(_.bigDecimal.stripTrailingZeros.toPlainString).getOrElse(number.toString),
+    // toPlainString expands a tiny exponent such as 1e100000000 into an enormous allocation.
+    number => number.toBigDecimal.map(_.bigDecimal.stripTrailingZeros.toString).getOrElse(number.toString),
     string => Json.fromString(string).noSpaces,
     array => array.iterator.map(render).mkString("[", ",", "]"),
     obj => obj.keys.toList.sorted.map(key => s"${Json.fromString(key).noSpaces}:${render(obj(key).get)}")

@@ -52,9 +52,11 @@ final class IntegrationConfigDeploymentWorker[Tx[_]: MonadThrow](deployments: In
       obj <- inventory.findObject(value.organizationId, value.integrationId, value.inventoryObjectId,
         forUpdate = false)
       secret <- integration.traverse(i => secrets.find(value.organizationId, i.secretId))
+      binding <- configs.binding(value.organizationId, value.integrationId, value.inventoryObjectId)
       revision <- configs.secureRevision(value.organizationId, value.configurationProfileId, value.revisionNumber)
-    } yield (integration, obj, secret.flatten, revision)).flatMap {
-      case (Some(i), Some(obj), Some(s), Some(revision)) if obj.isActive &&
+    } yield (integration, obj, secret.flatten, binding, revision)).flatMap {
+      case (Some(i), Some(obj), Some(s), Some(binding), Some(revision)) if obj.isActive &&
+          binding.id == value.bindingId &&
           revision.revisionId == value.configurationRevisionId && revision.contentSha256 == value.desiredSha256 =>
         (for {
           credential <- IO.delay(cipher.decrypt(s))

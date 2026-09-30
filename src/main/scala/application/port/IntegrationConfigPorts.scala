@@ -14,6 +14,7 @@ final case class IntegrationSecureRevision(revisionId: UUID, organizationId: UUI
 
 trait IntegrationConfigProfileRepository[F[_]] {
   def binding(organizationId: UUID, integrationId: UUID, objectId: UUID): F[Option[IntegrationConfigProfileBinding]]
+  def detachAll(organizationId: UUID, integrationId: UUID, at: Instant): F[Unit]
   def insertBinding(value: IntegrationConfigProfileBinding): F[Boolean]
   def insertSecureRevision(revisionId: UUID, organizationId: UUID, profileId: UUID,
     canonicalJson: String, at: Instant): F[Unit]
@@ -25,7 +26,8 @@ trait IntegrationConfigDeploymentRepository[F[_]] {
   def findByRequest(organizationId: UUID, requestId: UUID): F[Option[IntegrationConfigDeployment]]
   def insertOrFind(value: IntegrationConfigDeployment): F[(IntegrationConfigDeployment, Boolean)]
   def recent(organizationId: UUID, integrationId: UUID, objectId: UUID, limit: Int): F[List[IntegrationConfigDeployment]]
-  def latestSucceededHash(organizationId: UUID, integrationId: UUID, objectId: UUID): F[Option[String]]
+  def recentForBinding(organizationId: UUID, bindingId: UUID, limit: Int): F[List[IntegrationConfigDeployment]]
+  def latestSucceededHash(organizationId: UUID, bindingId: UUID): F[Option[String]]
   def hasActive(organizationId: UUID, integrationId: UUID): F[Boolean]
   def recoverAndClaim(owner: UUID, token: UUID, at: Instant, recoverAfter: Instant,
     limit: Int): F[(List[(UUID, UUID)], List[IntegrationConfigDeployment])]

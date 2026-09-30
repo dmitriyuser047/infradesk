@@ -265,6 +265,9 @@ An owner can adopt an existing observed Config Profile. InfraDesk reads its full
 encrypted at rest with a purpose-separated AES-GCM key and tenant/profile/revision-bound AAD.
 Ordinary inventory and profile lists carry only a SHA-256 hash, never the config body. File-template
 profiles and their assignments remain separate.
+Changing an integration's base URL or replacing its credential detaches its managed Config Profiles
+in the same transaction. Reuse of a profile UUID on another panel requires a new explicit adoption;
+earlier revisions and deployment history remain stored.
 
 Editing creates another immutable, numbered revision; it never writes to Remnawave. Preview reads
 the current remote document and shows a bounded diff against a selected local revision. Explicit

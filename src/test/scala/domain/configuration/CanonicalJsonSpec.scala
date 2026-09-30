@@ -19,4 +19,10 @@ final class CanonicalJsonSpec extends FunSuite {
     assertNotEquals(CanonicalJson.sha256(json("""{"a":[1,2]}""")),
       CanonicalJson.sha256(json("""{"a":[2,1]}""")))
   }
+
+  test("a large exponent has a bounded canonical representation") {
+    val rendered = CanonicalJson.render(json("""{"x":1e100000000}"""))
+    assert(rendered.length < 100)
+    assert(rendered.contains("E+100000000"))
+  }
 }

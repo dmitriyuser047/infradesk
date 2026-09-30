@@ -205,7 +205,7 @@ final class IntegrationConfigProfiles[Tx[_]: MonadThrow](integrations: Integrati
           case _ => fail[String]("INTEGRATION_CONFIG_PROFILE_UNSUPPORTED", "Config profile observation is invalid")
         }
         binding <- configs.binding(actor.organizationId, integrationId, objectId).flatMap(_.liftTo[Tx](notFound))
-        latest <- deployments.recent(actor.organizationId, integrationId, objectId, 1)
+        latest <- deployments.recentForBinding(actor.organizationId, binding.id, 1)
         _ <- MonadThrow[Tx].raiseWhen(latest.headOption.exists(d =>
           d.status == IntegrationConfigDeploymentStatus.Unknown &&
           d.finishedAt.exists(!obj.lastSeenAt.isAfter(_))))(IntegrationError(
@@ -239,8 +239,8 @@ final class IntegrationConfigProfiles[Tx[_]: MonadThrow](integrations: Integrati
       profile <- profileQuery.find(org, binding.configurationProfileId).flatMap(_.liftTo[Tx](notFound))
       latestHash <- configs.revisionHash(org, profile.id, profile.latestRevisionNumber).flatMap(_.liftTo[Tx](notFound))
       importedHash <- configs.revisionHash(org, profile.id, 1).flatMap(_.liftTo[Tx](notFound))
-      latest <- deployments.recent(org, integrationId, objectId, 1)
-      succeeded <- deployments.latestSucceededHash(org, integrationId, objectId)
+      latest <- deployments.recentForBinding(org, binding.id, 1)
+      succeeded <- deployments.latestSucceededHash(org, binding.id)
       summary <- obj.summary match {
         case value: RemnawaveConfigProfileSummary => value.pure[Tx]
         case _ => fail[RemnawaveConfigProfileSummary]("INTEGRATION_CONFIG_PROFILE_UNSUPPORTED",
@@ -255,6 +255,6 @@ final class IntegrationConfigProfiles[Tx[_]: MonadThrow](integrations: Integrati
 
   def history(org: UUID, integrationId: UUID, objectId: UUID,
     limit: Int): IO[List[IntegrationConfigDeployment]] =
-    runner.run(configs.binding(org, integrationId, objectId).flatMap(_.liftTo[Tx](notFound))) *>
-      runner.run(deployments.recent(org, integrationId, objectId, limit))
+    runner.run(configs.binding(org, integrationId, objectId).flatMap(_.liftTo[Tx](notFound)))
+      .flatMap(binding => runner.run(deployments.recentForBinding(org, binding.id, limit)))
 }

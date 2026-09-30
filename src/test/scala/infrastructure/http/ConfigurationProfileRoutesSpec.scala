@@ -201,8 +201,9 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
 
     private val query = new ConfigurationProfileQuery[IO] {
       private def guard[A](value: => A): IO[A] = if (failReads) IO.raiseError(new IllegalStateException("sql secret")) else IO(value)
-      def list(organizationId: UUID, archived: Boolean, limit: Int) = guard(store.profiles.values.toList
-        .filter(p => p.organizationId == organizationId && p.archived == archived).take(limit)
+      def list(organizationId: UUID, archived: Boolean, limit: Int,
+        kind: Option[domain.configuration.ConfigurationProfileKind]) = guard(store.profiles.values.toList
+        .filter(p => p.organizationId == organizationId && p.archived == archived && kind.forall(_ == p.kind)).take(limit)
         .map(ConfigurationProfileSummary(_, now)))
       def find(organizationId: UUID, id: UUID) = guard(store.profiles.get(id).filter(_.organizationId == organizationId))
       def listRevisions(organizationId: UUID, profileId: UUID, before: Option[Int], limit: Int) = guard(store.revisions

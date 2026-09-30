@@ -21,7 +21,8 @@ const integration = { id: 'one', name: 'Panel', providerType: 'REMNAWAVE', baseU
   enabled: true, credential: { apiTokenConfigured: true, caddyApiKeyConfigured: false },
   createdAt: '', updatedAt: '', managementMode: 'OBSERVE' }
 
-function setup(entry = `${route}?tab=profiles`, role: 'OWNER' | 'MEMBER' = 'OWNER', adopted = false) {
+function setup(entry = `${route}?tab=profiles`, role: 'OWNER' | 'MEMBER' = 'OWNER', adopted = false,
+  loseDeployResponse = false) {
   const calls: { url: string; method: string; body?: Record<string, unknown> }[] = []
   let managed = adopted
   let revision = 1
@@ -35,7 +36,9 @@ function setup(entry = `${route}?tab=profiles`, role: 'OWNER' | 'MEMBER' = 'OWNE
     if (url === '/api/v1/me/organizations') return json([{ id: 'org', code: 'org', name: 'Org', role }])
     if (url === root) return json(integration)
     if (url.startsWith(`${root}/inventory/config-profiles`))
-      return json({ items: [configProfile], total: 1, limit: 100, offset: 0 })
+      return json({ items: [{ ...configProfile, configManagement: managed ? {
+        configurationProfileId: 'local', name: 'Main', revisionNumber: revision, status } : null }],
+        total: 1, limit: 100, offset: 0 })
     if (url === path && method === 'GET') return managed ? json({ bindingId: 'binding',
       profile: { id: 'local', code: 'remnawave-main', name: 'Main', description: null,
         kind: 'REMNAWAVE_CONFIG', latestRevisionNumber: revision },
@@ -55,6 +58,7 @@ function setup(entry = `${route}?tab=profiles`, role: 'OWNER' | 'MEMBER' = 'OWNE
       status = 'DEPLOYING'; latestDeployment = { id: 'deployment', requestId: body!.requestId, revisionNumber: revision,
         status: 'QUEUED', requestedByUserId: 'owner', createdAt: '2026-09-30T10:00:00Z', startedAt: null,
         finishedAt: null, expectedRemoteSha256: 'a'.repeat(64), desiredSha256: 'b'.repeat(64), errorCode: null }
+      if (loseDeployResponse) throw new TypeError('Network response lost')
       return json(latestDeployment, 202)
     }
     if (url === `${path}/deployments?limit=50`) return json({ items: latestDeployment ? [latestDeployment] : [] })
@@ -70,7 +74,7 @@ function setup(entry = `${route}?tab=profiles`, role: 'OWNER' | 'MEMBER' = 'OWNE
   return calls
 }
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.sessionStorage.clear() })
 
 describe('Remnawave config management', () => {
   it('adopts an unmanaged profile and loads content only after opening its page', async () => {
@@ -83,6 +87,7 @@ describe('Remnawave config management', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Adopt' }))
     expect(await screen.findByRole('link', { name: 'Open' })).toBeTruthy()
     expect(calls.find(call => call.url === `${path}/adopt`)?.body?.code).toBe('default-profile')
+    expect(calls.some(call => call.url === path && call.method === 'GET')).toBe(false)
     fireEvent.click(screen.getByRole('link', { name: 'Open' }))
     expect(await screen.findByText(/PRIVATE-CONTENT/)).toBeTruthy()
     expect(calls.some(call => call.url === `${path}/revisions/1`)).toBe(true)
@@ -116,5 +121,23 @@ describe('Remnawave config management', () => {
     const calls = setup(`${route}/config-profiles/profile`, 'MEMBER', true)
     expect(await screen.findByText('Access denied')).toBeTruthy()
     expect(calls.some(call => call.url.includes('/integrations/one'))).toBe(false)
+  })
+
+  it('reuses an unresolved deployment request ID after a page reload', async () => {
+    const entry = `${route}/config-profiles/profile`
+    const first = setup(entry, 'OWNER', true, true)
+    expect(await screen.findByText(/PRIVATE-CONTENT/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Confirm deployment' }))
+      .getByRole('button', { name: 'Deploy' }))
+    await waitFor(() => expect(first.some(call => call.url === `${path}/revisions/1/deploy`)).toBe(true))
+    const firstId = first.find(call => call.url === `${path}/revisions/1/deploy`)?.body?.requestId
+    expect(firstId).toBe(window.sessionStorage.getItem('integration-config-deploy-request:org:one:profile:1'))
+    cleanup()
+    const second = setup(entry, 'OWNER', true)
+    expect(await screen.findByText(/PRIVATE-CONTENT/)).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: 'Check the same request' }))
+    await waitFor(() => expect(second.some(call => call.url === `${path}/revisions/1/deploy`)).toBe(true))
+    expect(second.find(call => call.url === `${path}/revisions/1/deploy`)?.body?.requestId).toBe(firstId)
   })
 })

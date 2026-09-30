@@ -89,7 +89,7 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       }
     }
     val management = new IntegrationManagement[ConnectionIO](integrations, secrets, ids, time, cipher, audit, states,
-      actionRepository, inventory)
+      actionRepository, inventory, configRepository, configDeployments.hasActive)
     @volatile var observation: IO[IntegrationObservation] = IO.pure(snapshot())
     @volatile var remoteActionCalls = 0
     @volatile var remoteOutcome: IO[IntegrationActionRemoteOutcome] =
@@ -224,6 +224,11 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       w.manual(integration.id)
       assertEquals(w.configProfiles.managed(w.org, integration.id, objectId).unsafeRunSync().get.status,
         IntegrationConfigStatus.InSync)
+      val profilePage = w.run.run(w.query.list(w.org, integration.id, IntegrationObjectType.ConfigProfile,
+        InventoryFilter(None, None, None, 50, 0))).unsafeRunSync()
+      assertEquals(profilePage.items.head.configManagement.map(_.configurationProfileId), Some(adopted.id))
+      assertEquals(profilePage.items.head.configManagement.map(_.revisionNumber), Some(1))
+      assertEquals(profilePage.items.head.configManagement.map(_.status), Some("IN_SYNC"))
 
       val next = parse("""{"a":2,"privateKey":"SUPER-SECRET-PRIVATE-KEY"}""").toOption.get
       assertEquals(w.configProfiles.appendRevision(w.actor, integration.id, objectId, next).unsafeRunSync(), 2)
@@ -327,6 +332,47 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       assertEquals(history.head.status, IntegrationConfigDeploymentStatus.Unknown)
       assertEquals(history.head.errorCode, Some("INTEGRATION_CONFIG_DEPLOYMENT_RESULT_UNKNOWN"))
     }
+  }
+
+  test("endpoint or credential changes detach config bindings without deleting revision or deployment history") {
+    List(false, true).foreach { replaceCredential => withWorld { w =>
+      val external = UUID.randomUUID().toString
+      val observed = ObservedIntegrationObject(IntegrationObjectType.ConfigProfile, external, "Default",
+        RemnawaveConfigProfileSummary(1, Instant.parse("2026-08-01T00:00:00Z"),
+          Instant.parse("2026-09-01T00:00:00Z"), Nil, Nil, Some(CanonicalJson.sha256(w.remoteConfig))))
+      val integration = w.create("Original panel")
+      w.observation = IO.pure(snapshot(observed)); w.manual(integration.id)
+      val objectId = w.objects(integration.id).head._5
+      val original = w.configProfiles.adopt(w.actor, integration.id, objectId,
+        AdoptIntegrationConfigProfile("original-config", "Original", None)).unsafeRunSync()
+      val deployment = w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 1,
+        UUID.randomUUID()).unsafeRunSync()
+      assertEquals(w.run.run(w.management.update(w.actor, integration.id,
+        UpdateIntegrationCommand("Original panel", "https://other.example.test", None)))
+        .attempt.unsafeRunSync().left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_ACTION_ALREADY_RUNNING"))
+      w.configWorker.tick.unsafeRunSync()
+      val changed = UpdateIntegrationCommand("New panel",
+        if (replaceCredential) "https://panel.example.test" else "https://other.example.test",
+        if (replaceCredential) Some(RemnawaveCredential("replacement", None)) else None)
+      w.run.run(w.management.update(w.actor, integration.id, changed)).unsafeRunSync()
+      assertEquals(w.configProfiles.managed(w.org, integration.id, objectId).unsafeRunSync(), None)
+      assertEquals(w.run.run(sql"select count(*) from configuration_revision_secure_payload where profile_id = ${original.id}"
+        .query[Long].unique).unsafeRunSync(), 1L)
+      assertEquals(w.run.run(w.configDeployments.findByRequest(w.org, deployment.requestId)).unsafeRunSync()
+        .map(_.status), Some(IntegrationConfigDeploymentStatus.Succeeded))
+      w.observation = IO.pure(snapshot(observed)); w.manual(integration.id)
+      assertEquals(w.objects(integration.id).head._5, objectId)
+      assertEquals(w.configProfiles.managed(w.org, integration.id, objectId).unsafeRunSync(), None)
+      assertEquals(w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 1,
+        UUID.randomUUID()).attempt.unsafeRunSync().left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_CONFIG_PROFILE_NOT_FOUND"))
+      val adopted = w.configProfiles.adopt(w.actor, integration.id, objectId,
+        AdoptIntegrationConfigProfile("new-config", "New", None)).unsafeRunSync()
+      assertNotEquals(adopted.id, original.id)
+      assertEquals(w.configProfiles.managed(w.org, integration.id, objectId).unsafeRunSync()
+        .map(_.profile.id), Some(adopted.id))
+    }}
   }
 
   test("config adoption rejects foreign, wrong-type, inactive and changed remote targets") {

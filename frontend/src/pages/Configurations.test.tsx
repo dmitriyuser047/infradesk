@@ -137,7 +137,8 @@ describe('configuration profiles', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Archived' }))
     expect(await screen.findByRole('link', { name: 'Old' })).toBeTruthy()
     expect(location()).toBe('/organizations/org/configurations?state=archived')
-    expect(requests.map(item => item.path)).toEqual(['?archived=false&limit=200', '?archived=true&limit=200'])
+    expect(requests.map(item => item.path)).toEqual([
+      '?archived=false&limit=200&kind=FILE_TEMPLATE', '?archived=true&limit=200&kind=FILE_TEMPLATE'])
   })
 
   it('creates a profile: variables are added and removed, errors are shown, success opens v1', async () => {

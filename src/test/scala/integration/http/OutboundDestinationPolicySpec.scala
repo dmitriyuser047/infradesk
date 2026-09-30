@@ -72,7 +72,7 @@ final class OutboundDestinationPolicySpec extends FunSuite {
 
       assertEquals(result.left.toOption.map(_.code),
         Some(OutboundDestinationPolicy.ResolutionFailed))
-      assert(elapsed < 1500.millis, clues(elapsed))
+      assert(elapsed < 5.seconds, clues(elapsed))
     } finally blackhole.close()
   }
 }

@@ -102,6 +102,8 @@ export interface InventoryObject<S> {
   binding?: BoundResource | null
   /** Null for a node nobody manages. */
   desiredState?: DesiredStateView | null
+  configManagement?: { configurationProfileId: string; name: string; revisionNumber: number;
+    status: import('../api/integrationConfigProfiles').ConfigStatus } | null
 }
 export interface InventoryPage<S> { items: InventoryObject<S>[]; total: number; limit: number; offset: number }
 export interface BindingCandidate { id: string; code: string; name: string; environment: NamedRef; project: NamedRef }

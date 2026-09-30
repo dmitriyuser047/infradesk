@@ -19,7 +19,8 @@ const base = (organizationId: string) => `/api/v1/organizations/${encodeURICompo
 const profilePath = (organizationId: string, profileId: string) => `${base(organizationId)}/${encodeURIComponent(profileId)}`
 
 export const configurationKeys = {
-  profiles: (organizationId: string, archived: boolean) => ['configurationProfiles', organizationId, { archived }] as const,
+  profiles: (organizationId: string, archived: boolean, kind: 'FILE_TEMPLATE' | 'REMNAWAVE_CONFIG') =>
+    ['configurationProfiles', organizationId, { archived, kind }] as const,
   allProfiles: (organizationId: string) => ['configurationProfiles', organizationId] as const,
   profile: (organizationId: string, profileId: string) => ['configurationProfile', organizationId, profileId] as const,
   revisions: (organizationId: string, profileId: string) => ['configurationRevisions', organizationId, profileId] as const,
@@ -27,10 +28,11 @@ export const configurationKeys = {
     ['configurationRevision', organizationId, profileId, revisionNumber] as const,
 }
 
-export function useConfigurationProfiles(organizationId: string, archived: boolean, enabled: boolean) {
+export function useConfigurationProfiles(organizationId: string, archived: boolean, enabled: boolean,
+  kind: 'FILE_TEMPLATE' | 'REMNAWAVE_CONFIG' = 'FILE_TEMPLATE') {
   return useQuery({
-    queryKey: configurationKeys.profiles(organizationId, archived),
-    queryFn: () => requestJson<ConfigurationProfile[]>(`${base(organizationId)}?archived=${archived}&limit=${ConfigurationListLimit}`),
+    queryKey: configurationKeys.profiles(organizationId, archived, kind),
+    queryFn: () => requestJson<ConfigurationProfile[]>(`${base(organizationId)}?archived=${archived}&limit=${ConfigurationListLimit}&kind=${kind}`),
     enabled,
   })
 }

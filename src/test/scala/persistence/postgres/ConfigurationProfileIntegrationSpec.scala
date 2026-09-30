@@ -15,6 +15,7 @@ import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.audit.{AuditCursor, AuditEvent}
 import domain.configuration.{
+  ConfigurationProfileKind,
   ConfigurationValidation,
   ConfigurationValueType,
   ConfigurationVariableDefinition,
@@ -79,6 +80,21 @@ final class ConfigurationProfileIntegrationSpec extends FunSuite {
         assertEquals(mine.map(_.profile.code), List("vpn-default"))
       }
     }
+  }
+
+  test("profile kind is filtered in SQL before the list limit") {
+    withFixture { fixture => for {
+      remote <- fixture.create("aaa-remote")
+      _ <- fixture.run(sql"update configuration_profile set kind = 'REMNAWAVE_CONFIG' where id = ${remote._1.id}"
+        .update.run)
+      file <- fixture.create("zzz-file")
+      files <- fixture.run(fixture.queries.list(OrganizationId, archived = false, 1,
+        Some(ConfigurationProfileKind.FileTemplate)))
+      all <- fixture.run(fixture.queries.list(OrganizationId, archived = false, 1))
+    } yield IO {
+      assertEquals(all.map(_.profile.id), List(remote._1.id))
+      assertEquals(files.map(_.profile.id), List(file._1.id))
+    }}
   }
 
   test("another organization's profile is never read, changed, archived or given a revision") {

@@ -238,18 +238,51 @@ final class PostgresIntegrationInventoryQuery extends IntegrationInventoryQuery[
       filter.state.map(value => fr"o.summary ->> 'state' = ${value.code}")
     ).flatten
     val where = fr"where" ++ conditions.reduce(_ ++ fr"and" ++ _)
-    // The binding and the desired state of every row come with the page: nothing is read per row.
-    val items = (fr"select" ++ objectColumns ++ fr", r.id, r.code, r.name, e.id, e.name, p.id, p.name," ++
-      IntegrationDesiredStateSql.viewColumns ++ fr"""
-       from integration_inventory_object o""" ++ IntegrationDesiredStateSql.viewJoins ++ fr"""
+    // Limit the page before its joins and lateral status reads; no per-row application queries.
+    val page = (fr"with page as materialized (select o.id from integration_inventory_object o" ++ where ++
+      fr"order by o.display_name, o.id limit ${filter.limit} offset ${filter.offset}) ")
+    val items = (page ++ fr"select" ++ objectColumns ++ fr", r.id, r.code, r.name, e.id, e.name, p.id, p.name," ++
+      IntegrationDesiredStateSql.viewColumns ++ fr""", cb.configuration_profile_id, cp.name,
+       cp.latest_revision_number,
+       case when cb.id is null then null
+         when not o.is_active then 'UNAVAILABLE'
+         when o.last_seen_at <= cb.created_at then 'WAITING_REFRESH'
+         when ld.status in ('QUEUED', 'RUNNING') then 'DEPLOYING'
+         when ld.status in ('SUCCEEDED', 'UNKNOWN') and o.last_seen_at <= ld.finished_at then 'WAITING_REFRESH'
+         when ld.status = 'FAILED' then 'DEPLOYMENT_FAILED'
+         when o.summary ->> 'configSha256' = secure.content_sha256 then 'IN_SYNC'
+         when o.summary ->> 'configSha256' = coalesce(done.desired_sha256, imported.content_sha256)
+           then 'LOCAL_CHANGES'
+         else 'REMOTE_DRIFT' end
+       from page pg join integration_inventory_object o on o.id = pg.id""" ++ IntegrationDesiredStateSql.viewJoins ++ fr"""
        left join integration_resource_binding b on b.inventory_object_id = o.id and b.organization_id = o.organization_id
        left join resource r on r.id = b.resource_id and r.organization_id = b.organization_id
        left join environment e on e.id = r.environment_id and e.organization_id = r.organization_id
-       left join project p on p.id = e.project_id and p.organization_id = e.organization_id""" ++ where ++
-      fr"order by o.display_name, o.id limit ${filter.limit} offset ${filter.offset}")
-      .query[(ObjectRow, BoundRow, IntegrationDesiredStateSql.ViewRow)].to[List]
-      .flatMap(_.traverse { case (row, bound, desired) =>
-        row.toDomain.liftTo[ConnectionIO].map(InventoryItem(_, bound.toView, desired.toView)) })
+       left join project p on p.id = e.project_id and p.organization_id = e.organization_id
+       left join integration_config_profile_binding cb on cb.inventory_object_id = o.id
+         and cb.organization_id = o.organization_id and cb.integration_id = o.integration_id
+         and cb.detached_at is null and o.object_type = 'CONFIG_PROFILE'
+       left join configuration_profile cp on cp.id = cb.configuration_profile_id
+         and cp.organization_id = cb.organization_id
+       left join configuration_revision latest_revision on latest_revision.profile_id = cp.id
+         and latest_revision.organization_id = cp.organization_id
+         and latest_revision.revision_number = cp.latest_revision_number
+       left join configuration_revision_secure_payload secure on secure.revision_id = latest_revision.id
+       left join configuration_revision imported_revision on imported_revision.profile_id = cp.id
+         and imported_revision.organization_id = cp.organization_id and imported_revision.revision_number = 1
+       left join configuration_revision_secure_payload imported on imported.revision_id = imported_revision.id
+       left join lateral (select d.status, d.finished_at from integration_config_deployment d
+         where d.organization_id = cb.organization_id and d.binding_id = cb.id
+         order by d.created_at desc, d.id desc limit 1) ld on true
+       left join lateral (select d.desired_sha256 from integration_config_deployment d
+         where d.organization_id = cb.organization_id and d.binding_id = cb.id and d.status = 'SUCCEEDED'
+         order by d.finished_at desc, d.id desc limit 1) done on true
+       order by o.display_name, o.id""")
+      .query[(ObjectRow, BoundRow, IntegrationDesiredStateSql.ViewRow,
+        Option[UUID], Option[String], Option[Int], Option[String])].to[List]
+      .flatMap(_.traverse { case (row, bound, desired, profileId, profileName, revision, status) =>
+        row.toDomain.liftTo[ConnectionIO].map(InventoryItem(_, bound.toView, desired.toView,
+          (profileId, profileName, revision, status).mapN(ConfigManagementSummary.apply))) })
     val total = (fr"select count(*) from integration_inventory_object o" ++ where).query[Long].unique
     (items, total).mapN(InventoryPage(_, _))
   }

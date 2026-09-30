@@ -346,10 +346,14 @@ object ApplicationModule {
       integrations.configurationTransport, transactionIdGenerator, transactionTimeProvider,
       auditRecorder, readOnlySnapshotRunner, transactionRunner, config.configurationDeployment)
 
+    val integrationConfigRepository = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigProfileRepository(
+      integration.secret.RemnawaveConfigCipher.fromConfig(config.secretEncryption))
+    val integrationConfigDeployments = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigDeploymentRepository
     val integrationManagement = new IntegrationManagement[ConnectionIO](
       integrationRepository, integrationSecretRepository, transactionIdGenerator,
       transactionTimeProvider, integrations.integrationCredentialCipher, auditRecorder,
-      integrationSyncStateRepository, integrationActionRepository, integrationInventoryRepository)
+      integrationSyncStateRepository, integrationActionRepository, integrationInventoryRepository,
+      integrationConfigRepository, integrationConfigDeployments.hasActive)
     val integrationSyncSettings = config.integrations.sync
     val integrationSync = new IntegrationSync[ConnectionIO](
       new IntegrationSyncTransactions[ConnectionIO](integrationRepository, integrationSecretRepository,
@@ -369,9 +373,6 @@ object ApplicationModule {
       actionSettings.pollInterval, actionSettings.batchSize, actionSettings.maxConcurrency,
       config.integrations.requestTimeout, UUID.randomUUID())
 
-    val integrationConfigRepository = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigProfileRepository(
-      integration.secret.RemnawaveConfigCipher.fromConfig(config.secretEncryption))
-    val integrationConfigDeployments = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigDeploymentRepository
     val integrationConfigProfiles = new application.integration.IntegrationConfigProfiles[ConnectionIO](
       integrationRepository, integrationInventoryRepository, integrationSecretRepository,
       integrations.integrationCredentialCipher, integrations.integrationProviderRegistry,

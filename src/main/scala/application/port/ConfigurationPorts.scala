@@ -46,7 +46,8 @@ final case class ConfigurationRevisionView(revision: ConfigurationRevision, crea
 /** Reads configuration profiles. Each list is one bounded statement, whatever it mentions. */
 trait ConfigurationProfileQuery[F[_]] {
 
-  def list(organizationId: UUID, archived: Boolean, limit: Int): F[List[ConfigurationProfileSummary]]
+  def list(organizationId: UUID, archived: Boolean, limit: Int,
+    kind: Option[domain.configuration.ConfigurationProfileKind] = None): F[List[ConfigurationProfileSummary]]
 
   def find(organizationId: UUID, id: UUID): F[Option[ConfigurationProfile]]
 

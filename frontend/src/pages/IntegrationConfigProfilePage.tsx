@@ -22,6 +22,20 @@ export const statusText: Record<ConfigStatus, [string, string]> = {
   REMOTE_DRIFT: ['Изменено в Remnawave', 'Remote drift'],
 }
 
+function savedDeployRequest(key: string): string | null {
+  try {
+    const value = window.sessionStorage.getItem(key)
+    return value && /^[0-9a-f-]{36}$/i.test(value) ? value : null
+  } catch { return null }
+}
+
+function storeDeployRequest(key: string, id: string | null): void {
+  try {
+    if (id) window.sessionStorage.setItem(key, id)
+    else window.sessionStorage.removeItem(key)
+  } catch { /* Retain the current component's request ID. */ }
+}
+
 export function IntegrationConfigProfilePage() {
   const { organizationId, integrationId, objectId } = useParams()
   if (!organizationId || !integrationId || !objectId) return null
@@ -54,10 +68,27 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
   const [previewError, setPreviewError] = useState<unknown>(null)
   const [previewing, setPreviewing] = useState(false)
   const [confirm, setConfirm] = useState(false)
-  const [requestId, setRequestId] = useState<string | null>(null)
+  const [pendingRequest, setPendingRequest] = useState<{ revision: number; id: string } | null>(null)
   const back = { label: ru ? 'Интеграция' : 'Integration',
     to: `/organizations/${org}/integrations/${integration}?tab=profiles` }
   const revision = selected ?? managed.data?.profile.latestRevisionNumber ?? null
+  const chosen = revision
+  const requestKey = chosen === null ? null :
+    `integration-config-deploy-request:${org}:${integration}:${object}:${chosen}`
+
+  useEffect(() => {
+    if (chosen === null || requestKey === null) return
+    const id = savedDeployRequest(requestKey)
+    setPendingRequest(id ? { revision: chosen, id } : null)
+  }, [chosen, requestKey])
+
+  useEffect(() => {
+    if (!pendingRequest || !deployments.data) return
+    const found = deployments.data.find(item => item.requestId === pendingRequest.id)
+    if (!found || found.status === 'QUEUED' || found.status === 'RUNNING') return
+    storeDeployRequest(`integration-config-deploy-request:${org}:${integration}:${object}:${pendingRequest.revision}`, null)
+    setPendingRequest(null)
+  }, [deployments.data, pendingRequest, org, integration, object])
 
   useEffect(() => {
     if (!canRead || revision === null) return
@@ -83,7 +114,7 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
   const value = managed.data
   const busy = value.latestDeployment?.status === 'QUEUED' || value.latestDeployment?.status === 'RUNNING'
   const label = statusText[value.status][ru ? 0 : 1]
-  const chosen = revision ?? value.profile.latestRevisionNumber
+  const chosenRevision = revision ?? value.profile.latestRevisionNumber
   const startEdit = () => {
     if (!content) return
     setEditor(JSON.stringify(content.config, null, 2)); setParseError(''); setEditing(true); setPreview(null)
@@ -103,15 +134,19 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
   }
   const previewSelected = () => {
     setPreviewing(true); setPreviewError(null); setPreview(null)
-    void previewConfigRevision(org, integration, object, chosen).then(setPreview, setPreviewError)
+    void previewConfigRevision(org, integration, object, chosenRevision).then(setPreview, setPreviewError)
       .finally(() => setPreviewing(false))
   }
   const deploySelected = () => {
-    const id = requestId ?? createRequestId()
-    setRequestId(id); setConfirm(false)
-    deploy.mutate({ revision: chosen, requestId: id }, { onSuccess: () => {
-      setRequestId(null); setPreview(null)
-    } })
+    if (!requestKey) return
+    const id = savedDeployRequest(requestKey) ??
+      (pendingRequest?.revision === chosenRevision ? pendingRequest.id : null) ?? createRequestId()
+    storeDeployRequest(requestKey, id)
+    setPendingRequest({ revision: chosenRevision, id }); setConfirm(false)
+    deploy.mutate({ revision: chosenRevision, requestId: id }, {
+      onSuccess: () => { setPreview(null) },
+      onError: () => { void deployments.refetch() },
+    })
   }
 
   return <AppShell><div className="workspace-page integration-page">
@@ -145,7 +180,7 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
       { id: 'revisions', label: ru ? 'Ревизии' : 'Revisions' },
       { id: 'deployments', label: ru ? 'Развёртывания' : 'Deployments' },
     ]} active={tab} onChange={next => setTab(next as typeof tab)} />
-    {tab === 'configuration' ? <WorkspaceSection title={ru ? `Ревизия ${chosen}` : `Revision ${chosen}`}>
+    {tab === 'configuration' ? <WorkspaceSection title={ru ? `Ревизия ${chosenRevision}` : `Revision ${chosenRevision}`}>
       <div className="integration-row-actions">
         <button className="secondary-button" type="button" disabled={!content || editing} onClick={startEdit}>
           {ru ? 'Новая ревизия' : 'New revision'}</button>
@@ -177,6 +212,11 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
       {deploy.isError ? <InlineAlert tone="danger" title={ru ? 'Запрос не подтверждён' : 'Request not confirmed'}>
         {describeError(deploy.error, i18n)} <button type="button" className="text-button" onClick={deploySelected}>
           {ru ? 'Проверить тот же запрос' : 'Check the same request'}</button></InlineAlert> : null}
+      {pendingRequest?.revision === chosenRevision && !deploy.isError && !busy ?
+        <InlineAlert tone="warning" title={ru ? 'Запрос ожидает подтверждения' : 'Request awaiting confirmation'}>
+          <button type="button" className="text-button" onClick={deploySelected} disabled={deploy.isPending}>
+            {ru ? 'Проверить тот же запрос' : 'Check the same request'}</button>
+        </InlineAlert> : null}
     </WorkspaceSection> : null}
     {tab === 'revisions' ? <WorkspaceSection title={ru ? 'Ревизии' : 'Revisions'}>
       {revisions.data?.map(item => <button key={item.revisionNumber} className="secondary-button" type="button"
@@ -193,7 +233,7 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
     </WorkspaceSection> : null}
     {confirm ? <div className="dialog-backdrop" role="presentation"><section role="dialog" aria-modal="true"
       aria-label={ru ? 'Подтвердить развёртывание' : 'Confirm deployment'} className="monitor-rule-dialog integration-bind-dialog">
-      <div className="dialog-heading"><h2>{ru ? `Развернуть ревизию ${chosen}?` : `Deploy revision ${chosen}?`}</h2></div>
+      <div className="dialog-heading"><h2>{ru ? `Развернуть ревизию ${chosenRevision}?` : `Deploy revision ${chosenRevision}?`}</h2></div>
       <div className="dialog-body"><p>{ru ? `Это заменит конфигурацию профиля ${remote?.displayName ?? value.profile.name} в Remnawave.` :
         `This will replace the configuration of ${remote?.displayName ?? value.profile.name} in Remnawave.`}</p>
         <p>{ru ? `Узлов с профилем: ${value.nodesUsingProfile}. Они могут быть затронуты.` :
