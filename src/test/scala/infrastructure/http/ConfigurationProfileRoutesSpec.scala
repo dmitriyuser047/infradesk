@@ -6,7 +6,7 @@ import application.port._
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.auth.OrganizationRole
-import domain.configuration.{ConfigurationProfile, ConfigurationRevision}
+import domain.configuration.{ConfigurationProfile, ConfigurationProfileKind, ConfigurationRevision}
 import io.circe.Json
 import munit.FunSuite
 import org.http4s.circe.CirceEntityDecoder._
@@ -62,6 +62,35 @@ final class ConfigurationProfileRoutesSpec extends FunSuite {
       assertEquals(f.call(method, path, body, OrganizationRole.Member)._1, Status.Forbidden, s"$method $path")
     }
     assertEquals(f.store.profiles.size, 0)
+  }
+
+  test("generic configuration routes never expose or mutate a Remnawave config profile") {
+    val f = new RouteFixture
+    val id = f.call(Method.POST, base, Some(createBody))._2.hcursor.downField("profile")
+      .get[String]("id").toOption.get
+    val profileId = UUID.fromString(id)
+    f.store.profiles += profileId -> f.store.profiles(profileId)
+      .copy(kind = ConfigurationProfileKind.RemnawaveConfig)
+    val initialAudit = f.audit.recorded.size
+    assertEquals(f.call(Method.GET, base)._2.asArray.map(_.size), Some(0))
+    assertEquals(f.call(Method.GET, s"$base?kind=FILE_TEMPLATE")._2.asArray.map(_.size), Some(0))
+    assertEquals(f.call(Method.GET, s"$base?kind=REMNAWAVE_CONFIG")._1, Status.BadRequest)
+    val update = Json.obj("name" -> Json.fromString("Changed"), "description" -> Json.Null)
+    val revision = Json.obj("template" -> Json.fromString("updated"), "variables" -> Json.arr())
+    List(
+      (Method.GET, s"$base/$id", None),
+      (Method.GET, s"$base/$id/revisions", None),
+      (Method.GET, s"$base/$id/revisions/1", None),
+      (Method.PATCH, s"$base/$id", Some(update)),
+      (Method.DELETE, s"$base/$id", None),
+      (Method.POST, s"$base/$id/revisions", Some(revision))
+    ).foreach { case (method, path, body) =>
+      assertEquals(f.call(method, path, body)._1, Status.NotFound, s"$method $path")
+    }
+    assertEquals(f.store.profiles(profileId).name, "VPN Production Nodes")
+    assertEquals(f.store.profiles(profileId).archived, false)
+    assertEquals(f.store.revisions.size, 1)
+    assertEquals(f.audit.recorded.size, initialAudit)
   }
 
   test("invalid content is refused with its diagnostics, and nothing is stored") {

@@ -13,7 +13,7 @@ import application.port.{ConfigurationActor, ConfigurationRevisionView, Transact
 import cats.effect.IO
 import cats.syntax.all._
 import domain.auth.OrganizationPermission
-import domain.configuration.{ConfigurationDiagnostic, ConfigurationProfileKind, ConfigurationTemplateRenderer, ConfigurationValidation, ValidatedConfiguration}
+import domain.configuration.{ConfigurationDiagnostic, ConfigurationTemplateRenderer, ConfigurationValidation, ValidatedConfiguration}
 import infrastructure.http.dto._
 import io.circe.{Decoder, Json}
 import org.http4s.{HttpRoutes, Request, Response}
@@ -55,11 +55,11 @@ final class ConfigurationProfileRoutes[Tx[_]](
     case request @ GET -> Root / "api" / "v1" / "organizations" / _ / "configuration-profiles" =>
       manage(request) { context =>
         val params = request.uri.query.params
-        val kind = params.get("kind").traverse(ConfigurationProfileKind.fromCode(_).toOption)
-        (archivedFilter(params.get("archived")), limit(params.get("limit")), kind) match {
-          case (Some(archived), Some(size), Some(profileKind)) =>
+        (archivedFilter(params.get("archived")), limit(params.get("limit")),
+          params.get("kind").forall(_ == "FILE_TEMPLATE")) match {
+          case (Some(archived), Some(size), true) =>
             respond(request, "configuration.list", context)(
-              reads.run(queries.list(context.organizationId, archived, size, profileKind)).flatMap(profiles => Ok(profiles)))
+              reads.run(queries.list(context.organizationId, archived, size)).flatMap(profiles => Ok(profiles)))
           case _ => BadRequest(invalidRequest)
         }
       }

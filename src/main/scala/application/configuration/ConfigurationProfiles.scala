@@ -96,7 +96,6 @@ final class ConfigurationProfileManagement[Tx[_]: MonadThrow](
   def appendRevision(actor: ActorContext, profileId: UUID, content: ValidatedConfiguration): Tx[ConfigurationRevision] =
     for {
       profile <- locked(actor.organizationId, profileId)
-      _ <- MonadThrow[Tx].raiseUnless(profile.kind == ConfigurationProfileKind.FileTemplate)(ConfigurationError.wrongKind)
       _ <- (if (profile.archived) MonadThrow[Tx].raiseError[Unit](ConfigurationError.archived) else ().pure[Tx])
       revisionId <- ids.nextId
       now <- time.now
@@ -138,7 +137,9 @@ final class ConfigurationProfileManagement[Tx[_]: MonadThrow](
     }
 
   private def locked(organizationId: UUID, profileId: UUID): Tx[ConfigurationProfile] =
-    profiles.findForUpdate(organizationId, profileId).flatMap(_.liftTo[Tx](ConfigurationError.notFound))
+    profiles.findForUpdate(organizationId, profileId)
+      .flatMap(_.filter(_.kind == ConfigurationProfileKind.FileTemplate)
+        .liftTo[Tx](ConfigurationError.notFound))
 }
 
 /** A profile as its page shows it: metadata and the content of its newest revision. */
@@ -149,13 +150,15 @@ final case class ConfigurationProfileDetail(profile: ConfigurationProfile, lates
   */
 final class ConfigurationProfileQueries[Tx[_]: Monad](query: ConfigurationProfileQuery[Tx]) {
 
-  def list(organizationId: UUID, archived: Boolean, limit: Int,
-    kind: Option[ConfigurationProfileKind] = None): Tx[List[ConfigurationProfileSummary]] =
-    query.list(organizationId, archived, limit, kind)
+  def list(organizationId: UUID, archived: Boolean, limit: Int): Tx[List[ConfigurationProfileSummary]] =
+    query.list(organizationId, archived, limit, Some(ConfigurationProfileKind.FileTemplate))
+
+  private def fileProfile(organizationId: UUID, profileId: UUID): Tx[Option[ConfigurationProfile]] =
+    query.find(organizationId, profileId).map(_.filter(_.kind == ConfigurationProfileKind.FileTemplate))
 
   /** Two statements for a profile: meant for one read-only snapshot, so they cannot disagree. */
   def detail(organizationId: UUID, profileId: UUID): Tx[Option[ConfigurationProfileDetail]] =
-    query.find(organizationId, profileId).flatMap {
+    fileProfile(organizationId, profileId).flatMap {
       case None => none[ConfigurationProfileDetail].pure[Tx]
       case Some(profile) =>
         query.findRevision(organizationId, profileId, profile.latestRevisionNumber)
@@ -164,13 +167,16 @@ final class ConfigurationProfileQueries[Tx[_]: Monad](query: ConfigurationProfil
 
   /** None when the profile is not this organization's; an empty page when it has no more. */
   def revisions(organizationId: UUID, profileId: UUID, before: Option[Int], limit: Int): Tx[Option[List[ConfigurationRevisionSummary]]] =
-    query.find(organizationId, profileId).flatMap {
+    fileProfile(organizationId, profileId).flatMap {
       case None => none[List[ConfigurationRevisionSummary]].pure[Tx]
       case Some(_) => query.listRevisions(organizationId, profileId, before, limit).map(Some(_))
     }
 
   def revision(organizationId: UUID, profileId: UUID, revisionNumber: Int): Tx[Option[ConfigurationRevisionView]] =
-    query.findRevision(organizationId, profileId, revisionNumber)
+    fileProfile(organizationId, profileId).flatMap {
+      case None => none[ConfigurationRevisionView].pure[Tx]
+      case Some(_) => query.findRevision(organizationId, profileId, revisionNumber)
+    }
 }
 
 object ConfigurationProfileQueries {

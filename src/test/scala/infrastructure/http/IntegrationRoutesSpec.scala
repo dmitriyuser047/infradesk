@@ -96,7 +96,7 @@ final class IntegrationRoutesSpec extends FunSuite {
     }
     val management = new IntegrationManagement[IO](integrations, secrets, new SystemIdGenerator,
       new SystemTimeProvider, cipher, audit, memory.syncState, actionRepository, memory.inventory,
-      configProfiles, (_, _) => IO.pure(false))
+      configProfiles)
     var auditedBeforeProbe = false
     var auditedBeforeObserve = false
     var observations = 0

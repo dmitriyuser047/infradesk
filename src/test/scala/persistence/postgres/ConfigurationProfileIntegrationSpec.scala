@@ -15,7 +15,6 @@ import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.audit.{AuditCursor, AuditEvent}
 import domain.configuration.{
-  ConfigurationProfileKind,
   ConfigurationValidation,
   ConfigurationValueType,
   ConfigurationVariableDefinition,
@@ -88,12 +87,35 @@ final class ConfigurationProfileIntegrationSpec extends FunSuite {
       _ <- fixture.run(sql"update configuration_profile set kind = 'REMNAWAVE_CONFIG' where id = ${remote._1.id}"
         .update.run)
       file <- fixture.create("zzz-file")
-      files <- fixture.run(fixture.queries.list(OrganizationId, archived = false, 1,
-        Some(ConfigurationProfileKind.FileTemplate)))
-      all <- fixture.run(fixture.queries.list(OrganizationId, archived = false, 1))
+      files <- fixture.run(fixture.queries.list(OrganizationId, archived = false, 1))
+      all <- fixture.run(fixture.query.list(OrganizationId, archived = false, 1))
     } yield IO {
       assertEquals(all.map(_.profile.id), List(remote._1.id))
       assertEquals(files.map(_.profile.id), List(file._1.id))
+    }}
+  }
+
+  test("generic profile management cannot rename, archive or revise Remnawave config") {
+    withFixture { fixture => for {
+      remote <- fixture.create("remote-config")
+      id = remote._1.id
+      _ <- fixture.run(sql"update configuration_profile set kind = 'REMNAWAVE_CONFIG' where id = $id".update.run)
+      renamed <- fixture.run(fixture.management.updateMetadata(fixture.actor, id,
+        ConfigurationProfileMetadata("Changed", None))).attempt
+      archived <- fixture.run(fixture.management.archive(fixture.actor, id)).attempt
+      revised <- fixture.run(fixture.management.appendRevision(fixture.actor, id, fixture.content())).attempt
+      stored <- fixture.run(fixture.query.find(OrganizationId, id))
+      revisions <- fixture.run(sql"select count(*) from configuration_revision where profile_id = $id".query[Long].unique)
+      journal <- fixture.journal(OrganizationId)
+    } yield IO {
+      List(renamed, archived, revised).foreach(result =>
+        assertEquals(result.left.toOption.collect { case error: ConfigurationError => error.code },
+          Some(ConfigurationError.NotFoundCode)))
+      assertEquals(stored.map(_.name), Some(remote._1.name))
+      assertEquals(stored.map(_.archived), Some(false))
+      assertEquals(revisions, 1L)
+      assertEquals(journal.count(_._1 == "CONFIGURATION_PROFILE_UPDATED"), 0)
+      assertEquals(journal.count(_._1 == "CONFIGURATION_PROFILE_ARCHIVED"), 0)
     }}
   }
 

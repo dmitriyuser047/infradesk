@@ -27,8 +27,7 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
   ids: IdGenerator[Tx], time: TimeProvider[Tx], cipher: IntegrationCryptography,
   audit: AuditRecorder[Tx], syncState: IntegrationSyncStateRepository[Tx],
   actions: IntegrationActionRepository[Tx], inventory: IntegrationInventoryRepository[Tx],
-  configProfiles: IntegrationConfigProfileRepository[Tx],
-  hasActiveConfigDeployment: (UUID, UUID) => Tx[Boolean]
+  configProfiles: IntegrationConfigProfileRepository[Tx]
 ) {
   def list(organizationId: UUID): Tx[List[Integration]] = integrations.listByOrganization(organizationId)
   def get(organizationId: UUID, id: UUID): Tx[Option[Integration]] = integrations.findById(organizationId, id)
@@ -113,7 +112,7 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
   private def load(org: UUID, id: UUID): Tx[Integration] =
     integrations.findByIdForUpdate(org, id).flatMap(_.liftTo[Tx](notFound))
   private def requireNoActive(org: UUID, id: UUID): Tx[Unit] =
-    (actions.hasActive(org, id), hasActiveConfigDeployment(org, id)).mapN(_ || _).flatMap(active => Either.cond(!active, (),
+    actions.hasActive(org, id).flatMap(active => Either.cond(!active, (),
       IntegrationError("INTEGRATION_ACTION_ALREADY_RUNNING", "An action is already active"))
       .liftTo[Tx])
   private def managed(value: Integration): Boolean =

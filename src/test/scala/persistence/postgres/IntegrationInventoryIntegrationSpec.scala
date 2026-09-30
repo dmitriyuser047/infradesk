@@ -89,7 +89,7 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       }
     }
     val management = new IntegrationManagement[ConnectionIO](integrations, secrets, ids, time, cipher, audit, states,
-      actionRepository, inventory, configRepository, configDeployments.hasActive)
+      actionRepository, inventory, configRepository)
     @volatile var observation: IO[IntegrationObservation] = IO.pure(snapshot())
     @volatile var remoteActionCalls = 0
     @volatile var remoteOutcome: IO[IntegrationActionRemoteOutcome] =
