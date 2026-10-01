@@ -64,6 +64,7 @@ final class ProvisioningRoutes[Tx[_]](service: ProvisioningRuns[IO, Tx], authori
       case error: ProvisioningError =>
         val status = error match {
           case ProvisioningError.NotFound | ProvisioningError.TargetNotFound => NotFound(ApiErrorResponse(error.code, error.getMessage))
+          case ProvisioningError.PlanExpired => Conflict(ApiErrorResponse(error.code, error.getMessage))
           case ProvisioningError.Disabled => ServiceUnavailable(ApiErrorResponse(error.code, error.getMessage))
           case ProvisioningError.RequestReused | ProvisioningError.UnsupportedTarget => BadRequest(ApiErrorResponse(error.code, error.getMessage))
           case _ => Conflict(ApiErrorResponse(error.code, error.getMessage))
@@ -98,6 +99,7 @@ final class ProvisioningRoutes[Tx[_]](service: ProvisioningRuns[IO, Tx], authori
     .deepMerge(Json.obj("outputTruncated" -> Json.fromBoolean(step.outputTruncated)))
   private def planJson(plan: ProvisioningPlan): Json = Json.obj("run" -> runJson(plan.run),
     "approvalInput" -> inputJson(plan.run.input),
+    "connectionName" -> Json.fromString(plan.connectionName),
     "steps" -> Json.arr(plan.steps.map(stepJson): _*), "warnings" -> Json.arr(plan.warnings.map(Json.fromString): _*),
     "blockingProblems" -> Json.arr(plan.blockingProblems.map(Json.fromString): _*))
   private def inputJson(input: ProvisioningInputSnapshot): Json = Json.obj(

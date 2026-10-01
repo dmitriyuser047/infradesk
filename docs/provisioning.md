@@ -20,6 +20,13 @@ and `POST /api/v1/organizations/{organizationId}/provisioning/runs`. Run detail 
 Planning and approval require both configuration-management and operation-execution permissions;
 history is visible to organization readers.
 
+Preview plans are retained for 24 hours. `PLANNED` previews are excluded from both organization
+and resource run history; an expired approval returns `PROVISIONING_PLAN_EXPIRED` and requires
+a new preview. After cleanup, the deleted draft returns not found. A bounded hourly cleanup
+removes only expired `PLANNED` rows and their step rows. Approved, queued, running, and terminal
+runs remain in history. Cleanup runs even when SSH provisioning is disabled and performs no
+remote work.
+
 An SSH timeout, disconnect, output truncation, or lease uncertainty records `UNKNOWN`. InfraDesk
 does not automatically replay an unknown run. Confirm the remote server's state before initiating
 another check. Known unsupported platforms and failed readiness conditions are recorded as

@@ -79,9 +79,9 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
         <button type="button" className="primary-button" disabled={starter.isPending || plan.blockingProblems.length > 0}
           onClick={() => { void start().catch(() => undefined) }}>{starter.isPending ? text.starting : text.queue}</button></>}>
       <h3>{text.details}</h3>
-      <p>{text.target}: {resourceName} · {plan.approvalInput.resourceType}</p>
-      <p>{text.connection}: {plan.approvalInput.connectionId}</p>
-      <p>{text.platform}: {plan.approvalInput.resourceKind || '—'}</p>
+      <p>{text.target}: {resourceName}</p>
+      <p>{text.connection}: {plan.connectionName}</p>
+      <p>{text.resourceKind}: {plan.approvalInput.resourceKind || '—'}</p>
       <ul>{plan.steps.map(step => <li key={step.id}>{text.stepKinds[step.kind] ?? step.displayName}</li>)}</ul>
       {plan.warnings.map(warning => <InlineAlert tone="warning" title={text.warnings} key={warning}>{warning}</InlineAlert>)}
       {plan.blockingProblems.map(problem => <InlineAlert tone="danger" title={text.blocked} key={problem}>{problem}</InlineAlert>)}

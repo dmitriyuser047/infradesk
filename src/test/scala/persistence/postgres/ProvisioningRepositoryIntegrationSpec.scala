@@ -6,7 +6,7 @@ import cats.effect.{Deferred, Ref}
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import application.port.ProvisioningStepResult
-import application.provisioning.{ProvisioningSettings, ProvisioningWorker}
+import application.provisioning.{ProvisioningError, ProvisioningPlanCleanup, ProvisioningRuns, ProvisioningSettings, ProvisioningWorker}
 import domain.provisioning._
 import munit.FunSuite
 import org.typelevel.doobie.implicits._
@@ -47,6 +47,133 @@ final class ProvisioningRepositoryIntegrationSpec extends FunSuite {
         assertEquals(results.flatten.map(_._1.id).distinct, List(planId))
         assertEquals(results.count(_.exists(_._2)), 1)
         assertEquals(history.count(_.requestId.contains(requestId)), 1)
+      }
+    }
+  }
+
+  test("history excludes drafts and bounded cleanup deletes only expired PLANNED rows with their steps") {
+    run { w =>
+      val repo = new PostgresProvisioningRunRepository
+      for {
+        node <- w.node("provisioning-plan-cleanup")
+        runningNode <- w.node("provisioning-plan-cleanup-running")
+        updated <- w.run(sql"select updated_at from connection where id=${node.connectionId}".query[java.time.Instant].unique)
+        runningUpdated <- w.run(sql"select updated_at from connection where id=${runningNode.connectionId}".query[java.time.Instant].unique)
+        now <- IO.realTimeInstant
+        ids = List.fill(5)(UUID.randomUUID())
+        _ <- w.run(ids.take(3).traverse_(id => repo.insertPlan(planned(w, node, id, updated))) *>
+          repo.insertPlan(planned(w, runningNode, ids(3), runningUpdated)) *>
+          repo.insertPlan(planned(w, node, ids(4), updated)))
+        _ <- w.run(sql"update provisioning_run set created_at=${now.minusSeconds(90000)} where id=${ids(0)}".update.run)
+        request = UUID.randomUUID()
+        _ <- w.run(repo.start(w.org, ids(2), request, support.AuthorizationFixtures.ActorUserId, now))
+        _ <- w.run(sql"update provisioning_run set created_at=${now.minusSeconds(90000)} where id=${ids(2)}".update.run)
+        _ <- w.run(sql"""update provisioning_run set status='RUNNING', request_id=${UUID.randomUUID()},
+          requested_by_user_id=${support.AuthorizationFixtures.ActorUserId}, claimed_by=${UUID.randomUUID()},
+          claim_token=${UUID.randomUUID()}, claim_until=${now.plusSeconds(90)}, created_at=${now.minusSeconds(90000)}
+          where id=${ids(3)}""".update.run)
+        _ <- w.run(sql"""update provisioning_run set status='SUCCEEDED', request_id=${UUID.randomUUID()},
+          requested_by_user_id=${support.AuthorizationFixtures.ActorUserId}, started_at=$now, finished_at=$now,
+          created_at=${now.minusSeconds(90000)} where id=${ids(4)}""".update.run)
+        orgHistory <- w.run(repo.history(w.org, None, 20))
+        resourceHistory <- w.run(repo.history(w.org, Some(node.resourceId), 20))
+        deleted <- w.run(repo.deleteExpiredPlans(now.minusSeconds(86400), 500, Some(w.org)))
+        expired <- w.run(repo.find(w.org, ids(0)))
+        recent <- w.run(repo.find(w.org, ids(1)))
+        queued <- w.run(repo.find(w.org, ids(2)))
+        running <- w.run(repo.find(w.org, ids(3)))
+        terminal <- w.run(repo.find(w.org, ids(4)))
+        expiredSteps <- w.run(sql"select count(*) from provisioning_run_step where run_id=${ids(0)}".query[Long].unique)
+      } yield {
+        assertEquals(orgHistory.map(_.id).toSet, Set(ids(2), ids(3), ids(4)))
+        assertEquals(resourceHistory.map(_.id).toSet, Set(ids(2), ids(4)))
+        assertEquals(deleted, 1)
+        assertEquals(expired, None)
+        assert(recent.nonEmpty)
+        assertEquals(queued.map(_._1.state), Some(ProvisioningRunState.Queued))
+        assertEquals(running.map(_._1.state), Some(ProvisioningRunState.Running))
+        assertEquals(terminal.map(_._1.state), Some(ProvisioningRunState.Succeeded))
+        assertEquals(expiredSteps, 0L)
+      }
+    }
+  }
+
+  test("plan cleanup tick applies the shared 24-hour lifetime and organization scope") {
+    run { w =>
+      val repo = new PostgresProvisioningRunRepository
+      val logger = Slf4jLogger.getLoggerFromName[cats.effect.IO]("test.provisioning.plan-cleanup")
+      for {
+        node <- w.node("provisioning-plan-cleanup-tick")
+        updated <- w.run(sql"select updated_at from connection where id=${node.connectionId}".query[java.time.Instant].unique)
+        now <- IO.realTimeInstant
+        id = UUID.randomUUID()
+        _ <- w.run(repo.insertPlan(planned(w, node, id, updated)))
+        _ <- w.run(sql"update provisioning_run set created_at=${now.minusSeconds(90000)} where id=$id".update.run)
+        cleanup = new ProvisioningPlanCleanup[ConnectionIO](repo, w.runner, logger, IO.pure(now), Some(w.org))
+        deleted <- cleanup.tick
+        found <- w.run(repo.find(w.org, id))
+      } yield {
+        assertEquals(deleted, 1)
+        assertEquals(found, None)
+      }
+    }
+  }
+
+  test("expired approval is rejected, while an approved retry remains idempotent beyond plan lifetime") {
+    run { w =>
+      val repository = new PostgresProvisioningRunRepository
+      val service = new ProvisioningRuns[IO, ConnectionIO](repository, new PostgresProvisioningTargetQuery,
+        w.ids, w.time, w.audit, w.runner, w.runner, ProvisioningSettings.Default)
+      for {
+        node <- w.node("provisioning-plan-expiry")
+        expired <- service.plan(w.org, node.resourceId)
+        now <- IO.realTimeInstant
+        _ <- w.run(sql"update provisioning_run set created_at=${now.minusSeconds(90000)} where id=${expired.run.id}".update.run)
+        expiredResult <- service.start(w.actor, expired.run.id, UUID.randomUUID()).attempt
+        expiredRow <- w.run(repository.find(w.org, expired.run.id))
+        auditBefore <- w.run(sql"select count(*) from audit_event where organization_id=${w.org} and action='PROVISIONING_RUN_REQUESTED'".query[Long].unique)
+        fresh <- service.plan(w.org, node.resourceId)
+        requestId = UUID.randomUUID()
+        approved <- service.start(w.actor, fresh.run.id, requestId)
+        _ <- w.run(sql"update provisioning_run set created_at=${now.minusSeconds(90000)} where id=${fresh.run.id}".update.run)
+        repeated <- service.start(w.actor, fresh.run.id, requestId)
+        otherRequest <- service.start(w.actor, fresh.run.id, UUID.randomUUID()).attempt
+        auditAfter <- w.run(sql"select count(*) from audit_event where organization_id=${w.org} and action='PROVISIONING_RUN_REQUESTED'".query[Long].unique)
+      } yield {
+        assertEquals(expiredResult.left.toOption.map(_.getClass), Some(ProvisioningError.PlanExpired.getClass))
+        assertEquals(expiredRow.map(_._1.state), Some(ProvisioningRunState.Planned))
+        assertEquals(expiredRow.flatMap(_._1.requestId), None)
+        assertEquals(auditBefore, 0L)
+        assertEquals(approved.state, ProvisioningRunState.Queued)
+        assertEquals(repeated.id, approved.id)
+        assertEquals(otherRequest.left.toOption.map(_.getClass), Some(ProvisioningError.AlreadyActive.getClass))
+        assertEquals(auditAfter, 1L)
+      }
+    }
+  }
+
+  test("approval racing cleanup either queues and preserves the plan or cleanup removes it") {
+    run { w =>
+      val repository = new PostgresProvisioningRunRepository
+      val service = new ProvisioningRuns[IO, ConnectionIO](repository, new PostgresProvisioningTargetQuery,
+        w.ids, w.time, w.audit, w.runner, w.runner, ProvisioningSettings.Default)
+      for {
+        node <- w.node("provisioning-plan-cleanup-race")
+        plan <- service.plan(w.org, node.resourceId)
+        now <- IO.realTimeInstant
+        request <- IO(UUID.randomUUID())
+        outcome <- (service.start(w.actor, plan.run.id, request).attempt,
+          w.run(repository.deleteExpiredPlans(now.plusSeconds(86400), 500, Some(w.org)))).parTupled
+        finalState <- w.run(repository.find(w.org, plan.run.id))
+      } yield outcome match {
+        case (Right(run), deleted) =>
+          assertEquals(run.state, ProvisioningRunState.Queued)
+          assertEquals(deleted, 0)
+          assertEquals(finalState.map(_._1.state), Some(ProvisioningRunState.Queued))
+        case (Left(_: ProvisioningError.NotFound.type), deleted) =>
+          assertEquals(deleted, 1)
+          assertEquals(finalState, None)
+        case other => fail(s"unexpected approval/cleanup race result: $other; final=$finalState")
       }
     }
   }

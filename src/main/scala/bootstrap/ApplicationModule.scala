@@ -39,7 +39,7 @@ import application.configuration.{
   ConfigurationProfileManagement,
   ConfigurationProfileQueries
 }
-import application.provisioning.{ProvisioningRuns, ProvisioningSettings, ProvisioningWorker}
+import application.provisioning.{ProvisioningPlanCleanup, ProvisioningRuns, ProvisioningSettings, ProvisioningWorker}
 import application.context.{
   GetConnectionInfrastructureSummary,
   GetResourceContext,
@@ -112,6 +112,7 @@ final case class ApplicationComponents(
   configurationDeploymentWorker: ConfigurationDeploymentWorker[ConnectionIO],
   provisioningRuns: ProvisioningRuns[IO, ConnectionIO],
   provisioningWorker: ProvisioningWorker[ConnectionIO],
+  provisioningPlanCleanup: ProvisioningPlanCleanup[ConnectionIO],
   configurationPromotions: ConfigurationPromotions[IO, ConnectionIO],
   configurationRollouts: ConfigurationRollouts[IO, ConnectionIO],
   configurationRolloutWorker: ConfigurationRolloutWorker[ConnectionIO],
@@ -357,6 +358,8 @@ object ApplicationModule {
     val provisioningWorker = new ProvisioningWorker[ConnectionIO](provisioningRunRepository,
       provisioningTargetQuery, integrations.provisioningTransport, transactionRunner,
       config.provisioning, loggers.configuration)
+    val provisioningPlanCleanup = new ProvisioningPlanCleanup[ConnectionIO](provisioningRunRepository,
+      transactionRunner, loggers.configuration)
 
     val integrationConfigRepository = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigProfileRepository(
       integration.secret.RemnawaveConfigCipher.fromConfig(config.secretEncryption))
@@ -438,6 +441,7 @@ object ApplicationModule {
         transactionRunner, schedulerInstanceId, config.configurationDeployment, loggers.configuration),
       provisioningRuns = provisioningRuns,
       provisioningWorker = provisioningWorker,
+      provisioningPlanCleanup = provisioningPlanCleanup,
       configurationPromotions = new ConfigurationPromotions[IO, ConnectionIO](
         configurationPromotionRepository, configurationProfileQuery, transactionTimeProvider, auditRecorder,
         readOnlySnapshotRunner, transactionRunner),

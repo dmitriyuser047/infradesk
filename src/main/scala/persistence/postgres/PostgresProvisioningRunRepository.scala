@@ -26,6 +26,23 @@ final class PostgresProvisioningRunRepository extends ProvisioningRunRepository[
     _ <- run.input.steps.traverse_(kind => sql"insert into provisioning_run_step(id, run_id, step_kind, position, status) values (${UUID.nameUUIDFromBytes((run.id.toString + ":" + kind.code).getBytes(java.nio.charset.StandardCharsets.UTF_8))}, ${run.id}, ${kind.code}, ${kind.order}, 'PENDING')".update.run)
   } yield ()
 
+  override def lockApproval(org: UUID, planId: UUID, requestId: UUID): ConnectionIO[Option[ProvisioningRun]] = for {
+    resource <- sql"select resource_id from provisioning_run where organization_id=$org and id=$planId".query[UUID].option
+    _ <- sql"select 1 from pg_advisory_xact_lock(hashtextextended($org::text || ':' || $requestId::text, 0))".query[Int].unique
+    byRequest <- selectRun(where = fr"organization_id = $org and request_id = $requestId").option
+    result <- byRequest match {
+      case some @ Some(_) => some.pure[ConnectionIO]
+      case None => resource match {
+        case None => Option.empty[ProvisioningRun].pure[ConnectionIO]
+        case Some(resourceId) => for {
+          _ <- sql"select 1 from pg_advisory_xact_lock(hashtextextended($org::text || ':' || $resourceId::text, 1))".query[Int].unique
+          locked <- (fr"select " ++ columns ++ fr" from provisioning_run where organization_id=$org and id=$planId for update")
+            .query[Row].option.map(_.map(decode))
+        } yield locked
+      }
+    }
+  } yield result
+
   override def start(org: UUID, planId: UUID, requestId: UUID, actorId: UUID,
     now: Instant): ConnectionIO[Option[(ProvisioningRun, Boolean)]] = for {
     resource <- sql"select resource_id from provisioning_run where organization_id=$org and id=$planId".query[UUID].option
@@ -41,7 +58,9 @@ final class PostgresProvisioningRunRepository extends ProvisioningRunRepository[
             active <- sql"select exists(select 1 from provisioning_run where organization_id=$org and resource_id=$resourceId and status in ('QUEUED','RUNNING'))".query[Boolean].unique
             started <- if (active) Option.empty[(ProvisioningRun, Boolean)].pure[ConnectionIO]
               else sql"""update provisioning_run set request_id=$requestId, requested_by_user_id=$actorId,
-                status='QUEUED', updated_at=$now where organization_id=$org and id=$planId and status='PLANNED'""".update.run.flatMap {
+                status='QUEUED', updated_at=$now where organization_id=$org and id=$planId and status='PLANNED'
+                and created_at > ($now - interval '24 hours')
+                and created_at > (clock_timestamp() - interval '24 hours')""".update.run.flatMap {
                 case 1 => find(org, planId).map(_.map(x => x._1 -> true))
                 case _ => Option.empty[(ProvisioningRun, Boolean)].pure[ConnectionIO]
               }
@@ -50,6 +69,12 @@ final class PostgresProvisioningRunRepository extends ProvisioningRunRepository[
       } yield result
     }
   } yield answer
+
+  override def deleteExpiredPlans(before: Instant, limit: Int, scope: Option[UUID]): ConnectionIO[Int] =
+    (fr"with expired as (select id from provisioning_run where status='PLANNED' and created_at <= $before" ++
+      scope.fold(fr"")(org => fr" and organization_id=$org") ++
+      fr" order by created_at,id for update skip locked limit ${limit.max(1).min(500)}), deleted as (delete from provisioning_run r using expired e where r.id=e.id and r.status='PLANNED' returning r.id) select count(*) from deleted")
+      .query[Long].unique.map(_.toInt)
 
   override def find(org: UUID, id: UUID): ConnectionIO[Option[(ProvisioningRun, List[ProvisioningStep])]] =
     selectRun(where = fr"organization_id = $org and id = $id").option.flatMap {
@@ -61,7 +86,7 @@ final class PostgresProvisioningRunRepository extends ProvisioningRunRepository[
     selectRun(where = fr"organization_id = $org and request_id = $requestId").option
 
   override def history(org: UUID, resourceId: Option[UUID], limit: Int): ConnectionIO[List[ProvisioningRun]] =
-    (fr"select " ++ columns ++ fr" from provisioning_run where organization_id = $org" ++
+    (fr"select " ++ columns ++ fr" from provisioning_run where organization_id = $org and status <> 'PLANNED'" ++
       resourceId.fold(fr"")(id => fr" and resource_id = $id") ++ fr" order by created_at desc, id desc limit ${limit.max(1).min(100)}")
       .query[Row].to[List].map(_.map(decode))
 

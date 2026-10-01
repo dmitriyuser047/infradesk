@@ -14,7 +14,9 @@ timestamps, sanitized facts, verification result and output truncation flag.
 
 Migration V45 creates `provisioning_run` and `provisioning_run_step`, tenant foreign keys,
 an organization/request uniqueness constraint and a partial unique index preventing two
-queued/running runs for one resource. Previously released migrations remain unchanged.
+queued/running runs for one resource. V46 adds an index for bounded expiry cleanup; previously
+released migrations remain unchanged. A preview includes the trusted SSH connection name separately
+from its immutable input snapshot, which continues to pin the connection ID and version.
 
 ## Execution and recovery
 
@@ -46,13 +48,16 @@ All endpoints are under `/api/v1/organizations/{organizationId}`:
 Planning and approval require both `ManageConfigurations` and `ExecuteOperations`.
 History requires `ReadOrganization`. Requests reject unknown fields, including commands
 and scripts. Repeating one approval returns the same run; reusing its request ID for a
-different plan is rejected. Enqueue and `PROVISIONING_RUN_REQUESTED` audit are atomic;
+different plan is rejected. Preview plans expire after 24 hours, are excluded from both run history
+views, and are deleted by a bounded hourly cleanup. Expired approval returns `PROVISIONING_PLAN_EXPIRED`;
+approved and later runs are preserved, including idempotent retries after 24 hours. Enqueue and `PROVISIONING_RUN_REQUESTED` audit are atomic;
 concurrent duplicate approvals record one audit event.
 
 ## Interface and configuration
 
 Server Detail contains an Automation section with plan review, explicit approval, recent
-runs, step states and sanitized facts. Errors and the unknown-result explanation are
+runs, step states and sanitized facts. Preview names the trusted SSH connection without exposing its UUID,
+and labels the resource kind without implying that the OS has already been observed. Errors and the unknown-result explanation are
 localized in Russian and English. Polling occurs every three seconds only while a run is
 queued/running. Navigating to another target resets the reviewed plan; an uncertain HTTP
 approval retry preserves its request UUID.
@@ -68,9 +73,11 @@ disabled runtime and cancellation, supported OS parsing, malformed/truncated out
 authorization and frontend polling/localization. These tests do not claim validation on a
 production VPS.
 
-The completed local checks were `sbt testFull` with PostgreSQL integration enabled
-(929 passed, 18 skipped, no failures), `npm test` (608 passed in 73 files), and
-`npm run build`. Backend packaging and the release CI also validate the distributable.
+Stage 25A including V46 was validated with PostgreSQL-backed `sbt testFull`
+(933 passed, 18 skipped, no failures),
+`npm test` (609 passed in 73 files), and `npm run build`. Focused PostgreSQL tests cover
+expiry, history exclusion, cascade cleanup, idempotent approved retries, and approval/cleanup
+races. Backend packaging and release CI validate the distributable.
 
 Server profiles, package installation, system configuration, firewall, Docker installation,
 Caddy and placeholder sites belong to Stage 25B. Remnawave installation/registration and

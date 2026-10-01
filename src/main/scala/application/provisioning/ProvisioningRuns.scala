@@ -10,6 +10,7 @@ import domain.audit.{AuditAction, AuditTargetType}
 import domain.provisioning._
 import java.time.Instant
 import java.util.UUID
+import scala.concurrent.duration._
 
 sealed abstract class ProvisioningError(val code: String, message: String) extends RuntimeException(message)
 object ProvisioningError {
@@ -21,10 +22,13 @@ object ProvisioningError {
   case object RequestReused extends ProvisioningError("PROVISIONING_REQUEST_REUSED", "Request ID belongs to another plan")
   case object AlreadyActive extends ProvisioningError("PROVISIONING_ALREADY_ACTIVE", "Provisioning is already active for this resource")
   case object SourceChanged extends ProvisioningError("PROVISIONING_SOURCE_CHANGED", "SSH source changed after planning")
+  case object PlanExpired extends ProvisioningError("PROVISIONING_PLAN_EXPIRED", "Provisioning plan expired; create a new preview")
 }
 
-final case class ProvisioningPlan(run: ProvisioningRun, steps: List[ProvisioningStep],
+final case class ProvisioningPlan(run: ProvisioningRun, connectionName: String, steps: List[ProvisioningStep],
   warnings: List[String], blockingProblems: List[String])
+
+object ProvisioningRuns { val PlanLifetime24h: FiniteDuration = 24.hours }
 
 final class ProvisioningRuns[F[_]: MonadThrow, Tx[_]: MonadThrow](
   repository: ProvisioningRunRepository[Tx], targets: ProvisioningTargetQuery[Tx],
@@ -53,7 +57,7 @@ final class ProvisioningRuns[F[_]: MonadThrow, Tx[_]: MonadThrow](
         ProvisioningRunState.Planned, now, now)
       _ <- repository.insertPlan(run)
       stored <- repository.find(organizationId, id)
-    } yield ProvisioningPlan(run, stored.fold(snapshot.steps.map(k => ProvisioningStep(id, k,
+    } yield ProvisioningPlan(run, target.connection.name, stored.fold(snapshot.steps.map(k => ProvisioningStep(id, k,
       ProvisioningStepState.Pending)))(_._2), Nil, Nil))
   } yield answer
 
@@ -64,18 +68,28 @@ final class ProvisioningRuns[F[_]: MonadThrow, Tx[_]: MonadThrow](
       case Some(run) if run.id == planId => run.pure[F]
       case Some(_) => MonadThrow[F].raiseError[ProvisioningRun](RequestReused)
       case None => writes.run(for {
-        found <- repository.find(actor.organizationId, planId)
-        stored <- found.liftTo[Tx](NotFound)
-        planned = stored._1
-        unchanged <- targets.unchanged(planned.input)
-        _ <- MonadThrow[Tx].raiseUnless(unchanged)(SourceChanged)
-        now <- time.now
-        queued <- repository.start(actor.organizationId, planId, requestId, actor.userId, now)
-        started <- queued.liftTo[Tx](AlreadyActive)
-        (run, created) = started
-        _ <- MonadThrow[Tx].raiseUnless(run.id == planId)(RequestReused)
-        _ <- if (created) audit.record(actor, AuditAction.ProvisioningRunRequested, AuditTargetType.Resource, Some(run.resourceId)) else MonadThrow[Tx].unit
-      } yield run)
+        locked <- repository.lockApproval(actor.organizationId, planId, requestId)
+        answer <- locked match {
+          case None => MonadThrow[Tx].raiseError[ProvisioningRun](NotFound)
+          case Some(run) if run.id != planId => MonadThrow[Tx].raiseError[ProvisioningRun](RequestReused)
+          // A concurrent retry may have approved this exact plan while this request waited.
+          // Return it even after the draft lifetime; only PLANNED records expire.
+          case Some(run) if run.state != ProvisioningRunState.Planned =>
+            if (run.requestId.contains(requestId)) run.pure[Tx]
+            else MonadThrow[Tx].raiseError[ProvisioningRun](AlreadyActive)
+          case Some(planned) => for {
+            now <- time.now // deliberately after advisory and row locks
+            _ <- MonadThrow[Tx].raiseUnless(planned.createdAt.isAfter(now.minusMillis(ProvisioningRuns.PlanLifetime24h.toMillis)))(PlanExpired)
+            unchanged <- targets.unchanged(planned.input)
+            _ <- MonadThrow[Tx].raiseUnless(unchanged)(SourceChanged)
+            queued <- repository.start(actor.organizationId, planId, requestId, actor.userId, now)
+            started <- queued.liftTo[Tx](AlreadyActive)
+            (run, created) = started
+            _ <- MonadThrow[Tx].raiseUnless(run.id == planId)(RequestReused)
+            _ <- if (created) audit.record(actor, AuditAction.ProvisioningRunRequested, AuditTargetType.Resource, Some(run.resourceId)) else MonadThrow[Tx].unit
+          } yield run
+        }
+      } yield answer)
     }
   } yield result
 

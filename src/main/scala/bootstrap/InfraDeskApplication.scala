@@ -81,7 +81,8 @@ object InfraDeskApplication {
             List(application.integrationConfigDeploymentWorker.run) ++
             (if (config.integrations.configRolloutsOperational)
               List(application.integrationConfigRolloutWorker.run) else Nil)
-        val provisioningWorkers = if (config.provisioning.enabled) List(application.provisioningWorker.run) else Nil
+        val provisioningWorkers = (if (config.provisioning.enabled) List(application.provisioningWorker.run) else Nil) ++
+          List(application.provisioningPlanCleanup.run)
         val workers = schedulerWorkers ++ notificationWorkers ++ configurationWorkers ++ ruleWorkers ++ provisioningWorkers ++
           integrationWorkers ++ List(
           application.cleanupLoginThrottle.run,

@@ -7,8 +7,11 @@ import java.util.UUID
 
 trait ProvisioningRunRepository[F[_]] {
   def insertPlan(run: ProvisioningRun): F[Unit]
+  /** Serializes approval with cleanup and any resource-scoped desired-state change. */
+  def lockApproval(organizationId: UUID, planId: UUID, requestId: UUID): F[Option[ProvisioningRun]]
   def start(organizationId: UUID, planId: UUID, requestId: UUID, actorId: UUID,
     now: Instant): F[Option[(ProvisioningRun, Boolean)]]
+  def deleteExpiredPlans(before: Instant, limit: Int, scope: Option[UUID] = None): F[Int]
   def find(organizationId: UUID, id: UUID): F[Option[(ProvisioningRun, List[ProvisioningStep])]]
   def findRequest(organizationId: UUID, requestId: UUID): F[Option[ProvisioningRun]]
   def history(organizationId: UUID, resourceId: Option[UUID], limit: Int): F[List[ProvisioningRun]]

@@ -49,6 +49,7 @@ final class ProvisioningRoutesIntegrationSpec extends FunSuite {
           "requestId" -> Json.fromString(UUID.randomUUID().toString))), OrganizationRole.Member)
         extraPlan <- api.call(Method.POST, "/provisioning/plan", Some(planBody.deepMerge(Json.obj("command" -> Json.fromString("id")))))
         planned <- api.call(Method.POST, "/provisioning/plan", Some(planBody))
+        connectionName = planned._2.hcursor.get[String]("connectionName")
         planId = UUID.fromString(planned._2.hcursor.downField("run").get[String]("id").toOption.get)
         requestId = UUID.randomUUID()
         approval = Json.obj("planId" -> Json.fromString(planId.toString), "requestId" -> Json.fromString(requestId.toString))
@@ -61,12 +62,19 @@ final class ProvisioningRoutesIntegrationSpec extends FunSuite {
         secondId = UUID.fromString(secondPlan._2.hcursor.downField("run").get[String]("id").toOption.get)
         reused <- api.call(Method.POST, "/provisioning/runs", Some(Json.obj(
           "planId" -> Json.fromString(secondId.toString), "requestId" -> Json.fromString(requestId.toString))))
+        expiredPreview <- api.call(Method.POST, "/provisioning/plan", Some(planBody))
+        expiredId = UUID.fromString(expiredPreview._2.hcursor.downField("run").get[String]("id").toOption.get)
+        now <- IO.realTimeInstant
+        _ <- w.run(sql"update provisioning_run set created_at=${now.minusSeconds(90000)} where id=$expiredId".update.run)
+        expiredStart <- api.call(Method.POST, "/provisioning/runs", Some(Json.obj(
+          "planId" -> Json.fromString(expiredId.toString), "requestId" -> Json.fromString(UUID.randomUUID().toString))))
         auditCount <- w.run(sql"select count(*) from audit_event where organization_id=${w.org} and action='PROVISIONING_RUN_REQUESTED'".query[Long].unique)
       } yield {
         assertEquals(memberPlan._1, Status.Forbidden)
         assertEquals(memberStart._1, Status.Forbidden)
         assertEquals(extraPlan._1, Status.BadRequest)
         assertEquals(extraStart._1, Status.BadRequest)
+        assertEquals(connectionName, Right("ssh provisioning-routes"))
         assert(duplicate.forall(_._1 == Status.Accepted), clues(duplicate))
         assertEquals(detail._1, Status.Ok)
         assertEquals(detail._2.hcursor.downField("run").get[String]("state"), Right("QUEUED"))
@@ -74,6 +82,7 @@ final class ProvisioningRoutesIntegrationSpec extends FunSuite {
         assertEquals(resourceHistory._2.hcursor.downField("items").as[List[Json]].map(_.size), Right(1))
         assertEquals((foreign._1, code(foreign._2)), (Status.NotFound, Some("PROVISIONING_RUN_NOT_FOUND")))
         assertEquals((reused._1, code(reused._2)), (Status.BadRequest, Some("PROVISIONING_REQUEST_REUSED")))
+        assertEquals((expiredStart._1, code(expiredStart._2)), (Status.Conflict, Some("PROVISIONING_PLAN_EXPIRED")))
         assertEquals(auditCount, 1L)
       }
     }

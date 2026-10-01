@@ -46,6 +46,7 @@ export interface ProvisioningRun {
 export interface ProvisioningPlan {
   run: ProvisioningRun
   approvalInput: ProvisioningInputSnapshot
+  connectionName: string
   steps: ProvisioningStep[]
   warnings: string[]
   blockingProblems: string[]

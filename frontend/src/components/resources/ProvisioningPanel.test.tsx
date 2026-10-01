@@ -20,11 +20,12 @@ const baseRun = (state: ProvisioningRun['state'], id = 'run-1'): ProvisioningRun
   createdAt: '2026-10-01T10:00:00Z', updatedAt: '2026-10-01T10:00:00Z', startedAt: null, finishedAt: null,
   failureCode: null, safeMessage: null,
   inputSnapshot: { schemaVersion: 1, runKind: 'SERVER_BASELINE_CHECK', resourceId: 'resource-1',
-    resourceType: 'NODE', resourceKind: 'VPS', connectionId: 'ssh-1', connectionUpdatedAt: '2026-10-01T09:00:00Z',
+    resourceType: 'NODE', resourceKind: 'new_vps_test', connectionId: 'ssh-1', connectionUpdatedAt: '2026-10-01T09:00:00Z',
     steps: ['PREFLIGHT', 'VERIFY'] },
 })
 const planData: ProvisioningPlan = {
   run: baseRun('PLANNED'), approvalInput: baseRun('PLANNED').inputSnapshot,
+  connectionName: 'SSH production',
   steps: [
     { id: 'step-1', position: 0, kind: 'PREFLIGHT', displayName: 'PREFLIGHT', attempt: 0, state: 'PENDING',
       startedAt: null, finishedAt: null, facts: {}, failureCode: null, safeMessage: null, outputSummary: null,
@@ -70,8 +71,10 @@ describe('ProvisioningPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Review readiness check' }))
     await screen.findByRole('dialog')
-    expect(screen.getByText('Server: Finland VPS · NODE')).toBeTruthy()
-    expect(screen.getByText('SSH connection: ssh-1')).toBeTruthy()
+    expect(screen.getByText('Server: Finland VPS')).toBeTruthy()
+    expect(screen.getByText('SSH connection: SSH production')).toBeTruthy()
+    expect(screen.getByText('Resource kind: new_vps_test')).toBeTruthy()
+    expect(screen.queryByText(/ssh-1/)).toBeNull()
     const approve = screen.getByRole('button', { name: 'Approve and run checks' })
     fireEvent.click(approve)
     await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1))
@@ -79,6 +82,19 @@ describe('ProvisioningPanel', () => {
     await waitFor(() => expect(mutate).toHaveBeenCalledTimes(2))
     expect(mutate.mock.calls[0][0].requestId).toBe(mutate.mock.calls[1][0].requestId)
     expect(mutate.mock.calls[0][0].planId).toBe('run-1')
+  })
+
+  it('shows the trusted connection name and resource kind with Russian labels', async () => {
+    mocks.history.mockReturnValue({ data: { items: [] }, isPending: false, isError: false })
+    mocks.plan.mockReturnValue({ mutateAsync: vi.fn().mockResolvedValue(planData), isPending: false, isError: false })
+    mocks.run.mockReturnValue({ data: undefined, isPending: false, isError: false, refetch: vi.fn() })
+    render(<I18nProvider initialLocale="ru"><ProvisioningPanel organizationId="org-1"
+      resourceId="resource-1" resourceName="Finland VPS" canRun /></I18nProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить готовность' }))
+    await screen.findByRole('dialog')
+    expect(screen.getByText('SSH-подключение: SSH production')).toBeTruthy()
+    expect(screen.getByText('Вид ресурса: new_vps_test')).toBeTruthy()
+    expect(screen.queryByText(/ssh-1/)).toBeNull()
   })
 
   it('shows observed facts, failed step and truncation without displaying remote output', () => {
