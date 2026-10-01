@@ -53,6 +53,17 @@ final class SshCommandExecutorSpec extends FunSuite {
     assertEquals(command.closeCount.get(), 1)
   }
 
+  test("opt-in bounded capture truncates while continuing to drain and flags the result") {
+    val bounded = new SshCommandExecutor[IO](policy.copy(truncateOverflow = true))
+    val command = new FakeCommand("12345678901234567890", "abcdefghi", Some(0))
+    val result = bounded.execute(command, 1).unsafeRunSync()
+    assertEquals(result.stdout, "12345678")
+    assertEquals(result.stderr, "abcdef")
+    assert(result.stdoutTruncated)
+    assert(result.stderrTruncated)
+    assertEquals(command.closeCount.get(), 1)
+  }
+
   test("turns an unfinished command into a typed timeout and releases it") {
     val command = new FakeCommand("", "", None)
     intercept[SshTransportFailure.CommandTimeout] {

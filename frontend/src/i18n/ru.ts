@@ -723,6 +723,22 @@ export const ru: Messages = {
     action: 'Выбрать организацию',
   },
 
+  provisioning: {
+    title: 'Автоматизация', history: 'Последние проверки', empty: 'Проверки готовности ещё не запускались',
+    plan: 'Проверить готовность', queue: 'Подтвердить и запустить проверки', cancel: 'Закрыть',
+    pending: 'Подготовка проверки…', starting: 'Постановка проверки в очередь…', loadError: 'Не удалось загрузить проверки готовности',
+    actionError: 'Не удалось запустить проверку готовности', details: 'Параметры проверки', target: 'Сервер', connection: 'SSH-подключение',
+    retry: 'Повторить', unknown: 'Результат удалённой проверки не определён. Уточните состояние сервера перед продолжением.',
+    platform: 'Платформа сервера', steps: 'Проверки без изменений на сервере',
+    facts: 'Наблюдаемые факты', warnings: 'Предупреждения', blocked: 'Что мешает проверке',
+    truncated: 'Вывод сервера усечён; результат считается неопределённым.',
+    states: { PLANNED: 'Подготовлена', QUEUED: 'В очереди', RUNNING: 'Выполняется', SUCCEEDED: 'Успешно', FAILED: 'Ошибка', UNKNOWN: 'Неизвестно' } as Record<string, string>,
+    stepStates: { PENDING: 'Ожидает', RUNNING: 'Выполняется', SUCCEEDED: 'Успешно', FAILED: 'Ошибка', SKIPPED: 'Пропущен', UNKNOWN: 'Неизвестно' } as Record<string, string>,
+    stepKinds: { PREFLIGHT: 'Проверка условий', VERIFY: 'Независимая проверка' } as Record<string, string>,
+    factNames: { os: 'Операционная система', version: 'Версия', architecture: 'Архитектура', root: 'Доступ root', sudoAvailable: 'sudo без запроса пароля', memoryAvailable: 'Требование к памяти', memoryMiB: 'Доступная память (МиБ)', diskAvailable: 'Требование к свободному месту', diskFreeMiB: 'Свободное место (МиБ)', commandsAvailable: 'Необходимые команды', dockerInstalled: 'Docker установлен', systemdAvailable: 'systemd доступен' } as Record<string, string>,
+    factValues: { true: 'Да', false: 'Нет', debian: 'Debian', ubuntu: 'Ubuntu', unsupported: 'Не поддерживается', '12': '12', '22.04': '22.04', '24.04': '24.04', amd64: 'amd64', x86_64: 'x86_64' } as Record<string, string>,
+    errors: { PROVISIONING_DISABLED: 'Проверки готовности отключены администратором.', PROVISIONING_TARGET_NOT_FOUND: 'Для сервера не найдено подходящее SSH-подключение.', PROVISIONING_TARGET_AMBIGUOUS: 'Для сервера найдено несколько SSH-подключений.', PROVISIONING_TARGET_UNSUPPORTED: 'Проверки доступны только для активных серверов.', PROVISIONING_RUN_NOT_FOUND: 'Проверка готовности не найдена.', PROVISIONING_REQUEST_REUSED: 'Этот идентификатор запроса уже связан с другим планом.', PROVISIONING_ALREADY_ACTIVE: 'Для этого сервера уже выполняется проверка готовности.', PROVISIONING_REMOTE_PROBE_INVALID: 'Сервер вернул неполные или некорректные данные проверки.', PROVISIONING_LEASE_EXPIRED: 'Срок аренды задания истёк; проверьте состояние сервера перед продолжением.', PROVISIONING_PREFLIGHT_FAILED: 'Одно или несколько требований к серверу не выполнены.', PROVISIONING_UNSUPPORTED_PLATFORM: 'Операционная система не поддерживается.', PROVISIONING_UNSUPPORTED_ARCHITECTURE: 'Архитектура процессора не поддерживается.', PROVISIONING_PRIVILEGE_REQUIRED: 'Нужен доступ root или sudo без запроса пароля.', PROVISIONING_MEMORY_INSUFFICIENT: 'Нужно не менее 512 МиБ памяти.', PROVISIONING_DISK_INSUFFICIENT: 'Нужно не менее 1 ГиБ свободного места.', PROVISIONING_COMMANDS_MISSING: 'Не найдена необходимая системная команда.', PROVISIONING_SYSTEMD_UNAVAILABLE: 'systemd недоступен.', PROVISIONING_VERIFICATION_FAILED: 'Независимая проверка готовности не пройдена.', PROVISIONING_REMOTE_TIMEOUT: 'Удалённая проверка превысила время ожидания; результат неопределён.', PROVISIONING_REMOTE_UNAVAILABLE: 'Связь прервалась; результат неопределён.', PROVISIONING_REMOTE_OUTPUT_LIMIT: 'Вывод превысил безопасный предел; результат неопределён.', PROVISIONING_SOURCE_CHANGED: 'SSH-подключение изменилось после планирования.', PROVISIONING_AUTHENTICATION_FAILED: 'Не удалось пройти SSH-аутентификацию.', PROVISIONING_HOST_KEY_MISMATCH: 'Ключ SSH-сервера изменился.', PROVISIONING_HOST_KEY_NOT_TRUSTED: 'Ключ SSH-сервера не подтверждён.' } as Record<string, string>,
+  },
   resources: {
     title: 'Серверы',
     subtitle: (environment: string, kind: string) => `${environment} · ${kind}`,

@@ -12,7 +12,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("V43 configuration, integration and desired-state data survive migration to V44") {
+  test("V43 configuration, integration and desired-state data survive migration to V45") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
     val base = DatabaseConfig.fromEnvironment(sys.env).fold(throw _, identity)
@@ -109,8 +109,8 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         "'SUCCEEDED', now(), now(), now())")
       val result = DatabaseMigrator.migrate(testConfig,
         Slf4jLogger.getLoggerFromName[IO]("test.database.migrator")).unsafeRunSync()
-      assertEquals(result.migrationsApplied, 1)
-      assertEquals(result.currentVersion, "44")
+      assertEquals(result.migrationsApplied, 2)
+      assertEquals(result.currentVersion, "45")
       val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
       try {
         val statement = connection.createStatement()
@@ -123,6 +123,7 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
             s"(select count(*) from integration_sync_state where integration_id = '$integration' " +
             "and consecutive_failures = 0 and claim_token is null), " +
             "(select count(*) from flyway_schema_history where version = '44' and success), " +
+            "(select count(*) from flyway_schema_history where version = '45' and success), " +
             s"(select count(*) from integration_inventory_object where id = '$inventory' and display_name = 'Upgrade node'), " +
             s"(select count(*) from integration_resource_binding where inventory_object_id = '$inventory'), " +
             s"(select count(*) from integration_sync_session where id = '$session' and status = 'COMPLETED'), " +
@@ -148,14 +149,15 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
             assertEquals(rows.getInt(10), 1)
             assertEquals(rows.getInt(11), 1)
             assertEquals(rows.getInt(12), 1)
-            assertEquals(rows.getInt(13), 2)
+            assertEquals(rows.getInt(13), 1)
+            assertEquals(rows.getInt(14), 2)
           } finally rows.close()
         } finally statement.close()
       } finally connection.close()
     } finally sql(maintenanceUrl, s"DROP DATABASE $databaseName WITH (FORCE)")
   }
 
-  test("Flyway applies V1 through V44 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V45 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -183,10 +185,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 44)
-        assertEquals(first.currentVersion, "44")
+        assertEquals(first.migrationsApplied, 45)
+        assertEquals(first.currentVersion, "45")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "44")
+        assertEquals(second.currentVersion, "45")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()

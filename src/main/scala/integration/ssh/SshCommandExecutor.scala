@@ -10,7 +10,8 @@ import java.io.{ByteArrayOutputStream, InputStream}
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
-final case class SshCommandExecutionPolicy(stdoutMaxBytes: Int, stderrMaxBytes: Int)
+final case class SshCommandExecutionPolicy(stdoutMaxBytes: Int, stderrMaxBytes: Int,
+  truncateOverflow: Boolean = false)
 
 object SshCommandExecutionPolicy {
   val Default: SshCommandExecutionPolicy = SshCommandExecutionPolicy(
@@ -26,9 +27,30 @@ private[ssh] trait RunningSshCommand {
   def close(): Unit
 }
 
-private[ssh] final case class CapturedSshCommand(exitCode: Int, stdout: String, stderr: String)
+private[ssh] final case class CapturedSshCommand(exitCode: Int, stdout: String, stderr: String,
+  stdoutTruncated: Boolean = false, stderrTruncated: Boolean = false)
+
+private[ssh] final case class BoundedBytes(bytes: Array[Byte], truncated: Boolean)
 
 private[ssh] object BoundedOutput {
+  def readCapture(stream: InputStream, maxBytes: Int): BoundedBytes = {
+    require(maxBytes >= 0, "maxBytes must not be negative")
+    val output = new ByteArrayOutputStream(math.min(maxBytes, 8192))
+    val buffer = new Array[Byte](8192)
+    var total = 0
+    var truncated = false
+    var read = stream.read(buffer)
+    while (read >= 0) {
+      if (read > 0) {
+        val accepted = math.min(read, maxBytes - total)
+        if (accepted > 0) output.write(buffer, 0, accepted)
+        if (accepted < read) truncated = true
+        total += accepted
+      }
+      read = stream.read(buffer)
+    }
+    BoundedBytes(output.toByteArray, truncated)
+  }
   def read(stream: InputStream, maxBytes: Int, streamName: String): Array[Byte] = {
     require(maxBytes >= 0, "maxBytes must not be negative")
     val output = new ByteArrayOutputStream(math.min(maxBytes, 8192))
@@ -53,9 +75,10 @@ private[ssh] final class SshCommandExecutor[F[_]: Async](policy: SshCommandExecu
   def execute(command: RunningSshCommand, timeoutSeconds: Int): F[CapturedSshCommand] = {
     val control = new ExecutionControl(command)
 
-    def capture(stream: InputStream, limit: Int, name: String): F[String] =
+    def capture(stream: InputStream, limit: Int, name: String): F[BoundedBytes] =
       Async[F].interruptibleMany {
-        try new String(BoundedOutput.read(stream, limit, name), StandardCharsets.UTF_8)
+        try if (policy.truncateOverflow) BoundedOutput.readCapture(stream, limit)
+        else BoundedBytes(BoundedOutput.read(stream, limit, name), truncated = false)
         catch {
           case failure: SshTransportFailure.CommandOutputLimitExceeded =>
             control.failAndClose(failure)
@@ -73,7 +96,8 @@ private[ssh] final class SshCommandExecutor[F[_]: Async](policy: SshCommandExecu
     (capture(command.stdout, policy.stdoutMaxBytes, "stdout"),
       capture(command.stderr, policy.stderrMaxBytes, "stderr"),
       awaitExit).parMapN { case (stdout, stderr, exitCode) =>
-      CapturedSshCommand(exitCode, stdout, stderr)
+      CapturedSshCommand(exitCode, new String(stdout.bytes, StandardCharsets.UTF_8),
+        new String(stderr.bytes, StandardCharsets.UTF_8), stdout.truncated, stderr.truncated)
     }.handleErrorWith { error =>
       Async[F].delay(control.primaryFailure.get()).flatMap {
         case Some(primary) => primary.raiseError[F, CapturedSshCommand]

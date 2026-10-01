@@ -61,8 +61,31 @@ final class AppConfigSpec extends FunSuite {
     assertEquals(config.scheduler.batchSize, 100)
     assertEquals(config.scheduler.maxConcurrency, 5)
     assertEquals(config.scheduler.claimLease, 900.seconds)
+    assertEquals(config.provisioning.enabled, true)
+    assertEquals(config.provisioning.pollInterval, 2.seconds)
+    assertEquals(config.provisioning.batchSize, 10)
+    assertEquals(config.provisioning.maxConcurrency, 2)
+    assertEquals(config.provisioning.leaseDuration, 120.seconds)
+    assertEquals(config.provisioning.stepTimeout, 30.seconds)
     assert(!config.toString.contains(key))
     assert(!config.toString.contains("test-password")) // DatabaseConfig must not be rendered in logs.
+  }
+
+  test("provisioning bounds are strict and lease outlives poll and step timeout") {
+    val configured = AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_PROVISIONING_ENABLED" -> "false",
+      "INFRADESK_PROVISIONING_POLL_INTERVAL_SECONDS" -> "5",
+      "INFRADESK_PROVISIONING_BATCH_SIZE" -> "8",
+      "INFRADESK_PROVISIONING_MAX_CONCURRENCY" -> "3",
+      "INFRADESK_PROVISIONING_CLAIM_LEASE_SECONDS" -> "90",
+      "INFRADESK_PROVISIONING_STEP_TIMEOUT_SECONDS" -> "25")).toOption.get.provisioning
+    assertEquals(configured.enabled, false)
+    assertEquals(configured.batchSize, 8)
+    assertEquals(configured.maxConcurrency, 3)
+    assert(AppConfig.fromEnvironment(minimal + ("INFRADESK_PROVISIONING_MAX_CONCURRENCY" -> "0")).isLeft)
+    assert(AppConfig.fromEnvironment(minimal ++ Map(
+      "INFRADESK_PROVISIONING_CLAIM_LEASE_SECONDS" -> "30",
+      "INFRADESK_PROVISIONING_STEP_TIMEOUT_SECONDS" -> "30")).isLeft)
   }
 
   test("notifications are disabled without a webhook URL and configured with one") {

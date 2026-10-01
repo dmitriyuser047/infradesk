@@ -218,6 +218,7 @@ private[postgres] final class ConfigurationDeploymentWorld(val runner: DoobieTra
       _ <- sql"delete from configuration_revision_variable where organization_id = $id".update.run
       _ <- sql"delete from configuration_revision where organization_id = $id".update.run
       _ <- sql"delete from configuration_profile where organization_id = $id".update.run
+      _ <- sql"delete from provisioning_run where organization_id = $id".update.run
       _ <- sql"delete from external_ref where organization_id = $id".update.run
       _ <- sql"delete from connection where organization_id = $id".update.run
       _ <- sql"delete from resource where organization_id = $id".update.run

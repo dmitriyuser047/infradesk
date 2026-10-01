@@ -3,6 +3,7 @@ package infrastructure.config
 
 import application.auth.{AuthRateLimitSettings, BootstrapConfig, SecurityEventSettings}
 import application.configuration.{ConfigurationDeploymentSettings, ConfigurationRuleSettings}
+import application.provisioning.ProvisioningSettings
 import cats.effect.IO
 import com.comcast.ip4s.{Host, Port}
 import infrastructure.database.DatabaseConfig
@@ -112,6 +113,7 @@ final case class AppConfig(
   sshEnvironmentSecrets: EnvironmentSecrets,
   terminal: TerminalConfig,
   configurationDeployment: ConfigurationDeploymentSettings = ConfigurationDeploymentSettings.Default,
+  provisioning: ProvisioningSettings = ProvisioningSettings.Default,
   configurationRules: ConfigurationRuleSettings = ConfigurationRuleSettings(),
   integrations: IntegrationsConfig = IntegrationsConfig(10.seconds, allowPrivateDestinations = false)
 )
@@ -147,10 +149,11 @@ object AppConfig {
       inventoryMaxObjects <- bounded(values, "INFRADESK_INTEGRATIONS_INVENTORY_MAX_OBJECTS", 10000, 1, 100000)
       terminal <- TerminalConfig.fromEnvironment(values)
       configurationDeployment <- parseConfigurationDeployment(values)
+      provisioning <- parseProvisioning(values)
       ruleEnabled <- parseBoolean(values, "INFRADESK_CONFIGURATION_RULES_ENABLED", default = true)
       ruleInterval <- bounded(values, "INFRADESK_CONFIGURATION_RULE_RECONCILE_SECONDS", 45, 5, 3600)
     } yield AppConfig(database, http, auth, loginRateLimit, SecurityEventSettings(securityEvents.seconds), bootstrap, secretEncryption, scheduler,
-      notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment,
+      notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment, provisioning,
       ConfigurationRuleSettings(enabled = ruleEnabled, reconcileInterval = ruleInterval.seconds),
       IntegrationsConfig(integrationTimeout.seconds, integrationAllowPrivate, integrationSync,
         integrationActions, integrationDesiredState, integrationConfigRollouts, inventoryMaxBytes, inventoryMaxObjects))
@@ -289,6 +292,20 @@ object AppConfig {
       maxRemoteFileBytes = maxFileBytes, sftpTimeout = sftp, validatorTimeout = validator,
       activationTimeout = activation, healthTimeout = health, overallTimeout = overall,
       maxTransientAttempts = attempts)
+  }
+
+  private def parseProvisioning(values: Map[String, String]): Either[IllegalArgumentException, ProvisioningSettings] = {
+    val d = ProvisioningSettings.Default
+    for {
+      enabled <- parseBoolean(values, "INFRADESK_PROVISIONING_ENABLED", default = true)
+      poll <- bounded(values, "INFRADESK_PROVISIONING_POLL_INTERVAL_SECONDS", d.pollInterval.toSeconds.toInt, 1, 3600)
+      batch <- bounded(values, "INFRADESK_PROVISIONING_BATCH_SIZE", d.batchSize, 1, 100)
+      concurrency <- bounded(values, "INFRADESK_PROVISIONING_MAX_CONCURRENCY", d.maxConcurrency, 1, 32)
+      lease <- bounded(values, "INFRADESK_PROVISIONING_CLAIM_LEASE_SECONDS", d.leaseDuration.toSeconds.toInt, 10, 3600)
+      timeout <- bounded(values, "INFRADESK_PROVISIONING_STEP_TIMEOUT_SECONDS", d.stepTimeout.toSeconds.toInt, 1, 600)
+      _ <- Either.cond(lease > timeout && lease > poll, (), new IllegalArgumentException(
+        "INFRADESK_PROVISIONING_CLAIM_LEASE_SECONDS must exceed step timeout and poll interval"))
+    } yield ProvisioningSettings(enabled, poll.seconds, batch, concurrency, lease.seconds, timeout.seconds)
   }
 
   private def bounded(values: Map[String, String], key: String, default: Int, min: Int,

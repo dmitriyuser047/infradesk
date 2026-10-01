@@ -80,6 +80,10 @@ final class SshjClient[F[_]: Async](
       use(new SshSession[F] {
         override def execute(command: String): F[SshCommandResult] =
           runCommand(ssh, observedFingerprint, config, command)
+        override def executeBounded(command: String, timeoutSeconds: Int, stdoutMaxBytes: Int,
+          stderrMaxBytes: Int): F[SshCommandResult] =
+          runCommand(ssh, observedFingerprint, config.copy(commandTimeoutSeconds = timeoutSeconds), command,
+            Some(SshCommandExecutionPolicy(stdoutMaxBytes, stderrMaxBytes, truncateOverflow = true)))
       })
     }
 
@@ -193,16 +197,20 @@ final class SshjClient[F[_]: Async](
     ssh: SSHClient,
     observedFingerprint: AtomicReference[Option[String]],
     config: SshConnectionConfig,
-    command: String
+    command: String,
+    boundedPolicy: Option[SshCommandExecutionPolicy] = None
   ): F[SshCommandResult] =
     Async[F].blocking(startCommand(ssh, command)).flatMap { running =>
-      commandExecutor.execute(running, config.commandTimeoutSeconds).flatMap { captured =>
+      boundedPolicy.fold(commandExecutor.execute(running, config.commandTimeoutSeconds)) { policy =>
+        new SshCommandExecutor[F](policy).execute(running, config.commandTimeoutSeconds)
+      }.flatMap { captured =>
         Async[F].delay(observedFingerprint.get().getOrElse {
           throw new IllegalStateException(
             s"SSH host key was not received from ${config.host}:${config.port}"
           )
         }).map { fingerprint =>
-          SshCommandResult(captured.exitCode, captured.stdout, captured.stderr, fingerprint)
+          SshCommandResult(captured.exitCode, captured.stdout, captured.stderr, fingerprint,
+            captured.stdoutTruncated, captured.stderrTruncated)
         }
       }
     }.adaptError {

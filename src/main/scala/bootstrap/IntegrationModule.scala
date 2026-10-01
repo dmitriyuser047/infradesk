@@ -38,7 +38,8 @@ import integration.ssh.{
   SshConnectionSyncBudget,
   SshConnector,
   SshjClient,
-  SshjConfigurationTransport
+  SshjConfigurationTransport,
+  SshProvisioningTransport
 }
 import integration.ssh.docker.SshContainerOperationExecutor
 import integration.remnawave.{RemnawaveClient, RemnawaveProvider}
@@ -63,6 +64,7 @@ final case class IntegrationComponents(
   connectionSyncBudget: ConnectionSyncBudget,
   openSshTerminal: OpenSshTerminal[ConnectionIO],
   configurationTransport: application.port.RemoteConfigurationTransport[IO],
+  provisioningTransport: application.port.ProvisioningTransport[IO],
   connectorRegistry: ResourceConnectorRegistry[IO]
 )
 
@@ -117,6 +119,8 @@ object IntegrationModule {
       openSshTerminal = openSshTerminal,
       configurationTransport = new SshjConfigurationTransport(sshClient, sshAuthenticationProvider,
         config.configurationDeployment.sftpTimeout),
+      provisioningTransport = new SshProvisioningTransport(sshClient, sshAuthenticationProvider,
+        config.provisioning.stepTimeout.toSeconds.toInt),
       connectorRegistry = connectorRegistry
     ) }
   }

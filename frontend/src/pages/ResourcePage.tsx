@@ -41,6 +41,8 @@ import { MetricCode, type MetricObservationResponse } from '../types/metric'
 import type { ResourceResponse } from '../types/resource'
 import { ResourceOperationsPanel } from '../components/resources/ResourceOperationsPanel'
 import { ResourceIntegrationSection } from '../components/integrations/ResourceIntegrationSection'
+import { ProvisioningPanel } from '../components/resources/ProvisioningPanel'
+import { supportsProvisioning } from '../components/resources/provisioningSupport'
 import { supportsIntegrationBinding } from '../components/integrations/integrationPresentation'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
@@ -141,6 +143,9 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
     <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
       {active === 'overview' ? <>
         <Overview resource={resource} />
+        {supportsProvisioning(resource.resourceTypeCode) ? <ProvisioningPanel key={`${organizationId}:${resourceId}`}
+          organizationId={organizationId} resourceId={resourceId} resourceName={resourceName}
+          canRun={permissions.can('manageConfigurations') && permissions.can('executeOperations')} /> : null}
         {/* A manual Remnawave binding, for those who manage integrations; others never request it. */}
         {supportsIntegrationBinding(resource.resourceTypeCode) && permissions.can('manageIntegrations')
           ? <ResourceIntegrationSection organizationId={organizationId} resourceId={resourceId} /> : null}

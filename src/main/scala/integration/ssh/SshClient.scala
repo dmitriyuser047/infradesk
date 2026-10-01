@@ -33,7 +33,9 @@ final case class SshCommandResult(
                                    exitCode: Int,
                                    stdout: String,
                                    stderr: String,
-                                   hostKeyFingerprint: String
+                                   hostKeyFingerprint: String,
+                                   stdoutTruncated: Boolean = false,
+                                   stderrTruncated: Boolean = false
                                  ) {
   def isSuccess: Boolean =
     exitCode == 0
@@ -41,6 +43,8 @@ final case class SshCommandResult(
 
 trait SshSession[F[_]] {
   def execute(command: String): F[SshCommandResult]
+  def executeBounded(command: String, timeoutSeconds: Int, stdoutMaxBytes: Int,
+    stderrMaxBytes: Int): F[SshCommandResult] = execute(command)
 }
 
 trait SshClient[F[_]] {

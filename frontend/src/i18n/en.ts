@@ -713,6 +713,21 @@ export const en = {
     action: 'Choose an organization',
   },
 
+  provisioning: {
+    title: 'Automation', history: 'Recent checks', empty: 'No readiness checks yet',
+    plan: 'Review readiness check', queue: 'Approve and run checks', cancel: 'Close',
+    pending: 'Preparing review…', starting: 'Queueing check…', loadError: 'Could not load readiness checks',
+    actionError: 'Could not start the readiness check', details: 'Approved target', target: 'Server', connection: 'SSH connection',
+    retry: 'Retry', unknown: 'The remote result is uncertain. Confirm the server state before continuing.',
+    platform: 'Target platform', steps: 'Read-only checks', facts: 'Observed facts',
+    warnings: 'Warnings', blocked: 'Blocking issues', truncated: 'Remote output was truncated; results are uncertain.',
+    states: { PLANNED: 'Planned', QUEUED: 'Queued', RUNNING: 'Running', SUCCEEDED: 'Succeeded', FAILED: 'Failed', UNKNOWN: 'Unknown' } as Record<string, string>,
+    stepStates: { PENDING: 'Pending', RUNNING: 'Running', SUCCEEDED: 'Succeeded', FAILED: 'Failed', SKIPPED: 'Skipped', UNKNOWN: 'Unknown' } as Record<string, string>,
+    stepKinds: { PREFLIGHT: 'Prerequisite check', VERIFY: 'Independent verification' } as Record<string, string>,
+    factNames: { os: 'Operating system', version: 'Version', architecture: 'Architecture', root: 'Root access', sudoAvailable: 'Non-interactive sudo', memoryAvailable: 'Memory requirement', memoryMiB: 'Memory available (MiB)', diskAvailable: 'Free disk requirement', diskFreeMiB: 'Free disk (MiB)', commandsAvailable: 'Required commands', dockerInstalled: 'Docker installed', systemdAvailable: 'systemd available' } as Record<string, string>,
+    factValues: { true: 'Yes', false: 'No', debian: 'Debian', ubuntu: 'Ubuntu', unsupported: 'Unsupported', '12': '12', '22.04': '22.04', '24.04': '24.04', amd64: 'amd64', x86_64: 'x86_64' } as Record<string, string>,
+    errors: { PROVISIONING_DISABLED: 'Readiness checks are disabled by the administrator.', PROVISIONING_TARGET_NOT_FOUND: 'No eligible SSH source was found for this server.', PROVISIONING_TARGET_AMBIGUOUS: 'More than one SSH source matches this server.', PROVISIONING_TARGET_UNSUPPORTED: 'Readiness checks are available for active server resources only.', PROVISIONING_RUN_NOT_FOUND: 'The readiness check was not found.', PROVISIONING_REQUEST_REUSED: 'This request ID is already associated with another plan.', PROVISIONING_ALREADY_ACTIVE: 'A readiness check is already active for this server.', PROVISIONING_REMOTE_PROBE_INVALID: 'The server returned an incomplete or invalid readiness observation.', PROVISIONING_LEASE_EXPIRED: 'The worker lease expired; confirm the server state before continuing.', PROVISIONING_PREFLIGHT_FAILED: 'One or more server readiness requirements did not pass.', PROVISIONING_UNSUPPORTED_PLATFORM: 'This operating system is not supported.', PROVISIONING_UNSUPPORTED_ARCHITECTURE: 'This CPU architecture is not supported.', PROVISIONING_PRIVILEGE_REQUIRED: 'Root access or non-interactive sudo is required.', PROVISIONING_MEMORY_INSUFFICIENT: 'At least 512 MiB of memory is required.', PROVISIONING_DISK_INSUFFICIENT: 'At least 1 GiB of free disk space is required.', PROVISIONING_COMMANDS_MISSING: 'A required system command is unavailable.', PROVISIONING_SYSTEMD_UNAVAILABLE: 'systemd is unavailable.', PROVISIONING_VERIFICATION_FAILED: 'The independent readiness check did not pass.', PROVISIONING_REMOTE_TIMEOUT: 'The remote check timed out; the result is uncertain.', PROVISIONING_REMOTE_UNAVAILABLE: 'The remote check disconnected; the result is uncertain.', PROVISIONING_REMOTE_OUTPUT_LIMIT: 'Remote output exceeded the safe limit; the result is uncertain.', PROVISIONING_SOURCE_CHANGED: 'The SSH source changed after planning.', PROVISIONING_AUTHENTICATION_FAILED: 'SSH authentication failed.', PROVISIONING_HOST_KEY_MISMATCH: 'The SSH host identity changed.', PROVISIONING_HOST_KEY_NOT_TRUSTED: 'The SSH host identity is not trusted.' } as Record<string, string>,
+  },
   resources: {
     title: 'Servers',
     subtitle: (environment: string, kind: string) => `${environment} · ${kind}`,

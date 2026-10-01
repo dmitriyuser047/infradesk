@@ -74,6 +74,7 @@ object AuditAction {
   /** Removed from InfraDesk's desired state; nothing on the server is touched. */
   case object ConfigurationAssignmentRemoved extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENT_REMOVED" }
   case object ConfigurationDeploymentRequested extends AuditAction { override val code: String = "CONFIGURATION_DEPLOYMENT_REQUESTED" }
+  case object ProvisioningRunRequested extends AuditAction { override val code: String = "PROVISIONING_RUN_REQUESTED" }
   case object ConfigurationDeploymentCancelled extends AuditAction { override val code: String = "CONFIGURATION_DEPLOYMENT_CANCELLED" }
   case object ConfigurationAssignmentsPromoted extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENTS_PROMOTED" }
   case object ConfigurationRolloutRequested extends AuditAction { override val code: String = "CONFIGURATION_ROLLOUT_REQUESTED" }
@@ -141,6 +142,7 @@ object AuditAction {
     ConfigurationAssignmentUpdated,
     ConfigurationAssignmentRemoved,
     ConfigurationDeploymentRequested,
+    ProvisioningRunRequested,
     ConfigurationDeploymentCancelled,
     ConfigurationAssignmentsPromoted,
     ConfigurationRolloutRequested,
