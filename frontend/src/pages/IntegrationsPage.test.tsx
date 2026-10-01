@@ -88,7 +88,7 @@ describe('integrations settings', () => {
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'New panel' } })
     fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://panel.example.test' } })
     fireEvent.change(screen.getByLabelText('API token'), { target: { value: 'private-api-token' } })
-    fireEvent.change(screen.getByLabelText('Caddy API key (optional)'), { target: { value: 'private-caddy-key' } })
+    fireEvent.change(screen.getByLabelText('Additional access key'), { target: { value: 'private-caddy-key' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(await screen.findByText('New panel')).toBeTruthy()
     const write = calls.find(call => call.method === 'POST' && call.url.endsWith('/integrations'))

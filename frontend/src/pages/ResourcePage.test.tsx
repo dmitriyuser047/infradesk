@@ -87,9 +87,9 @@ describe('resource detail page', () => {
     expect(screen.getByText('Observed read-only from Remnawave.')).toBeTruthy()
     // Observed and desired state side by side, with the compliance spelled out.
     expect(screen.getByText('Observed').nextElementSibling?.textContent).toBe('Enabled')
-    expect(screen.getByText('Desired state').nextElementSibling?.textContent).toContain('Enabled')
-    expect(screen.getByText('Compliant')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Change desired state' })).toBeTruthy()
+    expect(screen.getByText('Management', { selector: 'dt' }).nextElementSibling?.textContent).toContain('Should be enabled')
+    expect(screen.getByText('Currently enabled')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Change rule' })).toBeTruthy()
     expect(requests).toContain('/resources/server/integration-bindings')
     cleanup()
     const containerRequests = renderPage({ resource: container })

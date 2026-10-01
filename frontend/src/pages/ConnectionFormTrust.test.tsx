@@ -83,7 +83,7 @@ describe('server trust in the connection form', () => {
       expect(state()?.textContent).toContain('example.test:22')
       expect(confirmedKey()).toBe('Не подтверждён')
       // The draft section, not the summary of the saved connection above it.
-      expect(document.querySelector('.trust-body')?.textContent).not.toContain('Сервер подтверждён')
+      expect(document.querySelector('.trust-body')?.textContent).not.toContain('SSH-ключ подтверждён')
     }
 
     it('does not trust a changed host, and saving it is refused before any request', () => {

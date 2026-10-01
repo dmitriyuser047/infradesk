@@ -70,7 +70,7 @@ describe('application shell', () => {
 
     expect(document.querySelectorAll('.app-shell')).toHaveLength(1)
     for (const group of ['Инфраструктура', 'Мониторинг', 'Управление']) expect(within(nav).getByText(group)).toBeTruthy()
-    for (const link of ['Обзор', 'Ресурсы', 'Подключения', 'Инциденты', 'Проекты и окружения']) {
+    for (const link of ['Обзор', 'Серверы', 'Подключения', 'Инциденты', 'Проекты и окружения']) {
       expect(within(nav).getByRole('link', { name: link })).toBeTruthy()
     }
     expect(within(nav).getByRole('link', { name: 'Обзор' }).getAttribute('aria-current')).toBe('page')
@@ -84,8 +84,8 @@ describe('application shell', () => {
     expect(within(nav).getByRole('link', { name: 'Подключения' }).getAttribute('aria-current')).toBe('page')
     expect(within(nav).getByRole('link', { name: 'Обзор' }).getAttribute('href'))
       .toBe('/organizations/org/overview?project=org-p1&environment=env-test')
-    // With an environment selected, Resources opens it directly.
-    expect(within(nav).getByRole('link', { name: 'Ресурсы' }).getAttribute('href'))
+    // With an environment selected, Servers opens it directly.
+    expect(within(nav).getByRole('link', { name: 'Серверы' }).getAttribute('href'))
       .toBe('/organizations/org/environments/env-test?project=org-p1')
   })
 

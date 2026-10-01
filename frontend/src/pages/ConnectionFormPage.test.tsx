@@ -58,7 +58,7 @@ describe('SSH connection form', () => {
 
     expect(html).toContain('1. Сервер')
     expect(html).toContain('2. Аутентификация')
-    expect(html).toContain('3. Подлинность сервера')
+    expect(html).toContain('3. Безопасность')
     expect(html).toContain('4. Синхронизация')
     expect(html).toMatch(/checked="" value="PRIVATE_KEY"/)
     expect(html).toContain('Приватный ключ')
@@ -97,7 +97,7 @@ describe('SSH connection form', () => {
     expect(unverified).toContain('Отпечаток подтверждает, что InfraDesk подключается именно к нужному серверу')
     expect(trusted).toContain('SHA256:trusted')
     expect(trusted).toContain('trust-state trust-trusted')
-    expect(trusted).toContain('Сервер подтверждён')
+    expect(trusted).toContain('SSH-ключ подтверждён')
     expect(unverified).toContain('trust-state trust-untrusted')
     expect(unverified).toContain('Сервер не подтверждён')
     expect(unverified).toContain('Получить ключ сервера')

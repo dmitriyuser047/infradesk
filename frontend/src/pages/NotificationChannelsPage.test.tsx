@@ -67,6 +67,9 @@ describe('notification channels page', () => {
     expect(await screen.findByText('Mail alerts')).toBeTruthy()
     expect(screen.getByText('Automation')).toBeTruthy()
     expect(screen.getByText('Ops Telegram')).toBeTruthy()
+    const telegramCard = screen.getByText('Ops Telegram').closest('article')!
+    expect(telegramCard.querySelector('.notification-properties')?.textContent).toContain('ConnectionConfigured')
+    expect(telegramCard.querySelector('.notification-properties')?.textContent).toContain('Telegram chat-100123')
     expect(requests.filter(request => request.method === 'GET' && request.url.endsWith('/notification-channels'))).toHaveLength(1)
     expect(screen.getByText('smtp.example.test:587 · STARTTLS')).toBeTruthy()
     expect(screen.getByText('ops@example.test')).toBeTruthy()

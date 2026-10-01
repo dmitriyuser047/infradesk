@@ -12,9 +12,9 @@ import type {
 
 const copy = {
   en: {
-    management: 'Management', observe: 'Observe', managed: 'Manage selected nodes',
+    management: 'Management', observe: 'Observe', managed: 'Automatic management enabled',
     observeDetail: 'InfraDesk observes Remnawave and allows manual actions. It does not automatically change node state.',
-    managedDetail: 'InfraDesk automatically keeps the state of explicitly managed nodes. Unselected nodes remain observation-only.',
+    managedDetail: 'InfraDesk automatically keeps selected nodes in the specified state. Other nodes are only monitored.',
     startManaging: 'Manage selected nodes', stopManaging: 'Stop managing nodes',
     requiresSync: 'Managing nodes requires automatic synchronization. Enable the integration first.',
     confirmStartTitle: 'Let InfraDesk manage selected nodes?',
@@ -22,11 +22,13 @@ const copy = {
     confirmStopTitle: 'Stop managing selected nodes?',
     confirmStop: (count: number) => `Desired states for ${count} nodes will be removed. Their current state in Remnawave will not be changed.`,
     confirm: 'Confirm', cancel: 'Cancel', modeError: 'Unable to change the management mode',
-    counters: { managed: 'Managed nodes', compliant: 'Compliant', drifted: 'Drifted', applying: 'Applying', attention: 'Needs attention' },
-    desired: 'Desired state', notManaged: 'Not managed', manage: 'Manage', change: 'Change',
+    counters: { managed: 'Under management', compliant: 'In the specified state', drifted: 'Need changes', applying: 'Changing now', attention: 'Problems' },
+    desired: 'Management', notManaged: 'Not managed', manage: 'Manage', change: 'Change rule',
     state: { ENABLED: 'Enabled', DISABLED: 'Disabled' } as Record<DesiredNodeState, string>,
+    ruleState: { ENABLED: 'Should be enabled', DISABLED: 'Should be disabled' } as Record<DesiredNodeState, string>,
+    actual: { enabled: 'Currently enabled', disabled: 'Currently disabled' },
     status: {
-      COMPLIANT: 'Compliant', DRIFTED: 'Drift detected', APPLYING: 'Applying', WAITING_REFRESH: 'Waiting for observation',
+      COMPLIANT: 'In the specified state', DRIFTED: 'Drift detected', APPLYING: 'Applying', WAITING_REFRESH: 'Waiting for observation',
       REMEDIATION_FAILED: 'Remediation failed', UNAVAILABLE: 'Node unavailable',
     } as Record<DesiredStateStatus, string>,
     dialogTitle: (node: string) => `Manage ${node}`, desiredLabel: 'Desired state',
@@ -47,9 +49,9 @@ const copy = {
     } as Record<string, string>,
   },
   ru: {
-    management: 'Управление', observe: 'Наблюдение', managed: 'Управление выбранными нодами',
+    management: 'Управление', observe: 'Наблюдение', managed: 'Автоматическое управление включено',
     observeDetail: 'InfraDesk наблюдает Remnawave и позволяет выполнять ручные действия. Состояние нод автоматически не меняется.',
-    managedDetail: 'InfraDesk автоматически поддерживает состояние явно выбранных нод. Остальные ноды только наблюдаются.',
+    managedDetail: 'InfraDesk автоматически поддерживает выбранные ноды в заданном состоянии. Остальные ноды только отслеживаются.',
     startManaging: 'Управлять выбранными нодами', stopManaging: 'Прекратить управление',
     requiresSync: 'Для управления нужна автоматическая синхронизация. Сначала включите интеграцию.',
     confirmStartTitle: 'Разрешить InfraDesk управлять выбранными нодами?',
@@ -57,11 +59,13 @@ const copy = {
     confirmStopTitle: 'Прекратить управление выбранными нодами?',
     confirmStop: (count: number) => `Желаемые состояния для ${count} нод будут удалены. Их текущее состояние в Remnawave не изменится.`,
     confirm: 'Подтвердить', cancel: 'Отмена', modeError: 'Не удалось изменить режим управления',
-    counters: { managed: 'Управляемые ноды', compliant: 'Соответствуют', drifted: 'Расхождение', applying: 'Применяется', attention: 'Требуют внимания' },
-    desired: 'Желаемое состояние', notManaged: 'Не управляется', manage: 'Управлять', change: 'Изменить',
+    counters: { managed: 'Под управлением', compliant: 'В нужном состоянии', drifted: 'Требуют изменения', applying: 'Изменяются сейчас', attention: 'Проблемы' },
+    desired: 'Управление', notManaged: 'Не управляется', manage: 'Управлять', change: 'Изменить правило',
     state: { ENABLED: 'Включена', DISABLED: 'Отключена' } as Record<DesiredNodeState, string>,
+    ruleState: { ENABLED: 'Должна быть включена', DISABLED: 'Должна быть выключена' } as Record<DesiredNodeState, string>,
+    actual: { enabled: 'Сейчас включена', disabled: 'Сейчас выключена' },
     status: {
-      COMPLIANT: 'Соответствует', DRIFTED: 'Обнаружено расхождение', APPLYING: 'Применяется',
+      COMPLIANT: 'В нужном состоянии', DRIFTED: 'Обнаружено расхождение', APPLYING: 'Применяется',
       WAITING_REFRESH: 'Ожидание синхронизации', REMEDIATION_FAILED: 'Не удалось применить', UNAVAILABLE: 'Нода отсутствует',
     } as Record<DesiredStateStatus, string>,
     dialogTitle: (node: string) => `Управление: ${node}`, desiredLabel: 'Желаемое состояние',
@@ -161,10 +165,11 @@ export function ManagementSection({ organizationId, integration, counts }: {
 }
 
 /** The desired state of one node as text and a status, never color alone. */
-export function DesiredStateBadge({ value }: { value: DesiredStateView }) {
+export function DesiredStateBadge({ value, observedDisabled }: { value: DesiredStateView; observedDisabled: boolean }) {
   const t = useDesiredStateCopy()
-  return <span className="integration-inline"><strong>{t.state[value.state]}</strong>
-    <StatusIndicator label={t.status[value.status]} tone={desiredStatusTones[value.status]} /></span>
+  return <span className="integration-inline"><strong>{t.ruleState[value.state]}</strong>
+    <StatusIndicator label={value.status === 'COMPLIANT' ? observedDisabled ? t.actual.disabled : t.actual.enabled : t.status[value.status]}
+      tone={desiredStatusTones[value.status]} /></span>
 }
 
 /**
@@ -173,7 +178,7 @@ export function DesiredStateBadge({ value }: { value: DesiredStateView }) {
  */
 export function DesiredStateControl({ organizationId, integrationId, managementMode, node }: {
   organizationId: string; integrationId: string; managementMode: IntegrationManagementMode
-  node: { id: string; displayName: string; active: boolean; desiredState?: DesiredStateView | null }
+  node: { id: string; displayName: string; active: boolean; summary: { isDisabled: boolean }; desiredState?: DesiredStateView | null }
 }) {
   const t = useDesiredStateCopy()
   const canChange = useCanManageDesiredState(organizationId)
@@ -183,9 +188,8 @@ export function DesiredStateControl({ organizationId, integrationId, managementM
   // An unmanaged node can only be chosen while Remnawave still reports it; a managed one can always be released.
   const offer = managing && canChange && (desired !== null || node.active)
   return <div className="integration-desired">
-    {desired ? <DesiredStateBadge value={desired} /> : <span className="muted-copy">{t.notManaged}</span>}
-    {/* The bind button beside it is also called "Change": this one says what it changes. */}
-    {offer ? <button className="secondary-button" type="button" aria-label={desired ? t.save : undefined}
+    {desired ? <DesiredStateBadge value={desired} observedDisabled={node.summary.isDisabled} /> : <span className="muted-copy">{t.notManaged}</span>}
+    {offer ? <button className="secondary-button" type="button" aria-label={desired ? t.change : undefined}
       onClick={() => setOpen(true)}>{desired ? t.change : t.manage}</button> : null}
     {open ? <ManageNodeDialog organizationId={organizationId} integrationId={integrationId} node={node}
       onClose={() => setOpen(false)} /> : null}
@@ -212,7 +216,7 @@ function ManageNodeDialog({ organizationId, integrationId, node, onClose }: {
         {(['ENABLED', 'DISABLED'] as const).map(option => <label key={option} className="integration-candidate">
           <input type="radio" name={`desired-${node.id}`} value={option} checked={state === option}
             disabled={!node.active} onChange={() => setState(option)} />
-          <span>{t.state[option]}</span></label>)}
+          <span>{t.ruleState[option]}</span></label>)}
       </fieldset>
       <p className="muted-copy">{t.dialogDetail}</p>
       {desired ? <p className="muted-copy">{t.stopDetail}</p> : null}

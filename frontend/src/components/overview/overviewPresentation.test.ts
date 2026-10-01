@@ -108,7 +108,7 @@ describe('fleet summary cards', () => {
     }), links, 24, en)
 
     expect(empty.map(card => card.value)).toEqual(['0', '0', '0', '0', '0'])
-    expect(empty.find(card => card.id === 'incidents')?.detail).toBe('All clear')
+    expect(empty.find(card => card.id === 'incidents')?.detail).toBe('No problems found')
     expect(empty.find(card => card.id === 'connections')?.detail).toBe('None configured')
     expect(busy.find(card => card.id === 'nodes')?.detail).toBe('2 online · 1 offline')
     expect(busy.find(card => card.id === 'containers')?.value).toBe('240')

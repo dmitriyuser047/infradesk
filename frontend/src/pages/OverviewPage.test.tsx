@@ -190,7 +190,7 @@ describe('operations overview page', () => {
       { key: ['overview', 'org', 'project', null], value: empty })
 
     expect(html).toContain('No infrastructure discovered yet')
-    expect(html).toContain('All clear')
+    expect(html).toContain('No problems found')
     expect(html).toContain('No recent activity')
     expect(html).not.toContain('Welcome to InfraDesk')
     expect(html).not.toContain('role="alert"')
@@ -227,10 +227,10 @@ describe('operations overview page', () => {
       const ru = body({ data: healthy }, 'ru')
 
       expect(en).toMatch(/class="empty-workspace empty-success empty-compact" role="status"/)
-      expect(en).toContain('All clear')
-      expect(en).toContain('Nothing in the infrastructure needs attention')
-      expect(ru).toContain('Всё в порядке')
-      expect(ru).toContain('Инфраструктура не требует внимания')
+      expect(en).toContain('No problems found')
+      expect(en).toContain('All servers and checks are working normally.')
+      expect(ru).toContain('Проблем не обнаружено')
+      expect(ru).toContain('Все серверы и проверки работают нормально.')
       // A healthy state is not an alert and not a missing list.
       expect(en).not.toContain('attention-list')
       expect(en).not.toContain('role="alert"')

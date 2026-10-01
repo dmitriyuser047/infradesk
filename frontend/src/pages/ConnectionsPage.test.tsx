@@ -40,8 +40,8 @@ describe('connections list', () => {
 
     expect(html).toContain('deploy@trusted.example')
     expect(html).toContain('deploy@untrusted.example:2222')
-    expect(html).toMatch(/trusted<\/a>.*Сервер подтверждён/s)
-    expect(html).toMatch(/untrusted<\/a>.*Сервер не подтверждён/s)
+    expect(html).toMatch(/trusted<\/a>.*SSH-ключ подтверждён/s)
+    expect(html).toMatch(/untrusted<\/a>.*SSH-ключ не подтверждён/s)
     // A connection blocked by a changed key is never shown as confirmed.
     expect(html).toMatch(/changed<\/a>.*status-danger.*Ключ сервера изменился/s)
     expect(html).not.toContain('SHA256:k')

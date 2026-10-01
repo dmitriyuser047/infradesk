@@ -162,7 +162,7 @@ describe('connection checks in the SSH form', () => {
     expect((screen.getByRole('button', { name: 'Проверить подключение' }) as HTMLButtonElement).disabled).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: 'Подтвердить сервер' }))
-    expect(document.querySelector('.identity-grid')?.textContent).toContain('Сервер подтверждён')
+    expect(document.querySelector('.identity-grid')?.textContent).toContain('SSH-ключ подтверждён')
     expect(success()).toBeNull()
 
     change(keyField(), privateKey)
@@ -259,7 +259,7 @@ describe('connection checks in the SSH form', () => {
   it('speaks English', async () => {
     renderForm(() => json({ hostKeyFingerprint: 'SHA256:new-key' }), 'en')
 
-    expect(screen.getAllByText('Server identity').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Security').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Copy: Confirmed fingerprint' }).textContent).toBe('Copy')
     expect(screen.getAllByText('Private key configured').length).toBeGreaterThan(0)
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: 'other.test' } })

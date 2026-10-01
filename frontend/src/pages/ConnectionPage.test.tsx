@@ -98,12 +98,19 @@ describe('connection workspace', () => {
     const names = (item: HTMLElement) => item.querySelector('.resource-name')?.firstChild?.textContent
     expect(names(server)).toBe('fin-prod-01')
     expect(within(server).getAllByRole('treeitem').map(names)).toEqual(['backend', 'redis'])
-    expect(screen.getByText('Containers 2 · Servers 1')).toBeTruthy()
+    expect(screen.getByText('1 server · 2 containers')).toBeTruthy()
     // The open incident is named by its resource and leads to the incident, remembering this page.
     expect(screen.getByRole('link', { name: /^backend — Threshold exceeded/ }).getAttribute('href'))
       .toBe('/organizations/org/incidents/cpu?fromConnection=finnish')
     expect(requests.some(path => path.endsWith('/finnish/resources'))).toBe(false)
     expect(requests.some(path => path.includes('/incidents?'))).toBe(false)
+  })
+
+  it('keeps previously discovered resources separate from the active count', async () => {
+    renderPage({ summary: { ...summary, inactiveResourceCount: 4 } }, { locale: 'ru' })
+    expect(await screen.findByText('1 сервер · 2 контейнера')).toBeTruthy()
+    expect(screen.getByText('4 ранее обнаруженных ресурса больше не найдены')).toBeTruthy()
+    expect(screen.getByText('Активные ресурсы').nextElementSibling?.textContent).toContain('3')
   })
 
   it('opens the resources tab from the URL, loads the list then, and links each resource back here', async () => {

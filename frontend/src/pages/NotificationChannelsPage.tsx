@@ -61,7 +61,7 @@ function ChannelCard({ channel, org, canManage, label, lifecycle, test }: {
       {channel.type === 'TELEGRAM' && 'chatId' in config ? <div><dt>{t.chat}</dt><dd className="break-anywhere">{config.chatId}</dd></div> : null}
       {channel.type === 'EMAIL' && 'smtpHost' in config ? <><div><dt>{t.smtp}</dt><dd className="break-anywhere">{config.smtpHost}:{config.smtpPort} · {config.security}</dd></div>
         <div><dt>{t.from}</dt><dd className="break-anywhere">{config.fromAddress}</dd></div><div><dt>{t.recipients}</dt><dd className="break-anywhere">{config.recipients.join(', ')}</dd></div></> : null}
-      <div><dt>{t.credentialConfigured}</dt><dd>{config.credentialConfigured ? t.credentialConfigured : t.credentialMissing}</dd></div>
+      <div><dt>{t.connection}</dt><dd>{config.credentialConfigured ? t.credentialConfigured : t.credentialMissing}</dd></div>
     </dl>
     {canManage ? <div className="notification-actions">
       <Link className="secondary-button" to={formPath}>{t.edit}</Link>

@@ -159,10 +159,10 @@ describe('integration detail', () => {
     const { calls } = setup('/organizations/org/integrations/one')
     expect(await screen.findByRole('heading', { name: 'Main Remnawave' })).toBeTruthy()
     expect(screen.getByText('Automatic synchronization is disabled')).toBeTruthy()
-    expect(await screen.findByText('2 present · 1 gone')).toBeTruthy()
+    expect(await screen.findByText('2 · 1 no longer found')).toBeTruthy()
     expect(screen.getByText('Not scheduled')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Sync now' }))
-    expect(await screen.findByText('Synchronization completed')).toBeTruthy()
+    expect(await screen.findByText('Synchronization succeeded')).toBeTruthy()
     expect(screen.getByText('2 nodes · 1 hosts · 1 profiles')).toBeTruthy()
     expect(calls.filter(call => call.url === `${base}/sync` && call.method === 'POST')).toHaveLength(1)
   })
@@ -180,16 +180,16 @@ describe('integration detail', () => {
     expect(within(table).getByText('Frankfurt')).toBeTruthy()
     expect(within(table).getByText('Connected')).toBeTruthy()
     expect(within(table).getAllByText('203.0.113.10:2222')).toHaveLength(2)
-    expect(within(table).getByText('Not bound')).toBeTruthy()
-    expect(within(table).getByText('Gone')).toBeTruthy()
+    expect(within(table).getByText('No server linked')).toBeTruthy()
+    expect(within(table).getByText('Not found')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('State'), { target: { value: 'DISABLED' } })
     await waitFor(() => expect(calls.some(call => call.url.includes('state=DISABLED'))).toBe(true))
     await waitFor(() => expect(screen.queryByText('Frankfurt')).toBeNull())
     fireEvent.change(screen.getByLabelText('State'), { target: { value: '' } })
-    fireEvent.click(await screen.findByRole('button', { name: 'Bind' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Link to server' }))
     const dialog = await screen.findByRole('dialog')
     fireEvent.click(await within(dialog).findByLabelText(/vps-frankfurt/))
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Bind' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Link to server' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(calls.find(call => call.method === 'PUT')?.body).toEqual({ resourceId: 'res-1' })
     expect(await screen.findByRole('link', { name: 'vps-frankfurt' })).toBeTruthy()
@@ -260,7 +260,7 @@ describe('integration detail', () => {
   it('the list links each integration to its detail and summarizes its last sync', async () => {
     setup('/organizations/org/integrations')
     expect(await screen.findByRole('link', { name: 'Main Remnawave' })).toBeTruthy()
-    expect(screen.getByText(/2 nodes · last sync/)).toBeTruthy()
+    expect(screen.getByText(/Nodes: 2 · Sync/)).toBeTruthy()
     fireEvent.click(screen.getByRole('link', { name: 'Open' }))
     expect(await screen.findByText('Automatic synchronization is disabled')).toBeTruthy()
   })
@@ -302,7 +302,7 @@ describe('desired state of selected nodes', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(modeCalls(calls).map(call => call.body)).toEqual([{ mode: 'MANAGED_SELECTED' }])
     expect(await screen.findByRole('button', { name: 'Stop managing nodes' })).toBeTruthy()
-    expect(screen.getByText(/keeps the state of explicitly managed nodes/)).toBeTruthy()
+    expect(screen.getByText(/keeps selected nodes in the specified state/)).toBeTruthy()
   })
 
   it('manages a node by choice, with the automation spelled out, then changes and stops it', async () => {
@@ -312,21 +312,21 @@ describe('desired state of selected nodes', () => {
     let dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText(/persistent automation, not a one-time command/)).toBeTruthy()
     expect(desiredCalls(calls)).toHaveLength(0)
-    fireEvent.click(within(dialog).getByLabelText('Disabled'))
+    fireEvent.click(within(dialog).getByLabelText('Should be disabled'))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Manage node' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(desiredCalls(calls).map(call => [call.method, call.url.split('/').at(-2), call.body]))
       .toEqual([['PUT', 'obj-a', { state: 'DISABLED' }]])
     // Frankfurt is observed enabled and wanted disabled: the drift is named, not just coloured.
     expect(await screen.findByText('Drift detected')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Change desired state' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change rule' }))
     dialog = screen.getByRole('dialog')
     // The same state again is not a change.
     expect((within(dialog).getByRole('button', { name: 'Change desired state' }) as HTMLButtonElement).disabled).toBe(true)
-    fireEvent.click(within(dialog).getByLabelText('Enabled'))
+    fireEvent.click(within(dialog).getByLabelText('Should be enabled'))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Change desired state' }))
-    expect(await screen.findByText('Compliant')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Change desired state' }))
+    expect(await screen.findByText('Currently enabled')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Change rule' }))
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Stop managing' }))
     await waitFor(() => expect(desiredCalls(calls).some(call => call.method === 'DELETE')).toBe(true))
     await waitFor(() => expect(screen.getAllByText('Not managed')).toHaveLength(2))
@@ -340,13 +340,15 @@ describe('desired state of selected nodes', () => {
       managedNode('n4', 'Delta', 'CONNECTED', desired('DISABLED', 'WAITING_REFRESH')),
       managedNode('n5', 'Echo', 'CONNECTED', desired('DISABLED', 'REMEDIATION_FAILED')),
       managedNode('n6', 'Foxtrot', 'DISABLED', desired('DISABLED', 'UNAVAILABLE'), false),
-      managedNode('n7', 'Golf', 'CONNECTED', null)] })
+      managedNode('n7', 'Golf', 'CONNECTED', null),
+      managedNode('n8', 'Hotel', 'DISABLED', desired('DISABLED', 'COMPLIANT'))] })
     const table = await screen.findByRole('table')
-    for (const label of ['Compliant', 'Drift detected', 'Applying', 'Waiting for observation', 'Remediation failed',
+    for (const label of ['Currently enabled', 'Drift detected', 'Applying', 'Waiting for observation', 'Remediation failed',
       'Node unavailable', 'Not managed']) expect(within(table).getByText(label)).toBeTruthy()
     const row = (name: string) => within(table).getByText(name).closest('tr')!
     // Wanted enabled and observed enabled: Restart stays, Disable is not offered.
     expect(within(row('Alpha')).getByRole('button', { name: 'Restart' })).toBeTruthy()
+    expect(within(row('Hotel')).getByText('Currently disabled')).toBeTruthy()
     expect(within(row('Alpha')).queryByRole('button', { name: 'Disable' })).toBeNull()
     // Wanted enabled, observed disabled: Enable goes the same way as the intent.
     expect(within(row('Bravo')).getByRole('button', { name: 'Enable' })).toBeTruthy()
@@ -357,16 +359,16 @@ describe('desired state of selected nodes', () => {
     expect(within(row('Golf')).getByRole('button', { name: 'Disable' })).toBeTruthy()
     expect(within(row('Golf')).getByRole('button', { name: 'Manage' })).toBeTruthy()
     // A node Remnawave no longer reports can only be released.
-    expect(within(row('Foxtrot')).getByRole('button', { name: 'Change desired state' })).toBeTruthy()
+    expect(within(row('Foxtrot')).getByRole('button', { name: 'Change rule' })).toBeTruthy()
   })
 
   it('shows managed counters and removes intents, not remote state, when returning to Observe', async () => {
     const { calls } = setup('/organizations/org/integrations/one', 'OWNER', { enabled: true, managed: true, nodes: [
       managedNode('n1', 'Alpha', 'CONNECTED', desired('ENABLED', 'COMPLIANT')),
       managedNode('n2', 'Bravo', 'DISABLED', desired('ENABLED', 'DRIFTED'))] })
-    const counters = (await screen.findByText('Managed nodes')).closest('dl')!
-    expect(within(counters).getByText('Managed nodes').nextElementSibling?.textContent).toBe('2')
-    expect(within(counters).getByText('Drifted').nextElementSibling?.textContent).toBe('1')
+    const counters = (await screen.findByText('Under management')).closest('dl')!
+    expect(within(counters).getByText('Under management').nextElementSibling?.textContent).toBe('2')
+    expect(within(counters).getByText('Need changes').nextElementSibling?.textContent).toBe('1')
     fireEvent.click(screen.getByRole('button', { name: 'Stop managing nodes' }))
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText('Desired states for 2 nodes will be removed. Their current state in Remnawave will not be changed.')).toBeTruthy()

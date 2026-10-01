@@ -196,9 +196,10 @@ function InfrastructureOverview({ organizationId, connection, query, linkQuery, 
   return <>
     <dl className="summary-strip">
       <div className="summary-item">
-        <dt>{t.resources}</dt>
+        <dt>{t.activeResources}</dt>
         <dd><button type="button" className="summary-value" onClick={() => openTab('resources')}>{summary.activeResourceCount}</button>
-          <small>{typeCounts(summary, i18n)}{summary.inactiveResourceCount > 0 ? ` · ${t.inactiveCount(summary.inactiveResourceCount)}` : ''}</small></dd>
+          <small>{typeCounts(summary, i18n)}</small>
+          {summary.inactiveResourceCount > 0 ? <><br /><small>{t.inactiveCount(summary.inactiveResourceCount)}</small></> : null}</dd>
       </div>
       <div className="summary-item">
         <dt>{t.openIncidents}</dt>
@@ -236,8 +237,9 @@ function InfrastructureOverview({ organizationId, connection, query, linkQuery, 
 }
 
 function typeCounts(summary: ConnectionInfrastructureSummary, i18n: ReturnType<typeof useI18n>): string {
-  return summary.resourceTypeCounts
-    .map(count => `${i18n.t.resources.filter.types[count.resourceTypeCode] ?? count.resourceTypeCode} ${count.count}`)
+  return [...summary.resourceTypeCounts]
+    .sort((a, b) => Number(b.resourceTypeCode === 'NODE') - Number(a.resourceTypeCode === 'NODE'))
+    .map(count => i18n.t.infrastructure.resourceTypeCount(count.resourceTypeCode, count.count))
     .join(' · ')
 }
 

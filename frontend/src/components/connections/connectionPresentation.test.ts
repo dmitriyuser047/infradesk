@@ -29,7 +29,7 @@ describe('connection presentation helpers', () => {
 
   it('labels sync statuses and keeps an unknown code as it is', () => {
     expect(getSyncStatusLabel('RUNNING', en)).toBe('Running')
-    expect(getSyncStatusLabel('COMPLETED', en)).toBe('Completed')
+    expect(getSyncStatusLabel('COMPLETED', en)).toBe('Successful')
     expect(getSyncStatusLabel('FAILED', ru)).toBe('Ошибка')
     expect(getSyncStatusLabel('UNKNOWN', ru)).toBe('UNKNOWN')
   })

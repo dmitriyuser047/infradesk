@@ -141,6 +141,7 @@ function IntegrationForm({ organizationId, integrationId }: { organizationId: st
           onChange={event => setApiToken(event.target.value)} /></label>
         <label className="field">{t.caddyApiKey}<input type="password" autoComplete="off" value={caddyApiKey}
           onChange={event => setCaddyApiKey(event.target.value)} /></label>
+        <p>{t.caddyApiKeyHint}</p>
         <p>{t.credentialHint}</p>
       </> : null}
       {save.isError ? <InlineAlert tone="danger" title={t.saveError}>{describeError(save.error, i18n)}</InlineAlert> : null}

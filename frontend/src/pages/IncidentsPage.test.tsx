@@ -77,7 +77,7 @@ describe('incidents page', () => {
   it('tells a healthy "no open incidents" apart from the other empty lists', async () => {
     renderPage()
     expect(await screen.findByText('Открытых инцидентов нет')).toBeTruthy()
-    expect(screen.getByText('Инфраструктура не требует внимания')).toBeTruthy()
+    expect(screen.getByText('Все серверы и проверки работают нормально.')).toBeTruthy()
     expect(screen.getByRole('status').className).toContain('empty-success')
     cleanup()
 
@@ -93,7 +93,7 @@ describe('incidents page', () => {
   it('speaks English', async () => {
     renderPage({ locale: 'en' })
     expect(await screen.findByText('No open incidents')).toBeTruthy()
-    expect(screen.getByText('Infrastructure needs no attention')).toBeTruthy()
+    expect(screen.getByText('All servers and checks are working normally.')).toBeTruthy()
     expect(screen.getAllByRole('radio').map(radio => radio.parentElement?.textContent)).toEqual(['Open', 'Resolved', 'All'])
     cleanup()
 
