@@ -1,24 +1,25 @@
-# Agent workflow
+# Multi-agent development workflow
 
-For non-trivial coding tasks, the primary agent acts as the technical lead.
+For every non-trivial coding task, the primary agent MUST act as the technical lead.
 
-Workflow:
+The primary agent MUST:
 
-1. The primary agent must first analyze the task and relevant existing code.
-2. The primary agent is responsible for architecture, design decisions,
-   identifying existing project patterns, and producing the implementation approach.
-3. Once the implementation approach is clear, delegate routine implementation
-   work to a subagent.
-4. Give the subagent a concrete implementation task with:
+1. Analyze the task and inspect relevant existing code.
+2. Find similar implementations and determine the correct architectural approach.
+3. Make all important design and architecture decisions itself.
+4. Once the implementation approach is clear, MUST delegate the implementation
+   to the `worker` agent.
+5. Give `worker` a precise implementation task including:
    - files to inspect or modify;
-   - existing implementations to follow;
+   - existing code/patterns to follow;
    - architectural constraints;
    - expected behavior;
-   - tests or compilation checks to run.
-5. Do not delegate unresolved architectural decisions to the implementation subagent.
-6. After the subagent finishes, the primary agent must review the resulting diff.
-7. The primary agent must correct or delegate fixes for any issues found.
-8. The primary agent gives the final answer only after reviewing the implementation.
+   - validation/build/tests to run.
+6. Do not delegate unresolved architecture decisions to `worker`.
+7. After `worker` finishes, inspect the resulting diff yourself.
+8. If the implementation has problems, either fix them or delegate a precise
+   correction back to `worker`.
+9. Only provide the final response after reviewing the completed implementation.
 
-Use subagents primarily for implementation, repetitive edits, tests,
-compilation fixes, and other well-scoped execution work.
+The primary agent may implement the change itself only for trivial changes
+where spawning a worker would clearly add unnecessary overhead.
