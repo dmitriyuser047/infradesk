@@ -8,9 +8,9 @@
 .terminal-theme-label select { max-width: 115px; }
 .terminal-stage { position: relative; }
 .terminal-theme-dark .terminal-screen { background: #0d0d0d; border-color: #333; }
-.terminal-history-label { position: absolute; right: 16px; bottom: 16px; padding: 5px 9px; border-radius: 4px; background: var(--surface); color: var(--text-secondary); border: 1px solid var(--border); pointer-events: none; font-size: var(--font-size-small); }
-.terminal-context-menu { position: fixed; z-index: 100; display: grid; min-width: 155px; padding: 4px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); box-shadow: 0 8px 24px #0003; }
-.terminal-context-menu button { border: 0; padding: 8px 10px; text-align: left; background: transparent; color: var(--text-primary); cursor: pointer; }
+.terminal-history-label { position: absolute; right: var(--space-4); bottom: var(--space-4); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-secondary); border: 1px solid var(--border); pointer-events: none; font-size: var(--font-size-small); }
+.terminal-context-menu { position: fixed; z-index: 100; display: grid; min-width: 155px; max-height: calc(100dvh - 2 * var(--space-2)); overflow-y: auto; padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); box-shadow: var(--shadow-md); }
+.terminal-context-menu button { border: 0; padding: var(--space-2) var(--space-3); text-align: left; background: transparent; color: var(--text-primary); cursor: pointer; }
 .terminal-context-menu button:hover:not(:disabled) { background: var(--surface-muted); }
 .terminal-context-menu button:disabled { opacity: .5; cursor: default; }
 .terminal-panel:fullscreen { display: flex; flex-direction: column; padding: var(--space-3); }
@@ -18,6 +18,15 @@
 .terminal-panel:fullscreen .terminal-screen { flex: 1; min-height: 0; height: auto; }
 @media (max-width: 600px) { .terminal-screen { height: 60vh; min-height: 280px; } }
 .terminal-host { height: 100%; }
+
+.terminal-placeholder { display: grid; place-items: center; color: var(--text-secondary); text-align: center; }
+.terminal-state-message { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; color: var(--text-secondary); }
+.terminal-actions .icon-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.terminal-toolbar > .status-indicator { flex: 0 0 auto; }
+@media (max-width: 640px) {
+  .terminal-actions { width: 100%; }
+  .terminal-theme-label { flex-wrap: wrap; }
+}
 
 /* Workspace dock: live work of this tab, one compact row along the bottom of the application. */
 :root { --dock-height: 44px; }

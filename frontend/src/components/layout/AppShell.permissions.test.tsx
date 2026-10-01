@@ -29,11 +29,24 @@ describe('permission-aware workspace navigation', () => {
     const memberNav = screen.getByRole('navigation', { name: 'Primary navigation' })
     expect(within(memberNav).queryByRole('link', { name: 'Notifications' })).toBeNull()
     expect(within(memberNav).queryByRole('link', { name: 'Integrations' })).toBeNull()
+    expect(within(memberNav).queryByRole('link', { name: 'Configurations' })).toBeNull()
+    expect(within(memberNav).queryByText('Automation')).toBeNull()
     cleanup()
 
     renderShell('OWNER')
     const ownerNav = screen.getByRole('navigation', { name: 'Primary navigation' })
     expect(within(ownerNav).getByRole('link', { name: 'Notifications' })).toBeTruthy()
     expect(within(ownerNav).getByRole('link', { name: 'Integrations' })).toBeTruthy()
+    expect(within(ownerNav).getByRole('link', { name: 'Configurations' })).toBeTruthy()
+    expect(Array.from(ownerNav.querySelectorAll('.nav-group')).map(group => ({
+      label: group.querySelector('.nav-group-label')?.textContent ?? null,
+      links: Array.from(group.querySelectorAll('.nav-link')).map(link => link.textContent),
+    }))).toEqual([
+      { label: null, links: ['Overview'] },
+      { label: 'Infrastructure', links: ['Servers', 'Connections'] },
+      { label: 'Monitoring', links: ['Incidents', 'Notifications'] },
+      { label: 'Automation', links: ['Integrations', 'Configurations'] },
+      { label: 'Structure', links: ['Projects & Environments'] },
+    ])
   })
 })

@@ -12,6 +12,7 @@ import { DeploymentHistory, RolloutHistory } from '../components/configuration/C
 import { ConfigurationRolloutPanel } from '../components/configuration/ConfigurationRolloutPanel'
 import { AutomationPanel } from '../components/configuration/ConfigurationRules'
 import { AppShell } from '../components/layout/AppShell'
+import { withWorkspaceContext } from '../components/layout/workspaceNavigation'
 import {
   EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceFormSection, WorkspaceHeader, WorkspaceSection,
   WorkspaceTabs,
@@ -51,7 +52,7 @@ function ProfileContent({ organizationId, profileId }: { organizationId: string;
   const older = useConfigurationRevision(organizationId, profileId, canManage ? revisionNumber : null)
   const archive = useArchiveConfigurationProfile(organizationId, profileId)
   const [editing, setEditing] = useState(false)
-  const back = { label: t.back, to: configurationsPath(organizationId) }
+  const back = { label: t.back, to: withWorkspaceContext(configurationsPath(organizationId), searchParams) }
   const setParams = (change: (params: URLSearchParams) => void) => setSearchParams(previous => {
     const updated = new URLSearchParams(previous)
     change(updated)
@@ -72,7 +73,7 @@ function ProfileContent({ organizationId, profileId }: { organizationId: string;
   const shown = revisionNumber === null ? latestRevision : older.data
   const tabs = Tabs.filter(id => id !== 'rollouts' || permissions.can('deployConfigurations'))
     .map(id => ({ id, label: t.tabs[id] }))
-  const newVersionPath = `${configurationPath(organizationId, profileId)}/versions/new`
+  const newVersionPath = withWorkspaceContext(`${configurationPath(organizationId, profileId)}/versions/new`, searchParams)
   const showsRevision = tab === 'template' || tab === 'variables'
   // Opened from a promoted rule: its nodes and version are preselected in the rollout wizard.
   const rolloutRule = searchParams.get('rolloutRule')

@@ -1,27 +1,27 @@
-import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { createRequestId } from '../app/requestId'
 import { getConfigRevision, previewConfigRevision, useConfigDeployments, useConfigRevisions,
   previewConfigRollout, useConfigRollouts, useCreateConfigRevision, useDeployConfigRevision,
   useManagedConfigProfile, useStartConfigRollout, type ConfigPreview, type ConfigRevisionContent,
-  type ConfigRolloutPreview, type ConfigStatus } from '../api/integrationConfigProfiles'
+  type ConfigRolloutPreview } from '../api/integrationConfigProfiles'
 import { useIntegrationInventory } from '../api/integrationInventory'
+import { useIntegration } from '../api/integrations'
 import { useOrganizationPermissions } from '../components/auth/authorization'
+import { InfrastructureContextPath } from '../components/infrastructure/InfrastructureContextPath'
+import { withTab } from '../components/infrastructure/infrastructureLinks'
 import { AppShell } from '../components/layout/AppShell'
+import { contextSearch } from '../components/layout/workspaceNavigation'
 import { InlineAlert, PageLoading, PropertyGrid, StatusIndicator, WorkspaceHeader,
   WorkspaceSection, WorkspaceTabs } from '../components/layout/WorkspacePrimitives'
+import { IntegrationDialog } from '../components/integrations/IntegrationDialog'
+import { useSyncErrorText } from '../components/integrations/integrationPresentation'
+import { RefreshWarning, isUnavailableError } from '../components/layout/RefreshWarning'
+import { PageUnavailable, EmptyWorkspaceState } from '../components/layout/WorkspacePrimitives'
+import '../styles/pages/integrations.css'
 import { useI18n } from '../i18n'
-import { describeError } from '../i18n/errors'
+import { describeIntegrationError } from '../components/integrations/integrationPresentation'
 
-export const statusText: Record<ConfigStatus, [string, string]> = {
-  UNAVAILABLE: ['Профиль недоступен', 'Profile unavailable'],
-  DEPLOYING: ['Развёртывание', 'Deploying'],
-  WAITING_REFRESH: ['Ожидание синхронизации', 'Waiting for synchronization'],
-  DEPLOYMENT_FAILED: ['Ошибка развёртывания', 'Deployment failed'],
-  IN_SYNC: ['Синхронизировано', 'In sync'],
-  LOCAL_CHANGES: ['Локальные изменения', 'Local changes'],
-  REMOTE_DRIFT: ['Изменено в Remnawave', 'Remote drift'],
-}
 
 function savedDeployRequest(key: string): string | null {
   try {
@@ -46,10 +46,15 @@ export function IntegrationConfigProfilePage() {
 function ProfilePage({ organizationId: org, integrationId: integration, objectId: object }: {
   organizationId: string; integrationId: string; objectId: string
 }) {
-  const i18n = useI18n(); const ru = i18n.locale === 'ru'
+  const i18n = useI18n(); const c = i18n.t.integrationConfig
+  const errorText = useSyncErrorText()
+  const previewGeneration = useRef(0)
+  const [contentRetry, setContentRetry] = useState(0)
+  const location = useLocation()
   const permissions = useOrganizationPermissions(org)
   const canRead = permissions.can('manageIntegrations') && permissions.can('manageConfigurations')
   const canDeploy = canRead && permissions.can('executeOperations')
+  const integrationInfo = useIntegration(org, integration, canRead)
   const managed = useManagedConfigProfile(org, integration, object, canRead)
   const inventory = useIntegrationInventory(org, integration, 'config-profiles',
     { search: '', active: '', state: '', offset: 0, limit: 100 }, canRead)
@@ -78,8 +83,10 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
   const [automaticRollback, setAutomaticRollback] = useState(true)
   const [pendingRequest, setPendingRequest] = useState<{ revision: number; id: string } | null>(null)
   const [pendingRolloutRequest, setPendingRolloutRequest] = useState<{ revision: number; id: string } | null>(null)
-  const back = { label: ru ? 'Интеграция' : 'Integration',
-    to: `/organizations/${org}/integrations/${integration}?tab=profiles` }
+  const base = `/organizations/${encodeURIComponent(org)}/integrations`
+  const scopeSearch = contextSearch(new URLSearchParams(location.search))
+  const back = { label: i18n.t.shell.nav.integrations,
+    to: `${base}/${encodeURIComponent(integration)}${withTab(scopeSearch, 'profiles')}` }
   const revision = selected ?? managed.data?.profile.latestRevisionNumber ?? null
   const chosen = revision
   const requestKey = chosen === null ? null :
@@ -116,27 +123,28 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
   useEffect(() => {
     if (!canRead || revision === null) return
     let active = true
+    previewGeneration.current += 1
+    setPreviewing(false); setRolloutPreviewing(false); setConfirm(false); setRolloutConfirm(false); setRolloutPreview(null)
     setContent(null); setContentError(null); setPreview(null); setEditing(false); setEditor('')
     void getConfigRevision(org, integration, object, revision).then(value => {
       if (active) setContent(value)
     }, error => { if (active) setContentError(error) })
-    return () => { active = false }
-  }, [canRead, org, integration, object, revision])
+    return () => { active = false; previewGeneration.current += 1 }
+  }, [canRead, org, integration, object, revision, contentRetry])
 
-  if (permissions.isPending) return <AppShell><PageLoading title="Config Profile" back={back}
+  if (permissions.isPending) return <AppShell><PageLoading title={c.title} back={back}
     label={i18n.t.common.loading} /></AppShell>
-  if (!canRead) return <AppShell><div className="workspace-page"><WorkspaceHeader title="Config Profile" back={back} />
-    <InlineAlert tone="danger" title={ru ? 'Нет доступа' : 'Access denied'} /></div></AppShell>
-  if (managed.isPending) return <AppShell><PageLoading title="Config Profile" back={back}
+  if (!canRead) return <AppShell><div className="workspace-page"><WorkspaceHeader title={c.title} back={back} />
+    <InlineAlert tone="danger" title={c.accessDenied} /></div></AppShell>
+  if (managed.isPending) return <AppShell><PageLoading title={c.title} back={back}
     label={i18n.t.common.loading} /></AppShell>
-  if (managed.isError || !managed.data) return <AppShell><div className="workspace-page">
-    <WorkspaceHeader title="Config Profile" back={back} />
-    <InlineAlert tone="danger" title={ru ? 'Профиль недоступен' : 'Profile unavailable'}>
-      {managed.isError ? describeError(managed.error, i18n) : null}</InlineAlert></div></AppShell>
+  if (!managed.data || isUnavailableError(managed.error)) return <AppShell><PageUnavailable back={back}
+    onRetry={() => managed.refetch()} error={managed.error} notFound={!managed.isError}
+    notFoundTitle={c.profileUnavailable} errorTitle={c.loadFailed} /></AppShell>
 
   const value = managed.data
   const busy = value.latestDeployment?.status === 'QUEUED' || value.latestDeployment?.status === 'RUNNING'
-  const label = statusText[value.status][ru ? 0 : 1]
+  const label = c.statuses[value.status]
   const chosenRevision = revision ?? value.profile.latestRevisionNumber
   const startEdit = () => {
     if (!content) return
@@ -144,12 +152,12 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
   }
   const save = () => {
     let json: unknown
-    try { json = JSON.parse(editor) } catch { setParseError(ru ? 'Некорректный JSON' : 'Invalid JSON'); return }
+    try { json = JSON.parse(editor) } catch { setParseError(c.invalidJson); return }
     if (typeof json !== 'object' || json === null || Array.isArray(json)) {
-      setParseError(ru ? 'Корень должен быть объектом JSON' : 'Root must be a JSON object'); return
+      setParseError(c.rootMustBeAJsonObject); return
     }
     if (new TextEncoder().encode(editor).length > 256 * 1024) {
-      setParseError(ru ? 'Превышен лимит 256 KiB' : 'Exceeds the 256 KiB limit'); return
+      setParseError(c.exceedsThe256KibLimit); return
     }
     create.mutate(json as Record<string, unknown>, { onSuccess: result => {
       setSelected(result.revisionNumber); setEditing(false); setEditor('')
@@ -157,8 +165,11 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
   }
   const previewSelected = () => {
     setPreviewing(true); setPreviewError(null); setPreview(null)
-    void previewConfigRevision(org, integration, object, chosenRevision).then(setPreview, setPreviewError)
-      .finally(() => setPreviewing(false))
+    const generation = ++previewGeneration.current
+    void previewConfigRevision(org, integration, object, chosenRevision).then(value => {
+      if (generation === previewGeneration.current) setPreview(value)
+    }, error => { if (generation === previewGeneration.current) setPreviewError(error) })
+      .finally(() => { if (generation === previewGeneration.current) setPreviewing(false) })
   }
   const deploySelected = () => {
     if (!requestKey) return
@@ -173,9 +184,11 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
   }
   const previewRollout = () => {
     setRolloutPreviewing(true); setRolloutPreviewError(null); setRolloutPreview(null)
+    const generation = ++previewGeneration.current
     void previewConfigRollout(org, integration, object, chosenRevision).then(value => {
-      setRolloutPreview(value); setRolloutConfirm(true)
-    }, setRolloutPreviewError).finally(() => setRolloutPreviewing(false))
+      if (generation === previewGeneration.current) { setRolloutPreview(value); setRolloutConfirm(true) }
+    }, error => { if (generation === previewGeneration.current) setRolloutPreviewError(error) })
+      .finally(() => { if (generation === previewGeneration.current) setRolloutPreviewing(false) })
   }
   const startRollout = () => {
     if (!rolloutRequestKey) return
@@ -187,162 +200,168 @@ function ProfilePage({ organizationId: org, integrationId: integration, objectId
     })
   }
 
-  return <AppShell><div className="workspace-page integration-page">
-    <WorkspaceHeader title={remote?.displayName ?? value.profile.name} back={back}
+  return <AppShell><div className="workspace-page work-page detail-page integration-page">
+    {integrationInfo.data ? <InfrastructureContextPath items={[
+      { label: i18n.t.integrations.title, to: `${base}${scopeSearch}` },
+      { label: integrationInfo.data.name, to: back.to },
+      { label: remote?.displayName ?? value.profile.name },
+    ]} /> : null}
+    <WorkspaceHeader title={remote?.displayName ?? value.profile.name} back={integrationInfo.data ? undefined : back}
       subtitle={`${value.profile.name} · ${value.profile.code}`}
       status={<StatusIndicator label={label} tone={value.status === 'IN_SYNC' ? 'success' :
-        value.status === 'DEPLOYMENT_FAILED' || value.status === 'REMOTE_DRIFT' ? 'danger' : 'neutral'} />} />
+        value.status === 'REMOTE_DRIFT' ? 'warning' : value.status === 'DEPLOYMENT_FAILED' ? 'danger' : 'neutral'} />} />
+    {managed.isError ? <RefreshWarning updatedAt={managed.dataUpdatedAt} retry={() => managed.refetch()} /> : null}
     {value.status === 'REMOTE_DRIFT' ? <InlineAlert tone="warning" title={label}>
-      {ru ? 'Конфигурация изменена в Remnawave. Проверьте diff перед новым развёртыванием.' :
-        'The configuration changed in Remnawave. Review the diff before deploying again.'}</InlineAlert> : null}
-    {value.latestDeployment?.status === 'UNKNOWN' ? <InlineAlert tone="warning"
-      title={ru ? 'Результат неизвестен' : 'Deployment result is unknown'}>
-      {ru ? 'Невозможно безопасно определить, применена ли конфигурация. Синхронизируйте интеграцию перед новым развёртыванием.' :
-        'InfraDesk cannot safely determine whether Remnawave applied the configuration. Synchronize before deploying again.'}
+      {c.driftHelp}</InlineAlert> : null}
+    {value.latestDeployment?.status === 'UNKNOWN' || rollouts.data?.[0]?.status === 'UNKNOWN' ? <InlineAlert tone="warning"
+      title={c.deploymentResultIsUnknown}>
+      {c.unknownDetail}
     </InlineAlert> : null}
     {value.latestDeployment?.errorCode === 'INTEGRATION_CONFIG_REMOTE_CHANGED' ? <InlineAlert tone="danger"
-      title={ru ? 'Удалённая конфигурация изменилась' : 'Remote configuration changed'}>
-      {ru ? 'Синхронизируйте интеграцию и проверьте новый diff.' : 'Synchronize and review the new diff.'}
+      title={c.remoteConfigurationChanged}>
+      {c.syncReview}
     </InlineAlert> : null}
-    <WorkspaceSection title={ru ? 'Состояние' : 'Status'}><PropertyGrid columns={2} items={[
-      { label: ru ? 'Удалённый профиль' : 'Remote profile', value: remote?.displayName ?? '—' },
-      { label: ru ? 'Профиль InfraDesk' : 'InfraDesk profile', value: value.profile.name },
-      { label: ru ? 'Последняя ревизия' : 'Latest revision', value: value.profile.latestRevisionNumber },
-      { label: ru ? 'Последнее развёртывание' : 'Latest deployment', value: value.latestDeployment?.revisionNumber ?? '—' },
-      { label: ru ? 'Удалённый hash' : 'Remote hash', value: value.remoteSha256 ?? '—' },
-      { label: ru ? 'Локальный hash' : 'Local hash', value: value.latestSha256 },
-      { label: ru ? 'Узлов с профилем' : 'Nodes using profile', value: value.nodesUsingProfile },
+    <WorkspaceSection title={c.status}><PropertyGrid columns={2} items={[
+      { label: c.remoteProfile, value: remote?.displayName ?? '—' },
+      { label: c.infradeskProfile, value: value.profile.name },
+      { label: c.latestRevision, value: value.profile.latestRevisionNumber },
+      { label: c.latestDeployment, value: value.latestDeployment?.revisionNumber ?? '—' },
+      { label: c.nodesUsingProfile, value: value.nodesUsingProfile },
     ]} /></WorkspaceSection>
     <WorkspaceTabs tabs={[
-      { id: 'configuration', label: ru ? 'Конфигурация' : 'Configuration' },
-      { id: 'revisions', label: ru ? 'Ревизии' : 'Revisions' },
-      { id: 'deployments', label: ru ? 'Развёртывания' : 'Deployments' },
-      { id: 'rollouts', label: 'Rollouts' },
+      { id: 'configuration', label: c.configuration },
+      { id: 'revisions', label: c.revisions },
+      { id: 'deployments', label: c.deployments },
+      { id: 'rollouts', label: c.safeDeployments },
     ]} active={tab} onChange={next => setTab(next as typeof tab)} />
-    {tab === 'configuration' ? <WorkspaceSection title={ru ? `Ревизия ${chosenRevision}` : `Revision ${chosenRevision}`}>
+    {tab === 'configuration' ? <WorkspaceSection title={c.revisionTitle(chosenRevision)}>
+      <label className="field integration-revision-select">{c.revision}<select value={chosenRevision} disabled={editing}
+        onChange={event => setSelected(Number(event.target.value))}>
+        {(revisions.data ?? [{ revisionNumber: chosenRevision }]).map(item => <option key={item.revisionNumber}
+          value={item.revisionNumber}>{c.revisionTitle(item.revisionNumber)}</option>)}
+      </select></label>
       <div className="integration-row-actions">
         <button className="secondary-button" type="button" disabled={!content || editing} onClick={startEdit}>
-          {ru ? 'Новая ревизия' : 'New revision'}</button>
-        <button className="secondary-button" type="button" disabled={previewing || editing} onClick={previewSelected}>
-          {previewing ? i18n.t.common.loading : ru ? 'Предпросмотр развёртывания' : 'Preview deployment'}</button>
+          {c.newRevision}</button>
+        <button className="secondary-button" type="button" disabled={previewing || rolloutPreviewing || editing} onClick={previewSelected}>
+          {previewing ? i18n.t.common.loading : c.previewDeployment}</button>
+        {canDeploy ? <button className="secondary-button" type="button" disabled={busy || editing || !content ||
+          value.status === 'WAITING_REFRESH' || value.status === 'UNAVAILABLE' || !preview || preview.revisionNumber !== chosenRevision} onClick={() => setConfirm(true)}>
+          {c.deploy}</button> : null}
         {canDeploy ? <button className="primary-button" type="button" disabled={busy || editing || !content ||
-          value.status === 'WAITING_REFRESH' || value.status === 'UNAVAILABLE'} onClick={() => setConfirm(true)}>
-          {ru ? 'Развернуть' : 'Deploy'}</button> : null}
-        {canDeploy ? <button className="primary-button" type="button" disabled={busy || editing || !content ||
-          rolloutPreviewing || rollouts.data?.some(item => ![
+          rolloutPreviewing || previewing || rollouts.data?.some(item => ![
             'SUCCEEDED', 'ROLLED_BACK', 'FAILED', 'UNKNOWN', 'CANCELLED'].includes(item.status))}
           onClick={previewRollout}>{rolloutPreviewing ? i18n.t.common.loading :
-            ru ? 'Безопасное развёртывание' : 'Guarded rollout'}</button> : null}
+            c.guardedRollout}</button> : null}
       </div>
-      {contentError ? <InlineAlert tone="danger" title={ru ? 'Ошибка загрузки' : 'Load failed'}>
-        {describeError(contentError, i18n)}</InlineAlert> : null}
-      {editing ? <><textarea aria-label="JSON configuration" className="configuration-content-textarea" value={editor}
+      {contentError ? <InlineAlert tone="danger" title={c.loadFailed} action={<button className="secondary-button" onClick={() => setContentRetry(value => value + 1)}>{i18n.t.common.retry}</button>}>
+        {describeIntegrationError(contentError, i18n)}</InlineAlert> : null}
+      {editing ? <><p className="muted-copy">{c.immutable}</p><textarea aria-label={c.jsonConfiguration} className="configuration-content-textarea" value={editor}
         spellCheck={false} onChange={event => { setEditor(event.target.value); setParseError('') }} />
         {parseError ? <InlineAlert tone="danger" title={parseError} /> : null}
-        {create.isError ? <InlineAlert tone="danger" title={describeError(create.error, i18n)} /> : null}
+        {create.isError ? <InlineAlert tone="danger" title={(describeIntegrationError(create.error, i18n)) ?? undefined} /> : null}
         <div className="integration-row-actions"><button className="secondary-button" type="button"
           onClick={() => { setEditing(false); setEditor('') }}>{i18n.t.common.cancel}</button>
           <button className="primary-button" type="button" disabled={create.isPending} onClick={save}>
-            {ru ? 'Сохранить ревизию' : 'Save revision'}</button></div></> :
+            {c.saveRevision}</button></div></> :
         content ? <pre className="configuration-content-preview">{JSON.stringify(content.config, null, 2)}</pre> :
         <p role="status">{i18n.t.common.loading}</p>}
-      {previewError ? <InlineAlert tone="danger" title={ru ? 'Предпросмотр не удался' : 'Preview failed'}>
-        {describeError(previewError, i18n)}</InlineAlert> : null}
-      {preview ? <div><h3>{ru ? 'Текущая конфигурация Remnawave → выбранная ревизия' :
-        'Current Remnawave configuration → selected revision'}</h3>
-        <p>{preview.changed ? ru ? 'Есть изменения' : 'Changes found' : ru ? 'Изменений нет' : 'No changes'}</p>
+      {previewError ? <InlineAlert tone="danger" title={c.previewFailed}>
+        {describeIntegrationError(previewError, i18n)}</InlineAlert> : null}
+      {preview ? <div><h3>{c.diffTitle}</h3>
+        <p>{preview.changed ? c.changesFound : c.noChanges}</p>
         <pre className="configuration-content-preview">{preview.diff.text}</pre>
-        {preview.diff.truncated ? <p>{ru ? 'Diff усечён' : 'Diff truncated'}</p> : null}</div> : null}
-      {deploy.isError ? <InlineAlert tone="danger" title={ru ? 'Запрос не подтверждён' : 'Request not confirmed'}>
-        {describeError(deploy.error, i18n)} <button type="button" className="text-button" onClick={deploySelected}>
-          {ru ? 'Проверить тот же запрос' : 'Check the same request'}</button></InlineAlert> : null}
+        {preview.diff.truncated ? <p>{c.diffTruncated}</p> : null}</div> : null}
+      {deploy.isError ? <InlineAlert tone="danger" title={c.requestNotConfirmed}>
+        {describeIntegrationError(deploy.error, i18n)} <button type="button" className="text-button" onClick={deploySelected}>
+          {c.checkTheSameRequest}</button></InlineAlert> : null}
       {pendingRequest?.revision === chosenRevision && !deploy.isError && !busy ?
-        <InlineAlert tone="warning" title={ru ? 'Запрос ожидает подтверждения' : 'Request awaiting confirmation'}>
+        <InlineAlert tone="warning" title={c.requestAwaitingConfirmation}>
           <button type="button" className="text-button" onClick={deploySelected} disabled={deploy.isPending}>
-            {ru ? 'Проверить тот же запрос' : 'Check the same request'}</button>
+            {c.checkTheSameRequest}</button>
         </InlineAlert> : null}
       {rolloutPreviewError || rollout.isError ? <InlineAlert tone="danger"
-        title={ru ? 'Запрос rollout не выполнен' : 'Rollout request failed'}>
-        {describeError(rolloutPreviewError ?? rollout.error, i18n)}
+        title={c.rolloutRequestFailed}>
+        {describeIntegrationError(rolloutPreviewError ?? rollout.error, i18n)}
       </InlineAlert> : null}
       {pendingRolloutRequest ? <InlineAlert tone="warning"
-        title={ru ? 'Результат запроса rollout неизвестен' : 'Rollout request result is unknown'}>
-        {ru ? 'Повторная проверка использует тот же request ID.' :
-          'Check the request again with the same request ID.'}
+        title={c.rolloutRequestResultIsUnknown}>
+        {c.retryDetail}
         <button type="button" className="text-button" onClick={startRollout} disabled={rollout.isPending}>
-          {ru ? 'Проверить тот же запрос' : 'Check the same rollout request'}</button>
+          {c.checkTheSameRolloutRequest}</button>
       </InlineAlert> : null}
     </WorkspaceSection> : null}
-    {tab === 'revisions' ? <WorkspaceSection title={ru ? 'Ревизии' : 'Revisions'}>
-      {revisions.data?.map(item => <button key={item.revisionNumber} className="secondary-button" type="button"
+    {tab === 'revisions' ? <WorkspaceSection title={c.revisions}>
+      <HistoryState query={revisions} />
+      {!isUnavailableError(revisions.error) && revisions.data?.map(item => <button key={item.revisionNumber} className="secondary-button" type="button"
         onClick={() => { setSelected(item.revisionNumber); setTab('configuration') }}>
-        {ru ? 'Ревизия' : 'Revision'} {item.revisionNumber} · {i18n.format.dateTime(item.createdAt)}</button>)}
+        {c.revision} {item.revisionNumber} · {i18n.format.dateTime(item.createdAt)}
+        {item.revisionNumber === value.profile.latestRevisionNumber ? ` · ${c.latest}` : ''}
+        {item.revisionNumber === chosenRevision ? ` · ${c.selected}` : ''}
+        {deployments.data?.some(deployment => deployment.revisionNumber === item.revisionNumber && deployment.status === 'SUCCEEDED') ? ` · ${c.wasDeployed}` : ''}</button>)}
     </WorkspaceSection> : null}
-    {tab === 'deployments' ? <WorkspaceSection title={ru ? 'История развёртываний' : 'Deployment history'}>
-      <div className="table-scroll"><table className="data-grid"><thead><tr>
-        <th>{ru ? 'Ревизия' : 'Revision'}</th><th>{ru ? 'Статус' : 'Status'}</th>
-        <th>{ru ? 'Создано' : 'Created'}</th><th>{ru ? 'Ошибка' : 'Error'}</th></tr></thead>
-        <tbody>{deployments.data?.map(item => <tr key={item.id}><td>{item.revisionNumber}</td>
-          <td>{item.status}</td><td>{i18n.format.dateTime(item.createdAt)}</td><td>{item.errorCode ?? '—'}</td>
-        </tr>)}</tbody></table></div>
+    {tab === 'deployments' ? <WorkspaceSection title={c.deploymentHistory}>
+      <HistoryState query={deployments} />
+      {!isUnavailableError(deployments.error) && deployments.data?.length ? <div className="table-scroll"><table className="data-grid"><thead><tr>
+        <th>{c.revision}</th><th>{c.status}</th>
+        <th>{c.created}</th><th>{c.error}</th></tr></thead>
+        <tbody>{!isUnavailableError(deployments.error) && deployments.data?.map(item => <tr key={item.id}><td>{item.revisionNumber}</td>
+          <td><StatusIndicator label={c.operations[item.status]} tone={item.status === "UNKNOWN" ? "warning" : item.status === "FAILED" ? "danger" : item.status === "SUCCEEDED" ? "success" : "info"} /></td><td>{i18n.format.dateTime(item.createdAt)}</td><td>{errorText(item.errorCode) ?? '—'}</td>
+        </tr>)}</tbody></table></div> : null}
     </WorkspaceSection> : null}
-    {tab === 'rollouts' ? <WorkspaceSection title={ru ? 'Безопасные rollout' : 'Guarded rollout history'}>
-      <p>{ru ? 'Remnawave применяет изменения Config Profile ко всем включённым узлам этого профиля.' :
-        'Remnawave applies Config Profile changes to all enabled nodes using this profile.'}</p>
-      <p className="muted-copy">{ru ? 'Node-level canary недоступен: rollout выполняется для всего профиля.' :
-        'Node-level canary is unavailable for this provider. Rollout is profile-wide.'}</p>
-      {rollouts.data?.[0] ? <ol>
-        <li>{rollouts.data[0].status === 'PREPARING' ? '•' : '✓'} Preparing fresh baseline</li>
-        <li>{rollouts.data[0].baselineRevisionNumber ? '✓' : '•'} Baseline revision {rollouts.data[0].baselineRevisionNumber ?? '—'}</li>
-        <li>{['APPLYING', 'VERIFYING', 'ROLLBACK_APPLYING', 'ROLLBACK_VERIFYING', 'SUCCEEDED', 'ROLLED_BACK', 'FAILED', 'UNKNOWN']
-          .includes(rollouts.data[0].status) ? '✓' : '•'} Applying revision {rollouts.data[0].targetRevisionNumber}</li>
-        <li>{['VERIFYING', 'ROLLBACK_APPLYING', 'ROLLBACK_VERIFYING', 'SUCCEEDED', 'ROLLED_BACK', 'FAILED', 'UNKNOWN']
-          .includes(rollouts.data[0].status) ? '✓' : '•'} Waiting for fresh observation</li>
-        <li>{['ROLLBACK_APPLYING', 'ROLLBACK_VERIFYING', 'ROLLED_BACK'].includes(rollouts.data[0].status) ? '✕' : '•'} Verifying {rollouts.data[0].affectedNodes} nodes</li>
-        {['ROLLBACK_APPLYING', 'ROLLBACK_VERIFYING', 'ROLLED_BACK'].includes(rollouts.data[0].status) ?
-          <li>{rollouts.data[0].status === 'ROLLED_BACK' ? '✓' : '•'} Restoring revision {rollouts.data[0].baselineRevisionNumber}</li> : null}
-      </ol> : null}
-      <div className="table-scroll"><table className="data-grid"><thead><tr>
-        <th>{ru ? 'Ревизии' : 'Revisions'}</th><th>{ru ? 'Статус' : 'Status'}</th>
-        <th>{ru ? 'Авто rollback' : 'Auto rollback'}</th><th>{ru ? 'Ошибка' : 'Error'}</th></tr></thead>
-        <tbody>{rollouts.data?.map(item => <tr key={item.id}>
-          <td>{item.baselineRevisionNumber ?? '—'} → {item.targetRevisionNumber}</td><td>{item.status}</td>
-          <td>{item.automaticRollback ? 'On' : 'Off'}</td><td>{item.errorCode ?? '—'}</td>
-        </tr>)}</tbody></table></div>
+    {tab === 'rollouts' ? <WorkspaceSection title={c.guardedRolloutHistory}>
+      <HistoryState query={rollouts} />
+      <p className="muted-copy">{c.safeScope}</p>
+      {!isUnavailableError(rollouts.error) && rollouts.data?.[0] ? <PropertyGrid columns={2} items={[
+        { label: c.status, value: c.operations[rollouts.data[0].status] },
+        { label: c.baseline, value: rollouts.data[0].baselineRevisionNumber ?? '—' },
+        { label: c.target, value: rollouts.data[0].targetRevisionNumber },
+        { label: c.affectedNodes, value: rollouts.data[0].affectedNodes },
+        { label: c.alreadyUnhealthy, value: rollouts.data[0].preexistingUnhealthyNodes },
+      ]} /> : null}
+      {!isUnavailableError(rollouts.error) && rollouts.data?.length ? <div className="table-scroll"><table className="data-grid"><thead><tr>
+        <th>{c.revisions}</th><th>{c.status}</th>
+        <th>{c.automaticRollback}</th><th>{c.error}</th></tr></thead>
+        <tbody>{!isUnavailableError(rollouts.error) && rollouts.data?.map(item => <tr key={item.id}>
+          <td>{item.baselineRevisionNumber ?? '—'} → {item.targetRevisionNumber}</td><td><StatusIndicator label={c.operations[item.status]} tone={item.status === "UNKNOWN" || item.status === "ROLLED_BACK" ? "warning" : item.status === "FAILED" ? "danger" : item.status === "SUCCEEDED" ? "success" : "info"} /></td>
+          <td>{item.automaticRollback ? i18n.t.integrations.enabled : i18n.t.integrations.disabled}</td><td>{errorText(item.errorCode) ?? '—'}</td>
+        </tr>)}</tbody></table></div> : null}
     </WorkspaceSection> : null}
-    {confirm ? <div className="dialog-backdrop" role="presentation"><section role="dialog" aria-modal="true"
-      aria-label={ru ? 'Подтвердить развёртывание' : 'Confirm deployment'} className="monitor-rule-dialog integration-bind-dialog">
-      <div className="dialog-heading"><h2>{ru ? `Развернуть ревизию ${chosenRevision}?` : `Deploy revision ${chosenRevision}?`}</h2></div>
-      <div className="dialog-body"><p>{ru ? `Это заменит конфигурацию профиля ${remote?.displayName ?? value.profile.name} в Remnawave.` :
-        `This will replace the configuration of ${remote?.displayName ?? value.profile.name} in Remnawave.`}</p>
-        <p>{ru ? `Узлов с профилем: ${value.nodesUsingProfile}. Они могут быть затронуты.` :
-          `Nodes using profile: ${value.nodesUsingProfile}. They may be affected.`}</p></div>
-      <div className="dialog-actions"><button className="secondary-button" type="button" onClick={() => setConfirm(false)}>
-        {i18n.t.common.cancel}</button><button className="primary-button" type="button" onClick={deploySelected}>
-        {ru ? 'Развернуть' : 'Deploy'}</button></div></section></div> : null}
-    {rolloutConfirm && rolloutPreview ? <div className="dialog-backdrop" role="presentation"><section role="dialog"
-      aria-modal="true" aria-label="Confirm guarded rollout" className="monitor-rule-dialog integration-bind-dialog">
-      <div className="dialog-heading"><h2>{ru ? `Guarded rollout ревизии ${chosenRevision}?` :
-        `Guarded rollout revision ${chosenRevision}?`}</h2></div>
-      <div className="dialog-body">
-        <p>{ru ? 'Remnawave применит Config Profile ко всем включённым узлам, использующим этот профиль.' :
-          'Remnawave applies a Config Profile update to all enabled nodes using this profile.'}</p>
-        <p>{ru ? 'Затронуто узлов' : 'Affected nodes'}: {rolloutPreview.affectedNodes}</p>
-        {rolloutPreview.preexistingUnhealthyNodes > 0 ? <InlineAlert tone="warning"
-          title={`${rolloutPreview.preexistingUnhealthyNodes} nodes were already unhealthy before rollout.`} /> : null}
-        <p>{ru ? 'InfraDesk проверит их состояние после обновления.' :
-          'InfraDesk will verify their state after the update.'}</p>
-        <label><input type="checkbox" checked={automaticRollback}
-          onChange={event => setAutomaticRollback(event.target.checked)} /> {' '}
-          {ru ? `Восстановить ревизию ${rolloutPreview.baselineRevisionNumber} при подтверждённой регрессии` :
-            `Restore revision ${rolloutPreview.baselineRevisionNumber} if a health regression is confirmed`}</label>
-        <p className="muted-copy">{ru ? 'Node-level canary недоступен.' :
-          'Node-level canary is unavailable for this provider.'}</p>
-      </div><div className="dialog-actions"><button className="secondary-button" type="button"
-        onClick={() => setRolloutConfirm(false)}>{i18n.t.common.cancel}</button>
-        <button className="primary-button" type="button" onClick={startRollout} disabled={rollout.isPending}>
-          {ru ? 'Начать rollout' : 'Start rollout'}</button></div>
-    </section></div> : null}
-    <p className="muted-copy"><Link to={back.to}>{ru ? 'Вернуться к интеграции' : 'Back to integration'}</Link></p>
+    {confirm ? <IntegrationDialog title={c.deployRevision(chosenRevision)} onClose={() => setConfirm(false)}
+      busy={deploy.isPending} actions={<><button className="secondary-button" type="button" onClick={() => setConfirm(false)}>{i18n.t.common.cancel}</button>
+        <button className="primary-button" type="button" onClick={deploySelected} disabled={deploy.isPending}>{c.deploy}</button></>}>
+      <p>{c.replaceProfile(remote?.displayName ?? value.profile.name)}</p><p>{c.nodesAffected(value.nodesUsingProfile)}</p>
+      <p className="muted-copy">{c.safeScope}</p>
+      {preview ? <pre className="configuration-content-preview">{preview.diff.text}</pre> : null}
+    </IntegrationDialog> : null}
+    {rolloutConfirm && rolloutPreview ? <IntegrationDialog title={c.safeRevision(chosenRevision)}
+      onClose={() => setRolloutConfirm(false)} busy={rollout.isPending} actions={<>
+        <button className="secondary-button" type="button" onClick={() => setRolloutConfirm(false)}>{i18n.t.common.cancel}</button>
+        <button className="primary-button" type="button" onClick={startRollout} disabled={rollout.isPending}>{c.startRollout}</button></>}>
+      <strong>{remote?.displayName ?? value.profile.name}</strong><p>{c.safeScope}</p>
+      <PropertyGrid columns={2} items={[
+        { label: c.baseline, value: rolloutPreview.baselineRevisionNumber },
+        { label: c.target, value: rolloutPreview.targetRevisionNumber },
+        { label: c.affectedNodes, value: rolloutPreview.affectedNodes },
+      ]} />
+      {rolloutPreview.preexistingUnhealthyNodes > 0 ? <InlineAlert tone="warning" title={c.alreadyUnhealthy}>
+        {rolloutPreview.preexistingUnhealthyNodes}</InlineAlert> : null}
+      <p>{c.verifyNodes}</p>
+      <label><input type="checkbox" checked={automaticRollback}
+        onChange={event => setAutomaticRollback(event.target.checked)} /> {c.automaticRollback}</label>
+      <p className="muted-copy">{c.restoreRevision(rolloutPreview.baselineRevisionNumber)}</p>
+    </IntegrationDialog> : null}
+    <p className="muted-copy"><Link to={back.to}>{c.backToIntegration}</Link></p>
   </div></AppShell>
+}
+
+function HistoryState({ query }: { query: { isPending: boolean; isError: boolean; error: unknown;
+  data?: unknown[]; dataUpdatedAt: number; refetch: () => unknown } }) {
+  const i18n = useI18n()
+  if (query.isPending) return <div className="row-skeleton" aria-label={i18n.t.common.loading}><span /><span /></div>
+  if (query.isError) return query.data && !isUnavailableError(query.error) ?
+    <RefreshWarning updatedAt={query.dataUpdatedAt} retry={() => { void query.refetch() }} /> :
+    <InlineAlert tone="danger" title={describeIntegrationError(query.error, i18n)} action={
+      <button className="secondary-button" onClick={() => query.refetch()}>{i18n.t.common.retry}</button>} />
+  return query.data?.length === 0 ? <EmptyWorkspaceState compact title={i18n.t.integrationConfig.empty} /> : null
 }

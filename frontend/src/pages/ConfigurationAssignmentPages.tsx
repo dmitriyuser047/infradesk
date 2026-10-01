@@ -14,6 +14,7 @@ import { AssignmentStatus, ManagedRemovePanel, resourcePagePath } from '../compo
 import { ConfigurationDeploymentPanel } from '../components/configuration/ConfigurationDeploymentPanel'
 import { isTargetPath, supportsConfigurationAssignment } from '../components/configuration/configurationTargetSupport'
 import { AppShell } from '../components/layout/AppShell'
+import { withWorkspaceContext } from '../components/layout/workspaceNavigation'
 import { InlineAlert, PageLoading, PageUnavailable, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
@@ -49,6 +50,7 @@ export function ConfigurationAssignmentCreatePage() {
 function CreateContent({ organizationId, presetProfileId, presetResourceId }: {
   organizationId: string; presetProfileId: string | null; presetResourceId: string | null
 }) {
+  const [searchParams] = useSearchParams()
   const i18n = useI18n()
   const t = i18n.t.assignments
   const navigate = useNavigate()
@@ -59,12 +61,13 @@ function CreateContent({ organizationId, presetProfileId, presetResourceId }: {
   const presetResource = useResource(organizationId, presetResourceId ?? undefined)
   const presetProfile = useConfigurationProfile(organizationId, presetProfileId ?? '', canManage && presetProfileId !== null)
   const create = useCreateConfigurationAssignment(organizationId)
-  const back = presetProfileId
+  const parent = presetProfileId
     ? { label: presetProfile.data?.profile.name ?? i18n.t.configurations.back, to: profileTargetsPath(organizationId, presetProfileId) }
     : presetResourceId && presetResource.data
       ? { label: presetResource.data.name, to: `/organizations/${encodeURIComponent(organizationId)}/environments/${
         encodeURIComponent(presetResource.data.environmentId)}/resources/${encodeURIComponent(presetResourceId)}?tab=configurations` }
       : { label: i18n.t.configurations.back, to: configurationsPath(organizationId) }
+  const back = { ...parent, to: withWorkspaceContext(parent.to, searchParams) }
 
   if (!permissions.isPending && !canManage) {
     return <div className="workspace-page"><WorkspaceHeader title={t.createTitle} back={back} /><InlineAlert tone="danger" title={t.accessDenied} /></div>
@@ -95,8 +98,8 @@ function CreateContent({ organizationId, presetProfileId, presetResourceId }: {
       submitLabel={t.save} pendingLabel={t.saving}
       validate={() => (resourceId ? null : t.chooseTarget)}
       onSubmit={draft => create.mutate({ resourceId, profileId, ...draft }, {
-        onSuccess: detail => navigate(presetProfileId ? profileTargetsPath(organizationId, presetProfileId)
-          : `${resourcePagePath(organizationId, detail)}?tab=configurations`, { replace: true }),
+        onSuccess: detail => navigate(withWorkspaceContext(presetProfileId ? profileTargetsPath(organizationId, presetProfileId)
+          : `${resourcePagePath(organizationId, detail)}?tab=configurations`, searchParams), { replace: true }),
       })} />
   </div>
 }
@@ -168,9 +171,10 @@ function EditContent({ organizationId, assignmentId }: { organizationId: string;
   const [removingManaged, setRemovingManaged] = useState(false)
   const detail = query.data
   const fromProfile = searchParams.get('from') === 'profile'
-  const back = !detail ? { label: i18n.t.configurations.back, to: configurationsPath(organizationId) }
+  const parent = !detail ? { label: i18n.t.configurations.back, to: configurationsPath(organizationId) }
     : fromProfile ? { label: detail.profile.name, to: profileTargetsPath(organizationId, detail.profile.id) }
       : { label: detail.resource.name, to: `${resourcePagePath(organizationId, detail)}?tab=configurations` }
+  const back = { ...parent, to: withWorkspaceContext(parent.to, searchParams) }
 
   if (!permissions.isPending && !canManage) {
     return <div className="workspace-page"><WorkspaceHeader title={t.editTitle} back={back} /><InlineAlert tone="danger" title={t.accessDenied} /></div>

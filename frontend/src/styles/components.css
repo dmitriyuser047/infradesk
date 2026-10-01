@@ -23,6 +23,7 @@ input:not([type="checkbox"]):not([type="radio"]), select, textarea {
 }
 textarea { min-height: 120px; padding: var(--space-2) var(--space-3); resize: vertical; line-height: var(--line-height); }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 input:disabled, select:disabled, textarea:disabled, input[readonly] { background: var(--surface-muted); color: var(--text-tertiary); }
 input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); }
 input::placeholder, textarea::placeholder { color: var(--text-disabled); }
@@ -95,10 +96,14 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 
 /* Status: always text (and usually an icon) plus color, never color alone */
 .status-indicator {
-  display: inline-flex; align-items: center; gap: 6px; width: fit-content; min-height: 24px; padding: 0 10px;
+  display: inline-flex; align-items: center; gap: 6px; width: fit-content; min-height: var(--status-height-default); padding: 0 10px;
   border-radius: 999px; font-size: var(--font-size-caption); font-weight: 600; line-height: 1.2; white-space: nowrap;
 }
 .status-dot { display: inline-block; flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.status-indicator-small { min-height: var(--status-height-compact); gap: var(--space-1); padding-inline: var(--space-2); font-size: var(--font-size-caption); }
+.status-indicator-small svg { width: 12px; height: 12px; }
+.data-grid .status-indicator { min-height: var(--status-height-compact); gap: var(--space-1); padding-inline: var(--space-2); font-size: var(--font-size-caption); }
+.data-grid .status-indicator svg { width: 12px; height: 12px; }
 .status-indicator svg { flex: 0 0 auto; }
 .status-success { background: var(--success-soft); color: var(--success); }
 .status-warning { background: var(--warning-soft); color: var(--warning); }
@@ -260,8 +265,8 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 .form-toolbar { justify-content: flex-end; }
 
 /* Dialogs */
-.dialog-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: var(--space-4); background: rgb(16 24 40 / 45%); }
-.monitor-rule-dialog { width: min(100%, 480px); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-md); }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: var(--space-4); background: var(--overlay-backdrop); }
+.monitor-rule-dialog { width: min(100%, 480px); max-height: calc(100vh - 2 * var(--space-4)); max-height: calc(100dvh - 2 * var(--space-4)); overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-md); }
 .dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--border); }
 .dialog-close { width: 32px; height: 32px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-tertiary); font-size: 22px; line-height: 1; }
 .dialog-close:hover { background: var(--surface-hover); }

@@ -48,7 +48,7 @@ export function ContextSwitcher() {
   const parts = organizationId === undefined ? [] : [
     organization?.name ?? t.currentOrganization,
     project?.name ?? (resolvedProjectId ? '…' : t.allProjects),
-    ...(environmentId ? [environment?.name ?? '…'] : []),
+    ...(resolvedProjectId ? [environmentId ? environment?.name ?? '…' : t.allEnvironments] : []),
   ]
   const summary = parts.join(' / ')
 
@@ -78,6 +78,8 @@ export function ContextSwitcher() {
           {organizations.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
       </label>
+      <Link className="text-link" to="/organizations" onClick={() => popover.close(false)}>
+        {i18n.t.shell.organizations}</Link>
       {organizationId !== undefined ? <>
         <label className="field">
           <span className="field-label">{t.project}</span>

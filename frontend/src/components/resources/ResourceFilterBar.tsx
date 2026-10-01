@@ -32,10 +32,10 @@ export function ResourceFilterBar({ criteria, onChange, onRefresh }: {
       {criteria.query !== '' ? <button type="button" className="search-field-clear" aria-label={t.clearSearch}
         onClick={() => onChange({ ...criteria, query: '' })}><X aria-hidden size={14} /></button> : null}
     </div>
-    <SegmentedControl name="resource-type" label={t.type} options={types} value={criteria.type}
-      onChange={type => onChange({ ...criteria, type })} />
     <SegmentedControl name="resource-condition" label={t.condition} options={conditions} value={criteria.condition}
       onChange={condition => onChange({ ...criteria, condition })} />
+    <SegmentedControl name="resource-type" label={t.type} options={types} value={criteria.type}
+      onChange={type => onChange({ ...criteria, type })} />
     <div className="filter-bar-actions">
       {isResourceFilterActive(criteria) ? <button className="text-button" type="button" onClick={() => onChange(noResourceFilter)}>
         <RotateCcw aria-hidden size={14} />{t.reset}</button> : null}

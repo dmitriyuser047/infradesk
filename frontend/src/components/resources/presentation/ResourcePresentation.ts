@@ -36,6 +36,8 @@ export interface ResourceRendering {
   searchTerms?: (resource: ResourceResponse) => readonly string[]
   /** Status badge next to the title on the resource page, when this kind has one. */
   headerStatus?: (resource: ResourceResponse, i18n: I18n) => ResourceStatusPresentation
+  /** Secondary identity, when a type has a more useful value than its internal code. */
+  headerSubtitle?: (resource: ResourceResponse, i18n: I18n) => string | undefined
   /** Type-specific content of the Overview tab. */
   Overview: ComponentType<ResourcePresentationProps>
   /**

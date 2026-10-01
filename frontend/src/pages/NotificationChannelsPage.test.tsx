@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient, shouldRetryQuery } from '../app/queryClient'
-import { I18nProvider } from '../i18n'
+import { I18nProvider, type Locale } from '../i18n'
 import type { NotificationChannelResponse, TestNotificationResponse } from '../types/notificationChannel'
 import { NotificationChannelsPage } from './NotificationChannelsPage'
 
@@ -23,6 +23,7 @@ function json(value: unknown, status = 200): Response {
 }
 
 function setup(options: {
+  locale?: Locale
   role?: 'OWNER' | 'MEMBER'
   channels?: NotificationChannelResponse[]
   listError?: boolean
@@ -48,7 +49,7 @@ function setup(options: {
     if (url.endsWith('/test')) return options.testResponse ?? json(testResults.shift() ?? { status: 'SENT', code: null })
     throw new Error(`Unexpected request ${method} ${url}`)
   }))
-  render(<I18nProvider initialLocale="en"><QueryClientProvider client={client}>
+  render(<I18nProvider initialLocale={options.locale ?? 'en'}><QueryClientProvider client={client}>
     <MemoryRouter initialEntries={['/organizations/org/notifications']}><Routes>
       <Route path="/organizations/:organizationId/notifications" element={<NotificationChannelsPage />} />
     </Routes></MemoryRouter>
@@ -59,13 +60,29 @@ function setup(options: {
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('notification channels page', () => {
+  it.each([
+    ['ru', 'Отправлять при', 'Открытии инцидента, Закрытии инцидента', 'Типы проблем', 'Превышение порога, Потеря данных', 'Telegram-чат', 'Подключение', 'Настроено', 'Не настроено'],
+    ['en', 'Send when', 'An incident opens, An incident closes', 'Problem types', 'Threshold violation, Data loss', 'Telegram chat', 'Connection', 'Configured', 'Not configured'],
+  ] as const)('distinguishes notification settings and credentials in %s', async (locale, events, eventValues, reasons, reasonValues, chat, connection, configured, missing) => {
+    const telegram: NotificationChannelResponse = { ...emailChannel, id: 't', name: 'Ops Telegram', type: 'TELEGRAM',
+      events: ['INCIDENT_OPENED', 'INCIDENT_RESOLVED'], reasons: ['THRESHOLD', 'NO_DATA'],
+      config: { credentialConfigured: true, chatId: '-100123' } }
+    setup({ locale, channels: [telegram, { ...telegram, id: 'missing', name: 'Unconfigured', enabled: false,
+      config: { credentialConfigured: false, chatId: '-100456' } }] })
+    const card = within((await screen.findByText('Ops Telegram')).closest('article')!)
+    for (const label of [events, reasons, chat, connection]) expect(card.getByText(label, { selector: 'dt' })).toBeTruthy()
+    for (const value of [eventValues, reasonValues, configured, '-100123']) expect(card.getByText(value, { selector: 'dd' })).toBeTruthy()
+    expect(within(screen.getByText('Unconfigured').closest('article')!).getByText(missing)).toBeTruthy()
+    expect(document.body.textContent).not.toContain('Учётные данные настроены')
+  })
+
   it('uses production query settings and loads the complete list in one request', async () => {
     const webhook: NotificationChannelResponse = { ...emailChannel, id: 'w', name: 'Automation', type: 'WEBHOOK', config: { credentialConfigured: true } }
     const telegram: NotificationChannelResponse = { ...emailChannel, id: 't', name: 'Ops Telegram', type: 'TELEGRAM', config: { credentialConfigured: true, chatId: '-100123' } }
     const { client, requests } = setup({ channels: [webhook, telegram, emailChannel] })
     expect(client.getDefaultOptions().queries).toMatchObject({ retry: shouldRetryQuery, refetchOnWindowFocus: false })
     expect(await screen.findByText('Mail alerts')).toBeTruthy()
-    expect(screen.getByText('Automation')).toBeTruthy()
+    expect(screen.getByText('Automation', { selector: '.notification-card *' })).toBeTruthy()
     expect(screen.getByText('Ops Telegram')).toBeTruthy()
     const telegramCard = screen.getByText('Ops Telegram').closest('article')!
     expect(telegramCard.querySelector('.notification-properties')?.textContent).toContain('ConnectionConfigured')
@@ -95,7 +112,8 @@ describe('notification channels page', () => {
 
   it('renders empty and load-error states', async () => {
     setup({ channels: [] })
-    expect(await screen.findByText('No notification channels')).toBeTruthy()
+    expect(await screen.findByText('Notification channels are not configured')).toBeTruthy()
+    expect(screen.getByText('Add a channel to receive incident notifications.')).toBeTruthy()
     cleanup(); vi.unstubAllGlobals()
     const { requests } = setup({ listError: true })
     expect(await screen.findByText('Unable to load notification channels', {}, { timeout: 3_000 })).toBeTruthy()

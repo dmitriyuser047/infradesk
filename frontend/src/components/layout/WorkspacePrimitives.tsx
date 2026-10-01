@@ -125,12 +125,13 @@ export function WorkspaceTabs<T extends string>({ tabs, active, onChange }: {
 export type StatusTone = 'success' | 'danger' | 'info' | 'warning' | 'neutral'
 
 /** A status as a badge: text and a mark, colored by tone — the color is never the only signal. */
-export function StatusIndicator({ label, tone = 'neutral', icon: Icon }: {
+export function StatusIndicator({ label, tone = 'neutral', size = 'default', icon: Icon }: {
   label: string
   tone?: StatusTone
+  size?: 'small' | 'default'
   icon?: LucideIcon
 }) {
-  return <span className={`status-indicator status-${tone}`}>
+  return <span className={`status-indicator${size === 'small' ? ' status-indicator-small' : ''} status-${tone}`}>
     {Icon ? <Icon aria-hidden size={13} /> : <span className="status-dot" aria-hidden />}{label}
   </span>
 }

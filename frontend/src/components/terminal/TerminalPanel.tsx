@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Clipboard, Copy, Eraser, Maximize, Plug, RotateCcw, Unplug, X } from 'lucide-react'
+import { Clipboard, Copy, Eraser, Maximize, Minimize, Plug, RotateCcw, Unplug, X } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import type { ConnectionResponse } from '../../types/connection'
 import { InlineAlert, StatusIndicator } from '../layout/WorkspacePrimitives'
@@ -30,12 +30,19 @@ export function TerminalPanel({ organizationId, connection, editLink }: {
   const session = useTerminalSession(organizationId, connection.id)
   const controller = session ? workspace.get(organizationId, connection.id) : undefined
   const panel = useRef<HTMLDivElement>(null)
+  const [fullscreen, setFullscreen] = useState(false)
   const [fullscreenError, setFullscreenError] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const prerequisite = terminalPrerequisite(connection)
   const state: TerminalState = session?.state ?? 'idle'
   const running = state === 'connecting' || state === 'reconnecting' || state === 'connected' || state === 'closing'
   const reason = session?.code ? labels.reasons[session.code as keyof typeof labels.reasons] ?? labels.unknownError : undefined
+
+  useEffect(() => {
+    const changed = () => setFullscreen(document.fullscreenElement === panel.current)
+    document.addEventListener('fullscreenchange', changed)
+    return () => document.removeEventListener('fullscreenchange', changed)
+  }, [])
 
   useEffect(() => { controller?.rename(connection.name) }, [controller, connection.name])
 
@@ -64,23 +71,25 @@ export function TerminalPanel({ organizationId, connection, editLink }: {
           <button className="secondary-button" type="button" onClick={() => workspace.close(session.key)}>
             <X size={16} />{labels.close}</button>
         </> : null}
-        {document.fullscreenEnabled ? <button className="icon-button" type="button" title={labels.fullscreen} aria-label={labels.fullscreen}
+        {document.fullscreenEnabled ? <button className="icon-button" type="button" title={fullscreen ? t.workScreens.fullscreenExit : labels.fullscreen} aria-label={fullscreen ? t.workScreens.fullscreenExit : labels.fullscreen}
           onClick={() => {
             setFullscreenError(false)
             const request = document.fullscreenElement === panel.current ? document.exitFullscreen() : panel.current?.requestFullscreen()
             request?.catch(() => setFullscreenError(true))
-          }}><Maximize size={18} /></button> : null}
+          }}>{fullscreen ? <Minimize aria-hidden size={18} /> : <Maximize aria-hidden size={18} />}</button> : null}
       </div>
     </div>
     {prerequisite ? <InlineAlert tone={prerequisite === 'mismatch' ? 'danger' : 'warning'} title={labels[prerequisite]}
       action={editLink ? <Link className="secondary-button" to={editLink}>{t.common.edit}</Link> : undefined} /> : null}
     {reason && !running ? <InlineAlert tone={state === 'error' ? 'danger' : 'info'} title={reason} /> : null}
     {session?.clipboardNotice ? <InlineAlert tone="warning" title={labels[session.clipboardNotice]} /> : null}
-    {fullscreenError ? <InlineAlert tone="warning" title={labels.unknownError} /> : null}
+    {fullscreenError ? <InlineAlert tone="warning" title={t.workScreens.fullscreenError} /> : null}
     {controller ? <div className={`terminal-stage terminal-theme-${session?.theme ?? 'light'}`}
       onClick={() => { if (menu) setMenu(null) }}
       onContextMenu={event => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY }) }}>
       <TerminalViewport controller={controller} label={labels.title} />
+      {(state === 'connecting' || state === 'reconnecting') && !controller.hasHistory
+        ? <div className="terminal-state-message">{t.workScreens.terminalConnecting}</div> : null}
       {state !== 'connected' && controller.hasHistory ? <div className="terminal-history-label">{labels.history} · {labels.states[state]}</div> : null}
       {menu ? <div className="terminal-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
         <button type="button" role="menuitem" onClick={() => { controller.copy(); setMenu(null) }}>{labels.copy}</button>
@@ -89,7 +98,9 @@ export function TerminalPanel({ organizationId, connection, editLink }: {
         <button type="button" role="menuitem" onClick={() => { controller.clear(); setMenu(null) }}>{labels.clear}</button>
       </div> : null}
     </div>
-      : <div className="terminal-screen" aria-label={labels.title} />}
+      : <div className="terminal-screen terminal-placeholder" aria-label={labels.title}>
+        {state === 'connecting' || state === 'reconnecting' ? t.workScreens.terminalConnecting : t.workScreens.terminalIdle}
+      </div>}
   </div>
 }
 

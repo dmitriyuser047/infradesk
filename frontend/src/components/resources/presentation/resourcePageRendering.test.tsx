@@ -57,7 +57,7 @@ describe('resource page presentation', () => {
 
   it('puts the node status next to its name: online or offline', () => {
     expect(headerStatus(renderResourcePage(node))).toBe('status-success Online')
-    expect(headerStatus(renderResourcePage(nodeWith(false, { cpu: null, memory: null, uptime: null })))).toBe('status-danger Offline')
+    expect(headerStatus(renderResourcePage(nodeWith(false, { cpu: null, memory: null, uptime: null })))).toBe('status-danger Unavailable')
     expect(headerStatus(renderResourcePage(node, 'ru'))).toBe('status-success В сети')
   })
 
@@ -82,7 +82,7 @@ describe('resource page presentation', () => {
     expect(html).toContain('<dt>Distribution</dt><dd>—</dd>')
     expect(html).toContain('<dt>Kernel</dt><dd>—</dd>')
     expect(html).toContain('<dt>CPU model</dt><dd>—</dd>')
-    expect(headerStatus(html)).toBe('status-neutral Unknown')
+    expect(headerStatus(html)).toBe('status-neutral State unknown')
   })
 
   it('sets technical node values in monospace and plain ones as text', () => {
@@ -160,7 +160,7 @@ describe('resource page presentation', () => {
       const html = renderResourcePage(value)
 
       expect(html).toContain('Resource name')
-      expect(html).toContain(`${value.resourceTypeCode === 'NODE' ? 'Server' : 'Container'} · resource-code`)
+      expect(html).toContain(value.resourceTypeCode === 'NODE' ? 'node-1 · Ubuntu 24.04 LTS' : 'Container · resource-code')
       expect(html).toMatch(/class="workspace-back"[^>]*>.*Resources<\/a>/)
       expect(html).toContain('Overview')
     }

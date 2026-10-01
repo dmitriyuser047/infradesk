@@ -14,15 +14,16 @@ export interface WorkspaceScope {
 
 /** Which section a path belongs to; null outside any organization (the organization list). */
 export function activeWorkspaceModule(pathname: string): WorkspaceModule | null {
-  if (!/^\/organizations\/[^/]+/.test(pathname)) return null
+  pathname = pathname.split(/[?#]/, 1)[0]
+  if (!/^\/organizations\/[^/]+(\/|$)/.test(pathname)) return null
   if (/^\/organizations\/[^/]+\/overview\/?$/.test(pathname)) return 'overview'
-  if (pathname.includes('/incidents')) return 'incidents'
-  if (pathname.includes('/connections')) return 'connections'
-  if (pathname.includes('/notifications')) return 'notifications'
-  if (pathname.includes('/integrations')) return 'integrations'
-  if (/^\/organizations\/[^/]+\/configurations(\/|$)/.test(pathname)) return 'configurations'
-  if (/^\/organizations\/[^/]+\/resources\/?$/.test(pathname)) return 'resources'
-  if (pathname.includes('/environments/') && !pathname.endsWith('/environments/new')) return 'resources'
+  if (/^\/organizations\/[^/]+\/incidents(\/|$)/.test(pathname)) return 'incidents'
+  if (/^\/organizations\/[^/]+\/connections(\/|$)/.test(pathname)) return 'connections'
+  if (/^\/organizations\/[^/]+\/notifications(\/|$)/.test(pathname)) return 'notifications'
+  if (/^\/organizations\/[^/]+\/integrations(\/|$)/.test(pathname)) return 'integrations'
+  if (/^\/organizations\/[^/]+\/(configurations|configuration-rules|configuration-assignments)(\/|$)/.test(pathname)) return 'configurations'
+  if (/^\/organizations\/[^/]+\/resources(\/|$)/.test(pathname)) return 'resources'
+  if (/^\/organizations\/[^/]+\/environments\/[^/]+(\/|$)/.test(pathname)) return 'resources'
   return 'workspace'
 }
 
@@ -61,4 +62,14 @@ export function contextQuery(scope: Pick<WorkspaceScope, 'projectId' | 'environm
 
 export function contextSearch(params: URLSearchParams): string {
   return contextQuery({ projectId: params.get('project'), environmentId: params.get('environment') })
+}
+
+/** Carry only the workspace scope; keep the destination's own tab and filter parameters. */
+export function withWorkspaceContext(path: string, params: URLSearchParams): string {
+  const [pathname, search = ''] = path.split('?')
+  const destination = new URLSearchParams(search)
+  const scope = new URLSearchParams(contextSearch(params))
+  scope.forEach((value, key) => destination.set(key, value))
+  const query = destination.toString()
+  return `${pathname}${query ? `?${query}` : ''}`
 }

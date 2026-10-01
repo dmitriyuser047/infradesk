@@ -94,7 +94,8 @@ function renderApp(path: string, options: { role?: 'OWNER' | 'MEMBER'; locale?: 
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(['me'], { id: 'user', email: 'owner@example.com', displayName: 'Dmitriy' })
   client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Org', role: options.role ?? 'OWNER' }])
-  client.setQueryData(['projects', 'org'], [])
+  client.setQueryData(['projects', 'org'], [{ id: 'p', organizationId: 'org', code: 'vpn', name: 'VPN', description: null }])
+  client.setQueryData(['environments', 'org', 'p'], [{ id: 'e', organizationId: 'org', projectId: 'p', code: 'prod', name: 'Production', kind: 'PROD' }])
   return render(<I18nProvider initialLocale={options.locale ?? 'en'}><QueryClientProvider client={client}>
     <MemoryRouter initialEntries={[path]}><Routes>
       <Route path="/organizations/:organizationId/configurations" element={<ConfigurationsPage />} />
@@ -110,6 +111,19 @@ const location = () => screen.getByTestId('location').textContent
 
 describe('configuration profiles', () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('keeps scope through the profile, version editor and back navigation', async () => {
+    backend({ profiles: [profile({ id: 'p1' })], revisions: [revision(1)] })
+    renderApp('/organizations/org/configurations?project=p&environment=e')
+    const link = await screen.findByRole('link', { name: 'VPN Production Nodes' })
+    expect(link.getAttribute('href')).toBe('/organizations/org/configurations/p1?project=p&environment=e')
+    fireEvent.click(link)
+    await screen.findByRole('heading', { level: 1, name: 'VPN Production Nodes' })
+    expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/configurations?project=p&environment=e')
+    fireEvent.click(screen.getByRole('link', { name: 'New version' }))
+    await waitFor(() => expect(location()).toBe('/organizations/org/configurations/p1/versions/new?project=p&environment=e'))
+    expect(screen.getByRole('link', { name: 'VPN Production Nodes' }).getAttribute('href')).toBe('/organizations/org/configurations/p1?project=p&environment=e')
+  })
 
   it('appears in the navigation for an owner only', async () => {
     backend()

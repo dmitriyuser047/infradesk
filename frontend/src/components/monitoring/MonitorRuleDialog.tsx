@@ -39,7 +39,7 @@ export function MonitorRuleDialog({
       <section className="monitor-rule-dialog" role="dialog" aria-modal="true" aria-labelledby="monitor-rule-dialog-title">
         <div className="dialog-heading">
           <h2 id="monitor-rule-dialog-title">{rule === undefined ? t.monitoring.dialogAdd : t.monitoring.dialogEdit}</h2>
-          <button className="dialog-close" type="button" aria-label={t.common.close} onClick={onClose} disabled={pending}>×</button>
+          <button className="dialog-close" type="button" aria-label={t.common.close} title={t.common.close} onClick={onClose} disabled={pending}>×</button>
         </div>
         <MonitorRuleForm
           key={rule?.id ?? 'new'}

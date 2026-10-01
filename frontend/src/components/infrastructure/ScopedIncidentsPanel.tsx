@@ -7,6 +7,7 @@ import { IncidentList } from '../incidents/IncidentList'
 import type { IncidentRowOptions } from '../incidents/IncidentRow'
 import { EmptyWorkspaceState, InlineAlert, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { useNow } from '../layout/useNow'
+import { isUnavailableError, RefreshWarning } from '../layout/RefreshWarning'
 
 /**
  * The incidents of a connection's resources or of one resource: the open ones first, then the
@@ -27,8 +28,10 @@ export function ScopedIncidentsPanel({ organizationId, scope, options, openTotal
   const now = useNow(60_000)
   const open = useScopedIncidentPages(organizationId, scope, 'OPEN', true)
   const resolved = useScopedIncidentPages(organizationId, scope, 'RESOLVED', true)
-  const openRows = open.data?.pages.flat() ?? []
-  const history = resolved.data?.pages.flat() ?? []
+  const openData = isUnavailableError(open.error) ? undefined : open.data
+  const resolvedData = isUnavailableError(resolved.error) ? undefined : resolved.data
+  const openRows = openData?.pages.flat() ?? []
+  const history = resolvedData?.pages.flat() ?? []
   const total = openTotal !== undefined && openTotal >= openRows.length ? openTotal : undefined
 
   return <>
@@ -36,10 +39,11 @@ export function ScopedIncidentsPanel({ organizationId, scope, options, openTotal
       {total === undefined ? loadedCount(openRows.length, open.hasNextPage, i18n)
         : openRows.length < total ? i18n.t.common.shown(openRows.length, total) : t.openIncidentCount(total)}</span> : null}>
       {open.isPending ? <div className="incident-skeleton" aria-label={t.loadingIncidents}><span /><span /></div> : null}
-      {open.isError && openRows.length === 0 ? <InlineAlert tone="danger" title={t.incidentsError}
+      {open.isError && openData && !open.isFetchNextPageError ? <RefreshWarning updatedAt={open.dataUpdatedAt} retry={() => open.refetch()} /> : null}
+      {open.isError && !openData ? <InlineAlert tone="danger" title={t.incidentsError}
         action={<button className="secondary-button" type="button" onClick={() => open.refetch()}>{i18n.t.common.retry}</button>}>
         {describeError(open.error, i18n)}</InlineAlert> : null}
-      {open.isSuccess && openRows.length === 0 ? <EmptyWorkspaceState compact tone="success" icon={CheckCircle2}
+      {openData && openRows.length === 0 ? <EmptyWorkspaceState compact tone="success" icon={CheckCircle2}
         title={t.noActiveIncidents} detail={t.noActiveIncidentsDetail} /> : null}
       {openRows.length > 0 ? <IncidentList organizationId={organizationId} incidents={openRows} now={now}
         label={t.openIncidents} options={options} /> : null}
@@ -47,10 +51,11 @@ export function ScopedIncidentsPanel({ organizationId, scope, options, openTotal
     </WorkspaceSection>
     <WorkspaceSection title={t.resolvedIncidents}>
       {resolved.isPending ? <div className="incident-skeleton" aria-label={t.loadingIncidents}><span /><span /></div> : null}
-      {resolved.isError && history.length === 0 ? <InlineAlert tone="danger" title={t.incidentsError}
+      {resolved.isError && resolvedData && !resolved.isFetchNextPageError ? <RefreshWarning updatedAt={resolved.dataUpdatedAt} retry={() => resolved.refetch()} /> : null}
+      {resolved.isError && !resolvedData ? <InlineAlert tone="danger" title={t.incidentsError}
         action={<button className="secondary-button" type="button" onClick={() => resolved.refetch()}>{i18n.t.common.retry}</button>}>
         {describeError(resolved.error, i18n)}</InlineAlert> : null}
-      {resolved.isSuccess && history.length === 0 ? <EmptyWorkspaceState compact title={t.noResolvedIncidents} /> : null}
+      {resolvedData && history.length === 0 ? <EmptyWorkspaceState compact title={t.noResolvedIncidents} /> : null}
       {history.length > 0 ? <IncidentList organizationId={organizationId} incidents={history} now={now}
         label={t.resolvedIncidents} options={options} /> : null}
       <ShowMore query={resolved} />

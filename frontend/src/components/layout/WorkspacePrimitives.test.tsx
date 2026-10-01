@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../../api/httpClient'
 import { I18nProvider } from '../../i18n'
-import { CopyButton, PageLoading, PageUnavailable } from './WorkspacePrimitives'
+import { CopyButton, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator } from './WorkspacePrimitives'
 
 function renderInApp(node: React.ReactNode) {
   return render(<I18nProvider initialLocale="ru"><MemoryRouter>{node}</MemoryRouter></I18nProvider>)
@@ -30,6 +30,17 @@ describe('shared page primitives', () => {
     expect(screen.getByRole('heading', { name: 'Загрузка подключения' })).toBeTruthy()
     expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/list')
     expect(document.querySelector('[aria-busy="true"]')).not.toBeNull()
+  })
+
+  it('supports compact table statuses and long technical values', () => {
+    const longValue = 'host-' + 'a'.repeat(100) + '.example.internal'
+    renderInApp(<><StatusIndicator label="Online" tone="success" size="small" />
+      <StatusIndicator label="Unknown" />
+      <PropertyGrid items={[{ label: 'Hostname', value: longValue, technical: true }]} /></>)
+
+    expect(document.querySelector('.status-indicator-small')?.textContent).toContain('Online')
+    expect(document.querySelector('.status-indicator:not(.status-indicator-small)')?.textContent).toContain('Unknown')
+    expect(screen.getByText(longValue).className).toContain('property-technical')
   })
 
   it('explains a missing object without a retry, and a failed load with one and without the server message', () => {

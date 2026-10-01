@@ -2,9 +2,9 @@ import { Link, useLocation } from 'react-router-dom'
 
 import { useI18n } from '../../i18n'
 import type { IncidentListItemResponse } from '../../types/incident'
-import { incidentPath } from '../infrastructure/infrastructureLinks'
+import { incidentPath, originQuery, resourcePath } from '../infrastructure/infrastructureLinks'
 import { sourceSummary } from '../infrastructure/SourceConnections'
-import { formatMonitorCondition } from '../monitoring/monitorRulePresentation'
+import { formatMonitorCondition, getMetricLabel } from '../monitoring/monitorRulePresentation'
 import { IncidentStatusBadge } from './IncidentStatusBadge'
 import { getIncidentReasonPresentation, getIncidentTimePresentation } from './incidentPresentation'
 
@@ -41,6 +41,10 @@ export function IncidentRow({ organizationId, incident, now, options = {} }: {
   const resource = incident.resource
   const condition = formatMonitorCondition(incident.monitorRule, i18n)
   const subject = showResource ? resource.name : condition
+  const metric = getMetricLabel(incident.monitorRule.metricCode, i18n)
+  const problem = incident.reason === 'THRESHOLD' ? i18n.t.incidents.page.thresholdTitle(metric)
+    : incident.reason === 'NO_DATA' ? i18n.t.incidents.page.noDataTitle(metric) : reason.label
+  const resourceQuery = originQuery(new URLSearchParams(options.linkQuery ?? location.search), { kind: 'incident', id: incident.id })
   const sources = sourceSummary(incident.sourceConnections, i18n.t.infrastructure.moreSources)
   const ReasonIcon = reason.Icon
 
@@ -49,10 +53,13 @@ export function IncidentRow({ organizationId, incident, now, options = {} }: {
     <div className="incident-main">
       <div className="incident-subject">
         {/* Several incidents of one resource must still be told apart by their link alone. */}
-        <Link className="incident-link" to={destination} title={subject}
-          aria-label={i18n.t.incidents.linkLabel(subject, reason.label, time.label)}>{subject}</Link>
+        <Link className="incident-link" to={destination} title={problem}
+          aria-label={i18n.t.incidents.linkLabel(subject, reason.label, time.label)}>{showResource ? problem : subject}</Link>
         {showResource ? <span className="incident-type">{i18n.t.resources.types[resource.resourceTypeCode] ?? resource.resourceTypeCode}</span> : null}
       </div>
+      {showResource ? <Link className="incident-object-link"
+        aria-label={`${i18n.t.workScreens.incidentObject}: ${resource.name}`}
+        to={resourcePath(organizationId, incident.environment.id, resource.id, resourceQuery)}>{resource.name}</Link> : null}
       <span className={`incident-reason ${open ? `tone-${reason.tone}` : ''}`}>
         <ReasonIcon aria-hidden size={14} />{reason.label}
         {showCondition && showResource ? <span className="incident-condition"> · {condition}</span> : null}</span>

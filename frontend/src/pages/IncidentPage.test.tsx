@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -49,7 +49,7 @@ describe('incident page', () => {
   it('names what happened and where, never by identifier', async () => {
     const requests = renderPage()
     expect(await screen.findByRole('heading', { level: 1, name: 'CPU usage threshold breached' })).toBeTruthy()
-    expect(screen.getByText('backend · Container', { selector: '.workspace-subtitle' })).toBeTruthy()
+    expect(screen.getByText(/backend · Container/, { selector: '.workspace-subtitle' })).toBeTruthy()
     expect(document.body.textContent).not.toContain('0b69')
     expect(screen.getAllByText('CPU usage > 85% for 5m').length).toBeGreaterThan(0)
     // Everything above came from the incident read itself: no resource or connection is read.
@@ -59,15 +59,8 @@ describe('incident page', () => {
 
   it('links every related object by its canonical route', async () => {
     renderPage()
-    const path = await screen.findByRole('navigation', { name: 'Location in the infrastructure' })
-    expect(within(path).getAllByRole('link').map(link => [link.textContent, link.getAttribute('href')])).toEqual([
-      ['SvinPeak', '/organizations/org/resources?project=project'],
-      ['Production', '/organizations/org/environments/env?project=project&environment=env'],
-      // Links out of the incident remember it, so their "back" returns to it.
-      ['Finnish Node', '/organizations/org/connections/finnish?fromIncident=cpu'],
-      ['fin-prod-01', '/organizations/org/environments/env/resources/node?fromIncident=cpu'],
-      ['backend', '/organizations/org/environments/env/resources/backend?fromIncident=cpu'],
-    ])
+    await screen.findByRole('link', { name: 'Open resource backend' })
+    expect(screen.queryByRole('navigation', { name: 'Location in the infrastructure' })).toBeNull()
     expect(screen.getByRole('link', { name: 'Open resource backend' }).getAttribute('href'))
       .toBe('/organizations/org/environments/env/resources/backend?fromIncident=cpu')
     expect(screen.getByRole('link', { name: 'Open connection' }).getAttribute('href'))
@@ -87,9 +80,8 @@ describe('incident page', () => {
   it('keeps every source connection and pretends none is the one', async () => {
     renderPage({ ...incident, sourceConnections: [...incident.sourceConnections,
       { id: 'prom', name: 'Prometheus', connectorType: 'PROMETHEUS', active: false }] })
-    const path = await screen.findByRole('navigation', { name: 'Location in the infrastructure' })
-    expect(within(path).queryByText('Finnish Node')).toBeNull()
-    expect(screen.getByRole('link', { name: 'Open connection Finnish Node' })).toBeTruthy()
+    expect(await screen.findByRole('link', { name: 'Open connection Finnish Node' })).toBeTruthy()
+    expect(screen.queryByRole('navigation', { name: 'Location in the infrastructure' })).toBeNull()
     expect(screen.getByRole('link', { name: 'Open connection Prometheus' })).toBeTruthy()
     expect(screen.queryByRole('link', { name: 'Open connection' })).toBeNull()
     expect(screen.getByText('Sources')).toBeTruthy()

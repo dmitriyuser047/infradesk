@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { ConfigurationListLimit, useConfigurationProfiles } from '../api/configurations'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
+import { withWorkspaceContext } from '../components/layout/workspaceNavigation'
 import {
   EmptyWorkspaceState, InlineAlert, SegmentedControl, StatusIndicator, WorkspaceHeader, WorkspaceSection,
 } from '../components/layout/WorkspacePrimitives'
@@ -31,7 +32,7 @@ function ConfigurationsContent({ organizationId }: { organizationId: string }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const archived = searchParams.get('state') === 'archived'
   const query = useConfigurationProfiles(organizationId, archived, canManage)
-  const createPath = `${configurationsPath(organizationId)}/new`
+  const createPath = withWorkspaceContext(`${configurationsPath(organizationId)}/new`, searchParams)
   const create = <Link className="primary-button" to={createPath}><Plus aria-hidden size={16} />{t.create}</Link>
   const select = (next: 'active' | 'archived') => setSearchParams(previous => {
     const updated = new URLSearchParams(previous)
@@ -63,7 +64,7 @@ function ConfigurationsContent({ organizationId }: { organizationId: string }) {
         <thead><tr><th scope="col">{t.columns.name}</th><th scope="col">{t.columns.version}</th>
           <th scope="col">{t.columns.updated}</th><th scope="col">{t.columns.state}</th></tr></thead>
         <tbody>{profiles.map(profile => <tr key={profile.id}>
-          <td><Link className="grid-link" to={configurationPath(organizationId, profile.id)}>{profile.name}</Link>
+          <td><Link className="grid-link" to={withWorkspaceContext(configurationPath(organizationId, profile.id), searchParams)}>{profile.name}</Link>
             <small className="cell-secondary technical-value">{profile.code}</small></td>
           <td className="numeric-cell">{t.version(profile.latestRevisionNumber)}</td>
           <td>{i18n.format.dateTime(profile.updatedAt)}</td>

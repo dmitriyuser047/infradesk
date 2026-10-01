@@ -2,6 +2,7 @@ import { CheckCircle2, History, Siren } from 'lucide-react'
 import { useSearchParams, useParams } from 'react-router-dom'
 
 import { useIncidentPages } from '../api/incidents'
+import { isUnavailableError } from '../components/layout/RefreshWarning'
 import { AppShell } from '../components/layout/AppShell'
 import {
   EmptyWorkspaceState, InlineAlert, SegmentedControl, WorkspaceHeader, WorkspaceSection,
@@ -42,7 +43,7 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
   const queryStatus = filter === 'ALL' ? undefined : filter
   const incidentsQuery = useIncidentPages(organizationId, queryStatus)
   const now = useNow(60_000)
-  const incidents = incidentsQuery.data?.pages.flat()
+  const incidents = isUnavailableError(incidentsQuery.error) ? undefined : incidentsQuery.data?.pages.flat()
 
   const selectFilter = (next: Filter) => {
     setSearchParams(previous => { const updated = new URLSearchParams(previous); updated.set('status', next); return updated })
@@ -51,7 +52,7 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
 
   return (
     <AppShell>
-      <div className="workspace-page">
+      <div className="workspace-page work-page">
         <WorkspaceHeader title={t.title} subtitle={t.subtitle} />
         <WorkspaceSection title={t.section[filter]} actions={incidents ? <span className="resource-count">{loadedCount(incidents.length, incidentsQuery.hasNextPage, i18n)}</span> : null}>
           <div className="filter-bar">
@@ -66,11 +67,11 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
           {/* A failed refresh keeps the last list and says how old it is. */}
           {incidentsQuery.isError && incidents !== undefined ? (
             <InlineAlert tone="warning" title={t.refreshError} action={retry}>
-              {t.staleSince(i18n.format.time(new Date(incidentsQuery.dataUpdatedAt).toISOString()))} {describeError(incidentsQuery.error, i18n)}
+              {t.staleSince(i18n.format.dateTime(new Date(incidentsQuery.dataUpdatedAt).toISOString()))} {describeError(incidentsQuery.error, i18n)}
             </InlineAlert>
           ) : null}
           {incidents !== undefined && incidents.length === 0 ? (
-            <EmptyWorkspaceState tone={filter === 'OPEN' ? 'success' : 'neutral'} icon={emptyIcons[filter]}
+            <EmptyWorkspaceState compact tone={filter === 'OPEN' ? 'success' : 'neutral'} icon={emptyIcons[filter]}
               title={t.empty[filter].title} detail={t.empty[filter].detail} />
           ) : null}
           {incidents !== undefined && incidents.length > 0 ? (

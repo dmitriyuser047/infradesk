@@ -19,7 +19,7 @@ function nodeStatus(resource: ResourceResponse, i18n: I18n): ResourceStatusPrese
   const online = nodeData(resource)?.status?.online
   const t = i18n.t.resources.node
   return {
-    label: online === true ? t.online : online === false ? t.offline : i18n.t.common.unknown,
+    label: online === true ? t.online : online === false ? t.offline : i18n.t.workScreens.unknownState,
     tone: online === true ? 'success' : online === false ? 'danger' : 'neutral',
   }
 }
@@ -71,6 +71,11 @@ export const nodePresentation: ResourcePresentation = {
   condition: resource => { const online = nodeData(resource)?.status?.online; return online === true ? 'running' : online === false ? 'inactive' : 'unknown' },
   searchTerms: resource => { const hostname = nodeData(resource)?.spec?.hostname; return hostname ? [hostname] : [] },
   headerStatus: nodeStatus,
+  headerSubtitle: resource => {
+    const spec = nodeData(resource)?.spec
+    return spec ? [spec.hostname !== resource.name ? spec.hostname : null,
+      spec.distribution ?? spec.operatingSystem].filter(Boolean).join(' · ') || undefined : undefined
+  },
   Overview: NodeOverview,
   MetricSummary: NodeMetricSummary,
 }

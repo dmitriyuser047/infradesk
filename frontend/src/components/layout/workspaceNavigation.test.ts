@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest'
 
-import { activeWorkspaceModule, contextQuery, contextSearch, modulePath } from './workspaceNavigation'
+import { activeWorkspaceModule, contextQuery, contextSearch, modulePath, withWorkspaceContext } from './workspaceNavigation'
 
 describe('workspace navigation', () => {
+  it('ignores queries and matches module path boundaries rather than object names', () => {
+    expect(activeWorkspaceModule('/organizations/o/integrations/i?tab=nodes&project=p')).toBe('integrations')
+    expect(activeWorkspaceModule('/organizations/o/projects/connections/environments/new')).toBe('workspace')
+    expect(activeWorkspaceModule('/organizations/o/connections-old')).toBe('workspace')
+    expect(activeWorkspaceModule('/organizations/o/resources/r/history?tab=incidents')).toBe('resources')
+  })
+
+  it('carries only scope into a detail, leaving its own tab intact', () => {
+    expect(withWorkspaceContext('/configurations/profile?tab=targets', new URLSearchParams('project=p&environment=e&tab=nodes&state=archived')))
+      .toBe('/configurations/profile?tab=targets&project=p&environment=e')
+    expect(withWorkspaceContext('/configurations', new URLSearchParams('environment=e'))).toBe('/configurations')
+  })
   it('keeps every existing route in its section', () => {
     expect(activeWorkspaceModule('/organizations')).toBeNull()
     expect(activeWorkspaceModule('/organizations/o')).toBe('workspace')
@@ -10,11 +22,16 @@ describe('workspace navigation', () => {
     expect(activeWorkspaceModule('/organizations/o/projects/p/environments/new')).toBe('workspace')
     expect(activeWorkspaceModule('/organizations/o/overview')).toBe('overview')
     expect(activeWorkspaceModule('/organizations/o/resources')).toBe('resources')
+    expect(activeWorkspaceModule('/organizations/o/resources/r')).toBe('resources')
     expect(activeWorkspaceModule('/organizations/o/environments/e')).toBe('resources')
     expect(activeWorkspaceModule('/organizations/o/environments/e/resources/r')).toBe('resources')
     expect(activeWorkspaceModule('/organizations/o/incidents/i')).toBe('incidents')
     expect(activeWorkspaceModule('/organizations/o/connections/c/sync-sessions/s')).toBe('connections')
     expect(activeWorkspaceModule('/organizations/o/notifications/c/edit')).toBe('notifications')
+    expect(activeWorkspaceModule('/organizations/o/configurations/p/revisions/1')).toBe('configurations')
+    expect(activeWorkspaceModule('/organizations/o/configuration-rules/r')).toBe('configurations')
+    expect(activeWorkspaceModule('/organizations/o/configuration-assignments/a')).toBe('configurations')
+    expect(activeWorkspaceModule('/organizations/o/integrations/i/config-profiles/p')).toBe('integrations')
   })
 
   it('builds each section path inside the current context', () => {

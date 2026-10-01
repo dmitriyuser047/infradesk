@@ -30,14 +30,14 @@ const sources = [
  * Renders the page with the shell data seeded. The page makes two requests: the resource list and,
  * for the whole list at once, which connections discovered each resource.
  */
-async function renderPage(resources: ResourceResponse[], locale: Locale = 'ru') {
+async function renderPage(resources: ResourceResponse[], locale: Locale = 'ru', role = 'MEMBER') {
   const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(new Response(
     JSON.stringify(String(url).endsWith('/resource-sources') ? sources : resources),
     { status: 200, headers: { 'Content-Type': 'application/json' } })))
   vi.stubGlobal('fetch', fetchMock)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(['me'], { id: 'user', email: 'member@example.com', displayName: 'Member' })
-  client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Org', role: 'MEMBER' }])
+  client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Org', role }])
   client.setQueryData(['projects', 'org'], [{ id: 'project', organizationId: 'org', code: 'app', name: 'App', description: null }])
   client.setQueryData(['environments', 'org', 'project'], [
     { id: 'env', organizationId: 'org', projectId: 'project', code: 'prod', name: 'Production', kind: 'PROD' }])
@@ -54,6 +54,43 @@ const rows = () => screen.queryAllByRole('treeitem').map(item => item.querySelec
 
 describe('resources page filters', () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+  it('shows available server metrics and keeps container counts independent of search', async () => {
+    const data = fleet.map(item => item.id === 'finland' ? { ...item, updatedAt: '2026-10-01T10:00:00Z',
+      data: { kind: 'NODE' as const, spec: null, status: { online: true, cpuUsagePercent: 17,
+        memoryUsagePercent: 42, uptimeSeconds: 3600 } } } : item)
+    await renderPage(data, 'en')
+    await screen.findByRole('tree')
+    const row = () => screen.getByRole('link', { name: 'Open resource finland_node · Online' }).closest('.resource-row')!
+    expect(row().querySelectorAll('.numeric-cell')[0].textContent).toBe('17.0%')
+    expect(row().querySelectorAll('.numeric-cell')[1].textContent).toBe('42.0%')
+    expect(row().querySelectorAll('.numeric-cell')[2].textContent).toBe('2')
+    expect(row().querySelector('time')?.getAttribute('dateTime')).toBe('2026-10-01T10:00:00Z')
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search resources' }), { target: { value: 'postgres' } })
+    expect(document.querySelector('.resource-row .numeric-cell:nth-last-child(2)')?.textContent).toBe('2')
+    expect(screen.getByRole('status').textContent).toBe('Showing 1 of 4')
+  })
+
+  it('keeps the inventory and stored online status when refresh fails', async () => {
+    const fetch = await renderPage(fleet, 'en')
+    await screen.findByRole('tree')
+    fetch.mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ code: 'INTERNAL_ERROR' }), { status: 500 })))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(await screen.findByText('Unable to refresh data')).toBeTruthy()
+    expect(rows()).toEqual(['finland_node', 'postgres', 'report-cron', 'frankfurt_node'])
+    expect(screen.getByRole('link', { name: 'Open resource finland_node · Online' })).toBeTruthy()
+    expect(screen.getByText(/Showing state from/)).toBeTruthy()
+  })
+
+  it('offers adding a connection in an empty environment only with permission and preserves context', async () => {
+    await renderPage([], 'en', 'OWNER')
+    expect(await screen.findByRole('link', { name: 'Add connection' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Add connection' }).getAttribute('href')).toBe('/organizations/org/connections/new?project=project&environment=env')
+    cleanup()
+    await renderPage([], 'en', 'MEMBER')
+    await screen.findByText('No servers discovered yet')
+    expect(screen.queryByRole('link', { name: 'Add connection' })).toBeNull()
+  })
 
   it('searches, filters and resets the loaded list without another request', async () => {
     const fetchMock = await renderPage(fleet)
@@ -116,7 +153,7 @@ describe('resources page filters', () => {
     expect(screen.getByText('Ресурсы не найдены')).toBeTruthy()
     expect(screen.getByText('Измените поиск или фильтры')).toBeTruthy()
     expect(screen.queryByRole('tree')).toBeNull()
-    expect(screen.queryByText('Ресурсы ещё не обнаружены')).toBeNull()
+    expect(screen.queryByText('Серверы ещё не обнаружены')).toBeNull()
     // The empty state offers its own way back, next to the one in the filter bar.
     const [, emptyStateReset] = screen.getAllByRole('button', { name: 'Сбросить фильтры' })
     fireEvent.click(emptyStateReset)
@@ -124,7 +161,7 @@ describe('resources page filters', () => {
 
     cleanup()
     await renderPage([])
-    expect(await screen.findByText('Ресурсы ещё не обнаружены')).toBeTruthy()
+    expect(await screen.findByText('Серверы ещё не обнаружены')).toBeTruthy()
     expect(screen.queryByText('Ресурсы не найдены')).toBeNull()
     // Nothing to search in: no filter bar at all.
     expect(screen.queryByRole('searchbox')).toBeNull()
@@ -135,9 +172,9 @@ describe('resources page filters', () => {
     await screen.findByRole('tree')
     const search = screen.getByRole('searchbox', { name: 'Search resources' })
 
-    const type = screen.getByRole('group', { name: 'Resource type' })
+    const type = screen.getByRole('group', { name: 'Type' })
     expect(within(type).getAllByRole('radio').map(radio => radio.parentElement?.textContent)).toEqual(['All', 'Servers', 'Containers'])
-    const state = screen.getByRole('group', { name: 'State' })
+    const state = screen.getByRole('group', { name: 'Status' })
     expect(within(state).getAllByRole('radio').map(radio => radio.parentElement?.textContent)).toEqual(['All', 'Running', 'Inactive'])
 
     fireEvent.change(search, { target: { value: 'nothing' } })
@@ -149,6 +186,6 @@ describe('resources page filters', () => {
 
   it('says so in English when nothing has been discovered', async () => {
     await renderPage([], 'en')
-    expect(await screen.findByText('No resources discovered yet')).toBeTruthy()
+    expect(await screen.findByText('No servers discovered yet')).toBeTruthy()
   })
 })

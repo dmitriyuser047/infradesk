@@ -21,7 +21,7 @@
   /* Lines */
   --border: #e4e7ec;
   --border-strong: #d0d5dd;
-  --focus-ring: #84adff;
+  --focus-ring: var(--primary);
 
   /* Brand and status: text color + soft background pairs, never color alone */
   --primary: #2b59c3;
@@ -45,6 +45,7 @@
   /* Sidebar */
   --sidebar-bg: #101828;
   --sidebar-text: #cfd4dc;
+  --sidebar-on-hover: #ffffff;
   --sidebar-muted: #7d8696;
   --sidebar-hover: #1d2939;
   --sidebar-active: #243247;
@@ -69,7 +70,11 @@
   --space-5: 20px;
   --space-6: 24px;
   --control-height: 38px;
+  --control-height-compact: 32px;
   --row-height: 44px;
+  --status-height-compact: 20px;
+  --status-height-default: 24px;
+  --overlay-backdrop: rgb(16 24 40 / 45%);
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;

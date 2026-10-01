@@ -42,7 +42,7 @@ describe('project and environment forms', () => {
   it('lets an owner create a project in one request, showing that it is working', async () => {
     let finish: (response: Response) => void = () => undefined
     const sent = renderForm('/organizations/org/projects/new', { answer: method => method === 'POST'
-      ? new Promise<Response>(done => { finish = done }) : json([]) })
+      ? new Promise<Response>(done => { finish = done }) : json([{ id: 'billing', organizationId: 'org', code: 'billing', name: 'Billing', description: null }]) })
 
     expect(screen.getByRole('heading', { name: 'Новый проект' })).toBeTruthy()
     expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org')

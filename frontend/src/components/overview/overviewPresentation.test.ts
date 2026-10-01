@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { createI18n } from '../../i18n'
-import type { AttentionItemResponse, OverviewSummaryResponse } from '../../types/overview'
-import { getAttentionPresentation, getSummaryCards, isEmptyInfrastructure } from './overviewPresentation'
+import type { AttentionItemResponse, OverviewSummaryResponse, OperationsOverviewResponse } from '../../types/overview'
+import { getAttentionPresentation, getSummaryCards, isEmptyInfrastructure, getOverviewHealth } from './overviewPresentation'
 
 const en = createI18n('en')
 const ru = createI18n('ru')
@@ -16,6 +16,50 @@ function item(overrides: Partial<AttentionItemResponse>): AttentionItemResponse 
 }
 
 const links = { infrastructure: null, incidents: '/organizations/org/incidents', connections: '/organizations/org/connections' }
+
+function overview(changes: Partial<OverviewSummaryResponse> = {}): OperationsOverviewResponse {
+  return { scope: { type: 'ORGANIZATION' }, summary: summary({
+    nodes: { total: 2, online: 2, offline: 0 }, containers: { total: 4, running: 4, stopped: 0 },
+    connections: { total: 2, healthy: 2, failing: 0, neverSynced: 0 }, ...changes }),
+    attention: { items: [], total: 0 }, recentActivity: [], operationsHorizonHours: 24 }
+}
+
+describe('overall health presentation', () => {
+  it('shows known normal infrastructure and localized counts', () => {
+    expect(getOverviewHealth(overview(), ru)).toMatchObject({ state: 'normal', tone: 'success',
+      title: 'Все системы работают нормально', detail: '2 сервера в сети · 4 контейнера работают · активных инцидентов нет' })
+    expect(getOverviewHealth(overview(), en).title).toBe('All systems are operating normally')
+  })
+
+  it.each([
+    { incidents: { open: 1, threshold: 1, noData: 0 } },
+    { nodes: { total: 2, online: 1, offline: 1 } },
+    { connections: { total: 2, healthy: 1, failing: 1, neverSynced: 0 } },
+    { operations: { failed: 1, unknown: 0 } },
+    { operations: { failed: 0, unknown: 1 } },
+  ])('presents a reported problem without inventing critical severity: %j', changes => {
+    expect(getOverviewHealth(overview(changes), ru)).toMatchObject({ state: 'warning', tone: 'warning',
+      title: 'Есть проблемы, требующие внимания' })
+  })
+
+  it('distinguishes no infrastructure from unconfirmed health', () => {
+    expect(getOverviewHealth({ ...overview(), summary: summary() }, ru).state).toBe('empty')
+    expect(getOverviewHealth(overview({ nodes: { total: 2, online: 1, offline: 0 } }), ru).state).toBe('unknown')
+    expect(getOverviewHealth(overview({ connections: { total: 2, healthy: 1, failing: 0, neverSynced: 1 } }), ru).state).toBe('unknown')
+    // A stopped container alone is not turned into an incident or an invented critical problem.
+    expect(getOverviewHealth(overview({ containers: { total: 4, running: 3, stopped: 1 } }), ru).state).toBe('unknown')
+  })
+
+  it('keeps backend attention even when aggregate counts do not mention it', () => {
+    expect(getOverviewHealth({ ...overview(), attention: { total: 1, items: [item({ kind: 'NODE_OFFLINE' })] } }, ru).state).toBe('warning')
+  })
+
+  it('keeps ordinary counters neutral and incidents prominent', () => {
+    expect(getSummaryCards(overview().summary, links, 24, en).every(card => card.tone === 'neutral')).toBe(true)
+    expect(getSummaryCards(overview({ incidents: { open: 1, threshold: 1, noData: 0 } }).summary, links, 24, en)
+      .find(card => card.id === 'incidents')?.tone).toBe('warning')
+  })
+})
 
 function summary(overrides: Partial<OverviewSummaryResponse> = {}): OverviewSummaryResponse {
   return {
@@ -81,7 +125,7 @@ describe('attention presentation', () => {
     expect(hostKey.title).toBe('Ключ сервера изменился')
     expect(hostKey.subject).toBe('finland_node')
     expect(hostKey.detail).toBe('Ключ сервера изменился. Подключение заблокировано.')
-    expect(hostKey.to).toBe('/organizations/org/connections/connection/sync-sessions/session')
+    expect(hostKey.to).toBe('/organizations/org/connections/connection')
     expect(other.title).toBe('Synchronization failed')
     expect(other.detail).toBe('Synchronization failed')
   })
@@ -90,7 +134,7 @@ describe('attention presentation', () => {
     const offline = getAttentionPresentation('org', item({ kind: 'NODE_OFFLINE', priority: 3,
       resource: { ...resource, name: 'node-1', resourceTypeCode: 'NODE' } }), ru)
 
-    expect(offline.title).toBe('Сервер не в сети')
+    expect(offline.title).toBe('Сервер недоступен')
     expect(offline.subject).toBe('node-1')
     expect(offline.to).toBe('/organizations/org/environments/env/resources/resource')
   })
@@ -108,7 +152,7 @@ describe('fleet summary cards', () => {
     }), links, 24, en)
 
     expect(empty.map(card => card.value)).toEqual(['0', '0', '0', '0', '0'])
-    expect(empty.find(card => card.id === 'incidents')?.detail).toBe('No problems found')
+    expect(empty.find(card => card.id === 'incidents')?.detail).toBe('No active problems')
     expect(empty.find(card => card.id === 'connections')?.detail).toBe('None configured')
     expect(busy.find(card => card.id === 'nodes')?.detail).toBe('2 online · 1 offline')
     expect(busy.find(card => card.id === 'containers')?.value).toBe('240')

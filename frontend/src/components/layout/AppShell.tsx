@@ -5,6 +5,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom'
 import { useI18n, type Messages } from '../../i18n'
 import { useOrganizationPermissions, type OrganizationPermission } from '../auth/authorization'
 import { AccountMenu } from './AccountMenu'
+import { InfraDeskMark } from './InfraDeskMark'
 import { WorkspaceDock } from '../workspace/WorkspaceDock'
 import { useTerminalSessions } from '../workspace/TerminalWorkspaceProvider'
 import { ContextSwitcher } from './ContextSwitcher'
@@ -36,11 +37,15 @@ const navigation: NavigationGroup[] = [
       { module: 'connections', icon: Cable, label: t => t.shell.nav.connections },
     ],
   },
-  { label: t => t.shell.groups.monitoring, items: [{ module: 'incidents', icon: TriangleAlert, label: t => t.shell.nav.incidents }] },
-  { label: t => t.shell.groups.management, items: [
+  { label: t => t.shell.groups.monitoring, items: [
+    { module: 'incidents', icon: TriangleAlert, label: t => t.shell.nav.incidents },
     { module: 'notifications', icon: Bell, label: t => t.shell.nav.notifications, permission: 'manageNotifications' },
+  ] },
+  { label: t => t.shell.groups.automation, items: [
     { module: 'integrations', icon: Plug, label: t => t.shell.nav.integrations, permission: 'manageIntegrations' },
     { module: 'configurations', icon: FileCog, label: t => t.shell.nav.configurations, permission: 'manageConfigurations' },
+  ] },
+  { label: t => t.shell.groups.structure, items: [
     { module: 'workspace', icon: Layers, label: t => t.shell.nav.workspace },
   ] },
 ]
@@ -75,6 +80,7 @@ function ShellFrame({ children }: { children: ReactNode }) {
   const docked = useTerminalSessions().length > 0
   const toggleRef = useRef<HTMLButtonElement>(null)
   const sidebarRef = useRef<HTMLElement>(null)
+  const contentRef = useRef<HTMLElement>(null)
 
   // A navigation always closes the drawer on narrow screens.
   useEffect(() => { setDrawerOpen(false) }, [location.pathname, location.search])
@@ -97,48 +103,50 @@ function ShellFrame({ children }: { children: ReactNode }) {
     <aside ref={sidebarRef} id="app-sidebar" className="sidebar">
       <div className="sidebar-header">
         <Link className="brand" to="/organizations" aria-label={t.shell.brandHome}>
-          <span className="brand-mark" aria-hidden>ID</span><span className="brand-name">InfraDesk</span>
+          <InfraDeskMark /><span className="brand-name">InfraDesk</span>
         </Link>
-        <button type="button" className="icon-button sidebar-close" aria-label={t.shell.closeNavigation}
+        <button type="button" className="icon-button sidebar-close" aria-label={t.shell.closeNavigation} title={t.shell.closeNavigation}
           onClick={() => { setDrawerOpen(false); toggleRef.current?.focus() }}><X aria-hidden size={18} /></button>
       </div>
       <nav className="sidebar-nav" aria-label={t.shell.primaryNavigation}>
-        {navigation.map((group, index) => <div className="nav-group" key={index}>
+        {navigation.map((group, index) => {
+          const items = group.items.filter(item => !item.permission || permissions.can(item.permission))
+          return items.length > 0 ? <div className="nav-group" key={index}>
           {group.label ? <div className="nav-group-label">{group.label(t)}</div> : null}
           <ul>
-            {group.items.filter(item => !item.permission || permissions.can(item.permission)).map(item => {
+            {items.map(item => {
               const path = modulePath(item.module, scope)
               const Icon = item.icon
               const current = active === item.module
               return <li key={item.module}>{path ?
                 <Link className={`nav-link ${current ? 'nav-link-active' : ''}`} to={path}
+                  onClick={() => {
+                    if (drawerOpen) { setDrawerOpen(false); contentRef.current?.focus() }
+                  }}
                   aria-current={current ? 'page' : undefined}>
                   <Icon aria-hidden size={18} /><span>{item.label(t)}</span>
                 </Link> :
-                <span className="nav-link nav-link-disabled" aria-disabled="true">
+                <span className="nav-link nav-link-disabled" aria-disabled="true" title={t.shell.selectOrganizationFirst}>
                   <Icon aria-hidden size={18} /><span>{item.label(t)}</span>
                 </span>}</li>
             })}
           </ul>
-        </div>)}
+        </div> : null})}
         {scope.organizationId === undefined ? <p className="nav-hint">{t.shell.chooseOrganization}</p> : null}
       </nav>
-      <div className="sidebar-footer">
-        <Link className="nav-link" to="/organizations">{t.shell.organizations}</Link>
-      </div>
     </aside>
     {/* Closing by the backdrop returns focus to the menu button, as Escape and the close button do. */}
     {drawerOpen ? <div className="drawer-backdrop" aria-hidden onClick={() => { setDrawerOpen(false); toggleRef.current?.focus() }} /> : null}
     <div className="app-main">
       <header className="topbar">
-        <button ref={toggleRef} type="button" className="icon-button menu-toggle" aria-label={t.shell.openNavigation}
+        <button ref={toggleRef} type="button" className="icon-button menu-toggle" aria-label={t.shell.openNavigation} title={t.shell.openNavigation}
           aria-controls="app-sidebar" aria-expanded={drawerOpen} onClick={() => setDrawerOpen(true)}>
           <Menu aria-hidden size={20} />
         </button>
         <ContextSwitcher />
         <AccountMenu />
       </header>
-      <main className="content" id="main-content" tabIndex={-1}>{children}</main>
+      <main ref={contentRef} className="content" id="main-content" tabIndex={-1}>{children}</main>
     </div>
     <WorkspaceDock />
   </div>

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 
 import { useConfigurationAssignmentPages, useRemoveConfigurationAssignment } from '../../api/configurationAssignments'
 import { useDeploymentSummaries } from '../../api/configurationDeployments'
@@ -9,6 +9,7 @@ import { describeError } from '../../i18n/errors'
 import type { ConfigurationAssignment, ConfigurationAssignmentFilter } from '../../types/configurationAssignment'
 import type { DeploymentSummary } from '../../types/configurationDeployment'
 import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
+import { withWorkspaceContext } from '../layout/workspaceNavigation'
 import '../../styles/pages/configurations.css'
 
 const rulePagePath = (organizationId: string, ruleId: string) =>
@@ -112,6 +113,7 @@ export function ConfigurationAssignmentList({ organizationId, filter, view, canA
   view: 'profile' | 'resource'
   canAssign?: boolean
 }) {
+  const [searchParams] = useSearchParams()
   const i18n = useI18n()
   const t = i18n.t.assignments
   const pages = useConfigurationAssignmentPages(organizationId, filter, true)
@@ -129,7 +131,7 @@ export function ConfigurationAssignmentList({ organizationId, filter, view, canA
   const managedRow = rows.find(row => row.id === removingManaged && row.rule)
 
   return <WorkspaceSection title={title} description={<>{view === 'profile' ? t.targetsDescription : t.resourceDescription} {t.notApplied} {i18n.t.deployments.driftNote}</>}
-    actions={canAssign ? <Link className="secondary-button" to={newAssignmentPath(organizationId, filter)}>
+    actions={canAssign ? <Link className="secondary-button" to={withWorkspaceContext(newAssignmentPath(organizationId, filter), searchParams)}>
       {view === 'profile' ? t.assign : t.assignConfiguration}</Link> : undefined}>
     {pages.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
     {pages.isError ? <InlineAlert tone="danger" title={t.loadError}
@@ -152,9 +154,9 @@ export function ConfigurationAssignmentList({ organizationId, filter, view, canA
       </tr></thead>
       <tbody>{rows.map(assignment => <tr key={assignment.id}>
         {view === 'profile' ? <>
-          <td><Link className="grid-link" to={`${resourcePagePath(organizationId, assignment)}?tab=configurations`}>{assignment.resource.name}</Link></td>
+          <td><Link className="grid-link" to={withWorkspaceContext(`${resourcePagePath(organizationId, assignment)}?tab=configurations`, searchParams)}>{assignment.resource.name}</Link></td>
           <td>{assignment.resource.environment.name}</td>
-        </> : <td><Link className="grid-link" to={`/organizations/${encodeURIComponent(organizationId)}/configurations/${encodeURIComponent(assignment.profile.id)}`}>
+        </> : <td><Link className="grid-link" to={withWorkspaceContext(`/organizations/${encodeURIComponent(organizationId)}/configurations/${encodeURIComponent(assignment.profile.id)}`, searchParams)}>
           {assignment.profile.name}</Link><small className="cell-secondary technical-value">{assignment.profile.code}</small></td>}
         <td><code className="technical-value">{assignment.targetPath}</code>
           <AssignmentOwner organizationId={organizationId} assignment={assignment} /></td>
@@ -164,7 +166,7 @@ export function ConfigurationAssignmentList({ organizationId, filter, view, canA
         <td><AssignmentStatus assignment={assignment} /></td>
         <td><DeploymentSummaryStatus assignment={assignment} summary={summaryOf(assignment.id)} /></td>
         <td className="assignment-actions">
-          <Link className="text-button" to={`${assignmentPath(organizationId, assignment.id)}?from=${view}`}
+          <Link className="text-button" to={withWorkspaceContext(`${assignmentPath(organizationId, assignment.id)}?from=${view}`, searchParams)}
             aria-label={t.editLabel(assignment.targetPath)}>{t.edit}</Link>
           <button type="button" className="text-button danger-text" disabled={remove.isPending}
             aria-label={t.removeLabel(assignment.targetPath)} onClick={() => confirmRemove(assignment)}>{t.remove}</button>

@@ -1,32 +1,32 @@
-.notification-list { display: grid; gap: 14px; padding: 16px 20px 20px; }
-.notification-card { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); display: grid; gap: 14px; }
-.notification-card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.notification-list { display: grid; gap: var(--space-3); padding: var(--space-4) var(--space-5) var(--space-5); }
+.notification-card { min-width: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); display: grid; gap: var(--space-3); }
+.notification-card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
 .notification-card-heading h3 { overflow-wrap: anywhere; }
 .notification-type, .field-hint { color: var(--text-secondary); font-size: var(--font-size-small); }
-.notification-properties { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px 20px; min-width: 0; }
+.notification-properties { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: var(--space-3) var(--space-5); min-width: 0; }
 .notification-properties > div { min-width: 0; }
 .notification-properties dt { color: var(--text-secondary); font-size: var(--font-size-caption); }
-.notification-properties dd { margin: 3px 0 0; overflow-wrap: anywhere; }
-.notification-actions, .notification-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.notification-test-result { color: var(--success, #18794e); }
+.notification-properties dd { margin: var(--space-1) 0 0; overflow-wrap: anywhere; }
+.notification-actions, .notification-form-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.notification-test-result { color: var(--success); }
 .notification-test-error { color: var(--danger); }
-.notification-loading { padding: 24px 0; color: var(--text-secondary); }
+.notification-loading { padding: var(--space-6) 0; color: var(--text-secondary); }
 .notification-form-page { max-width: 900px; }
-.notification-form { gap: 22px; }
-.notification-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.notification-config { display: grid; gap: 14px; min-width: 0; padding-top: 16px; border-top: 1px solid var(--border); }
+.notification-form { gap: var(--space-6); }
+.notification-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.notification-config { display: grid; gap: var(--space-3); min-width: 0; padding-top: var(--space-4); border-top: 1px solid var(--border); }
 .notification-config h2 { font-size: var(--font-size-section); }
-.notification-form label:not(.notification-check) { display: grid; gap: 6px; min-width: 0; }
+.notification-form label:not(.notification-check) { display: grid; gap: var(--space-2); min-width: 0; }
 .notification-form input:not([type=checkbox]), .notification-form select, .notification-form textarea { width: 100%; min-width: 0; }
-.notification-form fieldset { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; }
-.notification-form legend { margin-bottom: 8px; font-weight: 600; }
-.notification-check { display: flex; align-items: center; gap: 9px; width: fit-content; }
-.notification-secret { display: grid; gap: 5px; }
-.notification-form-actions { justify-content: flex-end; padding-top: 10px; border-top: 1px solid var(--border); }
+.notification-form fieldset { display: grid; gap: var(--space-3); margin: 0; padding: 0; border: 0; }
+.notification-form legend { margin-bottom: var(--space-2); font-weight: 600; }
+.notification-check { display: flex; align-items: center; gap: var(--space-2); width: fit-content; }
+.notification-secret { display: grid; gap: var(--space-1); }
+.notification-form-actions { justify-content: flex-end; padding-top: var(--space-3); border-top: 1px solid var(--border); }
 .break-anywhere { overflow-wrap: anywhere; }
 @media (max-width: 640px) {
-  .notification-list { padding: 12px; }
-  .notification-card { padding: 14px; }
+  .notification-list { padding: var(--space-3); }
+  .notification-card { padding: var(--space-3); }
   .notification-form-grid { grid-template-columns: minmax(0, 1fr); }
   .notification-actions > * { flex: 1 1 auto; }
 }

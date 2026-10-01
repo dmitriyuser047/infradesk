@@ -5,11 +5,11 @@ import { useIncident } from '../api/incidents'
 import { useAvailableResourceOperations, useResourceOperationExecutions } from '../api/resourceOperations'
 import { IncidentStatusBadge } from '../components/incidents/IncidentStatusBadge'
 import { formatIncidentDuration, getIncidentReasonPresentation } from '../components/incidents/incidentPresentation'
-import { InfrastructureContextPath, resourceContextPath } from '../components/infrastructure/InfrastructureContextPath'
 import {
   connectionPath, environmentPath, originQuery, projectPath, readOrigin, resourcePath, withTab, workspaceQuery,
 } from '../components/infrastructure/infrastructureLinks'
 import { SourceConnectionLinks } from '../components/infrastructure/SourceConnections'
+import { isUnavailableError, RefreshWarning } from '../components/layout/RefreshWarning'
 import { AppShell } from '../components/layout/AppShell'
 import { PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { formatMonitorCondition, formatNoDataTimeout, getMetricLabel } from '../components/monitoring/monitorRulePresentation'
@@ -41,7 +41,7 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
     useResourceOperationExecutions(organizationId, resourceId, incidentQuery.isSuccess))
   const back = backLink(organizationId, searchParams, incidentQuery.data, i18n)
   if (incidentQuery.isPending) return <AppShell><PageLoading title={t.loading} back={back} label={t.loading} /></AppShell>
-  if (incidentQuery.isError || !incidentQuery.data) {
+  if (!incidentQuery.data || isUnavailableError(incidentQuery.error)) {
     return <AppShell><PageUnavailable back={back} onRetry={() => incidentQuery.refetch()} error={incidentQuery.error}
       notFound={incidentQuery.error instanceof ApiError && incidentQuery.error.code === 'INCIDENT_NOT_FOUND'}
       notFoundTitle={t.notFound} errorTitle={t.loadError} /></AppShell>
@@ -60,13 +60,11 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
   const sources = incident.sourceConnections
   const infra = i18n.t.infrastructure
 
-  return <AppShell><div className="workspace-page">
-    <InfrastructureContextPath items={resourceContextPath(organizationId, incident, [
-      { label: resource.name, to: resourceLink }, { label: t.crumb }], fromIncident)} />
-    <WorkspaceHeader title={title} subtitle={t.subtitle(resource.name, typeLabel)}
+  return <AppShell><div className="workspace-page work-page detail-page">
+    <WorkspaceHeader title={title} subtitle={<>{t.subtitle(resource.name, typeLabel)} · <time dateTime={incident.openedAt}>{t.opened} {i18n.format.dateTime(incident.openedAt)}</time></>}
       back={back} status={<IncidentStatusBadge status={incident.status} />}
       actions={<>
-        <Link className="secondary-button" to={resourceLink}>{infra.openResource}</Link>
+        <Link className="primary-button" to={resourceLink}>{infra.openResource}</Link>
         {/* One source is the connection to open; several are listed below, none preferred. */}
         {sources.length === 1 ? <Link className="secondary-button" to={connectionPath(organizationId, sources[0].id, fromIncident)}>
           {infra.openConnection}</Link> : null}
@@ -74,6 +72,7 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
         {operations === 'applicable' ? <Link className="secondary-button" to={resourcePath(organizationId, incident.environment.id,
           resource.id, withTab(fromIncident, 'operations'))}>{infra.goToOperations}</Link> : null}
       </>} />
+    {incidentQuery.isError ? <RefreshWarning updatedAt={incidentQuery.dataUpdatedAt} retry={() => incidentQuery.refetch()} /> : null}
     <div className="workspace-split detail-split">
       <WorkspaceSection title={t.overview}><PropertyGrid items={[
         { label: i18n.t.common.status, value: <IncidentStatusBadge status={incident.status} /> },

@@ -1,9 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
-import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
+import { useState, type ReactNode } from 'react'
+import { Link, useLocation, useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { RefreshCw, Search } from 'lucide-react'
 import { ApiError } from '../api/httpClient'
-import { useIntegration, useTestIntegration } from '../api/integrations'
+import { useDeleteIntegration, useSetIntegrationEnabled, useIntegration, useTestIntegration } from '../api/integrations'
 import { useIntegrationActions } from '../api/integrationActions'
 import { useAdoptConfigProfile } from '../api/integrationConfigProfiles'
 import {
@@ -12,16 +11,19 @@ import {
 } from '../api/integrationInventory'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
+import { contextSearch } from '../components/layout/workspaceNavigation'
 import {
   EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader,
   WorkspaceSection, WorkspaceTabs,
 } from '../components/layout/WorkspacePrimitives'
-import { nodeStateTones, sessionTones, useSyncErrorText } from '../components/integrations/integrationPresentation'
+import { connectionHealth, nodeStateTones, sessionTones, useSyncErrorText } from '../components/integrations/integrationPresentation'
 import { NodeActionControls } from '../components/integrations/NodeActionControls'
 import { DesiredStateControl, ManagementSection, useDesiredStateCopy } from '../components/integrations/DesiredStateControls'
-import { statusText } from './IntegrationConfigProfilePage'
+import { PageActionMenu } from '../components/layout/PageActionMenu'
+import { RefreshWarning, isUnavailableError } from '../components/layout/RefreshWarning'
+import { IntegrationDialog } from '../components/integrations/IntegrationDialog'
 import { useI18n } from '../i18n'
-import { describeError } from '../i18n/errors'
+import { describeIntegrationError } from '../components/integrations/integrationPresentation'
 import type {
   InventoryObject, IntegrationManagementMode, IntegrationOverview, IntegrationResponse, IntegrationSyncSession,
   RemnawaveConfigProfileSummary, RemnawaveHostSummary, RemnawaveNodeSummary,
@@ -42,7 +44,12 @@ export function IntegrationDetailPage() {
 
 function IntegrationDetail({ organizationId, integrationId }: { organizationId: string; integrationId: string }) {
   const i18n = useI18n(); const t = i18n.t.integrationInventory
-  const location = useLocation()
+  const location = useLocation(); const navigate = useNavigate()
+  const lifecycle = useSetIntegrationEnabled(organizationId)
+  const remove = useDeleteIntegration(organizationId)
+  const [confirmation, setConfirmation] = useState<'disable' | 'delete' | null>(null)
+  const [checkedAt, setCheckedAt] = useState<string | null>(null)
+  const ui = i18n.t.integrationUi
   const [searchParams, setSearchParams] = useSearchParams()
   const permissions = useOrganizationPermissions(organizationId)
   // Nothing about the integration is requested for someone who may not manage integrations.
@@ -58,48 +65,67 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
     return updated
   }, { replace: true })
   const orgPath = `/organizations/${encodeURIComponent(organizationId)}`
-  const back = { label: i18n.t.integrations.title, to: `${orgPath}/integrations` }
+  const back = { label: i18n.t.integrations.title,
+    to: `${orgPath}/integrations${contextSearch(new URLSearchParams(location.search))}` }
 
   if (permissions.isPending) return <AppShell><PageLoading title={i18n.t.integrations.title} back={back} label={i18n.t.common.loading} /></AppShell>
   if (!canManage) return <AppShell><div className="workspace-page">
     <WorkspaceHeader title={i18n.t.integrations.title} back={back} />
     <InlineAlert tone="danger" title={i18n.t.integrations.accessDenied} /></div></AppShell>
   if (query.isPending) return <AppShell><PageLoading title={i18n.t.integrations.title} back={back} label={i18n.t.integrations.loading} /></AppShell>
-  if (query.isError || !query.data) {
+  if (!query.data || isUnavailableError(query.error)) {
     return <AppShell><PageUnavailable back={back} onRetry={() => query.refetch()} error={query.error}
       notFound={query.error instanceof ApiError && query.error.code === 'INTEGRATION_NOT_FOUND'}
       notFoundTitle={t.notFound} errorTitle={i18n.t.integrations.loadError} /></AppShell>
   }
   const integration = query.data
   const syncResult = sync.data
-  return <AppShell><div className="workspace-page integration-page">
+  return <AppShell><div className="workspace-page work-page detail-page integration-page">
     <WorkspaceHeader title={integration.name} subtitle={`Remnawave · ${integration.baseUrl}`} back={back}
       status={<StatusIndicator label={integration.enabled ? i18n.t.integrations.enabled : i18n.t.integrations.disabled}
-        tone={integration.enabled ? 'success' : 'neutral'} />}
+        tone="neutral" />}
       actions={<>
         <button className="primary-button" type="button" disabled={sync.isPending} onClick={() => sync.mutate()}>
           <RefreshCw aria-hidden size={16} />{sync.isPending ? t.syncing : t.syncNow}</button>
-        <button className="secondary-button" type="button" disabled={test.isPending} onClick={() => test.mutate(integration.id)}>
+        <button className="secondary-button" type="button" disabled={test.isPending} onClick={() => test.mutate(integration.id, { onSettled: () => setCheckedAt(new Date().toISOString()) })}>
           {test.isPending ? i18n.t.integrations.testing : i18n.t.integrations.test}</button>
-        <Link className="secondary-button" to={`${orgPath}/integrations/${encodeURIComponent(integration.id)}/edit${location.search}`}>
-          {i18n.t.integrations.edit}</Link>
+        <PageActionMenu actions={[
+          { label: i18n.t.integrations.edit, to: `${orgPath}/integrations/${encodeURIComponent(integration.id)}/edit${location.search}` },
+          { label: integration.enabled ? i18n.t.integrations.disable : i18n.t.integrations.enable, disabled: lifecycle.isPending,
+            onSelect: () => integration.enabled ? setConfirmation('disable') : lifecycle.mutate({ id: integration.id, enabled: true }) },
+          { label: i18n.t.integrations.delete, danger: true, onSelect: () => setConfirmation('delete') },
+        ]} />
       </>} />
+    <p className="muted-copy">{ui.purpose}</p>
+    {query.isError ? <RefreshWarning updatedAt={query.dataUpdatedAt} retry={() => query.refetch()} /> : null}
+    {lifecycle.isError ? <InlineAlert tone="danger" title={describeIntegrationError(lifecycle.error, i18n)} /> : null}
+    {confirmation ? <IntegrationDialog title={confirmation === 'delete' ? ui.deleteTitle : ui.disableTitle}
+      onClose={() => setConfirmation(null)} busy={remove.isPending || lifecycle.isPending} actions={<>
+        <button className="secondary-button" onClick={() => setConfirmation(null)}>{i18n.t.common.cancel}</button>
+        <button className="primary-button" disabled={remove.isPending || lifecycle.isPending} onClick={() => {
+          if (confirmation === 'delete') remove.mutate(integration.id, { onSuccess: () => navigate(back.to) })
+          else lifecycle.mutate({ id: integration.id, enabled: false }, { onSuccess: () => setConfirmation(null) })
+        }}>{confirmation === 'delete' ? i18n.t.integrations.confirmDelete : i18n.t.integrations.disable}</button></>}>
+      <strong>{integration.name}</strong><p>{confirmation === 'delete' ? ui.deleteDetail : ui.disableDetail}</p>
+      {remove.isError ? <InlineAlert tone="danger" title={describeIntegrationError(remove.error, i18n)} /> : null}
+    </IntegrationDialog> : null}
     {!integration.enabled ? <InlineAlert tone="info" title={t.autoDisabled}>{t.autoDisabledDetail}</InlineAlert> : null}
     {syncResult?.status === 'COMPLETED' ? <InlineAlert tone="success" title={t.syncDone}>
       {syncResult.counts ? t.objects(syncResult.counts.nodes, syncResult.counts.hosts, syncResult.counts.configProfiles,
         syncResult.counts.deactivated) : null}</InlineAlert> : null}
     {syncResult?.status === 'FAILED' ? <InlineAlert tone="danger" title={t.syncFailed}>{errorText(syncResult.errorCode)}</InlineAlert> : null}
     {sync.isError ? <InlineAlert tone="danger" title={t.syncFailed}>
-      {sync.error instanceof ApiError ? errorText(sync.error.code) : describeError(sync.error, i18n)}</InlineAlert> : null}
-    {test.isSuccess ? <InlineAlert tone="success" title={i18n.t.integrations.testSuccess} /> : null}
+      {sync.error instanceof ApiError ? errorText(sync.error.code) : describeIntegrationError(sync.error, i18n)}</InlineAlert> : null}
+    {test.isSuccess ? <InlineAlert tone={test.data.ok ? "success" : "danger"} title={test.data.ok ? i18n.t.integrations.testSuccess : i18n.t.integrations.testError}>{test.data.ok ? ui.testDetail : null}</InlineAlert> : null}
     {test.isError ? <InlineAlert tone="danger" title={i18n.t.integrations.testError}>
-      {test.error instanceof ApiError ? errorText(test.error.code) : describeError(test.error, i18n)}</InlineAlert> : null}
-    <WorkspaceTabs tabs={[{ id: 'overview', label: t.tabs.overview }, { id: 'nodes', label: t.tabs.nodes },
-      { id: 'hosts', label: t.tabs.hosts }, { id: 'profiles', label: t.tabs.profiles }, { id: 'history', label: t.tabs.history },
-      { id: 'actions', label: i18n.locale === 'ru' ? 'Действия' : 'Actions' }]}
+      {test.error instanceof ApiError ? errorText(test.error.code) : describeIntegrationError(test.error, i18n)}</InlineAlert> : null}
+    <WorkspaceTabs tabs={[{ id: 'overview', label: t.tabs.overview }, { id: 'nodes', label: t.tabs.nodes, count: integration.overview?.inventory.nodes.active },
+      { id: 'hosts', label: t.tabs.hosts, count: integration.overview?.inventory.hosts.active }, { id: 'profiles', label: t.tabs.profiles, count: integration.overview?.inventory.configProfiles.active }, { id: 'history', label: t.tabs.history },
+      { id: 'actions', label: t.actionTab.title }]}
     active={active} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
-      {active === 'overview' ? <OverviewTab organizationId={organizationId} integration={integration} /> : null}
+      {active === 'overview' ? <OverviewTab organizationId={organizationId} integration={integration} checkedAt={checkedAt}
+        health={connectionHealth(test.isSuccess ? test.data.ok : undefined, test.error instanceof ApiError ? test.error.code : undefined)} /> : null}
       {active === 'nodes' ? <NodesTab organizationId={organizationId} integrationId={integrationId}
         managementMode={integration.managementMode} /> : null}
       {active === 'hosts' ? <HostsTab organizationId={organizationId} integrationId={integrationId} /> : null}
@@ -110,17 +136,25 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
   </div></AppShell>
 }
 
-function OverviewTab({ organizationId, integration }: { organizationId: string; integration: IntegrationResponse }) {
+function OverviewTab({ organizationId, integration, checkedAt, health }: {
+  organizationId: string; integration: IntegrationResponse; checkedAt: string | null; health: 'available' | 'unavailable' | 'unchecked'
+}) {
   const i18n = useI18n(); const t = i18n.t.integrationInventory
   const integrationId = integration.id; const enabled = integration.enabled
   const summary = useIntegrationSummary(organizationId, integrationId, true)
   const errorText = useSyncErrorText()
   if (summary.isPending) return <p role="status">{i18n.t.common.loading}</p>
-  if (summary.isError) return <LoadError error={summary.error} retry={() => summary.refetch()} />
+  if (!summary.data || isUnavailableError(summary.error)) return <LoadError error={summary.error} retry={() => summary.refetch()} />
   const value: IntegrationOverview = summary.data
   const last = value.lastSync
-  return <><ManagementSection organizationId={organizationId} integration={integration} counts={value.desiredState} />
-  <WorkspaceSection title={t.tabs.overview}>
+  const ui = i18n.t.integrationUi
+  return <>
+  {summary.isError ? <RefreshWarning updatedAt={summary.dataUpdatedAt} retry={() => summary.refetch()} /> : null}
+  <WorkspaceSection title={ui.connection}><StatusIndicator label={ui[health]}
+    tone={health === 'available' ? 'success' : health === 'unavailable' ? 'danger' : 'neutral'} />
+    {checkedAt && health !== 'unchecked' ? <p className="muted-copy">{ui.lastChecked}: <time dateTime={checkedAt}>{i18n.format.dateTime(checkedAt)}</time></p> : null}
+  </WorkspaceSection>
+  <WorkspaceSection title={ui.sync}>
     <PropertyGrid columns={2} items={[
       { label: t.lastSync, value: last ? <span className="integration-inline">
         <StatusIndicator label={t.status[last.status] ?? last.status} tone={sessionTones[last.status]} />
@@ -128,11 +162,20 @@ function OverviewTab({ organizationId, integration }: { organizationId: string; 
       { label: t.lastSuccess, value: value.lastSuccessfulSyncAt ? i18n.format.dateTime(value.lastSuccessfulSyncAt) : t.never },
       { label: t.nextRun, value: enabled && value.nextRunAt ? i18n.format.dateTime(value.nextRunAt) : t.notScheduled },
       ...(last?.status === 'FAILED' ? [{ label: t.lastError, value: errorText(last.errorCode) }] : []),
-      { label: t.tabs.nodes, value: t.counts(value.inventory.nodes.active, value.inventory.nodes.inactive) },
-      { label: t.tabs.hosts, value: t.counts(value.inventory.hosts.active, value.inventory.hosts.inactive) },
-      { label: t.tabs.profiles, value: t.counts(value.inventory.configProfiles.active, value.inventory.configProfiles.inactive) },
     ]} />
-  </WorkspaceSection></>
+  </WorkspaceSection>
+  <WorkspaceSection title={ui.inventory}><dl className="integration-counters">{([
+    ['nodes', value.inventory.nodes], ['hosts', value.inventory.hosts], ['profiles', value.inventory.configProfiles],
+  ] as const).map(([key, count]) => <div key={key}><dt>{t.tabs[key]}</dt>
+    <dd>{t.counts(count.active, count.inactive)}</dd></div>)}</dl></WorkspaceSection>
+  <ManagementSection organizationId={organizationId} integration={integration} counts={value.desiredState} />
+  {last?.status === 'FAILED' || value.desiredState.drifted > 0 || value.desiredState.needsAttention > 0 ?
+    <WorkspaceSection title={ui.attention}>
+      {last?.status === 'FAILED' ? <InlineAlert tone="danger" title={t.syncFailed}>{errorText(last.errorCode)}</InlineAlert> : null}
+      {value.desiredState.drifted > 0 ? <p>{i18n.t.integrationDesiredState.counters.drifted}: {value.desiredState.drifted}</p> : null}
+      {value.desiredState.needsAttention > 0 ? <p>{i18n.t.integrationDesiredState.counters.attention}: {value.desiredState.needsAttention}</p> : null}
+    </WorkspaceSection> : null}
+  </>
 }
 
 function useInventoryParams() {
@@ -184,14 +227,18 @@ function InventoryTable<S>({ kind, organizationId, integrationId, title, emptyTi
   const { t } = useI18n(); const text = t.integrationInventory
   const { params, update, page } = useInventoryParams()
   const query = useIntegrationInventory(organizationId, integrationId, kind, params, true)
+  const integration = useIntegration(organizationId, integrationId, true)
+  const synchronized = Boolean(integration.data?.overview?.lastSuccessfulSyncAt)
   const filtered = params.search !== '' || params.active !== '' || params.state !== ''
-  const data = query.data as { items: InventoryObject<S>[]; total: number } | undefined
+  const data = (isUnavailableError(query.error) ? undefined : query.data) as { items: InventoryObject<S>[]; total: number } | undefined
   return <WorkspaceSection title={title}>
     <InventoryFilters params={params} update={update} withState={withState} />
-    {query.isPending ? <p role="status">{t.common.loading}</p> : null}
-    {query.isError ? <LoadError error={query.error} retry={() => query.refetch()} /> : null}
+    {query.isPending ? <div className="row-skeleton" aria-label={t.common.loading}><span /><span /><span /></div> : null}
+    {query.isError ? data ? <RefreshWarning updatedAt={query.dataUpdatedAt} retry={() => query.refetch()} /> :
+      <LoadError error={query.error} retry={() => query.refetch()} /> : null}
     {data && data.total === 0 ? <EmptyWorkspaceState compact title={filtered ? text.emptyFiltered : emptyTitle}
-      detail={filtered ? undefined : text.emptyDetail} /> : null}
+      detail={filtered ? undefined : synchronized ? t.integrationUi.emptyAfterSync : kind === 'nodes' ? text.emptyNodesDetail : text.emptyDetail}
+      action={filtered ? <button className="secondary-button" onClick={() => update({ search: '', active: '', state: '' })}>{t.integrationUi.resetFilters}</button> : undefined} /> : null}
     {data && data.items.length > 0 ? <div className="table-scroll"><table className="data-grid integration-grid">
       <thead>{head}</thead><tbody>{data.items.map(item => row(item))}</tbody></table></div> : null}
     {data ? <Pager total={data.total} params={params} page={page} /> : null}
@@ -214,33 +261,42 @@ function NodesTab({ organizationId, integrationId, managementMode }: {
   const i18n = useI18n(); const t = i18n.t.integrationInventory
   const desiredCopy = useDesiredStateCopy()
   const [binding, setBinding] = useState<InventoryObject<RemnawaveNodeSummary> | null>(null)
+  const [unlink, setUnlink] = useState<InventoryObject<RemnawaveNodeSummary> | null>(null)
+  const scope = contextSearch(new URLSearchParams(useLocation().search))
   const unbind = useUnbindNode(organizationId, integrationId)
   const orgPath = `/organizations/${encodeURIComponent(organizationId)}`
   return <>
-    {unbind.isError ? <InlineAlert tone="danger" title={t.bindError}>{describeError(unbind.error, i18n)}</InlineAlert> : null}
+    {unbind.isError ? <InlineAlert tone="danger" title={t.bindError}>{describeIntegrationError(unbind.error, i18n)}</InlineAlert> : null}
     <InventoryTable<RemnawaveNodeSummary> kind="nodes" organizationId={organizationId} integrationId={integrationId}
       title={t.tabs.nodes} emptyTitle={t.emptyNodes} withState
       head={<tr><th>{t.name}</th><th>{t.address}</th><th>{t.state}</th><th>{t.version}</th><th>{t.users}</th>
-        <th>{t.traffic}</th><th>{desiredCopy.desired}</th><th>{t.resource}</th><th>{t.actions}</th></tr>}
+        <th>{t.traffic}</th><th>{desiredCopy.desired}</th><th title={i18n.t.integrationUi.bindingHelp}>{t.resource}</th><th>{t.actions}</th></tr>}
       row={item => <tr key={item.id} className={item.active ? undefined : 'row-quiet'}>
-        <td><strong>{item.displayName}</strong>{!item.active ? <> <StatusIndicator label={t.gone} /></> : null}</td>
+        <td><strong>{item.displayName}</strong>{!item.active ? <><small className="integration-last-seen">{t.lastSeen}: {i18n.format.dateTime(item.lastSeenAt)}</small></> : null}</td>
         <td className="property-technical">{hostPort(item.summary.address, item.summary.port)}</td>
-        <td><StatusIndicator label={t.nodeState[item.summary.state] ?? item.summary.state} tone={nodeStateTones[item.summary.state]} /></td>
+        <td><StatusIndicator label={item.active ? t.nodeState[item.summary.state] : t.gone} tone={item.active ? nodeStateTones[item.summary.state] : "neutral"} /></td>
         <td>{item.summary.xrayVersion ?? '—'}</td>
         <td>{i18n.format.number(item.summary.usersOnline)}</td>
         <td>{formatBytes(item.summary.trafficUsedBytes, i18n.format.number)}</td>
         <td><DesiredStateControl organizationId={organizationId} integrationId={integrationId}
           managementMode={managementMode} node={item} /></td>
-        <td>{item.binding ? <Link to={`${orgPath}/environments/${encodeURIComponent(item.binding.environment.id)}/resources/${encodeURIComponent(item.binding.resource.id)}`}>
+        <td>{item.binding ? <Link to={`${orgPath}/environments/${encodeURIComponent(item.binding.environment.id)}/resources/${encodeURIComponent(item.binding.resource.id)}${scope}`}>
           {item.binding.resource.name}</Link> : <span className="muted-copy">{t.notBound}</span>}
           {item.binding ? <div className="muted-copy">{item.binding.project.name} · {item.binding.environment.name}</div> : null}</td>
         <td><div className="integration-row-actions">
-          <NodeActionControls organizationId={organizationId} integrationId={integrationId} node={item} />
-          <button className="secondary-button" type="button" onClick={() => setBinding(item)}>{item.binding ? t.change : t.bind}</button>
-          {item.binding ? <button className="text-button" type="button" disabled={unbind.isPending}
-            onClick={() => unbind.mutate(item.id)}>{t.unbind}</button> : null}
+          <NodeActionControls organizationId={organizationId} integrationId={integrationId} node={item} compact
+            extraActions={[
+              ...(item.active ? [{ label: item.binding ? t.change : t.bind, onSelect: () => setBinding(item) }] : []),
+              ...(item.binding ? [{ label: t.unbind, danger: true, disabled: unbind.isPending, onSelect: () => setUnlink(item) }] : []),
+            ]} />
         </div></td>
       </tr>} />
+    {unlink ? <IntegrationDialog title={i18n.t.integrationUi.unlinkTitle} onClose={() => setUnlink(null)} busy={unbind.isPending}
+      actions={<><button className="secondary-button" disabled={unbind.isPending} onClick={() => setUnlink(null)}>{i18n.t.common.cancel}</button>
+        <button className="primary-button" disabled={unbind.isPending} onClick={() => unbind.mutate(unlink.id, { onSuccess: () => setUnlink(null) })}>{t.unbind}</button></>}>
+      <strong>{unlink.displayName} · {unlink.binding?.resource.name}</strong><p>{i18n.t.integrationUi.unlinkDetail}</p>
+      {unbind.isError ? <InlineAlert tone="danger" title={describeIntegrationError(unbind.error, i18n)} /> : null}
+    </IntegrationDialog> : null}
     {binding ? <BindDialog organizationId={organizationId} integrationId={integrationId} node={binding}
       onClose={() => setBinding(null)} /> : null}
   </>
@@ -248,28 +304,27 @@ function NodesTab({ organizationId, integrationId, managementMode }: {
 
 function ActionsTab({ organizationId, integrationId }: { organizationId: string; integrationId: string }) {
   const i18n = useI18n()
+  const t = i18n.t.integrationInventory.actionTab
+  const errorText = useSyncErrorText()
   const actions = useIntegrationActions(organizationId, integrationId, true)
-  const ru = i18n.locale === 'ru'
-  return <WorkspaceSection title={ru ? 'Действия' : 'Actions'}>
+  return <WorkspaceSection title={i18n.t.integrationUi.actionHistory}>
     {actions.isPending ? <p role="status">{i18n.t.common.loading}</p> : null}
-    {actions.isError ? <LoadError error={actions.error} retry={() => actions.refetch()} /> : null}
-    {actions.data?.length === 0 ? <EmptyWorkspaceState compact title={ru ? 'Действий пока нет' : 'No actions yet'} /> : null}
-    {actions.data?.length ? <div className="table-scroll"><table className="data-grid integration-grid">
-      <thead><tr><th>{ru ? 'Время' : 'Time'}</th><th>{ru ? 'Узел' : 'Node'}</th><th>{ru ? 'Действие' : 'Action'}</th>
-        <th>{ru ? 'Источник' : 'Source'}</th>
-        <th>{ru ? 'Пользователь' : 'Requested by'}</th><th>{ru ? 'Статус' : 'Status'}</th>
-        <th>{ru ? 'Длительность' : 'Duration'}</th><th>{ru ? 'Ошибка' : 'Error'}</th></tr></thead>
+    {actions.isError ? actions.data && !isUnavailableError(actions.error) ? <RefreshWarning updatedAt={actions.dataUpdatedAt} retry={() => actions.refetch()} /> : <LoadError error={actions.error} retry={() => actions.refetch()} /> : null}
+    {!isUnavailableError(actions.error) && actions.data?.length === 0 ? <EmptyWorkspaceState compact title={t.empty} /> : null}
+    {!isUnavailableError(actions.error) && actions.data?.length ? <div className="table-scroll"><table className="data-grid integration-grid">
+      <thead><tr><th>{t.time}</th><th>{t.node}</th><th>{t.action}</th><th>{t.source}</th>
+        <th>{t.requestedBy}</th><th>{t.status}</th><th>{t.duration}</th><th>{t.error}</th></tr></thead>
       <tbody>{actions.data.map(value => <tr key={value.id}>
-        <td>{i18n.format.dateTime(value.createdAt)}</td><td>{value.displayName}</td><td>{value.action}</td>
+        <td>{i18n.format.dateTime(value.createdAt)}</td><td>{value.displayName}</td><td>{t.codes[value.action]}</td>
         {/* Why the action exists: a person's request, or a desired state and the version it executed. */}
         <td>{value.source === 'DESIRED_STATE'
-          ? `${ru ? 'Желаемое состояние' : 'Desired state'}${value.desiredStateVersion ? ` v${value.desiredStateVersion}` : ''}`
-          : ru ? 'Вручную' : 'Manual'}</td>
+          ? `${t.automatic}${value.desiredStateVersion ? ` v${value.desiredStateVersion}` : ''}`
+          : t.manual}</td>
         <td>{value.requestedByName ?? value.requestedByUserId}</td>
-        <td>{value.status === 'UNKNOWN' ? ru ? 'Результат неизвестен' : 'Result unknown' : value.status}</td>
+        <td><StatusIndicator label={t.statuses[value.status]} tone={value.status === "FAILED" ? "danger" : value.status === "UNKNOWN" ? "warning" : value.status === "SUCCEEDED" ? "success" : "info"} /></td>
         <td>{value.startedAt && value.finishedAt ? i18n.format.duration(Math.max(0,
           Math.round((Date.parse(value.finishedAt) - Date.parse(value.startedAt)) / 1000))) : '—'}</td>
-        <td>{value.errorCode ?? '—'}</td>
+        <td>{errorText(value.errorCode) ?? '—'}</td>
       </tr>)}</tbody></table></div> : null}
   </WorkspaceSection>
 }
@@ -283,17 +338,13 @@ function BindDialog({ organizationId, integrationId, node, onClose }: {
   const candidates = useBindingCandidates(organizationId, integrationId, search, true)
   const bind = useBindNode(organizationId, integrationId)
   const errorText = useSyncErrorText()
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !bind.isPending) onClose() }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [bind.isPending, onClose])
-  return <div className="dialog-backdrop" role="presentation" onMouseDown={event => {
-    if (event.target === event.currentTarget && !bind.isPending) onClose()
-  }}><section className="monitor-rule-dialog integration-bind-dialog" role="dialog" aria-modal="true" aria-labelledby="bind-dialog-title">
-    <div className="dialog-heading"><h2 id="bind-dialog-title">{t.bindTitle(node.displayName)}</h2>
-      <button className="dialog-close" type="button" aria-label={i18n.t.common.close} onClick={onClose} disabled={bind.isPending}>×</button></div>
-    <div className="dialog-body">
+  return <IntegrationDialog title={t.bindTitle(node.displayName)} onClose={onClose} busy={bind.isPending}
+    actions={<>
+      <button className="secondary-button" type="button" disabled={bind.isPending} onClick={onClose}>{i18n.t.common.cancel}</button>
+      <button className="primary-button" type="button" disabled={bind.isPending || selected === ''}
+        onClick={() => bind.mutate({ objectId: node.id, resourceId: selected }, { onSuccess: onClose })}>{t.bind}</button>
+</>}>
+    <div>
       <p className="muted-copy">{t.bindDetail}</p>
       <div className="search-field"><Search className="search-field-icon" aria-hidden size={16} />
         <input type="search" aria-label={t.search} placeholder={t.search} value={search} maxLength={128}
@@ -308,23 +359,18 @@ function BindDialog({ organizationId, integrationId, node, onClose }: {
           <span><strong>{candidate.name}</strong><span className="muted-copy"> {candidate.code} · {candidate.project.name} · {candidate.environment.name}</span></span>
         </label>)}</fieldset> : null}
       {bind.isError ? <InlineAlert tone="danger" title={t.bindError}>
-        {bind.error instanceof ApiError ? errorText(bind.error.code) : describeError(bind.error, i18n)}</InlineAlert> : null}
+        {bind.error instanceof ApiError ? errorText(bind.error.code) : describeIntegrationError(bind.error, i18n)}</InlineAlert> : null}
     </div>
-    <div className="dialog-actions">
-      <button className="secondary-button" type="button" disabled={bind.isPending} onClick={onClose}>{i18n.t.common.cancel}</button>
-      <button className="primary-button" type="button" disabled={bind.isPending || selected === ''}
-        onClick={() => bind.mutate({ objectId: node.id, resourceId: selected }, { onSuccess: onClose })}>{t.bind}</button>
-    </div>
-  </section></div>
+  </IntegrationDialog>
 }
 
 function HostsTab({ organizationId, integrationId }: { organizationId: string; integrationId: string }) {
-  const { t } = useI18n(); const text = t.integrationInventory
+  const i18n = useI18n(); const text = i18n.t.integrationInventory
   return <InventoryTable<RemnawaveHostSummary> kind="hosts" organizationId={organizationId} integrationId={integrationId}
     title={text.tabs.hosts} emptyTitle={text.emptyHosts}
     head={<tr><th>{text.name}</th><th>{text.address}</th><th>{text.security}</th><th>{text.flags}</th><th>{text.nodes}</th></tr>}
     row={item => <tr key={item.id} className={item.active ? undefined : 'row-quiet'}>
-      <td><strong>{item.displayName}</strong>{!item.active ? <> <StatusIndicator label={text.gone} /></> : null}</td>
+      <td><strong>{item.displayName}</strong>{!item.active ? <><StatusIndicator label={text.gone} /><small className="integration-last-seen">{text.lastSeen}: {i18n.format.dateTime(item.lastSeenAt)}</small></> : null}</td>
       <td className="property-technical">{hostPort(item.summary.address, item.summary.port)}</td>
       <td>{item.summary.securityLayer}</td>
       <td>{[item.summary.isDisabled ? text.disabledFlag : null, item.summary.isHidden ? text.hidden : null]
@@ -334,15 +380,15 @@ function HostsTab({ organizationId, integrationId }: { organizationId: string; i
 }
 
 function ProfilesTab({ organizationId, integrationId }: { organizationId: string; integrationId: string }) {
-  const i18n = useI18n(); const text = i18n.t.integrationInventory
+  const i18n = useI18n(); const text = i18n.t.integrationInventory; const c = i18n.t.integrationConfig
   const permissions = useOrganizationPermissions(organizationId)
   const canManageConfig = permissions.can('manageIntegrations') && permissions.can('manageConfigurations')
   return <InventoryTable<RemnawaveConfigProfileSummary> kind="config-profiles" organizationId={organizationId}
     integrationId={integrationId} title={text.tabs.profiles} emptyTitle={text.emptyProfiles}
     head={<tr><th>{text.name}</th><th>{text.inbounds}</th><th>{text.nodes}</th><th>{text.updated}</th>
-      <th>{i18n.locale === 'ru' ? 'Управление' : 'Management'}</th><th>{i18n.locale === 'ru' ? 'Статус' : 'Status'}</th></tr>}
+      <th>{c.management}</th><th>{c.status}</th></tr>}
     row={item => <tr key={item.id} className={item.active ? undefined : 'row-quiet'}>
-      <td><strong>{item.displayName}</strong>{!item.active ? <> <StatusIndicator label={text.gone} /></> : null}</td>
+      <td><strong>{item.displayName}</strong>{!item.active ? <><StatusIndicator label={text.gone} /><small className="integration-last-seen">{text.lastSeen}: {i18n.format.dateTime(item.lastSeenAt)}</small></> : null}</td>
       <td>{item.summary.inbounds.length === 0 ? '—' : item.summary.inbounds.map(inbound =>
         [inbound.tag, inbound.type, inbound.port].filter(value => value !== null).join(' ')).join(', ')}</td>
       <td>{item.summary.nodeUuids.length}</td>
@@ -355,44 +401,42 @@ function ProfilesTab({ organizationId, integrationId }: { organizationId: string
 function ProfileManagementCell({ organizationId, integrationId, item, enabled }: {
   organizationId: string; integrationId: string; item: InventoryObject<RemnawaveConfigProfileSummary>; enabled: boolean
 }) {
-  const i18n = useI18n(); const ru = i18n.locale === 'ru'
+  const i18n = useI18n(); const c = i18n.t.integrationConfig
+  const location = useLocation()
   const managed = item.configManagement
+  const errorText = useSyncErrorText()
   const adopt = useAdoptConfigProfile(organizationId, integrationId, item.id)
   const [open, setOpen] = useState(false)
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const page = `/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(integrationId)}` +
-    `/config-profiles/${encodeURIComponent(item.id)}`
+    `/config-profiles/${encodeURIComponent(item.id)}${contextSearch(new URLSearchParams(location.search))}`
   const start = () => {
     setCode(item.displayName.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64))
     setName(item.displayName); setDescription(''); setOpen(true)
   }
   return <><td>{!enabled ? '—' : managed ?
-    <><span>{managed.name} · {ru ? 'Ревизия' : 'Revision'} {managed.revisionNumber}</span>{' '}
-      <Link to={page}>{ru ? 'Открыть' : 'Open'}</Link></> :
-    <><span>{ru ? 'Не управляется' : 'Not managed'}</span>{' '}
+    <><span>{managed.name} · {c.revision} {managed.revisionNumber}</span>{' '}
+      <Link to={page}>{c.open}</Link></> :
+    <><span>{c.notManaged}</span>{' '}
       {item.active ? <button className="secondary-button" type="button" onClick={start}>
-        {ru ? 'Принять' : 'Adopt'}</button> : null}</>}
+        {c.adopt}</button> : null}</>}
     </td>
-    <td>{managed ? statusText[managed.status][ru ? 0 : 1] : '—'}</td>
-    {open ? createPortal(<div className="dialog-backdrop" role="presentation"><section className="monitor-rule-dialog integration-bind-dialog"
-      role="dialog" aria-modal="true" aria-label={ru ? 'Принять профиль Remnawave' : 'Adopt Remnawave profile'}>
-      <div className="dialog-heading"><h2>{ru ? 'Принять профиль Remnawave' : 'Adopt Remnawave profile'}</h2>
-        <button className="dialog-close" type="button" aria-label={i18n.t.common.close} onClick={() => setOpen(false)}>×</button></div>
-      <div className="dialog-body"><p>{item.displayName}</p>
-        <label className="field">{ru ? 'Код InfraDesk' : 'InfraDesk code'}<input value={code} onChange={event => setCode(event.target.value)} /></label>
-        <label className="field">{ru ? 'Имя' : 'Name'}<input value={name} onChange={event => setName(event.target.value)} /></label>
-        <label className="field">{ru ? 'Описание' : 'Description'}<input value={description}
-          onChange={event => setDescription(event.target.value)} /></label>
-        <p className="muted-copy">{ru ? 'Текущая конфигурация будет импортирована как неизменяемая ревизия 1 и зашифрована при хранении.' :
-          'The current configuration will be imported as immutable revision 1 and encrypted at rest.'}</p>
-        {adopt.isError ? <InlineAlert tone="danger" title={describeError(adopt.error, i18n)} /> : null}</div>
-      <div className="dialog-actions"><button className="secondary-button" type="button" onClick={() => setOpen(false)}>
+    <td>{managed ? <StatusIndicator label={c.statuses[managed.status]} tone={managed.status === 'REMOTE_DRIFT' ? 'warning' : managed.status === 'DEPLOYMENT_FAILED' ? 'danger' : managed.status === 'IN_SYNC' ? 'success' : 'neutral'} /> : '—'}</td>
+    {open ? <IntegrationDialog title={c.adoptRemnawaveProfile} onClose={() => setOpen(false)} busy={adopt.isPending}
+      actions={<><button className="secondary-button" type="button" onClick={() => setOpen(false)}>
         {i18n.t.common.cancel}</button><button className="primary-button" type="button"
         disabled={adopt.isPending || !code.trim() || !name.trim()}
         onClick={() => adopt.mutate({ code, name, description: description || null }, { onSuccess: () => setOpen(false) })}>
-        {ru ? 'Принять' : 'Adopt'}</button></div></section></div>, document.body) : null}
+        {c.adopt}</button></>}><div><p>{item.displayName}</p>
+        <label className="field">{c.infradeskCode}<input value={code} onChange={event => setCode(event.target.value)} /></label>
+        <label className="field">{c.name}<input value={name} onChange={event => setName(event.target.value)} /></label>
+        <label className="field">{c.description}<input value={description}
+          onChange={event => setDescription(event.target.value)} /></label>
+        <p className="muted-copy">{c.adoptDetail}</p>
+        {adopt.isError ? <InlineAlert tone="danger" title={(adopt.error instanceof ApiError ? errorText(adopt.error.code) : describeIntegrationError(adopt.error, i18n)) ?? undefined} /> : null}</div>
+</IntegrationDialog> : null}
   </>
 }
 
@@ -404,9 +448,9 @@ function HistoryTab({ organizationId, integrationId }: { organizationId: string;
     : Math.max(0, Math.round((Date.parse(session.finishedAt) - Date.parse(session.startedAt)) / 1000))
   return <WorkspaceSection title={t.tabs.history}>
     {sessions.isPending ? <p role="status">{i18n.t.common.loading}</p> : null}
-    {sessions.isError ? <LoadError error={sessions.error} retry={() => sessions.refetch()} /> : null}
-    {sessions.data?.length === 0 ? <EmptyWorkspaceState compact title={t.emptyHistory} detail={t.emptyDetail} /> : null}
-    {sessions.data?.length ? <div className="table-scroll"><table className="data-grid integration-grid">
+    {sessions.isError ? sessions.data && !isUnavailableError(sessions.error) ? <RefreshWarning updatedAt={sessions.dataUpdatedAt} retry={() => sessions.refetch()} /> : <LoadError error={sessions.error} retry={() => sessions.refetch()} /> : null}
+    {!isUnavailableError(sessions.error) && sessions.data?.length === 0 ? <EmptyWorkspaceState compact title={t.emptyHistory} detail={t.emptyDetail} /> : null}
+    {!isUnavailableError(sessions.error) && sessions.data?.length ? <div className="table-scroll"><table className="data-grid integration-grid">
       <thead><tr><th>{t.started}</th><th>{t.trigger_}</th><th>{t.state}</th><th>{t.duration}</th><th>{t.result}</th></tr></thead>
       <tbody>{sessions.data.map(session => <tr key={session.id}>
         <td><time dateTime={session.startedAt}>{i18n.format.dateTime(session.startedAt)}</time></td>
@@ -424,5 +468,5 @@ function LoadError({ error, retry }: { error: unknown; retry: () => void }) {
   const i18n = useI18n()
   return <InlineAlert tone="danger" title={i18n.t.integrationInventory.loadError}
     action={<button className="secondary-button" type="button" onClick={retry}>{i18n.t.common.retry}</button>}>
-    {describeError(error, i18n)}</InlineAlert>
+    {describeIntegrationError(error, i18n)}</InlineAlert>
 }

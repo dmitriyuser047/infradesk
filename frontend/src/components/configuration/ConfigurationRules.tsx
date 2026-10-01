@@ -1,6 +1,6 @@
 import { useQueries } from '@tanstack/react-query'
 import { useId, useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useConfigurationRevisions } from '../../api/configurations'
 import { useConfigurationRules, useCreateRule, useSelectorPreview } from '../../api/configurationRules'
@@ -11,6 +11,7 @@ import type { ConfigurationProfile } from '../../types/configuration'
 import type { ConfigurationRule, Label, RuleSelector, SelectorPreview } from '../../types/configurationRule'
 import type { EnvironmentResponse } from '../../types/navigation'
 import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceFormSection, WorkspaceSection } from '../layout/WorkspacePrimitives'
+import { withWorkspaceContext } from '../layout/workspaceNavigation'
 import { isTargetPath } from './configurationTargetSupport'
 import '../../styles/pages/configurations.css'
 
@@ -156,6 +157,7 @@ export function RuleStateIndicator({ rule }: { rule: Pick<ConfigurationRule, 'en
 
 /** The Automation tab of a profile: its rules, and a form for a new one. */
 export function AutomationPanel({ organizationId, profile }: { organizationId: string; profile: ConfigurationProfile }) {
+  const [searchParams] = useSearchParams()
   const i18n = useI18n()
   const t = i18n.t.rules
   const [creating, setCreating] = useState(false)
@@ -175,7 +177,7 @@ export function AutomationPanel({ organizationId, profile }: { organizationId: s
           <th scope="col">{t.columns.revision}</th><th scope="col">{t.columns.selector}</th>
           <th scope="col">{t.columns.targets}</th></tr></thead>
         <tbody>{rows.map(rule => <tr key={rule.id}>
-          <td><Link className="grid-link" to={rulePath(organizationId, rule.id)}>{rule.name}</Link>
+          <td><Link className="grid-link" to={withWorkspaceContext(rulePath(organizationId, rule.id), searchParams)}>{rule.name}</Link>
             <small className="cell-secondary technical-value">{rule.code}</small></td>
           <td><RuleStateIndicator rule={rule} /></td>
           <td>{i18n.t.configurations.version(rule.profileRevisionNumber)}
@@ -200,6 +202,7 @@ export function AutomationPanel({ organizationId, profile }: { organizationId: s
 function RuleCreateForm({ organizationId, profile, onCancel }: {
   organizationId: string; profile: ConfigurationProfile; onCancel: () => void
 }) {
+  const [searchParams] = useSearchParams()
   const i18n = useI18n()
   const t = i18n.t.rules
   const navigate = useNavigate()
@@ -239,7 +242,7 @@ function RuleCreateForm({ organizationId, profile, onCancel }: {
     if (enabled && !preview.data) return setProblem(t.previewRequired)
     create.mutate({ code, name: name.trim(), description: description.trim() || null, profileId: profile.id,
       profileRevisionNumber: revision, targetPath: current.path, selector: current.cleaned, enabled },
-    { onSuccess: rule => navigate(rulePath(organizationId, rule.id)) })
+    { onSuccess: rule => navigate(withWorkspaceContext(rulePath(organizationId, rule.id), searchParams)) })
   }
   const listed = (revisions.data ?? []).map(item => item.revisionNumber)
   const options = listed.includes(revision) ? listed : [revision, ...listed]

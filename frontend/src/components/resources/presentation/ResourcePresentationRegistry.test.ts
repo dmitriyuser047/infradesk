@@ -46,7 +46,7 @@ describe('resource presentation registry', () => {
       kind: 'NODE', spec: null, status: { online: true, cpuUsagePercent: null, memoryUsagePercent: null, uptimeSeconds: null },
     }), en)).toEqual({ label: 'Online', tone: 'success' })
     expect(nodePresentation.rowStatus(resource('NODE', { kind: 'NODE', spec: null, status: null }), ru))
-      .toEqual({ label: 'Неизвестно', tone: 'neutral' })
+      .toEqual({ label: 'Состояние неизвестно', tone: 'neutral' })
     expect(containerPresentation.rowStatus(resource('CONTAINER', {
       kind: 'CONTAINER', spec: null, status: { state: 'running' },
     }), ru)).toEqual({ label: 'Работает', tone: 'success' })

@@ -33,7 +33,7 @@ export function AccountMenu() {
 
   return <div className="account-menu">
     <button ref={popover.triggerRef} type="button" className="account-trigger" onClick={popover.toggle}
-      aria-haspopup="menu" {...popover.triggerProps} aria-label={t.accountMenu(name)}>
+      aria-haspopup="menu" {...popover.triggerProps} aria-label={t.accountMenu(name)} title={t.accountMenu(name)}>
       <span className="avatar" aria-hidden>{initials(name)}</span>
       <span className="account-name">{name}</span>
     </button>

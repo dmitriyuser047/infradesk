@@ -10,82 +10,6 @@ import type {
   IntegrationResponse,
 } from '../../types/integration'
 
-const copy = {
-  en: {
-    management: 'Management', observe: 'Observe', managed: 'Automatic management enabled',
-    observeDetail: 'InfraDesk observes Remnawave and allows manual actions. It does not automatically change node state.',
-    managedDetail: 'InfraDesk automatically keeps selected nodes in the specified state. Other nodes are only monitored.',
-    startManaging: 'Manage selected nodes', stopManaging: 'Stop managing nodes',
-    requiresSync: 'Managing nodes requires automatic synchronization. Enable the integration first.',
-    confirmStartTitle: 'Let InfraDesk manage selected nodes?',
-    confirmStart: 'This turns automation on. For every node you then choose to manage, InfraDesk will enable or disable it in Remnawave whenever a different state is observed. Nodes you do not select stay observation-only.',
-    confirmStopTitle: 'Stop managing selected nodes?',
-    confirmStop: (count: number) => `Desired states for ${count} nodes will be removed. Their current state in Remnawave will not be changed.`,
-    confirm: 'Confirm', cancel: 'Cancel', modeError: 'Unable to change the management mode',
-    counters: { managed: 'Under management', compliant: 'In the specified state', drifted: 'Need changes', applying: 'Changing now', attention: 'Problems' },
-    desired: 'Management', notManaged: 'Not managed', manage: 'Manage', change: 'Change rule',
-    state: { ENABLED: 'Enabled', DISABLED: 'Disabled' } as Record<DesiredNodeState, string>,
-    ruleState: { ENABLED: 'Should be enabled', DISABLED: 'Should be disabled' } as Record<DesiredNodeState, string>,
-    actual: { enabled: 'Currently enabled', disabled: 'Currently disabled' },
-    status: {
-      COMPLIANT: 'In the specified state', DRIFTED: 'Drift detected', APPLYING: 'Applying', WAITING_REFRESH: 'Waiting for observation',
-      REMEDIATION_FAILED: 'Remediation failed', UNAVAILABLE: 'Node unavailable',
-    } as Record<DesiredStateStatus, string>,
-    dialogTitle: (node: string) => `Manage ${node}`, desiredLabel: 'Desired state',
-    dialogDetail: 'InfraDesk will automatically restore this state when a different state is observed. This is persistent automation, not a one-time command.',
-    manageNode: 'Manage node', save: 'Change desired state', stop: 'Stop managing',
-    stopDetail: 'Stopping removes the desired state. The node stays as it is in Remnawave.',
-    saveError: 'Unable to change the desired state',
-    observed: 'Observed', compliance: 'Compliance',
-    codes: {
-      INTEGRATION_ACTION_ALREADY_RUNNING: 'An action on this node is still queued or running. Wait for it to finish.',
-      INTEGRATION_MANAGEMENT_REQUIRES_SYNC: 'Managing nodes requires automatic synchronization.',
-      INTEGRATION_MANAGEMENT_ACTIVE: 'Switch back to Observe before changing the endpoint or the credentials.',
-      INTEGRATION_MANAGEMENT_MODE_REQUIRED: 'The integration does not manage selected nodes.',
-      INTEGRATION_DESIRED_STATE_DISABLED: 'Desired state is disabled for this deployment.',
-      INTEGRATION_DESIRED_STATE_UNSUPPORTED: 'Only Remnawave nodes can have a desired state.',
-      INTEGRATION_OBJECT_INACTIVE: 'This node is no longer reported by Remnawave.',
-      INTEGRATION_OBJECT_NOT_FOUND: 'This node is no longer in the inventory.',
-    } as Record<string, string>,
-  },
-  ru: {
-    management: 'Управление', observe: 'Наблюдение', managed: 'Автоматическое управление включено',
-    observeDetail: 'InfraDesk наблюдает Remnawave и позволяет выполнять ручные действия. Состояние нод автоматически не меняется.',
-    managedDetail: 'InfraDesk автоматически поддерживает выбранные ноды в заданном состоянии. Остальные ноды только отслеживаются.',
-    startManaging: 'Управлять выбранными нодами', stopManaging: 'Прекратить управление',
-    requiresSync: 'Для управления нужна автоматическая синхронизация. Сначала включите интеграцию.',
-    confirmStartTitle: 'Разрешить InfraDesk управлять выбранными нодами?',
-    confirmStart: 'Это включает автоматизацию. Каждую ноду, которую вы затем выберете, InfraDesk будет включать или отключать в Remnawave, когда наблюдаемое состояние отличается от желаемого. Невыбранные ноды остаются только под наблюдением.',
-    confirmStopTitle: 'Прекратить управление выбранными нодами?',
-    confirmStop: (count: number) => `Желаемые состояния для ${count} нод будут удалены. Их текущее состояние в Remnawave не изменится.`,
-    confirm: 'Подтвердить', cancel: 'Отмена', modeError: 'Не удалось изменить режим управления',
-    counters: { managed: 'Под управлением', compliant: 'В нужном состоянии', drifted: 'Требуют изменения', applying: 'Изменяются сейчас', attention: 'Проблемы' },
-    desired: 'Управление', notManaged: 'Не управляется', manage: 'Управлять', change: 'Изменить правило',
-    state: { ENABLED: 'Включена', DISABLED: 'Отключена' } as Record<DesiredNodeState, string>,
-    ruleState: { ENABLED: 'Должна быть включена', DISABLED: 'Должна быть выключена' } as Record<DesiredNodeState, string>,
-    actual: { enabled: 'Сейчас включена', disabled: 'Сейчас выключена' },
-    status: {
-      COMPLIANT: 'В нужном состоянии', DRIFTED: 'Обнаружено расхождение', APPLYING: 'Применяется',
-      WAITING_REFRESH: 'Ожидание синхронизации', REMEDIATION_FAILED: 'Не удалось применить', UNAVAILABLE: 'Нода отсутствует',
-    } as Record<DesiredStateStatus, string>,
-    dialogTitle: (node: string) => `Управление: ${node}`, desiredLabel: 'Желаемое состояние',
-    dialogDetail: 'InfraDesk будет автоматически восстанавливать это состояние, когда наблюдается другое. Это постоянная автоматизация, а не разовая команда.',
-    manageNode: 'Управлять нодой', save: 'Изменить желаемое состояние', stop: 'Прекратить управление',
-    stopDetail: 'Желаемое состояние будет удалено. Нода в Remnawave останется как есть.',
-    saveError: 'Не удалось изменить желаемое состояние',
-    observed: 'Наблюдается', compliance: 'Соответствие',
-    codes: {
-      INTEGRATION_ACTION_ALREADY_RUNNING: 'Действие над этой нодой ещё в очереди или выполняется. Дождитесь завершения.',
-      INTEGRATION_MANAGEMENT_REQUIRES_SYNC: 'Для управления нодами нужна автоматическая синхронизация.',
-      INTEGRATION_MANAGEMENT_ACTIVE: 'Вернитесь в режим наблюдения, прежде чем менять адрес или учётные данные.',
-      INTEGRATION_MANAGEMENT_MODE_REQUIRED: 'Интеграция не управляет выбранными нодами.',
-      INTEGRATION_DESIRED_STATE_DISABLED: 'Желаемое состояние отключено в этой установке.',
-      INTEGRATION_DESIRED_STATE_UNSUPPORTED: 'Желаемое состояние есть только у нод Remnawave.',
-      INTEGRATION_OBJECT_INACTIVE: 'Remnawave больше не сообщает об этой ноде.',
-      INTEGRATION_OBJECT_NOT_FOUND: 'Этой ноды больше нет в инвентаре.',
-    } as Record<string, string>,
-  },
-}
 
 /** Each status has its own meaning and tone; they are not one red "error". */
 export const desiredStatusTones: Record<DesiredStateStatus, StatusTone> = {
@@ -94,12 +18,12 @@ export const desiredStatusTones: Record<DesiredStateStatus, StatusTone> = {
 }
 
 export function useDesiredStateCopy() {
-  const { locale } = useI18n()
-  return copy[locale]
+  const { t } = useI18n()
+  return t.integrationDesiredState
 }
 
 function useErrorText() {
-  const i18n = useI18n(); const t = copy[i18n.locale]
+  const i18n = useI18n(); const t = i18n.t.integrationDesiredState
   return (error: unknown) => error instanceof ApiError && t.codes[error.code] ? t.codes[error.code] : describeError(error, i18n)
 }
 
@@ -168,8 +92,11 @@ export function ManagementSection({ organizationId, integration, counts }: {
 export function DesiredStateBadge({ value, observedDisabled }: { value: DesiredStateView; observedDisabled: boolean }) {
   const t = useDesiredStateCopy()
   return <span className="integration-inline"><strong>{t.ruleState[value.state]}</strong>
-    <StatusIndicator label={value.status === 'COMPLIANT' ? observedDisabled ? t.actual.disabled : t.actual.enabled : t.status[value.status]}
-      tone={desiredStatusTones[value.status]} /></span>
+    {value.status === 'COMPLIANT' || value.status === 'DRIFTED'
+      ? <StatusIndicator label={observedDisabled ? t.actual.disabled : t.actual.enabled}
+        tone={desiredStatusTones[value.status]} /> : null}
+    {value.status !== 'COMPLIANT' ? <StatusIndicator label={t.status[value.status]}
+      tone={desiredStatusTones[value.status]} /> : null}</span>
 }
 
 /**

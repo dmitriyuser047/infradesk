@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { ComponentType } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
 
 import { ApiError } from '../api/httpClient'
@@ -11,6 +11,7 @@ import { useOrganizationPermissions } from '../components/auth/authorization'
 import { ConfigurationAssignmentList } from '../components/configuration/ConfigurationAssignmentList'
 import { ResourceLabelsSection } from '../components/configuration/ResourceLabelsSection'
 import { supportsConfigurationAssignment } from '../components/configuration/configurationTargetSupport'
+import { isUnavailableError, RefreshWarning } from '../components/layout/RefreshWarning'
 import { AppShell } from '../components/layout/AppShell'
 import {
   InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
@@ -22,13 +23,14 @@ import { filterMetricSeries } from '../components/metrics/metricSeries'
 import { ResourceActivitySection } from '../components/history/ResourceActivitySection'
 import { InfrastructureContextPath, resourceContextPath } from '../components/infrastructure/InfrastructureContextPath'
 import {
-  environmentPath, originPath, originQuery, readOrigin, workspaceQuery,
+  connectionPath, environmentPath, originPath, originQuery, readOrigin, withTab, workspaceQuery,
 } from '../components/infrastructure/infrastructureLinks'
 import { asTree } from '../components/infrastructure/resourceGroups'
 import { ScopedIncidentsPanel } from '../components/infrastructure/ScopedIncidentsPanel'
 import { SourceConnectionLinks } from '../components/infrastructure/SourceConnections'
 import { MonitorRulesSection } from '../components/monitoring/MonitorRulesSection'
 import { supportsResourceMonitoring } from '../components/monitoring/resourceMonitoringSupport'
+import { resourceChildrenTitle, resourceDisplayName, resourceTerminalConnection } from '../components/resources/resourceInventoryPresentation'
 import { ResourceTree } from '../components/resources/ResourceTree'
 import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
 import type { ResourcePresentationProps } from '../components/resources/presentation/ResourcePresentation'
@@ -68,7 +70,7 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
   const [metricWindow, setMetricWindow] = useState(() => createLastHourWindow())
   const resourceQuery = useResource(organizationId, resourceId)
   const contextQuery = useResourceContext(organizationId, resourceId)
-  const context = contextQuery.data
+  const context = isUnavailableError(contextQuery.error) ? undefined : contextQuery.data
   const presentation = resourcePresentationRegistry.resolve(resourceQuery.data?.resourceTypeCode ?? '')
   const monitored = supportsResourceMonitoring(resourceQuery.data?.resourceTypeCode)
   // Desired configuration is for nodes only for now, and for those who may manage it.
@@ -92,12 +94,17 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
   }, { replace: true })
 
   if (resourceQuery.isPending) return <AppShell><PageLoading title={t.loading} back={back} label={t.loading} /></AppShell>
-  if (resourceQuery.isError || !resourceQuery.data) {
+  if (!resourceQuery.data || isUnavailableError(resourceQuery.error)) {
     return <AppShell><PageUnavailable back={back} onRetry={() => resourceQuery.refetch()} error={resourceQuery.error}
       notFound={resourceQuery.error instanceof ApiError && resourceQuery.error.code === 'RESOURCE_NOT_FOUND'}
       notFoundTitle={t.notFound} notFoundDetail={t.notFoundDetail} errorTitle={t.loadError} /></AppShell>
   }
   const resource = resourceQuery.data
+  const resourceName = resourceDisplayName(resource)
+  const terminalConnection = permissions.can('openTerminal') ? resourceTerminalConnection(resource, context?.sourceConnections ?? []) : undefined
+  const terminalQuery = new URLSearchParams(linkQuery)
+  terminalQuery.set('environment', environmentId)
+  if (context?.project.id) terminalQuery.set('project', context.project.id)
   // Incidents come from monitor rules, so they belong where monitoring does; whether the resource
   // has operations says nothing about either.
   const tabs: { id: Tab; label: string; count?: number }[] = [
@@ -114,17 +121,22 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
   const Overview = presentation.Overview
   const typeLabel = i18n.t.resources.types[resource.resourceTypeCode] ?? resource.resourceTypeCode
 
-  return <AppShell><div className="workspace-page resource-page">
-    {context ? <InfrastructureContextPath items={resourceContextPath(organizationId, context, [{ label: resource.name }], linkQuery)} /> : null}
-    <WorkspaceHeader title={resource.name} subtitle={t.subtitle(typeLabel, resource.code)} back={back}
+  return <AppShell><div className="workspace-page resource-page work-page detail-page">
+    {context ? <InfrastructureContextPath items={resourceContextPath(organizationId, context, [{ label: resourceName }], i18n.t.shell.nav, linkQuery)} /> : null}
+    <WorkspaceHeader title={resourceName} subtitle={presentation.headerSubtitle?.(resource, i18n) ?? t.subtitle(typeLabel, resource.code)}
+      back={context?.parentResource && !readOrigin(searchParams) ? undefined : back}
       status={<>{status ? <StatusIndicator label={status.label} tone={status.tone} /> : null}
         {!resource.active ? <StatusIndicator label={t.inactive} tone="neutral" /> : null}</>}
-      actions={context && context.sourceConnections.length > 1
-        // One source is already in the path; several are listed on request, none preferred.
+      actions={<>
+        {terminalConnection ? <Link className="primary-button"
+          to={connectionPath(organizationId, terminalConnection.id, withTab(`?${terminalQuery.toString()}`, 'terminal'))}>{i18n.t.workScreens.openTerminal}</Link> : null}
+        {context && context.sourceConnections.length > 0
+        // Sources are related entities, independent of the breadcrumb hierarchy.
         ? <details className="toolbar-overflow source-disclosure">
           <summary>{i18n.t.infrastructure.sourcesCount(context.sourceConnections.length)}</summary>
           <SourceConnectionLinks organizationId={organizationId} sources={context.sourceConnections} linkQuery={linkQuery} />
-        </details> : undefined} />
+        </details> : null}</>} />
+    {resourceQuery.isError ? <RefreshWarning updatedAt={resourceQuery.dataUpdatedAt} retry={() => resourceQuery.refetch()} /> : null}
     <WorkspaceTabs tabs={tabs} active={active} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
       {active === 'overview' ? <>
@@ -137,7 +149,7 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
       {active === 'monitoring' ? <>
         <MetricsSection resource={resource} Summary={presentation.MetricSummary}
           isPending={metricsQuery.isPending} isError={metricsQuery.isError} error={metricsQuery.error}
-          observations={metricsQuery.data} refresh={() => setMetricWindow(createLastHourWindow())}
+          observations={isUnavailableError(metricsQuery.error) ? undefined : metricsQuery.data} updatedAt={metricsQuery.dataUpdatedAt} refresh={() => setMetricWindow(createLastHourWindow())}
           retry={metricsQuery.refetch} />
         <MonitorRulesSection organizationId={organizationId} resourceId={resourceId} />
       </> : null}
@@ -197,26 +209,31 @@ function ResourceChildren({ organizationId, query, linkQuery }: {
   const i18n = useI18n()
   const t = i18n.t.infrastructure
   if (query.isPending) return null
-  if (query.isError || !query.data) {
+  if (!query.data || isUnavailableError(query.error)) {
     return <InlineAlert tone="warning" title={t.contextError}
       action={<button className="secondary-button" type="button" onClick={() => query.refetch()}>{i18n.t.common.retry}</button>}>
       {describeError(query.error, i18n)}</InlineAlert>
   }
   const context = query.data
-  if (context.activeChildCount === 0) return null
-  return <WorkspaceSection title={t.children}
+  const title = resourceChildrenTitle(context.children, context.activeChildCount, i18n)
+  if (context.activeChildCount === 0) return query.isError
+    ? <RefreshWarning updatedAt={query.dataUpdatedAt} retry={() => query.refetch()} /> : null
+  return <>
+  {query.isError ? <RefreshWarning updatedAt={query.dataUpdatedAt} retry={() => query.refetch()} /> : null}
+  <WorkspaceSection title={title}
     actions={<span className="resource-count">{t.childrenShown(context.children.length, context.activeChildCount)}</span>}>
-    <ResourceTree roots={asTree(context.children)} organizationId={organizationId} linkQuery={linkQuery} label={t.children} />
-  </WorkspaceSection>
+    <ResourceTree roots={asTree(context.children)} organizationId={organizationId} linkQuery={linkQuery} label={title} />
+  </WorkspaceSection></>
 }
 
-function MetricsSection({ resource, Summary, isPending, isError, error, observations, refresh, retry }: {
+function MetricsSection({ resource, Summary, isPending, isError, error, observations, updatedAt, refresh, retry }: {
   resource: ResourceResponse
   Summary: ComponentType<ResourcePresentationProps> | undefined
   isPending: boolean
   isError: boolean
   error: Error | null
   observations: readonly MetricObservationResponse[] | undefined
+  updatedAt: number
   refresh: () => void
   retry: () => void
 }) {
@@ -228,10 +245,11 @@ function MetricsSection({ resource, Summary, isPending, isError, error, observat
     <RefreshCw aria-hidden size={14} /> {i18n.t.common.refresh}</button>}>
     {Summary ? <Summary resource={resource} /> : null}
     {isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
-    {isError ? <InlineAlert tone="danger" title={t.loadError}
+    {isError && observations ? <RefreshWarning updatedAt={updatedAt} retry={retry} /> : null}
+    {isError && !observations ? <InlineAlert tone="danger" title={t.loadError}
       action={<button className="secondary-button" type="button" onClick={retry}>{i18n.t.common.retry}</button>}>
       {describeError(error, i18n)}</InlineAlert> : null}
-    {!isPending && !isError ? <div className="charts-grid">
+    {!isPending && (!isError || observations !== undefined) ? <div className="charts-grid">
       <section className="chart-pane" aria-label={t.chart(t.cpu)}><h3>{t.cpu}</h3><MetricChart title={t.cpu} data={cpuSeries} /></section>
       <section className="chart-pane" aria-label={t.chart(t.memory)}><h3>{t.memory}</h3><MetricChart title={t.memory} data={memorySeries} /></section>
     </div> : null}

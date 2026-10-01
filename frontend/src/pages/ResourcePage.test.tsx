@@ -186,20 +186,18 @@ describe('resource detail page', () => {
     const requests = renderPage({ resource: server, context: { ...context,
       children: [container], activeChildCount: 1 } })
 
-    const path = await screen.findByRole('navigation', { name: 'Location in the infrastructure' })
-    // One source: it is part of the path, and remembers where it was followed from.
-    expect(within(path).getAllByRole('link').map(link => [link.textContent, link.getAttribute('href')])).toEqual([
-      ['App', '/organizations/org/resources?project=project'],
-      ['Production', '/organizations/org/environments/env?project=project&environment=env'],
-      ['Finnish Node', '/organizations/org/connections/finnish?project=project&fromResource=server&fromEnvironment=env'],
-    ])
-    expect(within(path).getByText('finland_node').getAttribute('aria-current')).toBe('page')
+    await screen.findByText('Sources · 1')
+    // A simple detail uses a back link. Discovery sources stay related entities.
+    expect(screen.queryByRole('navigation', { name: 'Location in the infrastructure' })).toBeNull()
+    expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/environments/env?project=project&environment=env')
+    expect(screen.getByRole('link', { name: 'Open connection Finnish Node' }).getAttribute('href'))
+      .toBe('/organizations/org/connections/finnish?project=project&fromResource=server&fromEnvironment=env')
     // Project, environment and source are not repeated as a section below.
     expect(screen.queryByRole('heading', { name: 'Context' })).toBeNull()
-    expect(screen.queryByText('Sources · 1')).toBeNull()
+    expect(screen.getByText('Sources · 1')).toBeTruthy()
     // What it contains is operational and stays.
-    expect(await screen.findByRole('heading', { name: 'Contained resources' })).toBeTruthy()
-    expect(within(screen.getByRole('tree', { name: 'Contained resources' })).getByRole('link', { name: /postgres/ })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Containers' })).toBeTruthy()
+    expect(within(screen.getByRole('tree', { name: 'Containers' })).getByRole('link', { name: /postgres/ })).toBeTruthy()
     // Direct navigation: nothing was in the cache, and no list was loaded to find the context.
     expect(requests.some(value => value.includes('/environments/'))).toBe(false)
   })
@@ -210,7 +208,7 @@ describe('resource detail page', () => {
       sourceConnections: [...context.sourceConnections, { id: 'prom', name: 'Prometheus', connectorType: 'PROMETHEUS', active: true }] } })
 
     const path = await screen.findByRole('navigation', { name: 'Location in the infrastructure' })
-    expect(within(path).getAllByRole('link').map(link => link.textContent)).toEqual(['App', 'Production', 'fin-prod-01'])
+    expect(within(path).getAllByRole('link').map(link => link.textContent)).toEqual(['Servers', 'fin-prod-01'])
     expect(screen.getByText('Sources · 2')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open connection Finnish Node' }).getAttribute('href'))
       .toBe('/organizations/org/connections/finnish?project=project&fromResource=postgres&fromEnvironment=env')
@@ -239,7 +237,7 @@ describe('resource detail page', () => {
   it('lists the incidents of a monitored resource in its own tab, open first', async () => {
     const requests = renderPage({ resource: server, context: { ...context, openIncidentCount: 1 } })
     fireEvent.click(await screen.findByRole('tab', { name: 'Incidents 1' }))
-    expect(await screen.findByText('No active incidents')).toBeTruthy()
+    expect(await screen.findByText('No active problems')).toBeTruthy()
     await waitFor(() => expect(requests).toContain('/resources/server/incidents?status=OPEN&limit=50'))
     expect(requests).toContain('/resources/server/incidents?status=RESOLVED&limit=20')
   })

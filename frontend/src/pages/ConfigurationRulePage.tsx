@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { useConfigurationRevision, useConfigurationRevisions } from '../api/configurations'
 import { useDeploymentSummaries } from '../api/configurationDeployments'
@@ -14,6 +14,7 @@ import {
   SelectorEditor, SelectorSummary, RuleStateIndicator, cleanSelector, selectorProblem,
 } from '../components/configuration/ConfigurationRules'
 import { AppShell } from '../components/layout/AppShell'
+import { withWorkspaceContext } from '../components/layout/workspaceNavigation'
 import {
   EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceFormSection, WorkspaceHeader,
   WorkspaceSection, type StatusTone,
@@ -42,6 +43,7 @@ export function ruleRolloutPath(organizationId: string, rule: Pick<Configuration
  * touches. Everything here changes desired state only; deploying stays the rollout's job.
  */
 function RuleContent({ organizationId, ruleId }: { organizationId: string; ruleId: string }) {
+  const [searchParams] = useSearchParams()
   const i18n = useI18n()
   const t = i18n.t.rules
   const permissions = useOrganizationPermissions(organizationId)
@@ -51,9 +53,10 @@ function RuleContent({ organizationId, ruleId }: { organizationId: string; ruleI
   const reconcile = useReconcileRule(organizationId, ruleId)
   const [editing, setEditing] = useState(false)
   const rule = query.data
-  const back = rule
+  const parent = rule
     ? { label: rule.profile.name, to: `${configurationPath(organizationId, rule.profile.id)}?tab=automation` }
     : { label: i18n.t.configurations.back, to: configurationsPath(organizationId) }
+  const back = { ...parent, to: withWorkspaceContext(parent.to, searchParams) }
 
   if (!permissions.isPending && !canManage) {
     return <div className="workspace-page"><WorkspaceHeader title={t.title} back={back} /><InlineAlert tone="danger" title={i18n.t.configurations.accessDenied} /></div>
@@ -98,7 +101,7 @@ function RuleContent({ organizationId, ruleId }: { organizationId: string; ruleI
 
     <WorkspaceSection title={i18n.t.assignments.targetSection}>
       <PropertyGrid columns={2} items={[
-        { label: t.profile, value: <Link className="grid-link" to={configurationPath(organizationId, rule.profile.id)}>{rule.profile.name}</Link> },
+        { label: t.profile, value: <Link className="grid-link" to={withWorkspaceContext(configurationPath(organizationId, rule.profile.id), searchParams)}>{rule.profile.name}</Link> },
         { label: t.revision, value: <>{i18n.t.configurations.version(rule.profileRevisionNumber)}
           {newer ? <> <StatusIndicator label={t.newerAvailable(rule.profile.latestRevisionNumber)} tone="info" /></> : null}</> },
         { label: t.targetPath, value: rule.targetPath, technical: true },

@@ -8,8 +8,14 @@ import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, InlineAlert, WorkspaceFormSection, WorkspaceHeader,
   WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { PageActionMenu } from '../components/layout/PageActionMenu'
+import { RefreshWarning, isUnavailableError } from '../components/layout/RefreshWarning'
+import { IntegrationDialog } from '../components/integrations/IntegrationDialog'
+import { connectionHealth, sessionTones } from '../components/integrations/integrationPresentation'
+import { StatusIndicator } from '../components/layout/WorkspacePrimitives'
+import '../styles/pages/integrations.css'
 import { useI18n } from '../i18n'
-import { describeError } from '../i18n/errors'
+import { describeIntegrationError } from '../components/integrations/integrationPresentation'
 import type { IntegrationResponse } from '../types/integration'
 import { InvalidRoutePage } from './InvalidRoutePage'
 import '../styles/pages/notifications.css'
@@ -35,56 +41,67 @@ function IntegrationList({ organizationId }: { organizationId: string }) {
   const lifecycle = useSetIntegrationEnabled(organizationId)
   const test = useTestIntegration(organizationId)
   const remove = useDeleteIntegration(organizationId)
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [confirmation, setConfirmation] = useState<{ item: IntegrationResponse; kind: 'delete' | 'disable' } | null>(null)
+  const ui = i18n.t.integrationUi
   const createPath = `/organizations/${encodeURIComponent(organizationId)}/integrations/new${location.search}`
   const testError = useIntegrationError(test.error)
-  return <AppShell><div className="workspace-page">
+  return <AppShell><div className="workspace-page work-page integration-page">
     <WorkspaceHeader title={t.title} subtitle={t.subtitle} actions={canManage ?
       <Link className="primary-button" to={createPath}><Plus aria-hidden size={16} />{t.add}</Link> : undefined} />
     {permissions.isPending ? <p role="status">{i18n.t.common.loading}</p> : null}
     {!permissions.isPending && !canManage ? <InlineAlert tone="danger" title={t.accessDenied} /> : null}
     {canManage && query.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /><span /></div> : null}
-    {query.isError ? <InlineAlert tone="danger" title={t.loadError}
+    {query.isError && (!query.data || isUnavailableError(query.error)) ? <InlineAlert tone="danger" title={t.loadError}
       action={<button className="secondary-button" onClick={() => query.refetch()}>{i18n.t.common.retry}</button>}>
-      {describeError(query.error, i18n)}</InlineAlert> : null}
-    {query.data?.length === 0 ? <EmptyWorkspaceState icon={Plug} title={t.empty} detail={t.emptyDetail}
+      {describeIntegrationError(query.error, i18n)}</InlineAlert> : null}
+    {query.isError && query.data && !isUnavailableError(query.error) ? <RefreshWarning updatedAt={query.dataUpdatedAt} retry={() => query.refetch()} /> : null}
+    {canManage && !isUnavailableError(query.error) && query.data?.length === 0 ? <EmptyWorkspaceState icon={Plug} title={t.empty} detail={t.emptyDetail}
       action={<Link className="primary-button" to={createPath}>{t.add}</Link>} /> : null}
-    {query.data?.length ? <WorkspaceSection title={t.section}>
-      <div className="notification-list">{query.data.map(item => <article className="notification-card" key={item.id}>
+    {canManage && !isUnavailableError(query.error) && query.data?.length ? <WorkspaceSection title={t.section}>
+      <div className="notification-list">{query.data.map(item => {
+        const health = connectionHealth(test.variables === item.id && test.isSuccess ? test.data.ok : undefined,
+          test.variables === item.id && test.error instanceof ApiError ? test.error.code : undefined)
+        return <article className="notification-card" key={item.id}>
         <div className="notification-card-heading"><div><h3><Link to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}${location.search}`}>
           {item.name}</Link></h3><span className="notification-type">Remnawave</span></div>
-          <span className={`status-indicator ${item.enabled ? 'status-success' : 'status-muted'}`}>{item.enabled ? t.enabled : t.disabled}</span></div>
-        <dl className="notification-properties">
-          <div><dt>{t.provider}</dt><dd>Remnawave</dd></div>
-          <div><dt>{t.baseUrl}</dt><dd className="break-anywhere">{item.baseUrl}</dd></div>
-          <div><dt>{t.credential}</dt><dd>{item.credential.apiTokenConfigured ? t.configured : t.missing}
-            {item.credential.caddyApiKeyConfigured ? ` · ${t.caddyConfigured}` : ''}</dd></div>
-          {item.overview ? <div><dt>{inventory.tabs.overview}</dt><dd>{item.overview.lastSync
-            ? inventory.listSummary(item.overview.inventory.nodes.active, i18n.format.relative(item.overview.lastSync.startedAt))
-              + ` · ${inventory.status[item.overview.lastSync.status] ?? item.overview.lastSync.status}`
-            : inventory.never}</dd></div> : null}
-        </dl>
-        <div className="notification-actions">
-          <Link className="secondary-button" to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}${location.search}`}>{inventory.open}</Link>
-          <Link className="secondary-button" to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}/edit${location.search}`}>{t.edit}</Link>
-          <button className="secondary-button" disabled={lifecycle.isPending} onClick={() => lifecycle.mutate({ id: item.id, enabled: !item.enabled })}>
-            {item.enabled ? t.disable : t.enable}</button>
-          <button className="secondary-button" disabled={test.isPending} onClick={() => test.mutate(item.id)}>
-            {test.isPending && test.variables === item.id ? t.testing : t.test}</button>
-          <button className="secondary-button" disabled={remove.isPending} onClick={() => {
-            if (confirmDelete === item.id) { remove.mutate(item.id); setConfirmDelete(null) }
-            else setConfirmDelete(item.id)
-          }}>{confirmDelete === item.id ? t.confirmDelete : t.delete}</button>
+          <StatusIndicator label={item.enabled ? t.enabled : t.disabled} /></div>
+        <div className="integration-card-statuses">
+          <span>{ui.connection}: <StatusIndicator label={ui[health]} tone={health === "available" ? "success" : health === "unavailable" ? "danger" : "neutral"} /></span>
+          <span>{inventory.lastSync}: {item.overview?.lastSync ?
+            <StatusIndicator label={inventory.status[item.overview.lastSync.status]} tone={sessionTones[item.overview.lastSync.status]} /> : inventory.never}</span>
         </div>
-        {test.variables === item.id && test.isSuccess ? <InlineAlert tone="success" title={t.testSuccess} /> : null}
+        <p className="integration-overview-line">{item.overview?.lastSync
+          ? inventory.listSummary(item.overview.inventory.nodes.active, i18n.format.relative(item.overview.lastSync.startedAt)) : inventory.never}</p>
+        <p className="muted-copy break-anywhere">{item.baseUrl}</p>
+        <div className="notification-actions">
+          <Link className="primary-button" to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}${location.search}`}>{inventory.open}</Link>
+          <PageActionMenu actions={[
+            { label: t.test, disabled: test.isPending, onSelect: () => test.mutate(item.id) },
+            { label: t.edit, to: `/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}/edit${location.search}` },
+            { label: item.enabled ? t.disable : t.enable, disabled: lifecycle.isPending,
+              onSelect: () => item.enabled ? setConfirmation({ item, kind: 'disable' }) : lifecycle.mutate({ id: item.id, enabled: true }) },
+            { label: t.delete, danger: true, disabled: remove.isPending, onSelect: () => setConfirmation({ item, kind: 'delete' }) },
+          ]} />
+        </div>
+        {test.variables === item.id && test.isSuccess ? <InlineAlert tone={test.data.ok ? "success" : "danger"} title={test.data.ok ? t.testSuccess : t.testError}>{test.data.ok ? ui.testDetail : null}</InlineAlert> : null}
         {test.variables === item.id && test.isError ? <InlineAlert tone="danger" title={t.testError}>
-          {testError ?? describeError(test.error, i18n)}</InlineAlert> : null}
+          {testError ?? describeIntegrationError(test.error, i18n)}</InlineAlert> : null}
         {lifecycle.isError && lifecycle.variables?.id === item.id ? <InlineAlert tone="danger" title={t.actionError}>
-          {describeError(lifecycle.error, i18n)}</InlineAlert> : null}
+          {describeIntegrationError(lifecycle.error, i18n)}</InlineAlert> : null}
         {remove.isError && remove.variables === item.id ? <InlineAlert tone="danger" title={t.deleteError}>
-          {describeError(remove.error, i18n)}</InlineAlert> : null}
-      </article>)}</div>
+          {describeIntegrationError(remove.error, i18n)}</InlineAlert> : null}
+      </article>})}</div>
     </WorkspaceSection> : null}
+    {confirmation ? <IntegrationDialog title={confirmation.kind === 'delete' ? ui.deleteTitle : ui.disableTitle}
+      onClose={() => setConfirmation(null)} busy={remove.isPending || lifecycle.isPending}
+      actions={<><button className="secondary-button" onClick={() => setConfirmation(null)}>{i18n.t.common.cancel}</button>
+        <button className="primary-button" onClick={() => {
+          if (confirmation.kind === 'delete') remove.mutate(confirmation.item.id, { onSuccess: () => setConfirmation(null) })
+          else lifecycle.mutate({ id: confirmation.item.id, enabled: false }, { onSuccess: () => setConfirmation(null) })
+        }} disabled={remove.isPending || lifecycle.isPending}>{confirmation.kind === 'delete' ? t.confirmDelete : t.disable}</button></>}>
+      <strong>{confirmation.item.name}</strong><p>{confirmation.kind === 'delete' ? ui.deleteDetail : ui.disableDetail}</p>
+      {remove.isError || lifecycle.isError ? <InlineAlert tone="danger" title={describeIntegrationError(remove.error ?? lifecycle.error, i18n)} /> : null}
+    </IntegrationDialog> : null}
   </div></AppShell>
 }
 
@@ -144,7 +161,7 @@ function IntegrationForm({ organizationId, integrationId }: { organizationId: st
         <p>{t.caddyApiKeyHint}</p>
         <p>{t.credentialHint}</p>
       </> : null}
-      {save.isError ? <InlineAlert tone="danger" title={t.saveError}>{describeError(save.error, i18n)}</InlineAlert> : null}
+      {save.isError ? <InlineAlert tone="danger" title={t.saveError}>{describeIntegrationError(save.error, i18n)}</InlineAlert> : null}
       <div className="notification-form-actions"><button className="primary-button" type="submit" disabled={save.isPending || providers.isPending}>
         {save.isPending ? t.saving : t.save}</button><Link className="secondary-button" to={back}>{i18n.t.common.cancel}</Link></div>
     </WorkspaceFormSection> : null}

@@ -107,10 +107,15 @@ describe('connection workspace', () => {
   })
 
   it('keeps previously discovered resources separate from the active count', async () => {
-    renderPage({ summary: { ...summary, inactiveResourceCount: 4 } }, { locale: 'ru' })
-    expect(await screen.findByText('1 сервер · 2 контейнера')).toBeTruthy()
-    expect(screen.getByText('4 ранее обнаруженных ресурса больше не найдены')).toBeTruthy()
-    expect(screen.getByText('Активные ресурсы').nextElementSibling?.textContent).toContain('3')
+    renderPage({ summary: { ...summary, activeResourceCount: 4, inactiveResourceCount: 4,
+      resourceTypeCounts: [{ resourceTypeCode: 'CONTAINER', count: 3 }, { resourceTypeCode: 'NODE', count: 1 }] } }, { locale: 'ru' })
+    const breakdown = await screen.findByText('1 сервер · 3 контейнера')
+    const stale = screen.getByText('4 ранее обнаруженных ресурса больше не найдены')
+    expect(breakdown).not.toBe(stale)
+    expect(breakdown.textContent).not.toContain('ранее')
+    expect(screen.getByText('Активные ресурсы').nextElementSibling?.querySelector('.summary-value')?.textContent).toBe('4')
+    expect(screen.getAllByText('Успешно').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/больше не обнаруживается/i)).toBeNull()
   })
 
   it('opens the resources tab from the URL, loads the list then, and links each resource back here', async () => {
@@ -138,8 +143,8 @@ describe('connection workspace', () => {
     const empty = { ...summary, activeResourceCount: 0, openIncidentCount: 0, resourceTypeCounts: [], openIncidents: [], resources: [] }
     renderPage({ summary: empty, connection: connection({ lastSync: null }) })
     expect(await screen.findByText('Resources appear after the first synchronization')).toBeTruthy()
-    expect(screen.getAllByRole('button', { name: 'Synchronize' }).length).toBeGreaterThan(1)
-    expect(screen.getAllByText('No active incidents').length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: 'Synchronize' })).toHaveLength(1)
+    expect(screen.getAllByText('No active problems').length).toBeGreaterThan(0)
     cleanup()
 
     renderPage({ summary: empty })
@@ -155,12 +160,11 @@ describe('connection workspace', () => {
     expect(tabNames()).toEqual(['Overview', 'Resources', 'Terminal', 'Incidents', 'Synchronization'])
   })
 
-  it('places the connection in its project and environment, by name', async () => {
+  it('uses the back link and heading for a simple connection detail', async () => {
     renderPage()
-    const path = await screen.findByRole('navigation', { name: 'Location in the infrastructure' })
-    expect(within(path).getByRole('link', { name: 'SvinPeak' }).getAttribute('href')).toBe('/organizations/org/resources?project=project')
-    expect(within(path).getByRole('link', { name: 'Production' }).getAttribute('href'))
-      .toBe('/organizations/org/environments/env?project=project&environment=env')
+    expect(await screen.findByRole('heading', { level: 1, name: 'Finnish Node' })).toBeTruthy()
+    expect(screen.queryByRole('navigation', { name: 'Location in the infrastructure' })).toBeNull()
+    expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/connections')
   })
 
   it('speaks Russian', async () => {

@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import {
   refusedDiagnostics, useConfigurationProfile, useCreateConfigurationProfile, useCreateConfigurationRevision,
@@ -8,6 +8,8 @@ import { ApiError } from '../api/httpClient'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { ConfigurationContentEditor } from '../components/configuration/ConfigurationContentEditor'
 import { AppShell } from '../components/layout/AppShell'
+import { InfrastructureContextPath } from '../components/infrastructure/InfrastructureContextPath'
+import { withWorkspaceContext } from '../components/layout/workspaceNavigation'
 import { InlineAlert, PageLoading, PageUnavailable, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
@@ -26,6 +28,7 @@ export function ConfigurationCreatePage() {
 }
 
 function CreateContent({ organizationId }: { organizationId: string }) {
+  const [searchParams] = useSearchParams()
   const i18n = useI18n()
   const t = i18n.t.configurations
   const navigate = useNavigate()
@@ -36,7 +39,7 @@ function CreateContent({ organizationId }: { organizationId: string }) {
   const [code, setCode] = useState('')
   const [description, setDescription] = useState('')
   const [error, setError] = useState('')
-  const back = { label: t.back, to: configurationsPath(organizationId) }
+  const back = { label: t.back, to: withWorkspaceContext(configurationsPath(organizationId), searchParams) }
 
   if (!permissions.isPending && !permissions.can('manageConfigurations')) {
     return <div className="workspace-page"><WorkspaceHeader title={t.createTitle} back={back} /><InlineAlert tone="danger" title={t.accessDenied} /></div>
@@ -47,7 +50,7 @@ function CreateContent({ organizationId }: { organizationId: string }) {
     if (!codePattern.test(code.trim())) return setError(t.invalidCode)
     if (description.trim().length > 4000) return setError(t.invalidDescription)
     create.mutate({ code: code.trim(), name: name.trim(), description: description.trim() || null, ...content }, {
-      onSuccess: detail => navigate(configurationPath(organizationId, detail.profile.id), { replace: true }),
+      onSuccess: detail => navigate(withWorkspaceContext(configurationPath(organizationId, detail.profile.id), searchParams), { replace: true }),
     })
   }
   const refused = refusedDiagnostics(create.error)
@@ -90,7 +93,8 @@ function VersionContent({ organizationId, profileId }: { organizationId: string;
   const canManage = permissions.can('manageConfigurations')
   const query = useConfigurationProfile(organizationId, profileId, canManage)
   const save = useCreateConfigurationRevision(organizationId, profileId)
-  const back = { label: query.data?.profile.name ?? t.back, to: configurationPath(organizationId, profileId) }
+  const [searchParams] = useSearchParams()
+  const back = { label: query.data?.profile.name ?? t.back, to: withWorkspaceContext(configurationPath(organizationId, profileId), searchParams) }
 
   if (!permissions.isPending && !canManage) {
     return <div className="workspace-page"><WorkspaceHeader title={t.newVersion} back={back} /><InlineAlert tone="danger" title={t.accessDenied} /></div>
@@ -108,11 +112,16 @@ function VersionContent({ organizationId, profileId }: { organizationId: string;
   }
   const refused = refusedDiagnostics(save.error)
   return <div className="workspace-page">
-    <WorkspaceHeader title={t.newVersionTitle(profile.name)} subtitle={`${profile.code} · ${t.version(profile.latestRevisionNumber)}`} back={back} />
+    <InfrastructureContextPath items={[
+      { label: i18n.t.shell.nav.configurations, to: withWorkspaceContext(configurationsPath(organizationId), searchParams) },
+      { label: profile.name, to: back.to },
+      { label: t.newVersion },
+    ]} />
+    <WorkspaceHeader title={t.newVersionTitle(profile.name)} subtitle={`${profile.code} · ${t.version(profile.latestRevisionNumber)}`} />
     <ConfigurationContentEditor organizationId={organizationId} initialTemplate={latestRevision.template}
       initialVariables={latestRevision.variables} submitLabel={t.saveVersion} pendingLabel={t.savingVersion}
       pending={save.isPending} refused={refused}
-      onSubmit={content => save.mutate(content, { onSuccess: () => navigate(configurationPath(organizationId, profileId), { replace: true }) })} />
+      onSubmit={content => save.mutate(content, { onSuccess: () => navigate(withWorkspaceContext(configurationPath(organizationId, profileId), searchParams), { replace: true }) })} />
     {save.isError && !refused ? <InlineAlert tone="danger" title={describeError(save.error, i18n)} /> : null}
   </div>
 }

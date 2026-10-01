@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient } from '../app/queryClient'
@@ -68,14 +68,22 @@ describe('integrations settings', () => {
   it('tests and switches an integration, then deletes it without exposing credentials', async () => {
     const { calls } = setup()
     expect(await screen.findByText('Main Remnawave')).toBeTruthy()
-    expect(screen.getByText('API token configured')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    expect(screen.queryByText('API token configured')).toBeNull()
+    expect(screen.getByText('Not checked')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Test connection' }))
     expect(await screen.findByText('Connection successful')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Enable' }))
     expect(await screen.findByText('Enabled')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Disable' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Disable' }))
+    const dialog = screen.getByRole('dialog', { name: 'Disable integration?' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Disable' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(await screen.findByText('Disabled')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
     expect(await screen.findByText('No integrations yet')).toBeTruthy()
     expect(calls.filter(call => call.url.endsWith('/test'))).toHaveLength(1)

@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFunction } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { I18nProvider, LocaleStorageKey, type Locale } from '../../i18n'
 import { AppShell, ShellLayout } from './AppShell'
+import { InfraDeskMark } from './InfraDeskMark'
+import { ApiError } from '../../api/httpClient'
 
 function Page({ title }: { title: string }) {
   const location = useLocation()
@@ -13,8 +15,8 @@ function Page({ title }: { title: string }) {
   return <AppShell><h1>{title}</h1><p data-testid="location">{location.pathname}{location.search}</p></AppShell>
 }
 
-function setup(path: string, role: 'OWNER' | 'MEMBER' = 'OWNER', locale: Locale = 'ru') {
-  const queries = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+function setup(path: string, role: 'OWNER' | 'MEMBER' = 'OWNER', locale: Locale = 'ru', seed?: (client: QueryClient) => void) {
+  const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   queries.setQueryData(['me'], { id: 'user', email: 'dmitriy@example.com', displayName: 'Dmitriy' })
   queries.setQueryData(['my-organizations'], [
     { id: 'org', code: 'ORG', name: 'InfraDesk', role },
@@ -31,6 +33,16 @@ function setup(path: string, role: 'OWNER' | 'MEMBER' = 'OWNER', locale: Locale 
     { id: 'env-prod', organizationId: 'org', projectId: 'org-p1', code: 'prod', name: 'Production', kind: 'PROD' },
   ])
   queries.setQueryData(['environments', 'org', 'org-p2'], [])
+  queries.setQueryData(['resource-context', 'org', 'server'], {
+    project: { id: 'org-p1', name: 'InitialProject' },
+    environment: { id: 'env-test', name: 'Test', kind: 'TEST' },
+    parentResource: null, sourceConnections: [], children: [], activeChildCount: 0, openIncidentCount: 0,
+  })
+  queries.setQueryData(['environment-context', 'org', 'env-test'], {
+    project: { id: 'org-p1', name: 'InitialProject' },
+    environment: { id: 'env-test', name: 'Test', kind: 'TEST' },
+  })
+  seed?.(queries)
   // A declarative router: the data router builds fetch Requests with jsdom's AbortSignal, which
   // newer Node versions reject, and the shell needs no loaders.
   const history: { navigate?: NavigateFunction } = {}
@@ -47,6 +59,7 @@ function setup(path: string, role: 'OWNER' | 'MEMBER' = 'OWNER', locale: Locale 
           <Route path="/organizations/:organizationId/connections" element={<Page title="connections" />} />
           <Route path="/organizations/:organizationId/connections/:connectionId" element={<Page title="connection" />} />
           <Route path="/organizations/:organizationId/incidents" element={<Page title="incidents" />} />
+          <Route path="/organizations/:organizationId/*" element={<Page title="nested" />} />
         </Route>
       </Routes>
     </MemoryRouter></QueryClientProvider></I18nProvider>)
@@ -61,15 +74,68 @@ function CaptureNavigate({ target }: { target: { navigate?: NavigateFunction } }
 const location = () => screen.getByTestId('location').textContent
 
 describe('application shell', () => {
+  it('renders the product mark as decorative geometry beside the brand name', () => {
+    const { container } = render(<I18nProvider initialLocale="ru"><InfraDeskMark /></I18nProvider>)
+    const mark = container.querySelector('svg.brand-mark')
+    expect(mark?.getAttribute('aria-hidden')).toBe('true')
+    expect(mark?.querySelectorAll('path').length).toBe(2)
+    expect(container.textContent).toBe('')
+  })
+
   beforeEach(() => window.localStorage.clear())
   afterEach(() => cleanup())
+
+  it('falls back to organization scope when a selected project is no longer available', async () => {
+    setup('/organizations/org/integrations/one?project=removed&environment=gone&tab=nodes', 'OWNER', 'en', client => {
+      client.setQueryData(['environments', 'org', 'removed'], [])
+    })
+    await waitFor(() => expect(location()).toBe('/organizations/org/integrations/one?tab=nodes'))
+    expect(screen.getByRole('button', { name: 'Current context: InfraDesk / All projects. Change' })).toBeTruthy()
+  })
+
+  it.each([403, 404])('falls back to project scope after an environment becomes unavailable (%i)', async status => {
+    setup('/organizations/org/incidents?project=org-p1&environment=env-test&status=OPEN', 'OWNER', 'en', client => {
+      client.getQueryCache().find({ queryKey: ['environments', 'org', 'org-p1'] })!
+        .setState({ status: 'error', error: new ApiError(status, 'ENVIRONMENT_NOT_FOUND', 'unavailable') })
+    })
+    await waitFor(() => expect(location()).toBe('/organizations/org/incidents?project=org-p1&status=OPEN'))
+    expect(screen.getByRole('button', { name: 'Current context: InfraDesk / InitialProject / All environments. Change' })).toBeTruthy()
+  })
+
+  it('keeps scope during a temporary load failure', () => {
+    setup('/organizations/org/incidents?project=org-p1&environment=env-test', 'OWNER', 'en', client => {
+      client.getQueryCache().find({ queryKey: ['environments', 'org', 'org-p1'] })!
+        .setState({ status: 'error', error: new ApiError(500, 'INTERNAL_ERROR', 'temporary') })
+    })
+    expect(location()).toBe('/organizations/org/incidents?project=org-p1&environment=env-test')
+  })
+
+  it('does not mix a project-wide selection with a connection environment', () => {
+    setup('/organizations/org/connections/c1?project=org-p2', 'OWNER', 'en', client => {
+      client.setQueryData(['connection', 'org', 'c1'], { scope: { type: 'ENVIRONMENT', projectId: 'org-p1', environmentId: 'env-test' } })
+    })
+    expect(screen.getByRole('button', { name: 'Current context: InfraDesk / Website / All environments. Change' })).toBeTruthy()
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    expect(within(nav).getByRole('link', { name: 'Incidents' }).getAttribute('href')).toBe('/organizations/org/incidents?project=org-p2')
+  })
+
+  it('preserves environment scope from Servers through Connections, Incidents and Integrations', () => {
+    setup('/organizations/org/environments/env-test?project=org-p1', 'OWNER', 'en')
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    for (const [name, route] of [['Connections', 'connections'], ['Incidents', 'incidents'], ['Integrations', 'integrations']]) {
+      fireEvent.click(within(nav).getByRole('link', { name }))
+      expect(location()).toBe(`/organizations/org/${route}?project=org-p1&environment=env-test`)
+    }
+  })
 
   it('draws one frame with grouped sections, in Russian by default', () => {
     setup('/organizations/org/overview')
     const nav = screen.getByRole('navigation', { name: 'Основная навигация' })
 
     expect(document.querySelectorAll('.app-shell')).toHaveLength(1)
-    for (const group of ['Инфраструктура', 'Мониторинг', 'Управление']) expect(within(nav).getByText(group)).toBeTruthy()
+    expect(Array.from(nav.querySelectorAll('.nav-group-label')).map(item => item.textContent))
+      .toEqual(['Инфраструктура', 'Мониторинг', 'Автоматизация', 'Структура'])
+    expect(within(nav).queryByText('Управление')).toBeNull()
     for (const link of ['Обзор', 'Серверы', 'Подключения', 'Инциденты', 'Проекты и окружения']) {
       expect(within(nav).getByRole('link', { name: link })).toBeTruthy()
     }
@@ -89,12 +155,68 @@ describe('application shell', () => {
       .toBe('/organizations/org/environments/env-test?project=org-p1')
   })
 
+  it('keeps the selected project and environment while moving between modules', () => {
+    setup('/organizations/org/overview?project=org-p1&environment=env-test', 'OWNER', 'en')
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    fireEvent.click(within(nav).getByRole('link', { name: 'Incidents' }))
+    expect(location()).toBe('/organizations/org/incidents?project=org-p1&environment=env-test')
+    fireEvent.click(within(nav).getByRole('link', { name: 'Connections' }))
+    expect(location()).toBe('/organizations/org/connections?project=org-p1&environment=env-test')
+    fireEvent.click(within(nav).getByRole('link', { name: 'Configurations' }))
+    expect(location()).toBe('/organizations/org/configurations?project=org-p1&environment=env-test')
+  })
+
+  it('recovers the project from a direct environment link before switching modules', async () => {
+    setup('/organizations/org/environments/env-test', 'OWNER', 'en')
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    expect(await screen.findByRole('button', { name: 'Current context: InfraDesk / InitialProject / Test. Change' }))
+      .toBeTruthy()
+    fireEvent.click(within(nav).getByRole('link', { name: 'Incidents' }))
+    expect(location()).toBe('/organizations/org/incidents?project=org-p1&environment=env-test')
+  })
+
+  it('marks nested configuration and integration pages in the sidebar', () => {
+    for (const [path, label] of [
+      ['/organizations/org/configuration-rules/rule', 'Configurations'],
+      ['/organizations/org/configuration-assignments/assignment', 'Configurations'],
+      ['/organizations/org/integrations/integration/config-profiles/profile', 'Integrations'],
+      ['/organizations/org/environments/env-test/resources/server', 'Servers'],
+    ]) {
+      setup(path, 'OWNER', 'en')
+      const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+      expect(within(nav).getByRole('link', { name: label }).getAttribute('aria-current')).toBe('page')
+      cleanup()
+    }
+  })
+
+  it('shows each scope and exposes the organization list beside the switcher', () => {
+    for (const [path, name] of [
+      ['/organizations/org/overview', 'Current context: InfraDesk / All projects. Change'],
+      ['/organizations/org/overview?project=org-p1', 'Current context: InfraDesk / InitialProject / All environments. Change'],
+      ['/organizations/org/overview?project=org-p1&environment=env-prod', 'Current context: InfraDesk / InitialProject / Production. Change'],
+    ]) {
+      setup(path, 'OWNER', 'en')
+      fireEvent.click(screen.getByRole('button', { name }))
+      expect(within(screen.getByRole('dialog', { name: 'Change context' }))
+        .getByRole('link', { name: 'All organizations' }).getAttribute('href')).toBe('/organizations')
+      cleanup()
+    }
+  })
+
   it('disables the sections outside an organization', () => {
     setup('/organizations')
     const nav = screen.getByRole('navigation', { name: 'Основная навигация' })
 
     expect(within(nav).queryByRole('link', { name: 'Обзор' })).toBeNull()
     expect(within(nav).getByText('Выберите организацию, чтобы увидеть её разделы.')).toBeTruthy()
+  })
+
+  it('explains why navigation is disabled without an organization', () => {
+    setup('/organizations', 'OWNER', 'en')
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    const overview = within(nav).getByText('Overview').closest('.nav-link')
+    expect(overview?.getAttribute('aria-disabled')).toBe('true')
+    expect(overview?.getAttribute('title')).toBe('Choose an organization first')
   })
 
   it('shows the context as one line and changes it in a popover', () => {
@@ -186,6 +308,7 @@ describe('application shell', () => {
 
     expect(location()).toBe('/organizations/org/incidents')
     expect(screen.getByRole('button', { name: 'Открыть меню' }).getAttribute('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(screen.getByRole('main'))
   })
 
   it('switches the language from the account menu without a reload and remembers it', () => {

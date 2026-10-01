@@ -76,8 +76,9 @@ describe('incidents page', () => {
 
   it('tells a healthy "no open incidents" apart from the other empty lists', async () => {
     renderPage()
-    expect(await screen.findByText('Открытых инцидентов нет')).toBeTruthy()
+    expect(await screen.findByText('Активных проблем нет')).toBeTruthy()
     expect(screen.getByText('Все серверы и проверки работают нормально.')).toBeTruthy()
+    expect(screen.queryByText('Инфраструктура не требует внимания')).toBeNull()
     expect(screen.getByRole('status').className).toContain('empty-success')
     cleanup()
 
@@ -92,7 +93,7 @@ describe('incidents page', () => {
 
   it('speaks English', async () => {
     renderPage({ locale: 'en' })
-    expect(await screen.findByText('No open incidents')).toBeTruthy()
+    expect(await screen.findByText('No active problems')).toBeTruthy()
     expect(screen.getByText('All servers and checks are working normally.')).toBeTruthy()
     expect(screen.getAllByRole('radio').map(radio => radio.parentElement?.textContent)).toEqual(['Open', 'Resolved', 'All'])
     cleanup()
@@ -127,9 +128,9 @@ describe('incidents page', () => {
     fail = true
     fireEvent.click(screen.getByRole('button', { name: 'Обновить' }))
 
-    expect(await screen.findByText('Не удалось обновить список инцидентов')).toBeTruthy()
+    expect(await screen.findByText('Не удалось обновить данные')).toBeTruthy()
     expect(screen.getByText('node-0')).toBeTruthy()
-    expect(screen.getByText(/Показан список на/)).toBeTruthy()
+    expect(screen.getByText(/Показано состояние на/)).toBeTruthy()
   })
 
   it.each(['OPEN', 'RESOLVED', 'ALL'] as const)('pages the %s list: a full page offers more, the next continues after its last row', async filter => {

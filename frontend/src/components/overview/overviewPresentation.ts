@@ -3,7 +3,43 @@ import { describeFailure } from '../../i18n/errors'
 import { getIncidentReasonLabel, getOperationLabel } from '../history/historyEventPresentation'
 import type { StatusTone } from '../layout/WorkspacePrimitives'
 import { getMetricLabel } from '../monitoring/monitorRulePresentation'
-import type { AttentionItemResponse, OverviewSummaryResponse } from '../../types/overview'
+import type { AttentionItemResponse, OverviewSummaryResponse, OperationsOverviewResponse } from '../../types/overview'
+
+export interface OverviewHealthPresentation {
+  state: 'normal' | 'warning' | 'empty' | 'unknown'
+  tone: StatusTone
+  title: string
+  detail: string
+}
+
+/** Words only the facts of this scope. No metric evaluation or invented critical severity. */
+export function getOverviewHealth(overview: OperationsOverviewResponse, i18n: I18n): OverviewHealthPresentation {
+  const t = i18n.t.overview.health
+  const { nodes, containers, connections, incidents, operations } = overview.summary
+  const problems = [
+    nodes.offline > 0 ? t.offline(nodes.offline) : null,
+    incidents.open > 0 ? t.incidents(incidents.open) : null,
+    connections.failing > 0 ? t.syncFailures(connections.failing) : null,
+    operations.failed > 0 ? t.failedOperations(operations.failed, overview.operationsHorizonHours) : null,
+    operations.unknown > 0 ? t.unknownOperations(operations.unknown, overview.operationsHorizonHours) : null,
+  ].filter(Boolean)
+  if (problems.length > 0 || overview.attention.total > 0 || overview.attention.items.length > 0) {
+    return { state: 'warning', tone: 'warning', title: t.warning, detail: problems.join(' · ') || t.review }
+  }
+  if (isEmptyInfrastructure(overview.summary)) {
+    return { state: 'empty', tone: 'neutral', title: t.empty, detail: t.emptyDetail }
+  }
+  const inventoryMissing = nodes.total + containers.total === 0
+  const statusIncomplete = nodes.online < nodes.total || containers.running < containers.total ||
+    connections.healthy < connections.total
+  if (inventoryMissing || statusIncomplete) {
+    return { state: 'unknown', tone: 'neutral', title: t.unknown,
+      detail: connections.neverSynced > 0 ? t.notSynchronized(connections.neverSynced) : t.unknownDetail }
+  }
+  const detail = [nodes.total > 0 ? t.online(nodes.online) : null,
+    containers.total > 0 ? t.running(containers.running) : null, t.noIncidents].filter(Boolean).join(' · ')
+  return { state: 'normal', tone: 'success', title: t.normal, detail }
+}
 
 export interface AttentionPresentation {
   title: string
@@ -65,7 +101,7 @@ export function getAttentionPresentation(organizationId: string, item: Attention
         detail: describeFailure(item.sync?.errorCode, item.sync?.errorMessage, i18n, i18n.t.connections.syncFailed),
         status: t.syncStatus,
         tone: 'danger',
-        to: connectionPath === null ? null : `${connectionPath}/sync-sessions/${encodeURIComponent(item.id)}`,
+        to: connectionPath,
       }
     }
     case 'OPERATION_FAILED':
@@ -115,25 +151,25 @@ export function getSummaryCards(
       id: 'nodes', label: t.nodes, value: count(nodes.total),
       detail: nodes.total === 0 ? t.nothing
         : nodes.offline === 0 && nodes.online === nodes.total ? t.allOnline
-          : t.nodesDetail(count(nodes.online), count(nodes.offline)),
+          : t.nodesDetail(nodes.online, nodes.offline),
       tone: nodes.offline > 0 ? 'danger' : 'neutral', to: links.infrastructure,
     },
     {
       id: 'containers', label: t.containers, value: count(containers.total),
-      detail: containers.total === 0 ? t.nothing : t.containersDetail(count(containers.running), count(containers.stopped)),
+      detail: containers.total === 0 ? t.nothing : t.containersDetail(containers.running, containers.stopped),
       tone: 'neutral', to: links.infrastructure,
     },
     {
       id: 'incidents', label: t.incidents, value: count(incidents.open),
       detail: incidents.open === 0 ? t.noIncidents : t.incidentsDetail(count(incidents.threshold), count(incidents.noData)),
-      tone: incidents.open > 0 ? 'danger' : 'success', to: links.incidents,
+      tone: incidents.open > 0 ? 'warning' : 'neutral', to: links.incidents,
     },
     {
       id: 'connections', label: t.connections, value: count(connections.total),
       detail: connections.failing > 0 ? t.connectionsFailing(count(connections.failing))
         : connections.neverSynced > 0 ? t.connectionsNeverSynced(count(connections.neverSynced))
           : connections.total === 0 ? t.connectionsNone : t.connectionsOk,
-      tone: connections.failing > 0 ? 'danger' : 'neutral', to: links.connections,
+      tone: connections.failing > 0 ? 'warning' : 'neutral', to: links.connections,
     },
     {
       id: 'operations', label: t.operations(operationsHorizonHours), value: count(operationProblems),

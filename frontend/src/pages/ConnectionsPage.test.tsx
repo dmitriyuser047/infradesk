@@ -30,6 +30,20 @@ function render(role: 'OWNER' | 'MEMBER', connections: ConnectionResponse[]): st
 }
 
 describe('connections list', () => {
+  it('uses clear security and synchronization labels without changing sync outcomes', () => {
+    const html = render('OWNER', [connection('synced', { lastSync: {
+      id: 's', status: 'COMPLETED', startedAt: '2026-09-25T10:00:00Z',
+      finishedAt: '2026-09-25T10:00:02Z', errorCode: null, errorMessage: null,
+    } })])
+    expect(html).toContain('<th scope="col">Безопасность</th>')
+    expect(html).toContain('<th scope="col">Следующая синхронизация')
+    expect(html).toContain('SSH-ключ подтверждён')
+    expect(html).toContain('Успешно')
+    for (const old of ['Подлинность сервера', 'Сервер подтверждён', 'Следующий запуск', 'Выполнена', 'Завершена']) {
+      expect(html).not.toContain(old)
+    }
+  })
+
   it('shows where each connection points and whether that server is confirmed', () => {
     const html = render('OWNER', [
       connection('trusted'),
@@ -69,7 +83,7 @@ describe('connections list', () => {
         <Route path="/organizations/:organizationId/connections" element={<ConnectionsPage />} />
       </Routes></MemoryRouter>
     </QueryClientProvider>)
-    expect(html).toContain('<th>Ресурсы</th><th>Открытые инциденты</th>')
+    expect(html).toContain('<th scope="col">Ресурсы</th><th scope="col">Открытые инциденты</th>')
     expect(html).toMatch(/finnish<\/a>.*<td class="numeric-cell">8<\/td>.*2 открытых инцидента/s)
     expect(html).toMatch(/german<\/a>.*<td class="numeric-cell">3<\/td><td class="numeric-cell"><span class="muted-cell">0<\/span>/s)
   })

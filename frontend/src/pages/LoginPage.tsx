@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useLogin } from '../api/auth'
 import { ApiError } from '../api/httpClient'
 import { safeReturnPath } from '../components/auth/authPresentation'
+import { InfraDeskMark } from '../components/layout/InfraDeskMark'
 import { useI18n, type Messages } from '../i18n'
 
 /** A login failure is deliberately vague about the account, but a rate-limit is worth naming so a
@@ -33,7 +34,7 @@ export function LoginPage() {
   return (
     <main className="login-page">
       <form className="login-panel" onSubmit={submit}>
-        <p className="eyebrow"><span className="brand-mark" aria-hidden>ID</span>InfraDesk</p>
+        <p className="eyebrow"><InfraDeskMark />InfraDesk</p>
         <h1>{t.auth.signIn}</h1>
         <label>{t.auth.email}
           <input type="email" autoComplete="email" value={email} required onChange={(event) => setEmail(event.target.value)} />

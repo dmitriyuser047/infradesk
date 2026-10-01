@@ -88,6 +88,53 @@ function body(state: Partial<OverviewState>, locale: Locale = 'en'): string {
 }
 
 describe('operations overview page', () => {
+  it('shows an honest problem state and emphasizes incidents after the overall health', () => {
+    const html = body({ data: loaded }, 'ru')
+    expect(html).toContain('Есть проблемы, требующие внимания')
+    expect(html).toContain('1 сервер недоступен')
+    expect(html).toContain('id="overview-attention"')
+    expect(html).toMatch(/summary-card-priority[^>]+data-card="incidents"/)
+    expect(html.indexOf('data-health="warning"')).toBeLessThan(html.indexOf('summary-grid'))
+    expect(html.indexOf('summary-grid')).toBeLessThan(html.indexOf('id="overview-attention"'))
+  })
+
+  it('groups only explicitly related discovery facts without claiming a full sync result', () => {
+    const discovered: HistoryEventResponse = { ...activity, id: 'discovered', eventType: 'RESOURCE_DISCOVERED',
+      sync: { id: 'session', status: 'COMPLETED', errorCode: null },
+      resource: { id: 'node', name: 'node-1', resourceTypeCode: 'NODE', environmentId: 'environment' } }
+    const html = body({ data: { ...loaded, recentActivity: [discovered,
+      { ...discovered, id: 'gone', eventType: 'RESOURCE_DEACTIVATED' }] } }, 'ru')
+    expect(html.match(/class="activity-entry/g)).toHaveLength(1)
+    expect(html).toContain('Изменения ресурсов при синхронизации')
+    expect(html).toContain('В загруженных событиях: обнаружено 1 ресурс · больше не найдено 1 ресурс')
+    expect(html).toContain('activity-neutral activity-discovery')
+    expect(html).not.toContain('Синхронизация завершена успешно')
+  })
+
+  it('bounds activity at eight entries and keeps timestamps without an invented journal link', () => {
+    const events = Array.from({ length: 15 }, (_, index) => ({ ...activity, id: `event-${index}`,
+      eventType: 'OPERATION_SUCCEEDED' as const, sync: null }))
+    const html = body({ data: { ...loaded, recentActivity: events } })
+    expect(html.match(/class="activity-entry/g)).toHaveLength(8)
+    expect(html).toContain('Showing 8 of 15 loaded recent events')
+    expect(html).toContain('dateTime="2026-09-25T09:00:00Z"')
+    expect(html).not.toContain('activity-critical')
+    expect(html).not.toContain('All events')
+  })
+
+  it.each(['ru', 'en'] as const)('keeps discovery events and their order with clear stale wording in %s', locale => {
+    const discovered: HistoryEventResponse = { ...activity, id: 'discovered', eventType: 'RESOURCE_DISCOVERED',
+      sync: null, resource: { id: 'node', name: 'node-1', resourceTypeCode: 'NODE', environmentId: 'environment' } }
+    const gone: HistoryEventResponse = { ...discovered, id: 'gone', eventType: 'RESOURCE_DEACTIVATED' }
+    const html = body({ data: { ...loaded, recentActivity: [gone, discovered] } }, locale)
+    const stale = locale === 'ru' ? 'Ресурс больше не найден' : 'Resource no longer found'
+    const found = locale === 'ru' ? 'Ресурс обнаружен' : 'Resource discovered'
+    expect(html.match(/class="activity-entry/g)).toHaveLength(2)
+    expect(html.indexOf(stale)).toBeGreaterThan(-1)
+    expect(html.indexOf(found)).toBeGreaterThan(html.indexOf(stale))
+    expect(html).not.toContain('больше не обнаруживается')
+  })
+
   it('renders the fleet summary, attention in server order and recent activity', () => {
     const html = render('/organizations/org/overview', 'OWNER', { key: ['overview', 'org', null, null], value: loaded })
 
@@ -125,7 +172,6 @@ describe('operations overview page', () => {
 
     expect(html).toContain('href="/organizations/org/environments/environment/resources/api"')
     expect(html).toContain('href="/organizations/org/incidents/incident"')
-    expect(html).toContain('href="/organizations/org/connections/connection/sync-sessions/session"')
     expect(html).toContain('href="/organizations/org/connections/connection"')
     expect(html).toContain('href="/organizations/org/incidents"')
   })
@@ -164,12 +210,16 @@ describe('operations overview page', () => {
     expect(html.match(/summary-card summary-card-skeleton/g)).toHaveLength(5)
     expect(html).toMatch(/class="overview-columns".*Needs attention.*Recent activity/s)
     expect(html).not.toContain('role="alert"')
+    expect(html).toContain('overview-health-skeleton')
   })
 
   it('guides a new organization through setup instead of showing zeros', () => {
     const html = render('/organizations/org/overview', 'OWNER', { key: ['overview', 'org', null, null], value: empty }, 'ru')
 
     expect(html).toContain('Добро пожаловать в InfraDesk')
+    expect(html).toContain('Инфраструктура ещё не подключена')
+    expect(html).not.toContain('Все системы работают нормально')
+    expect(html).toContain('Добавить подключение')
     expect(html).toContain('Организация создана')
     // The seeded project and environment exist; the next step is connecting a server.
     expect(html).toMatch(/aria-current="step".*Подключите сервер/s)
@@ -189,8 +239,8 @@ describe('operations overview page', () => {
     const html = render('/organizations/org/overview?project=project', 'OWNER',
       { key: ['overview', 'org', 'project', null], value: empty })
 
-    expect(html).toContain('No infrastructure discovered yet')
-    expect(html).toContain('No problems found')
+    expect(html).toContain('Infrastructure is not connected yet')
+    expect(html).not.toContain('All systems are operating normally')
     expect(html).toContain('No recent activity')
     expect(html).not.toContain('Welcome to InfraDesk')
     expect(html).not.toContain('role="alert"')
@@ -220,17 +270,23 @@ describe('operations overview page', () => {
   })
 
   describe('Stage 17.6A presentation', () => {
-    const healthy: OperationsOverviewResponse = { ...loaded, attention: { items: [], total: 0 } }
+    const healthy: OperationsOverviewResponse = { ...loaded, attention: { items: [], total: 0 },
+      summary: { ...empty.summary, nodes: { total: 2, online: 2, offline: 0 },
+        containers: { total: 4, running: 4, stopped: 0 }, connections: { total: 2, healthy: 2, failing: 0, neverSynced: 0 } } }
 
     it('shows no problems as one compact healthy line, in English and Russian', () => {
       const en = body({ data: healthy })
       const ru = body({ data: healthy }, 'ru')
 
-      expect(en).toMatch(/class="empty-workspace empty-success empty-compact" role="status"/)
-      expect(en).toContain('No problems found')
-      expect(en).toContain('All servers and checks are working normally.')
-      expect(ru).toContain('Проблем не обнаружено')
-      expect(ru).toContain('Все серверы и проверки работают нормально.')
+      expect(en).toContain('data-health="normal"')
+      expect(en).toContain('All systems are operating normally')
+      expect(ru).toContain('Все системы работают нормально')
+      expect(ru).toContain('2 сервера в сети · 4 контейнера работают · активных инцидентов нет')
+      expect(en).not.toContain('attention-section')
+      expect(ru).not.toContain('Требует внимания')
+      expect(en).toContain('summary-grid')
+      expect(ru).not.toContain('Инфраструктура не требует внимания')
+      expect(ru).not.toContain('Всё в порядке')
       // A healthy state is not an alert and not a missing list.
       expect(en).not.toContain('attention-list')
       expect(en).not.toContain('role="alert"')
@@ -250,7 +306,7 @@ describe('operations overview page', () => {
       const entry = html.slice(html.indexOf('class="activity-entry'))
 
       expect(entry).toMatch(/class="activity-heading"><span class="activity-title">Synchronization failed<\/span><time class="activity-time"/)
-      expect(entry).toMatch(/class="activity-secondary"><a class="activity-subject" title="finland_node" href="\/organizations\/org\/connections\/connection"[^>]*>finland_node<\/a><span class="activity-detail">[^<]+<\/span><span class="activity-actor">System<\/span>/)
+      expect(entry).toMatch(/class="activity-secondary"><a class="activity-subject" href="\/organizations\/org\/connections\/connection"[^>]*>finland_node<\/a><span class="activity-detail">[^<]+<\/span><span class="activity-actor">System<\/span>/)
       // The scrolling list stays reachable from the keyboard.
       expect(html).toContain('class="activity-scroll" tabindex="0" role="region" aria-label="Recent activity"')
       // Beside fewer than three attention items it does not scroll, so it is no tab stop.
@@ -264,6 +320,8 @@ describe('operations overview page', () => {
       expect(body({ data })).toMatch(/empty-compact.*No recent activity/s)
       expect(body({ data }, 'ru')).toContain('Событий пока нет')
       expect(body({ data })).not.toContain('activity-timeline')
+      expect(body({ data })).toContain('Recent infrastructure changes will appear here.')
+      expect(body({ data })).not.toContain('empty-success')
     })
 
     it('keeps the last overview on screen when a refresh fails, and says how old it is', () => {
@@ -272,13 +330,17 @@ describe('operations overview page', () => {
       const en = body({ data: loaded, isError: true, error: failed, dataUpdatedAt: updatedAt })
       const ru = body({ data: loaded, isError: true, error: failed, dataUpdatedAt: updatedAt }, 'ru')
 
-      expect(en).toContain('Unable to refresh overview')
-      expect(en).toContain('Showing data as of')
+      expect(en).toContain('Unable to refresh data')
+      expect(en).toContain('Showing state from')
       expect(en).toContain('2 online · 1 offline')
       expect(en).toContain('No metrics received')
       expect(en).not.toContain('database password')
-      expect(ru).toContain('Не удалось обновить обзор')
-      expect(ru).toContain('Показаны данные на')
+      expect(ru).toContain('Не удалось обновить данные')
+      expect(ru).toContain('Показано состояние на')
+      const staleNormal = body({ data: healthy, isError: true, error: failed, dataUpdatedAt: updatedAt })
+      expect(staleNormal).toContain('data-health="normal"')
+      expect(staleNormal).toContain('Last known state from')
+      expect(staleNormal).not.toContain('overview-health-warning')
     })
 
     it('replaces the last overview when its scope no longer exists', () => {
@@ -299,7 +361,7 @@ describe('operations overview page', () => {
       }
       const expected = [1, ['<section class="workspace-section attention-section"', '<section class="workspace-section activity-section"']]
 
-      expect(structure(healthy)).toEqual(expected)
+      expect(structure(healthy)).toEqual([1, ['<section class="workspace-section activity-section"']])
       expect(structure(loaded)).toEqual(expected)
       expect(structure({ ...loaded, attention: { items: many, total: 20 } })).toEqual(expected)
     })

@@ -35,8 +35,8 @@ describe('incident list', () => {
   it('names the resource, what happened and when, from the list response alone', () => {
     const html = render([open, resolved])
 
-    expect(html).toMatch(/<a class="incident-link"[^>]*>finland-node-01<\/a><span class="incident-type">Сервер<\/span>/)
-    expect(html).toMatch(/<a class="incident-link"[^>]*>nginx-web<\/a><span class="incident-type">Контейнер<\/span>/)
+    expect(html).toMatch(/<a class="incident-link"[^>]*>Нет данных: Загрузка процессора<\/a><span class="incident-type">Сервер<\/span>/)
+    expect(html).toMatch(/<a class="incident-link"[^>]*>Нарушен порог: Загрузка процессора<\/a><span class="incident-type">Контейнер<\/span>/)
     expect(html).toContain('Данные не поступают')
     expect(html).toContain('Пороговое значение превышено')
     expect(html).not.toMatch(/>(THRESHOLD|NO_DATA)</)
@@ -61,12 +61,13 @@ describe('incident list', () => {
     expect(html.indexOf('/incidents/resolved')).toBeLessThan(html.indexOf('/incidents/open'))
   })
 
-  it('shows status in words, reads resolved rows quieter, and gives each row one real link', () => {
+  it('shows status in words, reads resolved rows quieter, and links each problem and its affected resource', () => {
     const html = render([open, resolved])
 
     expect(html).toMatch(/<li class="incident-row incident-open"[^>]*><span class="incident-status"><span class="status-indicator status-danger">.*?Открыт</)
     expect(html).toMatch(/<li class="incident-row incident-resolved"[^>]*><span class="incident-status"><span class="status-indicator status-success">.*?Закрыт</)
-    expect(html.match(/<a /g)).toHaveLength(2)
+    expect(html.match(/<a /g)).toHaveLength(4)
+    expect(html).toContain('href="/organizations/org/environments/env/resources/node?fromIncident=open"')
     expect(html).toContain('href="/organizations/org/incidents/open"')
     expect(html).toContain('<ol class="incident-list" aria-label="Список инцидентов">')
   })

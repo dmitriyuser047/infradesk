@@ -32,6 +32,11 @@
 .incident-resolved .incident-link { color: var(--text-secondary); font-weight: 500; }
 .incident-resolved .status-indicator { opacity: .85; }
 
+.work-page .section-content > .incident-list:last-child { margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4)); }
+.work-page .incident-row { padding-inline: var(--space-4); }
+.incident-object-link { position: relative; z-index: 1; width: fit-content; color: var(--text-secondary); font-size: var(--font-size-small); }
+.incident-object-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
 @media (max-width: 720px) {
   .section-content > .incident-list:last-child { margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4)); }
   .incident-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "status time" "main main"; padding: var(--space-3) var(--space-4); }

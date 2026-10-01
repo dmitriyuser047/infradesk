@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 
 import { useI18n } from '../../i18n'
 import type { EnvironmentReference, ProjectReference, ResourceReference, SourceConnection } from '../../types/infrastructure'
-import { connectionPath, environmentPath, projectPath, resourcePath } from './infrastructureLinks'
+import { modulePath } from '../layout/workspaceNavigation'
+import { resourcePath } from './infrastructureLinks'
 
 export interface ContextPathItem {
   label: string
@@ -12,13 +13,13 @@ export interface ContextPathItem {
 }
 
 /**
- * Where the current page sits in the infrastructure: project, environment, connection, resource.
+ * Where the current page sits within its module: source connection, parent resource, current object.
  * It only renders the context it is given and never requests anything; every link is a canonical
  * route, so the path works the same when the page was opened directly.
  */
 export function InfrastructureContextPath({ items }: { items: readonly ContextPathItem[] }) {
   const { t } = useI18n()
-  if (items.length === 0) return null
+  if (items.length < 3) return null
   return <nav className="context-path" aria-label={t.infrastructure.pathLabel}>
     <ol>
       {items.map((item, index) => {
@@ -34,9 +35,8 @@ export function InfrastructureContextPath({ items }: { items: readonly ContextPa
 }
 
 /**
- * The path of something that lives on a resource: project, environment, the connection that
- * discovered it when there is exactly one, the parent, then the given tail. With several sources
- * none is pretended to be the one: they are listed elsewhere on the page instead.
+ * Resources always belong to the Servers module in navigation. Discovery sources are
+ * related entities on the page; they do not change the object's breadcrumb hierarchy.
  */
 export function resourceContextPath(
   organizationId: string,
@@ -47,17 +47,18 @@ export function resourceContextPath(
     parentResource: ResourceReference | null
   },
   tail: readonly ContextPathItem[],
+  labels: { resources: string; connections: string },
   /** The query links to the connection and the parent carry, so their "back" returns here. */
   linkQuery = '',
 ): ContextPathItem[] {
-  const { project, environment, sourceConnections, parentResource } = context
-  const items: ContextPathItem[] = [
-    { label: project.name, to: projectPath(organizationId, project.id) },
-    { label: environment.name, to: environmentPath(organizationId, project.id, environment.id) },
-  ]
-  if (sourceConnections.length === 1) {
-    items.push({ label: sourceConnections[0].name, to: connectionPath(organizationId, sourceConnections[0].id, linkQuery) })
-  }
+  const { project, environment, parentResource } = context
+  const params = new URLSearchParams(linkQuery)
+  const scope = { organizationId, projectId: params.get('project') ?? project.id,
+    environmentId: params.has('project') ? params.get('environment') : environment.id }
+  const items: ContextPathItem[] = [{
+    label: labels.resources,
+    to: modulePath('resources', scope),
+  }]
   if (parentResource) {
     items.push({ label: parentResource.name, to: resourcePath(organizationId, environment.id, parentResource.id, linkQuery) })
   }

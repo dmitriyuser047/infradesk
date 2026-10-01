@@ -510,4 +510,48 @@ describe('terminal workspace', () => {
     fireEvent(document, new Event('fullscreenchange'))
     expect(fit).toHaveBeenCalledTimes(afterReady + 1)
   })
+
+  it('explains connecting and gives toolbar icons matching tooltips and accessible names', async () => {
+    render(app(workspace))
+    await connect()
+    expect(screen.getByText('Connecting to the server…')).toBeTruthy()
+    for (const name of ['Copy', 'Paste', 'Clear terminal']) {
+      expect(screen.getByRole('button', { name }).getAttribute('title')).toBe(name)
+    }
+    act(() => Socket.instances[0].ready())
+    expect(screen.queryByText('Connecting to the server…')).toBeNull()
+    expect(document.querySelector('.terminal-toolbar')?.textContent).toContain('Connected')
+  })
+
+  it('updates fullscreen tooltip and accessible name on browser fullscreen changes', async () => {
+    const properties = ['fullscreenEnabled', 'fullscreenElement', 'exitFullscreen'] as const
+    const originals = properties.map(key => Object.getOwnPropertyDescriptor(document, key))
+    let element: Element | null = null
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: true })
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => element })
+    Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: vi.fn(async () => {
+      element = null; document.dispatchEvent(new Event('fullscreenchange'))
+    }) })
+    try {
+      render(app(workspace))
+      const panel = document.querySelector('.terminal-panel')!
+      Object.defineProperty(panel, 'requestFullscreen', { configurable: true, value: vi.fn(async () => {
+        element = panel; document.dispatchEvent(new Event('fullscreenchange'))
+      }) })
+      const enter = screen.getByRole('button', { name: 'Fullscreen' })
+      expect(enter.getAttribute('title')).toBe('Fullscreen')
+      await act(async () => { fireEvent.click(enter) })
+      const exit = screen.getByRole('button', { name: 'Exit fullscreen' })
+      expect(exit.getAttribute('title')).toBe('Exit fullscreen')
+      await act(async () => { fireEvent.click(exit) })
+      expect(screen.getByRole('button', { name: 'Fullscreen' })).toBeTruthy()
+      expect(Socket.instances).toHaveLength(0)
+    } finally {
+      cleanup()
+      properties.forEach((key, index) => {
+        if (originals[index]) Object.defineProperty(document, key, originals[index]!)
+        else Reflect.deleteProperty(document, key)
+      })
+    }
+  })
 })
