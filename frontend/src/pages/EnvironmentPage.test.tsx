@@ -61,6 +61,8 @@ describe('resources page filters', () => {
         memoryUsagePercent: 42, uptimeSeconds: 3600 } } } : item)
     await renderPage(data, 'en')
     await screen.findByRole('tree')
+    expect(screen.getByRole('heading', { name: 'Servers' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Servers and containers' })).toBeTruthy()
     const row = () => screen.getByRole('link', { name: 'Open resource finland_node · Online' }).closest('.resource-row')!
     expect(row().querySelectorAll('.numeric-cell')[0].textContent).toBe('17.0%')
     expect(row().querySelectorAll('.numeric-cell')[1].textContent).toBe('42.0%')

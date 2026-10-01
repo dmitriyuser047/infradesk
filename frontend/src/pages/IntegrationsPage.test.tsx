@@ -65,6 +65,39 @@ describe('integrations settings', () => {
     expect(calls.some(call => call.url.endsWith('/integrations'))).toBe(false)
   })
 
+  it('shows localized inventory counts separately from sync state, omitting unavailable counts', async () => {
+    const withInventory: IntegrationResponse = { ...existing, enabled: true, overview: {
+      lastSync: { id: 'sync-1', integrationId: 'one', trigger: 'MANUAL', status: 'COMPLETED',
+        startedAt: '2026-10-01T10:00:00Z', finishedAt: '2026-10-01T10:00:01Z', errorCode: null, errorMessage: null, counts: null },
+      lastSuccessfulSyncAt: '2026-10-01T10:00:01Z', nextRunAt: null,
+      inventory: { nodes: { active: 2, inactive: 0 }, hosts: { active: 2, inactive: 0 }, configProfiles: { active: 2, inactive: 0 } },
+      desiredState: { managed: 0, compliant: 0, drifted: 0, applying: 0, needsAttention: 0 },
+    } }
+    setup('/organizations/org/integrations', 'OWNER', [withInventory])
+    const card = within((await screen.findByText('Main Remnawave')).closest('article')!)
+    expect(card.getByText('2 nodes · 2 hosts · 2 configuration profiles')).toBeTruthy()
+    expect(card.getByText('Last sync:')).toBeTruthy()
+    expect(card.getByText('Successful')).toBeTruthy()
+    expect(document.querySelector('.integration-sync-when')?.textContent).toBeTruthy()
+    expect(card.getByRole('link', { name: 'Open' })).toBeTruthy()
+    fireEvent.click(card.getByRole('button', { name: 'Actions' }))
+    const menu = screen.getByRole('menu')
+    expect(within(menu).getByRole('menuitem', { name: 'Test connection' })).toBeTruthy()
+    expect(within(menu).getByRole('menuitem', { name: 'Edit' })).toBeTruthy()
+    expect(within(menu).getByRole('menuitem', { name: 'Disable' })).toBeTruthy()
+    cleanup(); vi.unstubAllGlobals()
+
+    const nodeOnly = { ...existing, overview: {
+      lastSync: null, lastSuccessfulSyncAt: null, nextRunAt: null,
+      inventory: { nodes: { active: 1, inactive: 0 } }, desiredState: { managed: 0, compliant: 0, drifted: 0, applying: 0, needsAttention: 0 },
+    } as unknown as NonNullable<IntegrationResponse['overview']> }
+    setup('/organizations/org/integrations', 'OWNER', [nodeOnly])
+    await screen.findByText('1 node')
+    const nodeArticle = screen.getByText('1 node').closest('article')!
+    expect(nodeArticle.querySelector('.integration-card-statuses')?.textContent).toContain('Last sync: Never')
+    expect(nodeArticle.querySelector('.integration-overview-line')?.textContent).toBe('1 node')
+  })
+
   it('tests and switches an integration, then deletes it without exposing credentials', async () => {
     const { calls } = setup()
     expect(await screen.findByText('Main Remnawave')).toBeTruthy()

@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { notificationChannelsKey } from '../api/notificationChannels'
 import { createAppQueryClient } from '../app/queryClient'
-import { I18nProvider } from '../i18n'
+import { I18nProvider, type Locale } from '../i18n'
 import type { NotificationChannelResponse, SaveNotificationChannelRequest } from '../types/notificationChannel'
 import { NotificationChannelFormPage } from './NotificationChannelFormPage'
 import { NotificationChannelsPage } from './NotificationChannelsPage'
@@ -40,7 +40,7 @@ function responseFor(body: SaveNotificationChannelRequest, id: string): Notifica
     events: body.events, reasons: body.reasons, config, createdAt: '', updatedAt: '' }
 }
 
-function setup(existing?: NotificationChannelResponse, saveGate?: Promise<void>) {
+function setup(existing?: NotificationChannelResponse, saveGate?: Promise<void>, locale: Locale = 'en') {
   const client = createAppQueryClient()
   const initialList = existing ? [existing] : []
   client.setQueryData(notificationChannelsKey('org'), initialList, { updatedAt: Date.now() - 60_000 })
@@ -60,7 +60,7 @@ function setup(existing?: NotificationChannelResponse, saveGate?: Promise<void>)
     throw new Error(`Unexpected request ${method} ${url}`)
   }))
   const entry = existing ? `/organizations/org/notifications/${existing.id}/edit` : '/organizations/org/notifications/new'
-  render(<I18nProvider initialLocale="en"><QueryClientProvider client={client}>
+  render(<I18nProvider initialLocale={locale}><QueryClientProvider client={client}>
     <MemoryRouter initialEntries={[entry]}><Routes>
       <Route path="/organizations/:organizationId/notifications/new" element={<NotificationChannelFormPage />} />
       <Route path="/organizations/:organizationId/notifications/:channelId/edit" element={<NotificationChannelFormPage />} />
@@ -151,6 +151,22 @@ describe('notification channel create', () => {
 })
 
 describe('notification channel edit', () => {
+  it('uses the shared back link and localized bot-token reveal labels without changing secret behavior', async () => {
+    setup(telegram)
+    expect((await screen.findByLabelText('Bot token') as HTMLInputElement).type).toBe('password')
+    const back = document.querySelector('.workspace-back') as HTMLAnchorElement
+    expect(back.textContent).toBe('Notification channels')
+    expect(back.getAttribute('href')).toBe('/organizations/org/notifications')
+    expect(screen.getAllByRole('link', { name: 'Notification channels' })).toHaveLength(1)
+
+    const reveal = screen.getByRole('button', { name: 'Show bot token' })
+    fireEvent.click(reveal)
+    expect((screen.getByLabelText('Bot token') as HTMLInputElement).type).toBe('text')
+    expect(screen.getByRole('button', { name: 'Hide bot token' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide bot token' }))
+    expect((screen.getByLabelText('Bot token') as HTMLInputElement).type).toBe('password')
+  })
+
   it('sends a replacement Telegram token without lifecycle state or cached secret', async () => {
     const { client, requests } = setup(telegram)
     expect((await screen.findByLabelText('Bot token') as HTMLInputElement).value).toBe('')
@@ -220,5 +236,13 @@ describe('notification channel form validation and accessibility', () => {
     const passwordHelp = password.getAttribute('aria-describedby')!
     expect(passwordHelp).not.toContain(' ')
     expect(document.getElementById(passwordHelp)?.textContent).toContain('credential')
+  })
+
+  it('uses the correctly cased Russian bot-token reveal copy', async () => {
+    setup(telegram, undefined, 'ru')
+    await screen.findByLabelText('Токен бота')
+    expect(screen.getByRole('button', { name: 'Показать токен бота' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Показать токен бота' }))
+    expect(screen.getByRole('button', { name: 'Скрыть токен бота' })).toBeTruthy()
   })
 })

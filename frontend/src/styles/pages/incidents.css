@@ -46,3 +46,4 @@
   .incident-link { white-space: normal; overflow-wrap: anywhere; }
   .incident-subject { flex-wrap: wrap; }
 }
+.incidents-page .empty-compact { padding: var(--space-2) var(--space-3); }

@@ -7,7 +7,7 @@ import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { contextQuery } from '../components/layout/workspaceNavigation'
-import { getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
+import { getDisplayName, getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import { InvalidRoutePage } from './InvalidRoutePage'
@@ -48,7 +48,7 @@ function ResourcesIndexContent({ organizationId }: { organizationId: string }) {
       action={canManage ? <Link className="primary-button" to={`${base}/projects/new`}>{t.workspace.newProject}</Link> : undefined} /> : null}
     {visible.map((project, index) => {
       const query = environments[index]
-      return <WorkspaceSection key={project.id} title={project.name}>
+      return <WorkspaceSection key={project.id} title={getDisplayName(project)}>
         {query?.isPending ? <div className="row-skeleton" aria-label={t.workspace.loadingEnvironments}><span /><span /></div> : null}
         {query?.isError ? <InlineAlert tone="danger" title={t.workspace.unableToLoadEnvironments}
           action={<button type="button" className="secondary-button" onClick={() => query.refetch()}>{t.common.retry}</button>} /> : null}
@@ -57,7 +57,7 @@ function ResourcesIndexContent({ organizationId }: { organizationId: string }) {
           {query.data.map(environment => <li key={environment.id}>
             <Link className="link-row" to={`${base}/environments/${encodeURIComponent(environment.id)}${contextQuery({ projectId: project.id })}`}>
               <Server aria-hidden size={18} className="link-row-icon" />
-              <span className="link-row-text"><strong>{environment.name}</strong>
+              <span className="link-row-text"><strong>{getDisplayName(environment)}</strong>
                 <small>{getEnvironmentKindLabel(environment.kind, i18n)} · {environment.code}</small></span>
               <ChevronRight aria-hidden size={18} className="link-row-chevron" />
             </Link>

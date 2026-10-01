@@ -52,7 +52,7 @@ function IncidentsContent({ organizationId }: { organizationId: string }) {
 
   return (
     <AppShell>
-      <div className="workspace-page work-page">
+      <div className="workspace-page work-page incidents-page">
         <WorkspaceHeader title={t.title} subtitle={t.subtitle} />
         <WorkspaceSection title={t.section[filter]} actions={incidents ? <span className="resource-count">{loadedCount(incidents.length, incidentsQuery.hasNextPage, i18n)}</span> : null}>
           <div className="filter-bar">

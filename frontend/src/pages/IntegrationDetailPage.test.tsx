@@ -300,7 +300,8 @@ describe('integration detail', () => {
   it('the list links each integration to its detail and summarizes its last sync', async () => {
     setup('/organizations/org/integrations')
     expect(await screen.findByRole('link', { name: 'Main Remnawave' })).toBeTruthy()
-    expect(screen.getByText(/Nodes: 2 · Sync/)).toBeTruthy()
+    expect(screen.getByText('2 nodes · 1 host · 1 configuration profile')).toBeTruthy()
+    expect(screen.getByText('Successful')).toBeTruthy()
     fireEvent.click(screen.getByRole('link', { name: 'Open' }))
     expect(await screen.findByText('Automatic synchronization is disabled')).toBeTruthy()
   })

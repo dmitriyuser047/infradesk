@@ -70,7 +70,7 @@ const pages = [
   { path: '/organizations/org/overview', route: '/organizations/:organizationId/overview', element: <OverviewPage />, title: 'Обзор инфраструктуры', titleEn: 'Infrastructure overview' },
   { path: '/organizations/org/projects/new', route: '/organizations/:organizationId/projects/new', element: <ProjectCreatePage />, title: 'Новый проект', titleEn: 'Create project' },
   { path: '/organizations/org/projects/project/environments/new', route: '/organizations/:organizationId/projects/:projectId/environments/new', element: <EnvironmentCreatePage />, title: 'Новое окружение', titleEn: 'Create environment' },
-  { path: '/organizations/org/environments/environment?project=project', route: '/organizations/:organizationId/environments/:environmentId', element: <EnvironmentPage />, title: 'Ресурсы', titleEn: 'Resources' },
+  { path: '/organizations/org/environments/environment?project=project', route: '/organizations/:organizationId/environments/:environmentId', element: <EnvironmentPage />, title: 'Серверы', titleEn: 'Servers' },
   { path: '/organizations/org/environments/environment/resources/resource?project=project', route: '/organizations/:organizationId/environments/:environmentId/resources/:resourceId', element: <ResourcePage />, title: 'Node', titleEn: 'Node' },
   { path: '/organizations/org/connections', route: '/organizations/:organizationId/connections', element: <ConnectionsPage />, title: 'Подключения', titleEn: 'Connections' },
   { path: '/organizations/org/notifications', route: '/organizations/:organizationId/notifications', element: <NotificationChannelsPage />, title: 'Каналы уведомлений', titleEn: 'Notification channels' },
@@ -82,7 +82,7 @@ const pages = [
   { path: '/organizations/org/connections/connection/sync-sessions/session', route: '/organizations/:organizationId/connections/:connectionId/sync-sessions/:sessionId', element: <ConnectionSyncSessionPage />, title: 'Синхронизация', titleEn: 'Synchronization' },
   { path: '/organizations/org/incidents', route: '/organizations/:organizationId/incidents', element: <IncidentsPage />, title: 'Инциденты', titleEn: 'Incidents' },
   { path: '/organizations/org/incidents/incident', route: '/organizations/:organizationId/incidents/:incidentId', element: <IncidentPage />, title: 'Нарушен порог: Загрузка процессора', titleEn: 'CPU usage threshold breached' },
-  { path: '/organizations/org/resources', route: '/organizations/:organizationId/resources', element: <ResourcesIndexPage />, title: 'Ресурсы обнаруживаются в каждом окружении отдельно', titleEn: 'Resources are discovered per environment' },
+  { path: '/organizations/org/resources', route: '/organizations/:organizationId/resources', element: <ResourcesIndexPage />, title: 'Серверы', titleEn: 'Servers' },
   { path: '/missing', route: '*', element: <InvalidRoutePage />, title: 'Страница недоступна', titleEn: 'Page unavailable' },
 ]
 

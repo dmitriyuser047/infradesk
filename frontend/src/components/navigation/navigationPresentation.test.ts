@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
 import { createI18n } from '../../i18n'
-import { getEnvironmentKindLabel, selectProject, validSelection } from './navigationPresentation'
+import { getDisplayName, getEnvironmentKindLabel, selectProject, validSelection } from './navigationPresentation'
 
 describe('navigation presentation', () => {
+  it('prefers display names and falls back to a nonempty name or code, never an ID', () => {
+    expect(getDisplayName({ displayName: '  Friendly name ', name: 'API name', code: 'slug' })).toBe('Friendly name')
+    expect(getDisplayName({ name: 'API name', code: 'slug' })).toBe('API name')
+    expect(getDisplayName({ name: ' ', code: 'slug' })).toBe('slug')
+    const withId = { id: 'uuid', name: undefined }
+    expect(getDisplayName(withId)).toBe('')
+    expect(getDisplayName(null, 'Unavailable')).toBe('Unavailable')
+  })
   it('labels known environment kinds and preserves unknown codes', () => {
     const en = createI18n('en')
     expect(getEnvironmentKindLabel('DEV', en)).toBe('Development')

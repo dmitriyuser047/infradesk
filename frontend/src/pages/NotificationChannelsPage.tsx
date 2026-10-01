@@ -4,6 +4,7 @@ import { useNotificationChannels, useSetNotificationChannelEnabled, useTestNotif
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { PageActionMenu } from '../components/layout/PageActionMenu'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import type { NotificationChannelResponse } from '../types/notificationChannel'
@@ -64,9 +65,12 @@ function ChannelCard({ channel, org, canManage, label, lifecycle, test }: {
       <div><dt>{t.connection}</dt><dd>{config.credentialConfigured ? t.credentialConfigured : t.credentialMissing}</dd></div>
     </dl>
     {canManage ? <div className="notification-actions">
-      <Link className="secondary-button" to={formPath}>{t.edit}</Link>
-      <button className="secondary-button" disabled={lifecycle.isPending} onClick={() => lifecycle.mutate({ id: channel.id, enabled: !channel.enabled })}>{channel.enabled ? t.disable : t.enable}</button>
-      <button className="secondary-button" disabled={test.isPending} onClick={() => test.submit(channel.id)}>{test.isPending && test.variables === channel.id ? t.sending : t.sendTest}</button>
+      <button className="primary-button" disabled={test.isPending} onClick={() => test.submit(channel.id)}>{test.isPending && test.variables === channel.id ? t.sending : t.sendTest}</button>
+      <PageActionMenu actions={[
+        { label: t.edit, to: formPath },
+        { label: channel.enabled ? t.disable : t.enable, disabled: lifecycle.isPending,
+          onSelect: () => lifecycle.mutate({ id: channel.id, enabled: !channel.enabled }) },
+      ]} />
     </div> : null}
     {testText || testError ? <p className={`notification-test-result ${testError || testResult?.status !== 'SENT' ? 'notification-test-error' : ''}`} role="status">
       {testText ?? t.testError}{safeCode ? ` ${safeCode}` : ''}

@@ -16,6 +16,10 @@
 .integration-candidate { display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-2); border-radius: var(--radius-md); cursor: pointer; }
 .integration-candidate:hover { background: var(--surface-muted); }
 .integration-overview-line { margin: 0; color: var(--text-secondary); }
+.integration-page .notification-list.integration-list { gap: var(--space-3); padding: var(--space-3) var(--space-4) var(--space-4); }
+.integration-page .integration-list .notification-card.integration-card { gap: var(--space-2); padding: var(--space-3); }
+.integration-page .integration-list .integration-card > p { margin: 0; }
+.integration-provider-url { display: flex; flex-wrap: wrap; gap: 0 var(--space-1); color: var(--text-secondary); font-size: var(--font-size-small); }
 .configuration-content-textarea,
 .configuration-content-preview {
   width: 100%;
@@ -31,9 +35,10 @@
 
 .configuration-content-textarea { min-height: 24rem; resize: vertical; }
 
-.integration-card-statuses { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-2); }
+.integration-card-statuses { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+.integration-sync-when { margin-left: var(--space-1); color: var(--text-tertiary); font-size: var(--font-size-small); }
 .integration-page .notification-card { padding: var(--space-4); }
-.integration-page .notification-card p { margin: var(--space-2) 0; }
+.integration-page .notification-card:not(.integration-card) > p { margin: var(--space-2) 0; }
 .integration-page .notification-actions { justify-content: space-between; }
 .integration-page .integration-row-actions { flex-wrap: wrap; }
 .integration-last-seen { display: block; color: var(--text-secondary); margin-top: var(--space-1); }

@@ -58,21 +58,24 @@ function IntegrationList({ organizationId }: { organizationId: string }) {
     {canManage && !isUnavailableError(query.error) && query.data?.length === 0 ? <EmptyWorkspaceState icon={Plug} title={t.empty} detail={t.emptyDetail}
       action={<Link className="primary-button" to={createPath}>{t.add}</Link>} /> : null}
     {canManage && !isUnavailableError(query.error) && query.data?.length ? <WorkspaceSection title={t.section}>
-      <div className="notification-list">{query.data.map(item => {
+      <div className="notification-list integration-list">{query.data.map(item => {
         const health = connectionHealth(test.variables === item.id && test.isSuccess ? test.data.ok : undefined,
           test.variables === item.id && test.error instanceof ApiError ? test.error.code : undefined)
-        return <article className="notification-card" key={item.id}>
+        const counts = item.overview?.inventory
+        const inventorySummary = inventory.inventorySummary(counts?.nodes?.active, counts?.hosts?.active, counts?.configProfiles?.active)
+        return <article className="notification-card integration-card" key={item.id}>
         <div className="notification-card-heading"><div><h3><Link to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}${location.search}`}>
-          {item.name}</Link></h3><span className="notification-type">Remnawave</span></div>
+          {item.name}</Link></h3></div>
           <StatusIndicator label={item.enabled ? t.enabled : t.disabled} /></div>
+        <p className="integration-provider-url"><span>Remnawave</span> · <span className="break-anywhere">{item.baseUrl}</span></p>
         <div className="integration-card-statuses">
           <span>{ui.connection}: <StatusIndicator label={ui[health]} tone={health === "available" ? "success" : health === "unavailable" ? "danger" : "neutral"} /></span>
-          <span>{inventory.lastSync}: {item.overview?.lastSync ?
-            <StatusIndicator label={inventory.status[item.overview.lastSync.status]} tone={sessionTones[item.overview.lastSync.status]} /> : inventory.never}</span>
+          <span>{inventory.lastSync}: {item.overview?.lastSync ? <>
+            <StatusIndicator label={inventory.status[item.overview.lastSync.status]} tone={sessionTones[item.overview.lastSync.status]} />
+            <span className="integration-sync-when">{i18n.format.relative(item.overview.lastSync.startedAt)}</span>
+          </> : inventory.never}</span>
         </div>
-        <p className="integration-overview-line">{item.overview?.lastSync
-          ? inventory.listSummary(item.overview.inventory.nodes.active, i18n.format.relative(item.overview.lastSync.startedAt)) : inventory.never}</p>
-        <p className="muted-copy break-anywhere">{item.baseUrl}</p>
+        {inventorySummary ? <p className="integration-overview-line">{inventorySummary}</p> : null}
         <div className="notification-actions">
           <Link className="primary-button" to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}${location.search}`}>{inventory.open}</Link>
           <PageActionMenu actions={[

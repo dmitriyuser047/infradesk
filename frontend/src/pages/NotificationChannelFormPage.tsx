@@ -76,7 +76,7 @@ function ChannelForm({ org, existing }: { org: string; existing?: NotificationCh
   const eventOptions: [NotificationEventType, string][] = [['INCIDENT_OPENED', t.incidentOpened], ['INCIDENT_RESOLVED', t.incidentResolved]]
   const reasonOptions: [IncidentReason, string][] = [['THRESHOLD', t.threshold], ['NO_DATA', t.noData]]
   return <AppShell><div className="workspace-page notification-form-page">
-    <WorkspaceHeader title={title} actions={<Link className="text-link" to={back}>{t.back}</Link>} />
+    <WorkspaceHeader title={title} back={{ label: t.back, to: back }} />
     <WorkspaceFormSection contentClassName="notification-form" onSubmit={submit} noValidate>
       <div className="notification-form-grid">
         <label>{t.name}<input required value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
@@ -107,6 +107,9 @@ function SecretInput({ label, value, onChange, helper }: { label: string; value:
   const [visible, setVisible] = useState(false)
   const i18n = useI18n()
   const helperId = useId()
+  const revealLabel = label === i18n.t.notifications.botToken
+    ? (visible ? i18n.t.notifications.hideBotToken : i18n.t.notifications.showBotToken)
+    : `${visible ? i18n.t.notifications.hideSecret : i18n.t.notifications.showSecret} ${label}`
   return <div className="notification-secret"><label>{label}<input type={visible ? 'text' : 'password'} autoComplete="new-password" value={value} onChange={event => onChange(event.target.value)} aria-describedby={helperId} /></label>
-    <button type="button" className="text-button" onClick={() => setVisible(show => !show)}>{visible ? i18n.t.notifications.hideSecret : i18n.t.notifications.showSecret} {label}</button><p id={helperId} className="field-hint">{helper}</p></div>
+    <button type="button" className="text-button" onClick={() => setVisible(show => !show)}>{revealLabel}</button><p id={helperId} className="field-hint">{helper}</p></div>
 }

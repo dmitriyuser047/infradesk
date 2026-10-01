@@ -186,7 +186,7 @@ describe('resource detail page', () => {
     const requests = renderPage({ resource: server, context: { ...context,
       children: [container], activeChildCount: 1 } })
 
-    await screen.findByText('Sources · 1')
+    await screen.findByText('Connections · 1')
     // A simple detail uses a back link. Discovery sources stay related entities.
     expect(screen.queryByRole('navigation', { name: 'Location in the infrastructure' })).toBeNull()
     expect(document.querySelector('.workspace-back')?.getAttribute('href')).toBe('/organizations/org/environments/env?project=project&environment=env')
@@ -194,7 +194,7 @@ describe('resource detail page', () => {
       .toBe('/organizations/org/connections/finnish?project=project&fromResource=server&fromEnvironment=env')
     // Project, environment and source are not repeated as a section below.
     expect(screen.queryByRole('heading', { name: 'Context' })).toBeNull()
-    expect(screen.getByText('Sources · 1')).toBeTruthy()
+    expect(screen.getByText('Connections · 1')).toBeTruthy()
     // What it contains is operational and stays.
     expect(await screen.findByRole('heading', { name: 'Containers' })).toBeTruthy()
     expect(within(screen.getByRole('tree', { name: 'Containers' })).getByRole('link', { name: /postgres/ })).toBeTruthy()
@@ -209,11 +209,16 @@ describe('resource detail page', () => {
 
     const path = await screen.findByRole('navigation', { name: 'Location in the infrastructure' })
     expect(within(path).getAllByRole('link').map(link => link.textContent)).toEqual(['Servers', 'fin-prod-01'])
-    expect(screen.getByText('Sources · 2')).toBeTruthy()
+    expect(screen.getByText('Connections · 2')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open connection Finnish Node' }).getAttribute('href'))
       .toBe('/organizations/org/connections/finnish?project=project&fromResource=postgres&fromEnvironment=env')
     expect(screen.getByRole('link', { name: 'Open connection Prometheus' })).toBeTruthy()
     expect(screen.queryByRole('heading', { name: 'Context' })).toBeNull()
+  })
+
+  it('labels SSH discovery sources as connections in Russian', async () => {
+    renderPage({ resource: server }, { locale: 'ru' })
+    expect(await screen.findByText('Подключения · 1')).toBeTruthy()
   })
 
   it('returns to the incident or connection it was opened from', async () => {

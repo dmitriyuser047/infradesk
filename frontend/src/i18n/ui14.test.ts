@@ -22,6 +22,13 @@ describe('UI-1.4 resource terminology', () => {
     expect(en.infrastructure.inactiveCount(2)).toBe('2 previously discovered resources are no longer found')
   })
 
+  it('localizes Remnawave inventory counts and omits counts that are unavailable', () => {
+    expect(ru.integrationInventory.inventorySummary(2, 2, 2)).toBe('2 ноды · 2 хоста · 2 профиля конфигурации')
+    expect(ru.integrationInventory.inventorySummary(1, undefined, undefined)).toBe('1 нода')
+    expect(ru.integrationInventory.inventorySummary(5, 5, 5)).toBe('5 нод · 5 хостов · 5 профилей конфигурации')
+    expect(en.integrationInventory.inventorySummary(1, 2, undefined)).toBe('1 node · 2 hosts')
+  })
+
   it.each([
     [1, '1 сервер', '1 контейнер'],
     [2, '2 сервера', '2 контейнера'],

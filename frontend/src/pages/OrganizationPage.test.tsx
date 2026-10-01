@@ -93,14 +93,14 @@ describe('projects and environments', () => {
 
   it('marks the project and environment chosen in the URL, in words as well as by look', async () => {
     renderPage({ path: '/organizations/org?project=billing&environment=stage' })
-    await screen.findByRole('link', { name: 'Открыть ресурсы окружения Staging' })
+    await screen.findByRole('link', { name: 'Открыть серверы окружения Staging' })
 
     expect(card('Billing').getAttribute('aria-current')).toBe('true')
     expect(within(card('Billing')).getByText('Текущий проект')).toBeTruthy()
     expect(card('Website').getAttribute('aria-current')).toBeNull()
     expect(screen.getByRole('link', { name: 'Billing' }).getAttribute('aria-current')).toBe('page')
-    expect(screen.getByRole('link', { name: 'Открыть ресурсы окружения Staging' }).getAttribute('aria-current')).toBe('true')
-    expect(screen.getByRole('link', { name: 'Открыть ресурсы окружения Production' }).getAttribute('aria-current')).toBeNull()
+    expect(screen.getByRole('link', { name: 'Открыть серверы окружения Staging' }).getAttribute('aria-current')).toBe('true')
+    expect(screen.getByRole('link', { name: 'Открыть серверы окружения Production' }).getAttribute('aria-current')).toBeNull()
 
     // Choosing another project is a link that writes the context, which resets the environment.
     fireEvent.click(screen.getByRole('link', { name: 'Website' }))
@@ -113,7 +113,7 @@ describe('projects and environments', () => {
     renderPage()
     await screen.findByText('Production')
 
-    expect(screen.getByRole('link', { name: 'Открыть ресурсы окружения Production' }).getAttribute('href'))
+    expect(screen.getByRole('link', { name: 'Открыть серверы окружения Production' }).getAttribute('href'))
       .toBe('/organizations/org/environments/prod?project=billing')
     expect(screen.getByRole('link', { name: 'Обзор окружения Production' }).getAttribute('href'))
       .toBe('/organizations/org/overview?project=billing&environment=prod')

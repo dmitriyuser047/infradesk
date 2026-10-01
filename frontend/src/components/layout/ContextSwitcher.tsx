@@ -5,7 +5,7 @@ import { useMyOrganizations } from '../../api/auth'
 import { useEnvironmentContext, useEnvironments, useProjects } from '../../api/navigation'
 import { useI18n } from '../../i18n'
 import { canOrganization } from '../auth/authorization'
-import { getEnvironmentKindLabel } from '../navigation/navigationPresentation'
+import { getDisplayName, getEnvironmentKindLabel } from '../navigation/navigationPresentation'
 import { usePopover } from './usePopover'
 import { useWorkspaceRouteContext } from './useWorkspaceRouteContext'
 import { activeWorkspaceModule, modulePath, type WorkspaceScope } from './workspaceNavigation'
@@ -46,9 +46,9 @@ export function ContextSwitcher() {
   }
 
   const parts = organizationId === undefined ? [] : [
-    organization?.name ?? t.currentOrganization,
-    project?.name ?? (resolvedProjectId ? '…' : t.allProjects),
-    ...(resolvedProjectId ? [environmentId ? environment?.name ?? '…' : t.allEnvironments] : []),
+    getDisplayName(organization, t.currentOrganization),
+    resolvedProjectId ? getDisplayName(project, '…') : t.allProjects,
+    ...(resolvedProjectId ? [environmentId ? getDisplayName(environment, '…') : t.allEnvironments] : []),
   ]
   const summary = parts.join(' / ')
 
@@ -75,7 +75,7 @@ export function ContextSwitcher() {
         }}>
           {organizationId === undefined ? <option value="">{t.selectOrganizationHint}</option> : null}
           {organizationId !== undefined && !organization ? <option value={organizationId}>{t.currentOrganization}</option> : null}
-          {organizations.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          {organizations.map(item => <option key={item.id} value={item.id}>{getDisplayName(item, t.currentOrganization)}</option>)}
         </select>
       </label>
       <Link className="text-link" to="/organizations" onClick={() => popover.close(false)}>
@@ -85,7 +85,7 @@ export function ContextSwitcher() {
           <span className="field-label">{t.project}</span>
           <select value={resolvedProjectId ?? ''} onChange={event => go({ organizationId, projectId: event.target.value || null })}>
             <option value="">{t.allProjects}</option>
-            {projects.data?.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            {projects.data?.map(item => <option key={item.id} value={item.id}>{getDisplayName(item, t.project)}</option>)}
           </select>
         </label>
         <label className="field">
@@ -94,9 +94,9 @@ export function ContextSwitcher() {
             onChange={event => go({ organizationId, projectId: resolvedProjectId, environmentId: event.target.value || null })}>
             <option value="">{resolvedProjectId ? t.allEnvironments : t.selectProject}</option>
             {environmentId && !environments.data?.some(item => item.id === environmentId)
-              ? <option value={environmentId}>{environment?.name ?? '…'}</option> : null}
+              ? <option value={environmentId}>{getDisplayName(environment, '…')}</option> : null}
             {environments.data?.map(item => <option key={item.id} value={item.id}>
-              {item.name} · {getEnvironmentKindLabel(item.kind, i18n)}</option>)}
+              {getDisplayName(item, t.environment)} · {getEnvironmentKindLabel(item.kind, i18n)}</option>)}
           </select>
         </label>
         {canManageWorkspace && projects.isSuccess && projects.data.length === 0 ?

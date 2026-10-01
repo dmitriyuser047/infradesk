@@ -237,6 +237,48 @@ describe('application shell', () => {
     expect(location()).toBe('/organizations/org/overview?project=org-p1&environment=env-test')
   })
 
+  it('prefers optional display names for organization, project, and environment while retaining name fallbacks', () => {
+    setup('/organizations/org/overview?project=org-p1&environment=env-test', 'OWNER', 'en', client => {
+      client.setQueryData(['my-organizations'], [
+        { id: 'org', code: 'org_slug', name: 'API organization name', displayName: 'Friendly organization', role: 'OWNER' },
+      ])
+      client.setQueryData(['projects', 'org'], [
+        { id: 'org-p1', organizationId: 'org', code: 'project_slug', name: 'API project name', displayName: 'Friendly project', description: null },
+      ])
+      client.setQueryData(['environments', 'org', 'org-p1'], [
+        { id: 'env-test', organizationId: 'org', projectId: 'org-p1', code: 'environment_slug', name: 'API environment name', displayName: 'Friendly environment', kind: 'TEST' },
+      ])
+    })
+
+    const trigger = screen.getByRole('button', { name: 'Current context: Friendly organization / Friendly project / Friendly environment. Change' })
+    expect(trigger.textContent).toContain('Friendly organization')
+    expect(trigger.textContent).toContain('Friendly project')
+    expect(trigger.textContent).toContain('Friendly environment')
+    expect(trigger.textContent).not.toContain('project_slug')
+    fireEvent.click(trigger)
+    const panel = screen.getByRole('dialog', { name: 'Change context' })
+    expect(within(panel).getByRole('option', { name: 'Friendly organization' })).toBeTruthy()
+    expect(within(panel).getByRole('option', { name: 'Friendly project' })).toBeTruthy()
+    expect(within(panel).getByRole('option', { name: 'Friendly environment · Test' })).toBeTruthy()
+  })
+
+  it('uses organization/project/environment codes when names are absent and never shows UUIDs', () => {
+    setup('/organizations/org/overview?project=org-p1&environment=env-test', 'OWNER', 'en', client => {
+      client.setQueryData(['my-organizations'], [{ id: 'org', code: 'org_slug', name: '', role: 'OWNER' }])
+      client.setQueryData(['projects', 'org'], [{ id: 'org-p1', organizationId: 'org', code: 'project_slug', name: '', description: null }])
+      client.setQueryData(['environments', 'org', 'org-p1'], [
+        { id: 'env-test', organizationId: 'org', projectId: 'org-p1', code: 'environment_slug', name: '', kind: 'TEST' },
+      ])
+    })
+    const trigger = screen.getByRole('button', { name: 'Current context: org_slug / project_slug / environment_slug. Change' })
+    expect(trigger.textContent).not.toContain('env-test')
+    fireEvent.click(trigger)
+    const panel = screen.getByRole('dialog', { name: 'Change context' })
+    expect(within(panel).getByRole('option', { name: 'org_slug' })).toBeTruthy()
+    expect(within(panel).getByRole('option', { name: 'project_slug' })).toBeTruthy()
+    expect(within(panel).getByRole('option', { name: 'environment_slug · Test' })).toBeTruthy()
+  })
+
   it('selects an environment inside the chosen project and keeps the section', () => {
     setup('/organizations/org/incidents?project=org-p1')
     fireEvent.click(screen.getByRole('button', { name: /Текущий контекст/ }))

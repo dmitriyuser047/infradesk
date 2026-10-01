@@ -8,7 +8,7 @@ import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { contextQuery } from '../components/layout/workspaceNavigation'
-import { getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
+import { getDisplayName, getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import type { EnvironmentResponse, ProjectResponse } from '../types/navigation'
@@ -45,7 +45,7 @@ function OrganizationContent({ organizationId }: { organizationId: string }) {
   const hasProjects = projectsQuery.isSuccess && projectsQuery.data.length > 0
 
   return <div className="workspace-page">
-    <WorkspaceHeader title={t.title} subtitle={organizationQuery.data ? `${organizationQuery.data.name} · ${t.subtitle}` : t.subtitle}
+    <WorkspaceHeader title={t.title} subtitle={organizationQuery.data ? `${getDisplayName(organizationQuery.data)} · ${t.subtitle}` : t.subtitle}
       actions={isOwner ? <Link className="primary-button" to={`${base}/projects/new`}><Plus aria-hidden size={16} />{t.newProject}</Link> : null} />
     {/* Full for a first look; once projects exist, one quiet line with the details kept for screen readers. */}
     <ol className={hasProjects ? 'hierarchy hierarchy-compact' : 'hierarchy'} aria-label={t.title}>
@@ -110,7 +110,7 @@ function ProjectCard({ organizationId, project, environments, isOwner, selected,
       <div className="project-card-title">
         {/* Choosing a project is choosing the context: the link writes it into the URL, like the switcher. */}
         <h2 id={headingId}><Link className="project-link" to={`${base}${contextQuery({ projectId: project.id })}`}
-          aria-current={selected ? 'page' : undefined}>{project.name}</Link></h2>
+          aria-current={selected ? 'page' : undefined}>{getDisplayName(project)}</Link></h2>
         <span className="project-code">{project.code}</span>
       </div>
       <div className="project-card-meta">
@@ -125,22 +125,22 @@ function ProjectCard({ organizationId, project, environments, isOwner, selected,
         action={<button className="secondary-button" type="button" onClick={() => environments.refetch()}>{i18n.t.common.retry}</button>} /> : null}
       {list && list.length === 0 ? <EmptyWorkspaceState icon={Layers} title={t.noEnvironments}
         detail={isOwner ? t.noEnvironmentsDetail : t.noEnvironmentsMember}
-        action={isOwner ? <Link className="secondary-button" to={newEnvironmentPath} aria-label={t.addEnvironmentTo(project.name)}>
+        action={isOwner ? <Link className="secondary-button" to={newEnvironmentPath} aria-label={t.addEnvironmentTo(getDisplayName(project))}>
           <Plus aria-hidden size={16} />{i18n.t.environmentForm.submit}</Link> : undefined} /> : null}
       {list && list.length > 0 ? <ul className="link-list">
         {list.map(environment => {
           const current = environment.id === selectedEnvironmentId
           return <li key={environment.id} className={current ? 'environment-row environment-row-selected' : 'environment-row'}>
-            <Link className="link-row" aria-label={t.openResourcesOf(environment.name)} aria-current={current ? 'true' : undefined}
+            <Link className="link-row" aria-label={t.openResourcesOf(getDisplayName(environment))} aria-current={current ? 'true' : undefined}
               to={`${base}/environments/${encodeURIComponent(environment.id)}${contextQuery({ projectId: project.id })}`}>
               <Server aria-hidden size={18} className="link-row-icon" />
-              <span className="link-row-text"><strong>{environment.name}</strong>
+              <span className="link-row-text"><strong>{getDisplayName(environment)}</strong>
                 <span className="environment-meta"><small>{environment.code}</small>
                   <StatusIndicator label={getEnvironmentKindLabel(environment.kind, i18n)}
                     tone={environment.kind === 'PROD' ? 'info' : 'neutral'} /></span></span>
               <ChevronRight aria-hidden size={18} className="link-row-chevron" />
             </Link>
-            <Link className="text-link environment-overview" aria-label={t.openOverviewOf(environment.name)}
+            <Link className="text-link environment-overview" aria-label={t.openOverviewOf(getDisplayName(environment))}
               to={`${base}/overview${contextQuery({ projectId: project.id, environmentId: environment.id })}`}>{t.openOverview}</Link>
           </li>
         })}
@@ -149,7 +149,7 @@ function ProjectCard({ organizationId, project, environments, isOwner, selected,
     <div className="project-card-footer">
       <Link className="text-button" to={`${base}/overview${contextQuery({ projectId: project.id })}`}>{t.projectOverview}</Link>
       {isOwner && list && list.length > 0 ? <Link className="text-button" to={newEnvironmentPath}
-        aria-label={t.addEnvironmentTo(project.name)}><Plus aria-hidden size={16} />{t.newEnvironment}</Link> : null}
+        aria-label={t.addEnvironmentTo(getDisplayName(project))}><Plus aria-hidden size={16} />{t.newEnvironment}</Link> : null}
     </div>
   </section>
 }

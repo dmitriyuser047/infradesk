@@ -122,13 +122,29 @@ describe('notification channels page', () => {
 
   it('uses lifecycle responses to update cache without a list refetch', async () => {
     const { requests } = setup()
-    fireEvent.click(await screen.findByRole('button', { name: 'Disable' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Actions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Disable' }))
     expect(await screen.findByText('Disabled')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Enable' }))
     await waitFor(() => expect(screen.getByText('Enabled')).toBeTruthy())
     expect(requests.filter(request => request.url.endsWith('/disable'))).toHaveLength(1)
     expect(requests.filter(request => request.url.endsWith('/enable'))).toHaveLength(1)
     expect(requests.filter(request => request.method === 'GET' && request.url.endsWith('/notification-channels'))).toHaveLength(1)
+  })
+
+  it('keeps Send test primary and places edit/lifecycle actions in the overflow menu', async () => {
+    setup()
+    const testButton = await screen.findByRole('button', { name: 'Send test' })
+    expect(testButton.className).toContain('primary-button')
+    expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Disable' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }))
+    const menu = screen.getByRole('menu')
+    expect(within(menu).getByRole('menuitem', { name: 'Edit' }).getAttribute('href'))
+      .toBe('/organizations/org/notifications/c1/edit')
+    expect(within(menu).getByRole('menuitem', { name: 'Disable' })).toBeTruthy()
+    expect(within(menu).queryByRole('menuitem', { name: 'Delete' })).toBeNull()
   })
 
   it.each([

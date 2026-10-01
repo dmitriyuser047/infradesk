@@ -161,7 +161,7 @@ describe('resource page presentation', () => {
 
       expect(html).toContain('Resource name')
       expect(html).toContain(value.resourceTypeCode === 'NODE' ? 'node-1 · Ubuntu 24.04 LTS' : 'Container · resource-code')
-      expect(html).toMatch(/class="workspace-back"[^>]*>.*Resources<\/a>/)
+      expect(html).toMatch(/class="workspace-back"[^>]*>.*Servers<\/a>/)
       expect(html).toContain('Overview')
     }
   })
