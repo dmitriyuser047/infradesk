@@ -262,6 +262,9 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
         Conflict(ApiErrorResponse(error.code, "Endpoint and credentials cannot change while nodes are managed"))
       case "INTEGRATION_MANAGEMENT_REQUIRES_SYNC" =>
         Conflict(ApiErrorResponse(error.code, "Managing nodes requires automatic synchronization"))
+      case "INTEGRATION_CONFIG_ROLLOUT_REQUIRES_SYNC" =>
+        Conflict(ApiErrorResponse(error.code,
+          "Automatic synchronization cannot be disabled while a guarded rollout is active"))
       case code if code.startsWith("INTEGRATION_") &&
         !Set("INTEGRATION_CREDENTIAL_MISSING", "INTEGRATION_CREDENTIAL_INVALID").contains(code) =>
         BadGateway(ApiErrorResponse(code, "Integration check failed"))

@@ -36,7 +36,8 @@ final class IntegrationLifecycleSpec extends FunSuite {
         new PostgresIntegrationInventoryRepository,
         new PostgresIntegrationConfigProfileRepository(integration.secret.RemnawaveConfigCipher.fromConfig(
           SecretEncryptionConfig.fromEnvironment(Map("INFRADESK_SECRET_MASTER_KEY_BASE64" ->
-            Base64.getEncoder.encodeToString(Array.fill[Byte](32)(9)))).toOption.get)))
+            Base64.getEncoder.encodeToString(Array.fill[Byte](32)(9)))).toOption.get)),
+        new PostgresIntegrationConfigRolloutRepository)
       val actor = ActorContext(user, org)
       val setup: ConnectionIO[Unit] = for {
         _ <- sql"insert into organization (id, code, name) values ($org, ${org.toString}, 'Integrations')".update.run

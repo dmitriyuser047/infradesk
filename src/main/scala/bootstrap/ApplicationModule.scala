@@ -356,7 +356,7 @@ object ApplicationModule {
       integrationRepository, integrationSecretRepository, transactionIdGenerator,
       transactionTimeProvider, integrations.integrationCredentialCipher, auditRecorder,
       integrationSyncStateRepository, integrationActionRepository, integrationInventoryRepository,
-      integrationConfigRepository)
+      integrationConfigRepository, integrationConfigRollouts)
     val integrationSyncSettings = config.integrations.sync
     val integrationSync = new IntegrationSync[ConnectionIO](
       new IntegrationSyncTransactions[ConnectionIO](integrationRepository, integrationSecretRepository,

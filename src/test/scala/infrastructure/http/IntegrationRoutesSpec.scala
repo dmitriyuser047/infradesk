@@ -5,6 +5,7 @@ import application.integration.{IntegrationBindings, IntegrationError, Integrati
   IntegrationProviderRegistry, IntegrationRuntimeContext, IntegrationSync, IntegrationSyncTransactions,
   IntegrationTestResult, TestIntegration}
 import application.port.{BindableResource, IntegrationActionRepository, IntegrationConfigProfileRepository,
+  IntegrationConfigRolloutActivity,
   IntegrationRepository, IntegrationSecureRevision, IntegrationSecret,
   IntegrationSecretRepository, TransactionRunner}
 import cats.effect.IO
@@ -65,6 +66,7 @@ final class IntegrationRoutesSpec extends FunSuite {
       Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> key)).toOption.get)
     val audit = TestAuditRecorder(journal)
     @volatile var activeAction = false
+    @volatile var activeRollout = false
     val actionRepository = new IntegrationActionRepository[IO] {
       override def hasActive(organizationId: UUID, integrationId: UUID): IO[Boolean] = IO(activeAction)
       override def insertOrFind(value: IntegrationActionExecution): IO[(IntegrationActionExecution, Boolean)] =
@@ -96,7 +98,10 @@ final class IntegrationRoutesSpec extends FunSuite {
     }
     val management = new IntegrationManagement[IO](integrations, secrets, new SystemIdGenerator,
       new SystemTimeProvider, cipher, audit, memory.syncState, actionRepository, memory.inventory,
-      configProfiles)
+      configProfiles, new IntegrationConfigRolloutActivity[IO] {
+        override def hasActive(organizationId: UUID, integrationId: UUID,
+          objectId: Option[UUID]): IO[Boolean] = IO(activeRollout)
+      })
     var auditedBeforeProbe = false
     var auditedBeforeObserve = false
     var observations = 0
@@ -304,6 +309,20 @@ final class IntegrationRoutesSpec extends FunSuite {
     assertEquals(mode("OBSERVE").status, Status.Ok)
     assertEquals(f.call(Method.POST, s"$root/$id/disable").status, Status.Ok)
     assertEquals(f.observations, 0)
+  }
+
+  test("automatic sync cannot be disabled while a guarded config rollout is active") {
+    val f = new World
+    val id = f.created()
+    assertEquals(f.call(Method.POST, s"$root/$id/enable").status, Status.Ok)
+    f.activeRollout = true
+    val refused = f.call(Method.POST, s"$root/$id/disable")
+    assertEquals(refused.status, Status.Conflict)
+    assertEquals(refused.as[Json].unsafeRunSync().hcursor.get[String]("code"),
+      Right("INTEGRATION_CONFIG_ROLLOUT_REQUIRES_SYNC"))
+    assert(f.integrations.findById(org, UUID.fromString(id)).unsafeRunSync().exists(_.enabled))
+    f.activeRollout = false
+    assertEquals(f.call(Method.POST, s"$root/$id/disable").status, Status.Ok)
   }
 
   test("a snapshot naming one object twice is rejected as a whole") {

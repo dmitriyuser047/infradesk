@@ -37,13 +37,16 @@ trait IntegrationConfigDeploymentRepository[F[_]] {
 }
 
 /** Durable orchestration only. Implementations never receive credentials or configuration plaintext. */
-trait IntegrationConfigRolloutRepository[F[_]] {
+trait IntegrationConfigRolloutActivity[F[_]] {
+  def hasActive(organizationId: UUID, integrationId: UUID, objectId: Option[UUID] = None): F[Boolean]
+}
+
+trait IntegrationConfigRolloutRepository[F[_]] extends IntegrationConfigRolloutActivity[F] {
   def findByRequest(organizationId: UUID, requestId: UUID): F[Option[IntegrationConfigRollout]]
   def insertOrFind(value: IntegrationConfigRollout): F[(IntegrationConfigRollout, Boolean)]
   def find(organizationId: UUID, id: UUID): F[Option[IntegrationConfigRollout]]
   def recent(organizationId: UUID, integrationId: UUID, objectId: UUID,
     limit: Int): F[List[IntegrationConfigRollout]]
-  def hasActive(organizationId: UUID, integrationId: UUID, objectId: Option[UUID] = None): F[Boolean]
   def cancel(organizationId: UUID, id: UUID, at: Instant): F[Option[IntegrationConfigRollout]]
   def preview(organizationId: UUID, integrationId: UUID, objectId: UUID,
     targetRevisionNumber: Int): F[Option[IntegrationConfigRolloutPreview]]

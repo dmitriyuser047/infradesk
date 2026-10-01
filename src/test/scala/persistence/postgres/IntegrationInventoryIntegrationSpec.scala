@@ -90,7 +90,7 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       }
     }
     val management = new IntegrationManagement[ConnectionIO](integrations, secrets, ids, time, cipher, audit, states,
-      actionRepository, inventory, configRepository)
+      actionRepository, inventory, configRepository, configRollouts)
     @volatile var observation: IO[IntegrationObservation] = IO.pure(snapshot())
     @volatile var remoteActionCalls = 0
     @volatile var remoteOutcome: IO[IntegrationActionRemoteOutcome] =
@@ -382,6 +382,11 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       assertEquals(requested.status, IntegrationConfigRolloutStatus.Preparing)
       assertEquals(w.configRolloutService.start(w.actor, integration.id, objectId, 2,
         requestId, automaticRollback = true).unsafeRunSync().id, requested.id)
+      val disableDuringRollout = w.run.run(w.management.setEnabled(w.actor, integration.id, enabled = false))
+        .attempt.unsafeRunSync()
+      assertEquals(disableDuringRollout.left.toOption.collect { case e: IntegrationError => e.code },
+        Some("INTEGRATION_CONFIG_ROLLOUT_REQUIRES_SYNC"))
+      assert(w.run.run(w.integrations.findById(w.org, integration.id)).unsafeRunSync().exists(_.enabled))
       assertEquals(w.configPatchCalls, 0, "the HTTP request creates durable intent only")
       assertEquals(w.configProfiles.requestDeploy(w.actor, integration.id, objectId, 2, UUID.randomUUID())
         .attempt.unsafeRunSync().left.toOption.collect { case e: IntegrationError => e.code },
@@ -464,6 +469,8 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       val health = w.run.run(w.configRollouts.nodeHealth(w.org, recovery.id)).unsafeRunSync()
       assertEquals(health.count(_.result == "PREEXISTING_UNHEALTHY"), 1)
       assertEquals(health.count(_.result == "REGRESSION"), 0)
+      assertEquals(w.run.run(w.management.setEnabled(w.actor, integration.id, enabled = false))
+        .unsafeRunSync().enabled, false, "a terminal rollout no longer blocks disabling sync")
     }
   }
 

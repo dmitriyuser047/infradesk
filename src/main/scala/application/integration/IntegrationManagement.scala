@@ -3,7 +3,8 @@ package application.integration
 
 import application.audit.AuditRecorder
 import application.auth.ActorContext
-import application.port.{IdGenerator, IntegrationActionRepository, IntegrationConfigProfileRepository, IntegrationCryptography,
+import application.port.{IdGenerator, IntegrationActionRepository, IntegrationConfigProfileRepository,
+  IntegrationConfigRolloutActivity, IntegrationCryptography,
   IntegrationInventoryRepository, IntegrationRepository, IntegrationSecret, IntegrationSecretRepository,
   IntegrationSyncStateRepository, TimeProvider}
 import cats.MonadThrow
@@ -27,7 +28,7 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
   ids: IdGenerator[Tx], time: TimeProvider[Tx], cipher: IntegrationCryptography,
   audit: AuditRecorder[Tx], syncState: IntegrationSyncStateRepository[Tx],
   actions: IntegrationActionRepository[Tx], inventory: IntegrationInventoryRepository[Tx],
-  configProfiles: IntegrationConfigProfileRepository[Tx]
+  configProfiles: IntegrationConfigProfileRepository[Tx], rollouts: IntegrationConfigRolloutActivity[Tx]
 ) {
   def list(organizationId: UUID): Tx[List[Integration]] = integrations.listByOrganization(organizationId)
   def get(organizationId: UUID, id: UUID): Tx[Option[Integration]] = integrations.findById(organizationId, id)
@@ -83,6 +84,10 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
       else if (!enabled && managed(stored)) IntegrationError(IntegrationDesiredStates.RequiresSync,
         "Automatic synchronization cannot be disabled while nodes are managed").raiseError[Tx, Integration]
       else for {
+        activeRollout <- if (!enabled) rollouts.hasActive(actor.organizationId, id) else false.pure[Tx]
+        _ <- MonadThrow[Tx].raiseWhen(activeRollout)(IntegrationError(
+          "INTEGRATION_CONFIG_ROLLOUT_REQUIRES_SYNC",
+          "Automatic synchronization cannot be disabled while a guarded rollout is active"))
         now <- time.now
         next = stored.copy(enabled = enabled, updatedAt = now)
         _ <- integrations.save(next)
