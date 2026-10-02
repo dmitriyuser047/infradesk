@@ -98,19 +98,21 @@ export function WorkspaceFormSection({ title, description, descriptionId, action
 
 export function WorkspaceTabs<T extends string>({ tabs, active, onChange }: {
   /** `count`, when known, follows the label as a small badge; the label alone still names the tab. */
-  tabs: readonly { id: T; label: string; count?: number }[]
+  tabs: readonly { id: T; label: string; count?: number; disabled?: boolean }[]
   active: T
   onChange: (value: T) => void
 }) {
   const { t } = useI18n()
+  const enabledTabs = tabs.filter(tab => !tab.disabled)
   return <div className="workspace-tabs" role="tablist" aria-label={t.common.sections}>
-    {tabs.map((tab, index) => <button key={tab.id} id={`tab-${tab.id}`} type="button" role="tab" aria-selected={active === tab.id}
-      aria-controls={`panel-${tab.id}`} tabIndex={active === tab.id ? 0 : -1}
-      className={active === tab.id ? 'workspace-tab active' : 'workspace-tab'} onClick={() => onChange(tab.id)}
+    {tabs.map(tab => <button key={tab.id} id={`tab-${tab.id}`} type="button" role="tab" aria-selected={active === tab.id}
+      aria-controls={`panel-${tab.id}`} tabIndex={active === tab.id ? 0 : -1} disabled={tab.disabled}
+      className={active === tab.id ? 'workspace-tab active' : 'workspace-tab'} onClick={() => { if (!tab.disabled) onChange(tab.id) }}
       onKeyDown={event => {
-        const next = event.key === 'ArrowRight' ? tabs[(index + 1) % tabs.length]
-          : event.key === 'ArrowLeft' ? tabs[(index - 1 + tabs.length) % tabs.length]
-            : event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[tabs.length - 1] : undefined
+        const index = enabledTabs.findIndex(item => item.id === tab.id)
+        const next = event.key === 'ArrowRight' ? enabledTabs[(index + 1) % enabledTabs.length]
+          : event.key === 'ArrowLeft' ? enabledTabs[(index - 1 + enabledTabs.length) % enabledTabs.length]
+            : event.key === 'Home' ? enabledTabs[0] : event.key === 'End' ? enabledTabs[enabledTabs.length - 1] : undefined
         if (next) {
           event.preventDefault()
           onChange(next.id)

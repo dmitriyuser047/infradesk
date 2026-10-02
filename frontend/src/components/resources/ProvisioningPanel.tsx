@@ -7,8 +7,8 @@ import { InlineAlert, StatusIndicator, WorkspaceSection } from '../layout/Worksp
 import type { ProvisioningPlan, ProvisioningRun } from '../../types/provisioning'
 import { ApiError } from '../../api/httpClient'
 
-export function ProvisioningPanel({ organizationId, resourceId, resourceName, canRun }: {
-  organizationId: string; resourceId: string; resourceName: string; canRun: boolean
+export function ProvisioningPanel({ organizationId, resourceId, resourceName, canRun, focusRunId, onRunQueued }: {
+  organizationId: string; resourceId: string; resourceName: string; canRun: boolean; focusRunId?: string | null; onRunQueued?: (id: string) => void
 }) {
   const i18n = useI18n()
   const { t } = i18n
@@ -20,11 +20,24 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
   const [focusedRunId, setFocusedRunId] = useState<string | null>(null)
   const requestId = useRef<{ planId: string; requestId: string } | null>(null)
   const detail = useProvisioningRun(organizationId, focusedRunId)
+  useEffect(() => { if (focusRunId) setFocusedRunId(focusRunId) }, [focusRunId])
   useEffect(() => {
     if (focusedRunId === null && history.data?.items?.[0]) setFocusedRunId(history.data.items[0].id)
   }, [focusedRunId, history.data])
 
   const stateText = (state: string) => text.states[state] ?? state
+  const profileStepNames: Record<string, string> = { ...t.serverProfiles.runSteps }
+  const profileFactNames: Record<string, string> = { ...t.serverProfiles.factNames }
+  const profileFactValues: Record<string, string> = { ...t.serverProfiles.factValues }
+  const knownErrors: Record<string, string> = { ...text.errors, ...t.serverProfiles.errors }
+  const stepName = (kind: string, safeName: string) => text.stepKinds[kind] ?? profileStepNames[kind] ?? safeName
+  const factLines = (facts: Record<string, string>) => Object.entries(facts).flatMap(([key, value]) => {
+    const name = text.factNames[key] ?? profileFactNames[key]
+    if (!name) return []
+    const translated = text.factValues[value] ?? profileFactValues[value]
+    const numeric = ['memoryMiB', 'diskFreeMiB'].includes(key) && /^(0|[1-9][0-9]{0,7})$/.test(value)
+    return translated || numeric ? [{ key, name, value: translated ?? value }] : []
+  })
   const tone = (run: ProvisioningRun) => run.state === 'SUCCEEDED' ? 'success'
     : run.state === 'FAILED' ? 'danger' : run.state === 'UNKNOWN' ? 'warning'
       : run.state === 'RUNNING' ? 'info' : 'neutral'
@@ -38,6 +51,7 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
     if (!requestId.current) return
     const queued = await starter.mutateAsync(requestId.current)
     setFocusedRunId(queued.id)
+    onRunQueued?.(queued.id)
     setPlan(null)
   }
 
@@ -49,6 +63,7 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
     {history.isPending ? <p>{text.pending}</p> : null}
     {!history.isPending && history.data?.items?.length === 0 ? <p>{text.empty}</p> : null}
     {history.data?.items?.map(run => <div className="provisioning-run" key={run.id}>
+      <span>{t.serverProfiles.runKind[run.inputSnapshot.runKind]}</span>
       <span>{i18n.format.dateTime(run.createdAt)}</span>
       <StatusIndicator label={stateText(run.state)} tone={tone(run)} />
       <button type="button" className="text-button" onClick={() => setFocusedRunId(run.id)}>{t.common.open}</button>
@@ -66,11 +81,11 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
             : text.actionError}
       </InlineAlert> : null}
       {detail.data.steps.map(step => <div className="provisioning-step" key={step.id}>
-        <div><strong>{text.stepKinds[step.kind] ?? step.displayName}</strong>
+        <div><strong>{stepName(step.kind, step.displayName)}</strong>
           <StatusIndicator label={text.stepStates[step.state] ?? step.state} tone={step.state === 'SUCCEEDED' ? 'success'
             : step.state === 'FAILED' ? 'danger' : step.state === 'UNKNOWN' ? 'warning' : 'neutral'} /></div>
-        {Object.entries(step.facts).map(([key, value]) => <p key={key}>{text.factNames[key] ?? key}: {text.factValues[value] ?? value}</p>)}
-      {step.failureCode ? <p>{errorText(text.errors, step.failureCode)}</p> : null}
+        {factLines(step.facts).map(({ key, name, value }) => <p key={key}>{name}: {value}</p>)}
+      {step.failureCode ? <p>{errorText(knownErrors, step.failureCode, text.actionError)}</p> : null}
         {step.outputTruncated ? <p>{text.truncated}</p> : null}
       </div>)}
     </div> : null}
@@ -82,7 +97,7 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
       <p>{text.target}: {resourceName}</p>
       <p>{text.connection}: {plan.connectionName}</p>
       <p>{text.resourceKind}: {plan.approvalInput.resourceKind || '—'}</p>
-      <ul>{plan.steps.map(step => <li key={step.id}>{text.stepKinds[step.kind] ?? step.displayName}</li>)}</ul>
+      <ul>{plan.steps.map(step => <li key={step.id}>{stepName(step.kind, step.displayName)}</li>)}</ul>
       {plan.warnings.map(warning => <InlineAlert tone="warning" title={text.warnings} key={warning}>{warning}</InlineAlert>)}
       {plan.blockingProblems.map(problem => <InlineAlert tone="danger" title={text.blocked} key={problem}>{problem}</InlineAlert>)}
       {starter.isError ? <InlineAlert tone="danger" title={text.actionError}>{localizedFailure(starter.error, text.errors, text.actionError)}</InlineAlert> : null}
@@ -90,9 +105,9 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
   </WorkspaceSection>
 }
 
-function errorText(errors: Record<string, string>, code: string | null) {
+function errorText(errors: Record<string, string>, code: string | null, fallback: string) {
   if (!code) return ''
-  return errors[code] ?? code
+  return errors[code] ?? fallback
 }
 
 function localizedFailure(error: unknown, errors: Record<string, string>, fallback: string) {

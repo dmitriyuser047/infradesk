@@ -125,19 +125,21 @@ describe('configuration profiles', () => {
     expect(screen.getByRole('link', { name: 'VPN Production Nodes' }).getAttribute('href')).toBe('/organizations/org/configurations/p1?project=p&environment=e')
   })
 
-  it('appears in the navigation for an owner only', async () => {
+  it('shows the configurations entry to members and defaults them to server profiles without requesting file profiles', async () => {
     backend()
     renderApp('/organizations/org/overview')
     expect(screen.getByRole('link', { name: 'Configurations' }).getAttribute('href')).toBe('/organizations/org/configurations')
     cleanup()
     renderApp('/organizations/org/overview', { role: 'MEMBER' })
-    expect(screen.queryByRole('link', { name: 'Configurations' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Configurations' }).getAttribute('href')).toBe('/organizations/org/configurations')
     cleanup()
-    // Hidden navigation is not the security: the page itself refuses a member, and asks for nothing.
+    // Members can read typed server profiles; the legacy file-profile endpoint remains disabled.
     const { requests } = backend()
     renderApp('/organizations/org/configurations', { role: 'MEMBER' })
-    expect(screen.getByText('You do not have permission to manage configurations.')).toBeTruthy()
-    expect(requests).toEqual([])
+    expect(await screen.findByRole('heading', { level: 1, name: 'Server profiles' })).toBeTruthy()
+    await waitFor(() => expect(location()).toBe('/organizations/org/configurations?type=server'))
+    await waitFor(() => expect(requests.some(item => item.path.includes('/server-profiles'))).toBe(true))
+    expect(requests.some(item => item.path.includes('configuration-profiles'))).toBe(false)
   })
 
   it('lists profiles with their latest version and no content, active or archived', async () => {
@@ -153,6 +155,16 @@ describe('configuration profiles', () => {
     expect(location()).toBe('/organizations/org/configurations?state=archived')
     expect(requests.map(item => item.path)).toEqual([
       '?archived=false&limit=200&kind=FILE_TEMPLATE', '?archived=true&limit=200&kind=FILE_TEMPLATE'])
+  })
+
+  it('switches between file and typed server profiles through the URL category', async () => {
+    const { requests } = backend()
+    renderApp('/organizations/org/configurations?project=p&environment=e')
+    fireEvent.click(await screen.findByRole('tab', { name: 'Server profiles' }))
+    await waitFor(() => expect(location()).toBe('/organizations/org/configurations?project=p&environment=e&type=server'))
+    await waitFor(() => expect(requests.some(item => item.path.includes('/server-profiles'))).toBe(true))
+    fireEvent.click(screen.getByRole('tab', { name: 'File configurations' }))
+    await waitFor(() => expect(location()).toBe('/organizations/org/configurations?project=p&environment=e'))
   })
 
   it('creates a profile: variables are added and removed, errors are shown, success opens v1', async () => {

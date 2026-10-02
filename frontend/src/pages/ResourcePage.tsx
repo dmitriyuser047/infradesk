@@ -42,6 +42,7 @@ import type { ResourceResponse } from '../types/resource'
 import { ResourceOperationsPanel } from '../components/resources/ResourceOperationsPanel'
 import { ResourceIntegrationSection } from '../components/integrations/ResourceIntegrationSection'
 import { ProvisioningPanel } from '../components/resources/ProvisioningPanel'
+import { ServerProfileAutomationPanel } from '../components/resources/ServerProfileAutomationPanel'
 import { supportsProvisioning } from '../components/resources/provisioningSupport'
 import { supportsIntegrationBinding } from '../components/integrations/integrationPresentation'
 import { InvalidRoutePage } from './InvalidRoutePage'
@@ -52,7 +53,7 @@ type Tab = typeof Tabs[number]
 export function ResourcePage() {
   const { organizationId, environmentId, resourceId } = useParams()
   if (!organizationId || !environmentId || !resourceId) return <InvalidRoutePage />
-  return <ResourceContent organizationId={organizationId} environmentId={environmentId} resourceId={resourceId} />
+  return <ResourceContent key={`${organizationId}:${environmentId}:${resourceId}`} organizationId={organizationId} environmentId={environmentId} resourceId={resourceId} />
 }
 
 /**
@@ -70,6 +71,7 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = Tabs.find(value => value === searchParams.get('tab')) ?? 'overview'
   const [metricWindow, setMetricWindow] = useState(() => createLastHourWindow())
+  const [focusedRunId, setFocusedRunId] = useState<string | null>(null)
   const resourceQuery = useResource(organizationId, resourceId)
   const contextQuery = useResourceContext(organizationId, resourceId)
   const context = isUnavailableError(contextQuery.error) ? undefined : contextQuery.data
@@ -145,7 +147,10 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
         <Overview resource={resource} />
         {supportsProvisioning(resource.resourceTypeCode) ? <ProvisioningPanel key={`${organizationId}:${resourceId}`}
           organizationId={organizationId} resourceId={resourceId} resourceName={resourceName}
-          canRun={permissions.can('manageConfigurations') && permissions.can('executeOperations')} /> : null}
+          canRun={permissions.can('manageConfigurations') && permissions.can('executeOperations')}
+          focusRunId={focusedRunId} onRunQueued={setFocusedRunId} /> : null}
+        {supportsProvisioning(resource.resourceTypeCode) ? <ServerProfileAutomationPanel key={`profile:${organizationId}:${resourceId}`}
+          organizationId={organizationId} resourceId={resourceId} resourceName={resourceName} resourceActive={resource.active} onRunQueued={setFocusedRunId} /> : null}
         {/* A manual Remnawave binding, for those who manage integrations; others never request it. */}
         {supportsIntegrationBinding(resource.resourceTypeCode) && permissions.can('manageIntegrations')
           ? <ResourceIntegrationSection organizationId={organizationId} resourceId={resourceId} /> : null}

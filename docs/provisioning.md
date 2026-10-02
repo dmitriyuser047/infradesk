@@ -36,6 +36,11 @@ queued work.
 The worker defaults are configurable with `INFRADESK_PROVISIONING_ENABLED` (true),
 `INFRADESK_PROVISIONING_POLL_INTERVAL_SECONDS` (2), `INFRADESK_PROVISIONING_BATCH_SIZE` (10),
 `INFRADESK_PROVISIONING_MAX_CONCURRENCY` (2),
-`INFRADESK_PROVISIONING_CLAIM_LEASE_SECONDS` (120), and
-`INFRADESK_PROVISIONING_STEP_TIMEOUT_SECONDS` (30). Lease duration must exceed the bounded step
+`INFRADESK_PROVISIONING_CLAIM_LEASE_SECONDS` (900), and
+`INFRADESK_PROVISIONING_STEP_TIMEOUT_SECONDS` (300). Lease duration must exceed the bounded step
 timeout and heartbeat interval. Production Compose forwards these variables to the backend.
+
+Stage 25B adds explicitly reviewed server-profile changes through the same engine. Profiles have
+immutable revisions, pinned resource assignments and separate sanitized observations; changes
+are never automatically applied. See [the Stage 25B implementation report](stage25b-implementation.md)
+for the typed modules, file/firewall safety, API, permissions, verification and test evidence.

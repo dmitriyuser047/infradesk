@@ -40,6 +40,9 @@ final class InMemoryRemote extends RemoteConfigurationTransport[IO] {
       else use(new Session(server(connection.id), connection.id))
     }
 
+  override def withSessionBounded[A](connection: Connection, maxOutputBytes: Int)(use: RemoteConfigurationSession[IO] => IO[A]): IO[A] =
+    withSession(connection)(use)
+
   private final class Session(remote: Server, connectionId: UUID) extends RemoteConfigurationSession[IO] {
     private def step[A](kind: String, path: String, args: List[String] = Nil)(action: => A): IO[A] = {
       val operation = Operation(connectionId, kind, path, args)
@@ -86,6 +89,9 @@ final class InMemoryRemote extends RemoteConfigurationTransport[IO] {
 
     override def execute(executable: String, args: List[String], timeout: FiniteDuration): IO[Int] =
       step("execute", executable, args)(remote.run(executable :: args))
+
+    override def executeCaptured(executable: String, args: List[String], timeout: FiniteDuration,
+      maxOutputBytes: Int): IO[RemoteCommandOutput] = execute(executable,args,timeout).map(code => RemoteCommandOutput(code,"",""))
   }
 }
 

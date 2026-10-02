@@ -43,7 +43,7 @@ const navigation: NavigationGroup[] = [
   ] },
   { label: t => t.shell.groups.automation, items: [
     { module: 'integrations', icon: Plug, label: t => t.shell.nav.integrations, permission: 'manageIntegrations' },
-    { module: 'configurations', icon: FileCog, label: t => t.shell.nav.configurations, permission: 'manageConfigurations' },
+    { module: 'configurations', icon: FileCog, label: t => t.shell.nav.configurations, permission: 'readOrganization' },
   ] },
   { label: t => t.shell.groups.structure, items: [
     { module: 'workspace', icon: Layers, label: t => t.shell.nav.workspace },

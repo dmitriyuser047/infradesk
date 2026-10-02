@@ -15,7 +15,7 @@ import scala.concurrent.duration._
 final class ProvisioningWorker[Tx[_]: MonadThrow](runs: ProvisioningRunRepository[Tx], targets: ProvisioningTargetQuery[Tx],
   transport: ProvisioningTransport[IO], runner: TransactionRunner[IO, Tx], settings: ProvisioningSettings,
   logger: Logger[IO], owner: UUID = UUID.randomUUID(), clock: IO[Instant] = IO.realTimeInstant,
-  scope: Option[UUID] = None) {
+  scope: Option[UUID] = None, profileHandler: Option[ProvisioningProfileApplyHandler[IO,Tx]] = None) {
 
   def run: IO[Nothing] = if (!settings.enabled) IO.never else loop
   def tick: IO[Unit] = if (!settings.enabled) IO.unit else pollOnce
@@ -63,9 +63,24 @@ final class ProvisioningWorker[Tx[_]: MonadThrow](runs: ProvisioningRunRepositor
       ProvisioningStepResult(Map.empty, Some(target.swap.toOption.getOrElse("PROVISIONING_SOURCE_CHANGED")), None), uncertain = false).as(false)
       else {
         val connection = selected.get.connection
-        val observation = kind match {
+        val isProfile = run.input.runKind == ProvisioningRunKind.ServerProfileApply
+        val observation: IO[ProvisioningStepResult] = if (isProfile) {
+          if (run.input.profileApply.isEmpty || profileHandler.isEmpty)
+            IO.pure(ProvisioningStepResult(Map.empty, Some("PROVISIONING_PROFILE_SNAPSHOT_INVALID"), None))
+          else profileHandler.get.validateBoundary(run,connection,kind).flatMap {
+            case Some(result) => IO.pure(result)
+            case None if kind == ProvisioningStepKind.Preflight => transport.preflight(connection)
+            case None if kind == ProvisioningStepKind.Verify => transport.verify(connection).flatMap { readiness =>
+              if (readiness.failureCode.nonEmpty || readiness.uncertain || readiness.outputTruncated || readiness.verificationResult != Some(true))
+                IO.pure(readiness.copy(verificationResult=Some(false),failureCode=readiness.failureCode.orElse(Some("PROVISIONING_VERIFICATION_FAILED"))))
+              else profileHandler.get.execute(run,connection,kind)
+            }
+            case None => profileHandler.get.execute(run,connection,kind)
+          }
+        } else kind match {
           case ProvisioningStepKind.Preflight => transport.preflight(connection)
           case ProvisioningStepKind.Verify => transport.verify(connection)
+          case _ => IO.pure(ProvisioningStepResult(Map.empty,Some("PROVISIONING_STEP_UNSUPPORTED"),None))
         }
         withHeartbeat(run, token)(observation.timeoutTo(settings.stepTimeout,
           IO.pure(ProvisioningStepResult(Map.empty, Some("PROVISIONING_REMOTE_TIMEOUT"), None, uncertain = true))))
@@ -81,18 +96,35 @@ final class ProvisioningWorker[Tx[_]: MonadThrow](runs: ProvisioningRunRepositor
             else if (kind == ProvisioningStepKind.Verify && result.failureCode.isEmpty && result.verificationResult != Some(true))
               result.copy(failureCode = Some("PROVISIONING_VERIFICATION_FAILED"))
             else result
-            val uncertain = normalized.uncertain
-            if (normalized.failureCode.isDefined || uncertain) completeFailure(run, token, kind, normalized, uncertain).as(false)
+            val uncertain = normalized.uncertain || normalized.outputTruncated
+            val invalidSkip = normalized.skipped && (kind == ProvisioningStepKind.Preflight || kind == ProvisioningStepKind.Verify ||
+              !ProvisioningStepKind.ProfileApply.contains(kind) ||
+              !Set("NOT_MANAGED","ALREADY_COMPLIANT")(normalized.facts.getOrElse("skipReason","")))
+            if (invalidSkip)
+              completeFailure(run,token,kind,normalized.copy(failureCode=Some("PROVISIONING_INVALID_SKIP_REASON")),uncertain=false).as(false)
+            else if (isProfile && kind == ProvisioningStepKind.Verify && normalized.profileObservation.nonEmpty)
+              recordProfileVerification(run,token,connection,normalized,uncertain)
+            else if (normalized.failureCode.isDefined || uncertain) completeFailure(run, token, kind, normalized, uncertain).as(false)
             else completeSuccess(run, token, kind, normalized)
           }
       }
   } yield completed
 
+  private def recordProfileVerification(run: ProvisioningRun, token: UUID, connection: domain.connection.Connection,
+    result: ProvisioningStepResult, uncertain: Boolean): IO[Boolean] = for {
+    now <- clock
+    state: ProvisioningStepState = if (uncertain) ProvisioningStepState.Unknown else result.failureCode.fold[ProvisioningStepState](ProvisioningStepState.Succeeded)(_ => ProvisioningStepState.Failed)
+    terminal: Option[ProvisioningRunState] = if (uncertain) Some(ProvisioningRunState.Unknown) else result.failureCode.map(_ => ProvisioningRunState.Failed)
+    saved <- runner.run(profileHandler.get.recordVerification(run,token,connection,result,state,result.failureCode,terminal,now))
+    _ <- if (saved && terminal.nonEmpty) logger.info(s"provisioning.step.failed runId=${run.id} step=VERIFY code=${result.failureCode.getOrElse("PROVISIONING_UNKNOWN")}") else IO.unit
+  } yield saved && terminal.isEmpty
+
   private def completeSuccess(run: ProvisioningRun, token: UUID, kind: ProvisioningStepKind,
     result: ProvisioningStepResult): IO[Boolean] = for {
     now <- clock
+    state = if (result.skipped) ProvisioningStepState.Skipped else ProvisioningStepState.Succeeded
     persisted <- runner.run(runs.finishStep(run.organizationId, run.id, token, kind,
-      ProvisioningStepState.Succeeded, result.facts, None, result.outputTruncated, now))
+      state, result.facts, None, result.outputTruncated, now, result.verificationResult))
   } yield persisted
 
   private def completeFailure(run: ProvisioningRun, token: UUID, kind: ProvisioningStepKind,
@@ -104,7 +136,7 @@ final class ProvisioningWorker[Tx[_]: MonadThrow](runs: ProvisioningRunRepositor
     finalState = if (uncertain) ProvisioningRunState.Unknown else ProvisioningRunState.Failed
     _ <- runner.run(for {
       stepSaved <- runs.finishStep(run.organizationId, run.id, token, kind, state, result.facts, result.failureCode,
-        result.outputTruncated, now)
+        result.outputTruncated, now, result.verificationResult)
       _ <- MonadThrow[Tx].raiseUnless(stepSaved)(LostLease)
       pendingSkipped <- runs.skipPending(run.organizationId, run.id, token, skippedAt)
       _ <- MonadThrow[Tx].raiseUnless(pendingSkipped)(LostLease)

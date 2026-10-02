@@ -23,6 +23,7 @@ object ProvisioningError {
   case object AlreadyActive extends ProvisioningError("PROVISIONING_ALREADY_ACTIVE", "Provisioning is already active for this resource")
   case object SourceChanged extends ProvisioningError("PROVISIONING_SOURCE_CHANGED", "SSH source changed after planning")
   case object PlanExpired extends ProvisioningError("PROVISIONING_PLAN_EXPIRED", "Provisioning plan expired; create a new preview")
+  case object ProfilePlanChanged extends ProvisioningError("PROVISIONING_PROFILE_PLAN_CHANGED", "The assignment or observation changed; create a new preview")
 }
 
 final case class ProvisioningPlan(run: ProvisioningRun, connectionName: String, steps: List[ProvisioningStep],
@@ -33,7 +34,8 @@ object ProvisioningRuns { val PlanLifetime24h: FiniteDuration = 24.hours }
 final class ProvisioningRuns[F[_]: MonadThrow, Tx[_]: MonadThrow](
   repository: ProvisioningRunRepository[Tx], targets: ProvisioningTargetQuery[Tx],
   ids: IdGenerator[Tx], time: TimeProvider[Tx], audit: AuditRecorder[Tx],
-  reads: TransactionRunner[F, Tx], writes: TransactionRunner[F, Tx], settings: ProvisioningSettings
+  reads: TransactionRunner[F, Tx], writes: TransactionRunner[F, Tx], settings: ProvisioningSettings,
+  profilePlanValidator: Option[ProvisioningApplyPlanValidator[Tx]] = None
 ) {
   import ProvisioningError._
 
@@ -82,11 +84,20 @@ final class ProvisioningRuns[F[_]: MonadThrow, Tx[_]: MonadThrow](
             _ <- MonadThrow[Tx].raiseUnless(planned.createdAt.isAfter(now.minusMillis(ProvisioningRuns.PlanLifetime24h.toMillis)))(PlanExpired)
             unchanged <- targets.unchanged(planned.input)
             _ <- MonadThrow[Tx].raiseUnless(unchanged)(SourceChanged)
+            profileValid <- planned.input.runKind match {
+              case ProvisioningRunKind.ServerBaselineCheck => MonadThrow[Tx].raiseUnless(planned.input.profileApply.isEmpty)(SourceChanged).as(true)
+              case ProvisioningRunKind.ServerProfileApply => planned.input.profileApply match {
+                case None => MonadThrow[Tx].raiseError[Boolean](ProfilePlanChanged)
+                case Some(snapshot) => profilePlanValidator.fold(false.pure[Tx])(_.valid(planned.organizationId,planned.resourceId,snapshot))
+              }
+            }
+            _ <- MonadThrow[Tx].raiseUnless(profileValid)(if (planned.input.runKind == ProvisioningRunKind.ServerProfileApply) ProfilePlanChanged else SourceChanged)
             queued <- repository.start(actor.organizationId, planId, requestId, actor.userId, now)
             started <- queued.liftTo[Tx](AlreadyActive)
             (run, created) = started
             _ <- MonadThrow[Tx].raiseUnless(run.id == planId)(RequestReused)
-            _ <- if (created) audit.record(actor, AuditAction.ProvisioningRunRequested, AuditTargetType.Resource, Some(run.resourceId)) else MonadThrow[Tx].unit
+            action = if (run.input.runKind == ProvisioningRunKind.ServerProfileApply) AuditAction.ServerProfileApplyRequested else AuditAction.ProvisioningRunRequested
+            _ <- if (created) audit.record(actor, action, AuditTargetType.Resource, Some(run.resourceId)) else MonadThrow[Tx].unit
           } yield run
         }
       } yield answer)

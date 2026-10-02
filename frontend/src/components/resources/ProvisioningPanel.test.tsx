@@ -125,6 +125,14 @@ describe('ProvisioningPanel', () => {
     expect(screen.queryByText(failed.safeMessage)).toBeNull()
   })
 
+  it('distinguishes profile runs and renders only allowlisted safe facts', () => {
+    const run = { ...baseRun('SUCCEEDED'), inputSnapshot: { ...baseRun('SUCCEEDED').inputSnapshot, runKind: 'SERVER_PROFILE_APPLY' as const } }
+    setup([run], { run, steps: [{ ...planData.steps[0], kind:'INSTALL_PACKAGES', state:'SUCCEEDED', facts:{ os:'ubuntu', contentHash:'private-hash', unexpectedField:'do-not-render' } }] })
+    expect(screen.getByText('Profile application')).toBeTruthy()
+    expect(screen.getByText('Operating system: Ubuntu')).toBeTruthy()
+    expect(screen.queryByText(/private-hash|unexpectedField|do-not-render/)).toBeNull()
+  })
+
   it('automatically opens the newest history item and disables approval for blocked plans', async () => {
     const latest = baseRun('RUNNING')
     mocks.history.mockReturnValue({ data: { items: [latest] }, isPending: false, isError: false })

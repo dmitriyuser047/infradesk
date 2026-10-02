@@ -33,6 +33,7 @@ import infrastructure.http.{
   ResourceRoutes,
   ResourceOperationRoutes,
   ProvisioningRoutes,
+  ServerProfileRoutes,
   SshConnectionMutationRoutes,
   TerminalRoutes,
   WorkspaceMutationRoutes
@@ -82,6 +83,7 @@ object HttpModule {
         authorization
       ).routes <+>
       new ProvisioningRoutes(application.provisioningRuns, authorization, loggers.configuration).routes <+>
+        new ServerProfileRoutes(application.serverProfiles,authorization,loggers.configuration).routes <+>
         new ResourceOperationRoutes(
           application.resourceOperationPreparation,
           application.executeResourceOperation,

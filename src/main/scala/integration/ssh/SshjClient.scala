@@ -90,7 +90,8 @@ final class SshjClient[F[_]: Async](
   /** SFTP uses exactly the same credential and pinned host-key handshake as command sessions.
     * Every SFTP request waits at most `sftpTimeoutMillis`; every command at most its own timeout.
     */
-  def withSftp[A](config: SshConnectionConfig, authentication: SshAuthentication, sftpTimeoutMillis: Int)
+  def withSftp[A](config: SshConnectionConfig, authentication: SshAuthentication, sftpTimeoutMillis: Int,
+    boundedPolicy: Option[SshCommandExecutionPolicy] = None)
                  (use: (SFTPClient, (String, Int) => F[SshCommandResult]) => F[A]): F[A] =
     Resource.makeCase(Async[F].blocking(open(config, authentication))) {
       case ((ssh, _), exitCase) => closeClient(ssh, exitCase)
@@ -101,7 +102,7 @@ final class SshjClient[F[_]: Async](
         sftp
       })(sftp => Async[F].blocking(sftp.close()).attempt.void).use { sftp =>
         use(sftp, (command, timeoutSeconds) =>
-          runCommand(ssh, observedFingerprint, config.copy(commandTimeoutSeconds = timeoutSeconds), command))
+          runCommand(ssh, observedFingerprint, config.copy(commandTimeoutSeconds = timeoutSeconds), command, boundedPolicy))
       }
     }
 

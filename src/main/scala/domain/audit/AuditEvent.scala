@@ -92,6 +92,12 @@ object AuditAction {
   case object ConfigurationAssignmentAdopted extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENT_ADOPTED" }
   case object ConfigurationAssignmentDetached extends AuditAction { override val code: String = "CONFIGURATION_ASSIGNMENT_DETACHED" }
   case object ResourceLabelsUpdated extends AuditAction { override val code: String = "RESOURCE_LABELS_UPDATED" }
+  case object ServerProfileCreated extends AuditAction { val code = "SERVER_PROFILE_CREATED" }
+  case object ServerProfileRevisionCreated extends AuditAction { val code = "SERVER_PROFILE_REVISION_CREATED" }
+  case object ServerProfileAssigned extends AuditAction { val code = "SERVER_PROFILE_ASSIGNED" }
+  case object ServerProfileUnassigned extends AuditAction { val code = "SERVER_PROFILE_UNASSIGNED" }
+  case object ServerProfileArchived extends AuditAction { val code = "SERVER_PROFILE_ARCHIVED" }
+  case object ServerProfileApplyRequested extends AuditAction { val code = "SERVER_PROFILE_APPLY_REQUESTED" }
 
   val All: List[AuditAction] = List(
     ProjectCreated,
@@ -158,7 +164,13 @@ object AuditAction {
     ConfigurationRuleReconcileRequested,
     ConfigurationAssignmentAdopted,
     ConfigurationAssignmentDetached,
-    ResourceLabelsUpdated
+    ResourceLabelsUpdated,
+    ServerProfileCreated,
+    ServerProfileRevisionCreated,
+    ServerProfileAssigned,
+    ServerProfileUnassigned,
+    ServerProfileArchived,
+    ServerProfileApplyRequested
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =
@@ -188,11 +200,12 @@ object AuditTargetType {
   case object ConfigurationDeployment extends AuditTargetType { override val code: String = "CONFIGURATION_DEPLOYMENT" }
   case object ConfigurationRollout extends AuditTargetType { override val code: String = "CONFIGURATION_ROLLOUT" }
   case object ConfigurationAssignmentRule extends AuditTargetType { override val code: String = "CONFIGURATION_ASSIGNMENT_RULE" }
+  case object ServerProfile extends AuditTargetType { val code = "SERVER_PROFILE" }
 
   val All: List[AuditTargetType] =
     List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Integration, Account, TerminalSession,
       ConfigurationProfile, ConfigurationAssignment, ConfigurationDeployment, ConfigurationRollout,
-      ConfigurationAssignmentRule)
+      ConfigurationAssignmentRule, ServerProfile)
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditTargetType] =
     All.find(_.code == code)

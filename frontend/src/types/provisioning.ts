@@ -3,7 +3,7 @@ export type ProvisioningStepState = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILE
 
 export interface ProvisioningInputSnapshot {
   schemaVersion: number
-  runKind: 'SERVER_BASELINE_CHECK'
+  runKind: 'SERVER_BASELINE_CHECK' | 'SERVER_PROFILE_APPLY'
   resourceId: string
   resourceType: string
   resourceKind: string

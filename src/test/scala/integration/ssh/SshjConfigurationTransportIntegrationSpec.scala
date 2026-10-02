@@ -107,6 +107,23 @@ final class SshjConfigurationTransportIntegrationSpec extends FunSuite {
     assertEquals(error, RemoteConfigurationFailure.HostKeyMismatch)
   }
 
+  server.test("bounded capture keeps exit code and separately caps UTF-8 stdout and stderr") { remote =>
+    remote.commandOutputs.set(Map(List("probe") -> (17,"abcdéfg","error-output")))
+    val result=session(remote)(_.executeCaptured("probe",Nil,5.seconds,4))
+    assertEquals(result.exitCode,17)
+    assertEquals(result.stdout,"abcd")
+    assertEquals(result.stderr,"erro")
+    assert(result.stdoutTruncated && result.stderrTruncated)
+  }
+
+  server.test("zero-byte capture drains both streams and marks output as truncated") { remote =>
+    remote.commandOutputs.set(Map(List("probe") -> (0,"stdout","stderr")))
+    val result=session(remote)(_.executeCaptured("probe",Nil,5.seconds,0))
+    assertEquals(result.stdout,"")
+    assertEquals(result.stderr,"")
+    assert(result.stdoutTruncated && result.stderrTruncated)
+  }
+
   test("an unreachable host is a transient failure") {
     val remote = RemoteConfigurationServer.start()
     val connection = remote.connection(UUID.randomUUID())

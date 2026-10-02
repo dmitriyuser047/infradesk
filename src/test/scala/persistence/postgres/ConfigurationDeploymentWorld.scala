@@ -193,6 +193,14 @@ private[postgres] final class ConfigurationDeploymentWorld(val runner: DoobieTra
 
   def cleanUp: IO[Unit] = run(List(org, foreignOrg).traverse_ { id =>
     for {
+      _ <- sql"delete from server_profile_observation where organization_id=$id".update.run
+      _ <- sql"delete from server_profile_assignment where organization_id=$id".update.run
+      // Only isolated test fixture teardown bypasses immutable-history triggers. Production APIs
+      // archive profiles and retain every revision. SET LOCAL resets at this transaction's end.
+      _ <- sql"set local session_replication_role='replica'".update.run
+      _ <- sql"delete from server_profile_revision where organization_id=$id".update.run
+      _ <- sql"delete from server_profile where organization_id=$id".update.run
+      _ <- sql"set local session_replication_role='origin'".update.run
       _ <- sql"update configuration_assignment set source_rule_id = null where organization_id = $id".update.run
       _ <- sql"delete from configuration_assignment_rule_issue where organization_id = $id".update.run
       _ <- sql"delete from configuration_assignment_rule_exclusion where organization_id = $id".update.run

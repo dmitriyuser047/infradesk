@@ -1,4 +1,5 @@
 import { FileCog, Plus } from 'lucide-react'
+import { useEffect } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { ConfigurationListLimit, useConfigurationProfiles } from '../api/configurations'
@@ -6,12 +7,13 @@ import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { withWorkspaceContext } from '../components/layout/workspaceNavigation'
 import {
-  EmptyWorkspaceState, InlineAlert, SegmentedControl, StatusIndicator, WorkspaceHeader, WorkspaceSection,
+  EmptyWorkspaceState, InlineAlert, SegmentedControl, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
 } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import { InvalidRoutePage } from './InvalidRoutePage'
 import '../styles/pages/configurations.css'
+import { ServerProfilesList } from './ServerProfilesPage'
 
 export const configurationsPath = (organizationId: string) => `/organizations/${encodeURIComponent(organizationId)}/configurations`
 export const configurationPath = (organizationId: string, profileId: string) =>
@@ -19,7 +21,19 @@ export const configurationPath = (organizationId: string, profileId: string) =>
 
 export function ConfigurationsPage() {
   const { organizationId } = useParams()
+  const permissions = useOrganizationPermissions(organizationId)
+  const canManage = permissions.can('manageConfigurations')
+  const permissionsPending = permissions.isPending
+  const [params, setParams] = useSearchParams()
+  useEffect(() => {
+    if (!permissionsPending && !canManage && params.get('type') !== 'server') {
+      setParams(previous => { const next = new URLSearchParams(previous); next.set('type', 'server'); return next }, { replace: true })
+    }
+  }, [permissionsPending, canManage, params, setParams])
   if (!organizationId) return <InvalidRoutePage />
+  if (params.get('type') === 'server' || !canManage) {
+    return <AppShell><ServerProfilesList organizationId={organizationId} canManage={canManage} /></AppShell>
+  }
   return <AppShell><ConfigurationsContent organizationId={organizationId} /></AppShell>
 }
 
@@ -40,6 +54,12 @@ function ConfigurationsContent({ organizationId }: { organizationId: string }) {
     else updated.delete('state')
     return updated
   }, { replace: true })
+  const selectCategory = (category: 'file' | 'server') => setSearchParams(previous => {
+    const updated = new URLSearchParams(previous)
+    if (category === 'server') updated.set('type', 'server')
+    else updated.delete('type')
+    return updated
+  }, { replace: true })
 
   if (!permissions.isPending && !canManage) {
     return <div className="workspace-page"><WorkspaceHeader title={t.title} subtitle={t.subtitle} />
@@ -48,6 +68,8 @@ function ConfigurationsContent({ organizationId }: { organizationId: string }) {
   const profiles = query.data
   return <div className="workspace-page">
     <WorkspaceHeader title={t.title} subtitle={t.subtitle} actions={canManage ? create : null} />
+    <WorkspaceTabs tabs={[{ id: 'file', label: i18n.t.serverProfiles.categoryLegacy }, { id: 'server', label: i18n.t.serverProfiles.categoryServer }]} active="file" onChange={selectCategory} />
+    <div role="tabpanel" id="panel-file" aria-labelledby="tab-file">
     <WorkspaceSection title={t.section} actions={profiles ? <span className="resource-count">{profiles.length}</span> : null}>
       <div className="filter-bar">
         <SegmentedControl name="configuration-state" label={t.filterLabel} value={archived ? 'archived' : 'active'} onChange={select}
@@ -73,5 +95,6 @@ function ConfigurationsContent({ organizationId }: { organizationId: string }) {
         </tr>)}</tbody>
       </table></div> : null}
     </WorkspaceSection>
+    </div>
   </div>
 }

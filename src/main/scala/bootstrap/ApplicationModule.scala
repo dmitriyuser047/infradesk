@@ -39,7 +39,7 @@ import application.configuration.{
   ConfigurationProfileManagement,
   ConfigurationProfileQueries
 }
-import application.provisioning.{ProvisioningPlanCleanup, ProvisioningRuns, ProvisioningSettings, ProvisioningWorker}
+import application.provisioning.{ProvisioningPlanCleanup, ProvisioningRuns, ProvisioningSettings, ProvisioningWorker, ServerProfiles}
 import application.context.{
   GetConnectionInfrastructureSummary,
   GetResourceContext,
@@ -113,6 +113,7 @@ final case class ApplicationComponents(
   provisioningRuns: ProvisioningRuns[IO, ConnectionIO],
   provisioningWorker: ProvisioningWorker[ConnectionIO],
   provisioningPlanCleanup: ProvisioningPlanCleanup[ConnectionIO],
+  serverProfiles: ServerProfiles[IO, ConnectionIO],
   configurationPromotions: ConfigurationPromotions[IO, ConnectionIO],
   configurationRollouts: ConfigurationRollouts[IO, ConnectionIO],
   configurationRolloutWorker: ConfigurationRolloutWorker[ConnectionIO],
@@ -352,15 +353,20 @@ object ApplicationModule {
       integrations.configurationTransport, transactionIdGenerator, transactionTimeProvider,
       auditRecorder, readOnlySnapshotRunner, transactionRunner, config.configurationDeployment)
 
+    val serverProfiles = new ServerProfiles[IO,ConnectionIO](serverProfileRepository,provisioningTargetQuery,
+      provisioningRunRepository,integrations.serverProfileRemote,transactionIdGenerator,transactionTimeProvider,
+      auditRecorder,readOnlySnapshotRunner,transactionRunner,config.provisioning)
+    val serverProfileApplyCoordinator = new application.provisioning.ServerProfileApplyCoordinator[ConnectionIO](
+      serverProfileRepository,provisioningRunRepository,provisioningTargetQuery,integrations.serverProfileRemote,readOnlySnapshotRunner,config.provisioning.leaseDuration)
     val provisioningRuns = new ProvisioningRuns[IO, ConnectionIO](provisioningRunRepository,
       provisioningTargetQuery, transactionIdGenerator, transactionTimeProvider, auditRecorder,
-      readOnlySnapshotRunner, transactionRunner, config.provisioning)
+      readOnlySnapshotRunner, transactionRunner, config.provisioning,
+      Some(serverProfiles))
     val provisioningWorker = new ProvisioningWorker[ConnectionIO](provisioningRunRepository,
       provisioningTargetQuery, integrations.provisioningTransport, transactionRunner,
-      config.provisioning, loggers.configuration)
+      config.provisioning, loggers.configuration,profileHandler=Some(serverProfileApplyCoordinator))
     val provisioningPlanCleanup = new ProvisioningPlanCleanup[ConnectionIO](provisioningRunRepository,
       transactionRunner, loggers.configuration)
-
     val integrationConfigRepository = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigProfileRepository(
       integration.secret.RemnawaveConfigCipher.fromConfig(config.secretEncryption))
     val integrationConfigDeployments = new ru.bitec.app.ops.persistence.postgres.PostgresIntegrationConfigDeploymentRepository
@@ -442,6 +448,7 @@ object ApplicationModule {
       provisioningRuns = provisioningRuns,
       provisioningWorker = provisioningWorker,
       provisioningPlanCleanup = provisioningPlanCleanup,
+      serverProfiles = serverProfiles,
       configurationPromotions = new ConfigurationPromotions[IO, ConnectionIO](
         configurationPromotionRepository, configurationProfileQuery, transactionTimeProvider, auditRecorder,
         readOnlySnapshotRunner, transactionRunner),

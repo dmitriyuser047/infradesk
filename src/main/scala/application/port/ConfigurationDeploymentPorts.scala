@@ -148,6 +148,8 @@ object RemoteConfigurationFile {
 
 /** How a new remote file must look before it may take a target's place. */
 final case class RemoteFileCreation(permissions: Int, owner: Option[(Int, Int)])
+final case class RemoteCommandOutput(exitCode: Int, stdout: String, stderr: String,
+  stdoutTruncated: Boolean = false, stderrTruncated: Boolean = false)
 
 /** A single authenticated, host-key-pinned SSH/SFTP connection. Every call is bounded in size and
   * time; every failure is a [[RemoteConfigurationFailure]].
@@ -172,8 +174,14 @@ trait RemoteConfigurationSession[F[_]] {
 
   /** Runs one executable with arguments, each passed as exactly one argument. Output is discarded. */
   def execute(executable: String, args: List[String], timeout: FiniteDuration): F[Int]
+  /** Controlled bounded capture for backend-owned read-only probes. */
+  def executeCaptured(executable: String, args: List[String], timeout: FiniteDuration,
+    maxOutputBytes: Int): F[RemoteCommandOutput] =
+    throw new UnsupportedOperationException("This remote session does not support bounded command capture")
 }
 
 trait RemoteConfigurationTransport[F[_]] {
   def withSession[A](connection: Connection)(use: RemoteConfigurationSession[F] => F[A]): F[A]
+  def withSessionBounded[A](connection: Connection, maxOutputBytes: Int)(use: RemoteConfigurationSession[F] => F[A]): F[A] =
+    withSession(connection)(use)
 }

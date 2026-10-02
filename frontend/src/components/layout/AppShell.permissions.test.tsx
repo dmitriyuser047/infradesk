@@ -24,13 +24,13 @@ function renderShell(role: 'OWNER' | 'MEMBER') {
 afterEach(() => cleanup())
 
 describe('permission-aware workspace navigation', () => {
-  it('shows sensitive settings only to owners', () => {
+  it('shows read-only server profiles to members while keeping sensitive settings owner-only', () => {
     renderShell('MEMBER')
     const memberNav = screen.getByRole('navigation', { name: 'Primary navigation' })
     expect(within(memberNav).queryByRole('link', { name: 'Notifications' })).toBeNull()
     expect(within(memberNav).queryByRole('link', { name: 'Integrations' })).toBeNull()
-    expect(within(memberNav).queryByRole('link', { name: 'Configurations' })).toBeNull()
-    expect(within(memberNav).queryByText('Automation')).toBeNull()
+    expect(within(memberNav).getByRole('link', { name: 'Configurations' })).toBeTruthy()
+    expect(within(memberNav).getByText('Automation')).toBeTruthy()
     cleanup()
 
     renderShell('OWNER')

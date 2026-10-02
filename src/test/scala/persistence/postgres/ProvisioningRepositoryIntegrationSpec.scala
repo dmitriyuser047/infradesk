@@ -27,7 +27,7 @@ final class ProvisioningRepositoryIntegrationSpec extends FunSuite {
     updated: java.time.Instant, resourceKind: String = "VPS") =
     ProvisioningRun(id, w.org, node.resourceId, None, None,
       ProvisioningInputSnapshot(1, ProvisioningRunKind.ServerBaselineCheck, w.org, node.resourceId,
-        "NODE", resourceKind, node.connectionId, updated, ProvisioningStepKind.all),
+        "NODE", resourceKind, node.connectionId, updated, ProvisioningStepKind.Baseline),
       ProvisioningRunState.Planned, updated, updated)
 
   test("parallel approvals for one plan and request ID enqueue exactly one run") {
@@ -235,7 +235,7 @@ final class ProvisioningRepositoryIntegrationSpec extends FunSuite {
           ProvisioningRun(UUID.randomUUID(), w.org, node.resourceId, None, None,
             ProvisioningInputSnapshot(1, ProvisioningRunKind.ServerBaselineCheck, w.org, node.resourceId,
               eligible.resourceType, eligible.resourceKind, eligible.connectionId, eligible.connectionUpdatedAt,
-              ProvisioningStepKind.all), ProvisioningRunState.Planned, now, now) -> name
+              ProvisioningStepKind.Baseline), ProvisioningRunState.Planned, now, now) -> name
         }
         _ <- w.run(runs.traverse_ { case (plannedRun, _) => repo.insertPlan(plannedRun) })
         _ <- runs.traverse_ { case (plannedRun, _) => w.run(repo.start(w.org, plannedRun.id,

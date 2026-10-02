@@ -39,7 +39,8 @@ import integration.ssh.{
   SshConnector,
   SshjClient,
   SshjConfigurationTransport,
-  SshProvisioningTransport
+  SshProvisioningTransport,
+  SshServerProfileRemote
 }
 import integration.ssh.docker.SshContainerOperationExecutor
 import integration.remnawave.{RemnawaveClient, RemnawaveProvider}
@@ -65,6 +66,7 @@ final case class IntegrationComponents(
   openSshTerminal: OpenSshTerminal[ConnectionIO],
   configurationTransport: application.port.RemoteConfigurationTransport[IO],
   provisioningTransport: application.port.ProvisioningTransport[IO],
+  serverProfileRemote: application.port.ServerProfileRemote[IO],
   connectorRegistry: ResourceConnectorRegistry[IO]
 )
 
@@ -100,6 +102,8 @@ object IntegrationModule {
         )
       )
 
+    val configurationTransport = new SshjConfigurationTransport(sshClient,sshAuthenticationProvider,
+      config.configurationDeployment.sftpTimeout)
     OpenSshTerminal.create(
       persistence.connectionRepository,
       persistence.transactionRunner,
@@ -117,10 +121,10 @@ object IntegrationModule {
       resourceOperationBudget = sshContainerOperations,
       connectionSyncBudget = new SshConnectionSyncBudget,
       openSshTerminal = openSshTerminal,
-      configurationTransport = new SshjConfigurationTransport(sshClient, sshAuthenticationProvider,
-        config.configurationDeployment.sftpTimeout),
+      configurationTransport = configurationTransport,
       provisioningTransport = new SshProvisioningTransport(sshClient, sshAuthenticationProvider,
         config.provisioning.stepTimeout.toSeconds.toInt),
+      serverProfileRemote = new SshServerProfileRemote(configurationTransport),
       connectorRegistry = connectorRegistry
     ) }
   }

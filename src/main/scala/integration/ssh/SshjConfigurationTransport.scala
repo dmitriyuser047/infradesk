@@ -6,6 +6,7 @@ import application.port.{
   RemoteConfigurationFile,
   RemoteConfigurationSession,
   RemoteConfigurationTransport,
+  RemoteCommandOutput,
   RemoteFileCreation,
   RemoteFileMetadata
 }
@@ -32,10 +33,19 @@ final class SshjConfigurationTransport(
   import SshjConfigurationTransport._
 
   override def withSession[A](connection: Connection)(use: RemoteConfigurationSession[IO] => IO[A]): IO[A] =
+    withSessionInternal(connection,None)(use)
+
+  override def withSessionBounded[A](connection: Connection, maxOutputBytes: Int)(use: RemoteConfigurationSession[IO] => IO[A]): IO[A] = {
+    require(maxOutputBytes >= 0 && maxOutputBytes <= 1024 * 1024)
+    withSessionInternal(connection,Some(SshCommandExecutionPolicy(maxOutputBytes,math.min(maxOutputBytes,8192),truncateOverflow=true)))(use)
+  }
+
+  private def withSessionInternal[A](connection: Connection, bounded: Option[SshCommandExecutionPolicy])
+    (use: RemoteConfigurationSession[IO] => IO[A]): IO[A] =
     (for {
       config <- IO.fromEither(SshConnectionConfig.from(connection.config))
       authentication <- credentials.resolve(connection)
-      result <- client.withSftp(config, authentication, sftpTimeout.toMillis.toInt) { (sftp, run) =>
+      result <- client.withSftp(config, authentication, sftpTimeout.toMillis.toInt,bounded) { (sftp, run) =>
         use(new Session(sftp, run, sftpTimeout))
       }
     } yield result).adaptError(classify)
@@ -142,6 +152,16 @@ object SshjConfigurationTransport {
     override def execute(executable: String, args: List[String], limit: FiniteDuration): IO[Int] =
       guarded(run(PosixArgv.encode(executable :: args), math.max(1, limit.toSeconds.toInt)).map(_.exitCode))
 
+    override def executeCaptured(executable: String, args: List[String], limit: FiniteDuration,
+      maxOutputBytes: Int): IO[RemoteCommandOutput] = guarded {
+      require(maxOutputBytes >= 0 && maxOutputBytes <= 1024 * 1024)
+      run(PosixArgv.encode(executable :: args), math.max(1, limit.toSeconds.toInt)).map { r =>
+        val (stdout,outTruncated) = bounded(r.stdout,maxOutputBytes)
+        val (stderr,errTruncated) = bounded(r.stderr,math.min(maxOutputBytes,8192))
+        RemoteCommandOutput(r.exitCode,stdout,stderr,r.stdoutTruncated || outTruncated,r.stderrTruncated || errTruncated)
+      }
+    }
+
     private def lstat(path: String): Option[FileAttributes] =
       try Some(sftp.lstat(path))
       catch {
@@ -156,6 +176,16 @@ object SshjConfigurationTransport {
   private def metadataOf(attributes: FileAttributes): RemoteFileMetadata =
     RemoteFileMetadata(attributes.getMode.getPermissionsMask & Integer.parseInt("7777", 8),
       attributes.getUID, attributes.getGID)
+
+  private def bounded(value: String, maxBytes: Int): (String,Boolean) = {
+    val bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+    if (bytes.length <= maxBytes) value -> false
+    else {
+      var end = maxBytes
+      while (end > 0 && (bytes(end) & 0xc0) == 0x80) end -= 1
+      new String(bytes,0,end,java.nio.charset.StandardCharsets.UTF_8) -> true
+    }
+  }
 
   private def guarded[A](action: IO[A]): IO[A] = action.adaptError(classify)
 

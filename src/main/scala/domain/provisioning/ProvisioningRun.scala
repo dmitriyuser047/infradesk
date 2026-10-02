@@ -8,6 +8,9 @@ sealed trait ProvisioningRunState { def code: String; def terminal: Boolean }
 sealed trait ProvisioningRunKind { def code: String }
 object ProvisioningRunKind {
   case object ServerBaselineCheck extends ProvisioningRunKind { val code = "SERVER_BASELINE_CHECK" }
+  case object ServerProfileApply extends ProvisioningRunKind { val code = "SERVER_PROFILE_APPLY" }
+  val all = List(ServerBaselineCheck, ServerProfileApply)
+  def fromCode(code: String): ProvisioningRunKind = all.find(_.code == code).getOrElse(throw new IllegalArgumentException("Unknown provisioning run kind"))
 }
 object ProvisioningRunState {
   case object Planned extends ProvisioningRunState { val code = "PLANNED"; val terminal = false }
@@ -24,8 +27,20 @@ object ProvisioningRunState {
 sealed trait ProvisioningStepKind { def code: String; def order: Int }
 object ProvisioningStepKind {
   case object Preflight extends ProvisioningStepKind { val code = "PREFLIGHT"; val order = 0 }
+  case object InstallPackages extends ProvisioningStepKind { val code = "INSTALL_PACKAGES"; val order = 1 }
+  case object ConfigureNetwork extends ProvisioningStepKind { val code = "CONFIGURE_NETWORK"; val order = 2 }
+  case object ConfigureLimits extends ProvisioningStepKind { val code = "CONFIGURE_LIMITS"; val order = 3 }
+  case object ConfigureFirewall extends ProvisioningStepKind { val code = "CONFIGURE_FIREWALL"; val order = 4 }
+  case object ConfigureFail2ban extends ProvisioningStepKind { val code = "CONFIGURE_FAIL2BAN"; val order = 5 }
+  case object ConfigureDocker extends ProvisioningStepKind { val code = "CONFIGURE_DOCKER"; val order = 6 }
+  case object DeploySite extends ProvisioningStepKind { val code = "DEPLOY_SITE"; val order = 7 }
+  case object ConfigureCaddy extends ProvisioningStepKind { val code = "CONFIGURE_CADDY"; val order = 8 }
   case object Verify extends ProvisioningStepKind { val code = "VERIFY"; val order = 1 }
-  val all = List(Preflight, Verify)
+  val Baseline = List(Preflight, Verify)
+  val ProfileApply = List(Preflight, InstallPackages, ConfigureNetwork, ConfigureLimits, ConfigureFirewall,
+    ConfigureFail2ban, ConfigureDocker, DeploySite, ConfigureCaddy, Verify)
+  val all = List(Preflight, InstallPackages, ConfigureNetwork, ConfigureLimits, ConfigureFirewall,
+    ConfigureFail2ban, ConfigureDocker, DeploySite, ConfigureCaddy, Verify)
   def fromCode(code: String): ProvisioningStepKind = all.find(_.code == code).getOrElse(
     throw new IllegalArgumentException(s"Unknown provisioning step: $code"))
 }
@@ -67,7 +82,13 @@ object ProvisioningSafeMessage {
 final case class ProvisioningInputSnapshot(schemaVersion: Int, runKind: ProvisioningRunKind,
   organizationId: UUID, resourceId: UUID,
   resourceType: String, resourceKind: String, connectionId: UUID, connectionUpdatedAt: Instant,
-  steps: List[ProvisioningStepKind])
+  steps: List[ProvisioningStepKind], profileApply: Option[ServerProfileApplySnapshot] = None)
+
+/** Everything approved for one explicit profile apply. No SSH secret or remote output is stored. */
+final case class ServerProfileApplySnapshot(assignmentId: UUID, assignmentVersion: Long, profileId: UUID,
+  revisionId: UUID, revisionNumber: Int, revisionHash: String, content: ServerProfileContent,
+  observationId: UUID, observationHash: String, reviewedDiffHash: String,
+  blockingProblems: List[String] = Nil)
 
 final case class ProvisioningRun(id: UUID, organizationId: UUID, resourceId: UUID,
   requestId: Option[UUID], requestedBy: Option[UUID], input: ProvisioningInputSnapshot, state: ProvisioningRunState,
@@ -80,8 +101,9 @@ final case class ProvisioningStep(runId: UUID, kind: ProvisioningStepKind, state
   startedAt: Option[Instant] = None, finishedAt: Option[Instant] = None,
   facts: Map[String, String] = Map.empty, failureCode: Option[String] = None,
   attempt: Int = 0, safeMessage: Option[String] = None, outputSummary: Option[String] = None,
-  verificationResult: Option[Boolean] = None, outputTruncated: Boolean = false) {
+  verificationResult: Option[Boolean] = None, outputTruncated: Boolean = false,
+  storedPosition: Option[Int] = None) {
   def id: UUID = UUID.nameUUIDFromBytes((runId.toString + ":" + kind.code).getBytes(java.nio.charset.StandardCharsets.UTF_8))
-  def position: Int = kind.order
+  def position: Int = storedPosition.getOrElse(kind.order)
   def displayName: String = kind.code
 }

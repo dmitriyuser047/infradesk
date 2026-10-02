@@ -36,6 +36,7 @@ final class RemoteConfigurationServer private (val root: Path, sshd: SshServer, 
   /** unit name -> remote configuration path the unit reads. */
   val units = new AtomicReference[Map[String, String]](Map.empty)
   val failingActions = new AtomicReference[Set[String]](Set.empty)
+  val commandOutputs = new AtomicReference[Map[List[String], (Int,String,String)]](Map.empty)
 
   def port: Int = sshd.getPort
 
@@ -152,12 +153,22 @@ object RemoteConfigurationServer {
   private final class DecodedCommand(command: String, server: RemoteConfigurationServer) extends Command {
     private var exit: ExitCallback = _
     private var out: OutputStream = _
+    private var err: OutputStream = _
     override def setInputStream(in: InputStream): Unit = ()
     override def setOutputStream(stream: OutputStream): Unit = out = stream
-    override def setErrorStream(err: OutputStream): Unit = ()
+    override def setErrorStream(stream: OutputStream): Unit = err = stream
     override def setExitCallback(callback: ExitCallback): Unit = exit = callback
     override def start(channel: ChannelSession, env: Environment): Unit = {
-      val status = scala.util.Try(server.handle(decode(command))).getOrElse(126)
+      val argv=decode(command)
+      val status = scala.util.Try(server.commandOutputs.get().get(argv) match {
+        case Some((code,stdout,stderr)) =>
+          server.commands.add(argv)
+          out.write(stdout.getBytes(StandardCharsets.UTF_8))
+          err.write(stderr.getBytes(StandardCharsets.UTF_8))
+          err.flush()
+          code
+        case None => server.handle(argv)
+      }).getOrElse(126)
       out.flush()
       exit.onExit(status)
     }

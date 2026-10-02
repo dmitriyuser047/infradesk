@@ -78,6 +78,7 @@ final class ProvisioningRoutes[Tx[_]](service: ProvisioningRuns[IO, Tx], authori
     "id" -> Json.fromString(run.id.toString), "organizationId" -> Json.fromString(run.organizationId.toString),
     "resourceId" -> Json.fromString(run.resourceId.toString), "requestId" -> run.requestId.fold(Json.Null)(id => Json.fromString(id.toString)),
     "requestedByUserId" -> run.requestedBy.fold(Json.Null)(id => Json.fromString(id.toString)),
+    "runKind" -> Json.fromString(run.input.runKind.code),
     "currentStep" -> run.currentStep.fold(Json.Null)(step => Json.fromString(step.code)),
     "state" -> Json.fromString(run.state.code), "createdAt" -> HttpJsonCodecs.instantEncoder(run.createdAt),
     "updatedAt" -> HttpJsonCodecs.instantEncoder(run.updatedAt),
@@ -108,7 +109,14 @@ final class ProvisioningRoutes[Tx[_]](service: ProvisioningRuns[IO, Tx], authori
     "resourceType" -> Json.fromString(input.resourceType), "resourceKind" -> Json.fromString(input.resourceKind),
     "connectionId" -> Json.fromString(input.connectionId.toString),
     "connectionUpdatedAt" -> HttpJsonCodecs.instantEncoder(input.connectionUpdatedAt),
-    "steps" -> Json.arr(input.steps.map(step => Json.fromString(step.code)): _*))
+    "steps" -> Json.arr(input.steps.map(step => Json.fromString(step.code)): _*),
+    "profileApply" -> input.profileApply.fold(Json.Null)(p => Json.obj(
+      "assignmentId" -> Json.fromString(p.assignmentId.toString), "assignmentVersion" -> Json.fromLong(p.assignmentVersion),
+      "profileId" -> Json.fromString(p.profileId.toString), "revisionId" -> Json.fromString(p.revisionId.toString),
+      "revisionNumber" -> Json.fromInt(p.revisionNumber), "revisionHash" -> Json.fromString(p.revisionHash),
+      "content" -> p.content.json, "observationId" -> Json.fromString(p.observationId.toString),
+      "observationHash" -> Json.fromString(p.observationHash), "reviewedDiffHash" -> Json.fromString(p.reviewedDiffHash),
+      "blockingProblems" -> Json.arr(p.blockingProblems.map(Json.fromString): _*))))
 }
 
 private final case class PlanRequest(resourceId: UUID)

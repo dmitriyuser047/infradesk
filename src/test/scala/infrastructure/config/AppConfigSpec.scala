@@ -65,8 +65,8 @@ final class AppConfigSpec extends FunSuite {
     assertEquals(config.provisioning.pollInterval, 2.seconds)
     assertEquals(config.provisioning.batchSize, 10)
     assertEquals(config.provisioning.maxConcurrency, 2)
-    assertEquals(config.provisioning.leaseDuration, 120.seconds)
-    assertEquals(config.provisioning.stepTimeout, 30.seconds)
+    assertEquals(config.provisioning.leaseDuration, 900.seconds)
+    assertEquals(config.provisioning.stepTimeout, 300.seconds)
     assert(!config.toString.contains(key))
     assert(!config.toString.contains("test-password")) // DatabaseConfig must not be rendered in logs.
   }

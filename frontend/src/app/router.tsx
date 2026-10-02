@@ -57,6 +57,14 @@ export const router = createBrowserRouter([
         const { ConfigurationsPage } = await import('../pages/ConfigurationsPage')
         return { Component: ConfigurationsPage }
       } },
+      { path: '/organizations/:organizationId/configurations/server-profiles/new', lazy: async () => {
+        const { ServerProfileCreatePage } = await import('../pages/ServerProfilesPage')
+        return { Component: ServerProfileCreatePage }
+      } },
+      { path: '/organizations/:organizationId/configurations/server-profiles/:serverProfileId', lazy: async () => {
+        const { ServerProfileDetailPage } = await import('../pages/ServerProfilesPage')
+        return { Component: ServerProfileDetailPage }
+      } },
       { path: '/organizations/:organizationId/configurations/new', lazy: async () => {
         const { ConfigurationCreatePage } = await import('../pages/ConfigurationEditorPages')
         return { Component: ConfigurationCreatePage }
