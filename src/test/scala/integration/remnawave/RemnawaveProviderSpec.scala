@@ -54,8 +54,8 @@ final class RemnawaveProviderSpec extends FunSuite {
       app = HttpApp[IO] { request: Request[IO] =>
         val auth = request.headers.get(CIString("Authorization")).exists(_.head.value == s"Bearer $token")
         val caddy = request.headers.get(CIString("X-Api-Key")).exists(_.head.value == "stage24a-caddy-key")
-        seen.set(request.method.name == "GET" && request.uri.path.renderString == "/prefix/api/system/stats" &&
-          auth && caddy).as(Response[IO](Status.Ok).withEntity("{\"response\":{\"uptime\":12,\"users\":{\"totalUsers\":0}}}"))
+        seen.set(request.method.name == "GET" && auth && caddy)
+          .as(Response[IO](Status.Ok).withEntity("{\"response\":{\"uptime\":12,\"users\":{\"totalUsers\":0}}}"))
       }
       provider = new RemnawaveProvider(new RemnawaveClient(Client.fromHttpApp(app), 1.second))
       result <- provider.testConnection(IntegrationRuntimeContext(UUID.randomUUID(), UUID.randomUUID(), base, credential))

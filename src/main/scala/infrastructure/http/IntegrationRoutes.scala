@@ -109,7 +109,9 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
       authorization.require(request, OrganizationPermission.ManageIntegrations) { context =>
         withIntegration(org, context.organizationId, id) { (_, integrationId) =>
           respond(test.execute(context.actor, integrationId).flatMap(result =>
-            Ok(IntegrationTestResponse(result.ok, result.providerType.code, result.latencyMs))))
+            Ok(IntegrationTestResponse(result.ok, result.providerType.code, result.latencyMs,
+              result.nodeApi.map(api => NodeApiCompatibilityResponse(api.serverVersion, api.apiGeneration,
+                api.sourceCommit, api.capabilities.toList.map(_.code).sorted, api.provisioningReady, api.blocker))))))
         }
       }
 

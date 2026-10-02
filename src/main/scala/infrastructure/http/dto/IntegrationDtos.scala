@@ -14,4 +14,7 @@ final case class IntegrationResponse(id: UUID, name: String, providerType: Strin
   enabled: Boolean, credential: IntegrationCredentialStatus, createdAt: Instant, updatedAt: Instant,
   managementMode: String)
 final case class IntegrationProviderResponse(`type`: String, displayName: String, capabilities: List[String])
-final case class IntegrationTestResponse(ok: Boolean, providerType: String, latencyMs: Long)
+final case class NodeApiCompatibilityResponse(serverVersion: Option[String], apiGeneration: Option[String],
+  sourceCommit: Option[String], capabilities: List[String], provisioningReady: Boolean, blocker: Option[String])
+final case class IntegrationTestResponse(ok: Boolean, providerType: String, latencyMs: Long,
+  nodeApi: Option[NodeApiCompatibilityResponse] = None)

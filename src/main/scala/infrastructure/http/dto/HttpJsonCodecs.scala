@@ -112,8 +112,11 @@ object HttpJsonCodecs {
   implicit val integrationProviderResponseEncoder: Encoder[IntegrationProviderResponse] =
     Encoder.forProduct3("type", "displayName", "capabilities")(v =>
       (v.`type`, v.displayName, v.capabilities))
+  implicit val nodeApiCompatibilityResponseEncoder: Encoder[NodeApiCompatibilityResponse] =
+    Encoder.forProduct6("serverVersion", "apiGeneration", "sourceCommit", "capabilities", "provisioningReady", "blocker")(
+      v => (v.serverVersion, v.apiGeneration, v.sourceCommit, v.capabilities, v.provisioningReady, v.blocker))
   implicit val integrationTestResponseEncoder: Encoder[IntegrationTestResponse] =
-    Encoder.forProduct3("ok", "providerType", "latencyMs")(v => (v.ok, v.providerType, v.latencyMs))
+    Encoder.forProduct4("ok", "providerType", "latencyMs", "nodeApi")(v => (v.ok, v.providerType, v.latencyMs, v.nodeApi))
 
   implicit val apiErrorResponseEncoder: Encoder[ApiErrorResponse] =
     Encoder.forProduct2("code", "message")(value => (value.code, value.message))

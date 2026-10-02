@@ -9,7 +9,8 @@ import io.circe.Json
 
 final case class IntegrationRuntimeContext(id: UUID, organizationId: UUID,
   baseUrl: IntegrationBaseUrl, credential: IntegrationCredential)
-final case class IntegrationTestResult(ok: Boolean, providerType: IntegrationProviderType, latencyMs: Long)
+final case class IntegrationTestResult(ok: Boolean, providerType: IntegrationProviderType, latencyMs: Long,
+  nodeApi: Option[domain.integration.NodeApiCompatibility] = None)
 
 /** Full config exists only during an explicit operation. Inventory and list DTOs contain hashes. */
 final case class IntegrationConfigProfileDocument(externalId: String, config: Json, updatedAt: Option[Instant]) {
@@ -34,6 +35,7 @@ trait IntegrationProvider[F[_]] {
   def executeAction(context: IntegrationRuntimeContext, externalId: String,
     action: IntegrationActionCode): F[IntegrationActionRemoteOutcome]
   def configProfiles: Option[IntegrationConfigProfileTransport[F]] = None
+  def nodeProvisioning: Option[application.port.NodeProvisioningTransport[F]] = None
 }
 
 final class IntegrationProviderRegistry[F[_]](providers: List[IntegrationProvider[F]]) {

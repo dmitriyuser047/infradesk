@@ -395,6 +395,8 @@ export const en = {
       INTEGRATION_RATE_LIMITED: 'The panel rate limited this request.', INTEGRATION_TIMEOUT: 'The panel did not respond in time.',
       INTEGRATION_UNREACHABLE: 'The panel could not be reached.', INTEGRATION_TLS_ERROR: 'TLS verification failed.',
       INTEGRATION_INVALID_RESPONSE: 'The panel returned an unexpected response.',
+      INTEGRATION_API_CONTRACT_UNCONFIRMED: 'Compatibility with this Remnawave version has not been confirmed. Changes are unavailable.',
+      INTEGRATION_API_CONTRACT_CHANGED: 'Remnawave changed after the preview. Check compatibility and review a new preview.',
       INTEGRATION_REMOTE_UNAVAILABLE: 'The panel is unavailable.',
       INTEGRATION_DESTINATION_NOT_ALLOWED: 'This destination is blocked by the deployment policy.',
     },

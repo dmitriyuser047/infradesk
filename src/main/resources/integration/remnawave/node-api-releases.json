@@ -1,0 +1,194 @@
+[
+  {
+    "version": "2.8.0",
+    "commit": "798d74986db5984364897464306928973bce3b67",
+    "generation": "PROFILE_PUBKEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "ef3c488c89b646116d87ec662dba5df678fb3a28adfa6385dbea6fe6e7ac416e",
+      "libs/contract/models/nodes.schema.ts": "55f2d99774442f9de08067c23959a3b609124848d2e4fe078a18e9958f9bc6f3",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-pubkey.command.ts": "d6d6c1d791f0e46d2ddff8be644a6023f6c05c6ac91cc93c6545eca895f01ab8"
+    }
+  },
+  {
+    "version": "2.8.1",
+    "commit": "ba51868149362d0b9ac0e23133d0532176ccb5a2",
+    "generation": "PROFILE_PUBKEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "ef3c488c89b646116d87ec662dba5df678fb3a28adfa6385dbea6fe6e7ac416e",
+      "libs/contract/models/nodes.schema.ts": "55f2d99774442f9de08067c23959a3b609124848d2e4fe078a18e9958f9bc6f3",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-pubkey.command.ts": "d6d6c1d791f0e46d2ddff8be644a6023f6c05c6ac91cc93c6545eca895f01ab8"
+    }
+  },
+  {
+    "version": "3.0.0",
+    "commit": "0f8b639b6c5b194c1f81bf574dab1026d0efcb7c",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "da53e954295e5ce5f673741b0e501ddbdacd8d58eba5b525e1640af007347599",
+      "libs/contract/models/nodes.schema.ts": "300166a60d582f204ef4c11d99409415e46f6ddb89a2b6b2ce12f3c09834d4a3",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.1.0",
+    "commit": "c7495492ce62f43332e9fb7dd66b9f97a799a73e",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "da53e954295e5ce5f673741b0e501ddbdacd8d58eba5b525e1640af007347599",
+      "libs/contract/models/nodes.schema.ts": "043e3957e73b9a4206c95b583d9c27b27600ef15e2b07c6f7073ec2ab43b8ad2",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.2.0",
+    "commit": "762d3a2e6ab6cc98017de41640da30e950e00403",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "da53e954295e5ce5f673741b0e501ddbdacd8d58eba5b525e1640af007347599",
+      "libs/contract/models/nodes.schema.ts": "043e3957e73b9a4206c95b583d9c27b27600ef15e2b07c6f7073ec2ab43b8ad2",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.2.1",
+    "commit": "1a80d12ff73f939604eb004f25ac39f94e29967b",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "da53e954295e5ce5f673741b0e501ddbdacd8d58eba5b525e1640af007347599",
+      "libs/contract/models/nodes.schema.ts": "043e3957e73b9a4206c95b583d9c27b27600ef15e2b07c6f7073ec2ab43b8ad2",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.2.2",
+    "commit": "465bc090c271d707d5232d9faf2510cacba030b4",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "b56ad6d2f4e2d93c923667a06d428f061911cb18387b5df116fdf654e825c9b3",
+      "libs/contract/models/nodes.schema.ts": "76372f650d8602a7829ced56fd53bd335b33ff6bc1f44550b0c352d23b81c650",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.2.3",
+    "commit": "e93afed2fb5cbfdfa9a7e0fe19fc35e4a005b978",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "b56ad6d2f4e2d93c923667a06d428f061911cb18387b5df116fdf654e825c9b3",
+      "libs/contract/models/nodes.schema.ts": "76372f650d8602a7829ced56fd53bd335b33ff6bc1f44550b0c352d23b81c650",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.3.0",
+    "commit": "542f131487f24bcc0121ae0d1cdd58cea8fd9d86",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "2113d671211c07ebae43fdcdce3232890398ec33a0c7ecf1a748eae1eb64f14b",
+      "libs/contract/models/nodes.schema.ts": "70a0bf1b06d66e5b6dcd996ae35228111a50554d706b712c913ac0bf7cde40b7",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.3.1",
+    "commit": "1eb72dda8460d9373e8b18cbc35c542acb3e364f",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "2113d671211c07ebae43fdcdce3232890398ec33a0c7ecf1a748eae1eb64f14b",
+      "libs/contract/models/nodes.schema.ts": "70a0bf1b06d66e5b6dcd996ae35228111a50554d706b712c913ac0bf7cde40b7",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.3.2",
+    "commit": "347e6de129f0289a3831dfbb7452d36b49528f3c",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "2113d671211c07ebae43fdcdce3232890398ec33a0c7ecf1a748eae1eb64f14b",
+      "libs/contract/models/nodes.schema.ts": "70a0bf1b06d66e5b6dcd996ae35228111a50554d706b712c913ac0bf7cde40b7",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.4.0",
+    "commit": "dd0eab160fd91a1c09345df459e146712581736f",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "2113d671211c07ebae43fdcdce3232890398ec33a0c7ecf1a748eae1eb64f14b",
+      "libs/contract/models/nodes.schema.ts": "70a0bf1b06d66e5b6dcd996ae35228111a50554d706b712c913ac0bf7cde40b7",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.4.1",
+    "commit": "26afe641b41aea82d39550af851d42a75aa03077",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "2113d671211c07ebae43fdcdce3232890398ec33a0c7ecf1a748eae1eb64f14b",
+      "libs/contract/models/nodes.schema.ts": "70a0bf1b06d66e5b6dcd996ae35228111a50554d706b712c913ac0bf7cde40b7",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.4.2",
+    "commit": "fca29680290f6f010bae1100ff0f5a14ad4a3196",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "2113d671211c07ebae43fdcdce3232890398ec33a0c7ecf1a748eae1eb64f14b",
+      "libs/contract/models/nodes.schema.ts": "70a0bf1b06d66e5b6dcd996ae35228111a50554d706b712c913ac0bf7cde40b7",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  },
+  {
+    "version": "3.4.3",
+    "commit": "f8ad8ad3410252215ca7b2e429d157bd275ec564",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "2113d671211c07ebae43fdcdce3232890398ec33a0c7ecf1a748eae1eb64f14b",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/models/nodes.schema.ts": "70a0bf1b06d66e5b6dcd996ae35228111a50554d706b712c913ac0bf7cde40b7",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d"
+    }
+  },
+  {
+    "version": "3.4.4",
+    "commit": "b22970cc88481a7e278b5767721672a18f8b2ada",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "2113d671211c07ebae43fdcdce3232890398ec33a0c7ecf1a748eae1eb64f14b",
+      "libs/contract/models/nodes.schema.ts": "70a0bf1b06d66e5b6dcd996ae35228111a50554d706b712c913ac0bf7cde40b7",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2"
+    }
+  }
+]

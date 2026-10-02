@@ -144,7 +144,7 @@ final class RemnawaveClient(client: Client[IO], requestTimeout: FiniteDuration,
     }
   }
 
-  private def definiteBeforeWrite(error: Throwable): Option[String] = error match {
+  private[remnawave] def definiteBeforeWrite(error: Throwable): Option[String] = error match {
     case _: integration.http.OutboundDestinationRejected => Some("INTEGRATION_DESTINATION_NOT_ALLOWED")
     case _: java.net.UnknownHostException | _: java.net.ConnectException | _: java.net.NoRouteToHostException =>
       Some("INTEGRATION_UNREACHABLE")
@@ -153,7 +153,7 @@ final class RemnawaveClient(client: Client[IO], requestTimeout: FiniteDuration,
     case _ => None
   }
 
-  private def get(target: URI, credential: RemnawaveCredential, maxBytes: Int): IO[String] =
+  private[remnawave] def get(target: URI, credential: RemnawaveCredential, maxBytes: Int): IO[String] =
     IO.fromEither(Uri.fromString(target.toASCIIString).leftMap(_ => RemnawaveErrors.error("INTEGRATION_INVALID_RESPONSE")))
       .flatMap { uri =>
         val request = Request[IO](Method.GET, uri).putHeaders(
@@ -170,6 +170,45 @@ final class RemnawaveClient(client: Client[IO], requestTimeout: FiniteDuration,
       }
 
   private def invalidResponse[A]: IO[A] = IO.raiseError(RemnawaveErrors.error("INTEGRATION_INVALID_RESPONSE"))
+
+  /** Called only by the capability-gated adapter. One POST, never an automatic retry. */
+  private[remnawave] def createNodeWire(baseUrl: IntegrationBaseUrl, credential: RemnawaveCredential,
+    intent: domain.integration.NodeCreateIntent): IO[domain.integration.NodeCreateOutcome] = {
+    import domain.integration.NodeCreateOutcome._
+    IO.fromEither(Uri.fromString(baseUrl.endpoint(NodesPath).toASCIIString)
+      .leftMap(_ => RemnawaveErrors.error("INTEGRATION_INVALID_REQUEST"))).flatMap { uri =>
+      val request = Request[IO](Method.POST, uri).withEntity(RemnawaveNodeApi.createPayload(intent).noSpaces)
+        .putHeaders(Header.Raw(CIString("Authorization"), s"Bearer ${credential.apiToken}"),
+          Header.Raw(CIString("Content-Type"), "application/json"))
+      val authenticated = credential.caddyApiKey.fold(request)(key =>
+        request.putHeaders(Header.Raw(CIString("X-Api-Key"), key)))
+      client.run(authenticated).use { response =>
+        response.status.code match {
+          // The upstream creates the DB row before checking profile inbounds. A124 returns 404
+          // after that write. Neither an arbitrary 400 nor a 404 proves the node was not created.
+          case 400 | 404 | 422 => boundedBody(response, MaxResponseBytes).map { body =>
+            val code = body.flatMap(parse(_).toOption).flatMap(_.hcursor.get[String]("errorCode").toOption)
+            code match {
+              case Some("A033" | "A034") => Rejected("INTEGRATION_NODE_CONFLICT")
+              case _ => Unknown("INTEGRATION_NODE_CREATE_RESULT_UNKNOWN")
+            }
+          }
+          case 401 => IO.pure[domain.integration.NodeCreateOutcome](Rejected("INTEGRATION_AUTH_FAILED"))
+          case 403 => IO.pure[domain.integration.NodeCreateOutcome](Rejected("INTEGRATION_FORBIDDEN"))
+          case 405 => IO.pure[domain.integration.NodeCreateOutcome](Rejected("INTEGRATION_API_CONTRACT_UNCONFIRMED"))
+          case 409 => IO.pure[domain.integration.NodeCreateOutcome](Rejected("INTEGRATION_NODE_CONFLICT"))
+          case _ if response.status.isSuccess => boundedBody(response, ConfigProfileMaxResponseBytes).map { body =>
+            body.flatMap(parse(_).toOption).flatMap(_.hcursor.downField("response").success)
+              .flatMap(RemnawaveNodeApi.node)
+              .filter(RemnawaveNodeApi.matches(_, intent)).fold[domain.integration.NodeCreateOutcome](
+                Unknown("INTEGRATION_NODE_CREATE_RESULT_UNKNOWN"))(Created.apply)
+          }
+          case _ => IO.pure[domain.integration.NodeCreateOutcome](Unknown("INTEGRATION_NODE_CREATE_RESULT_UNKNOWN"))
+        }
+      }
+    }.timeout(requestTimeout).handleError(error => definiteBeforeWrite(error)
+      .map(Rejected.apply).getOrElse(Unknown("INTEGRATION_NODE_CREATE_RESULT_UNKNOWN")))
+  }
 }
 
 object RemnawaveClient {

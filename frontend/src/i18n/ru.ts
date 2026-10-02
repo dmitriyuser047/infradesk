@@ -405,6 +405,8 @@ export const ru: Messages = {
       INTEGRATION_RATE_LIMITED: 'Панель ограничила частоту запросов.', INTEGRATION_TIMEOUT: 'Панель не ответила вовремя.',
       INTEGRATION_UNREACHABLE: 'Не удалось связаться с панелью.', INTEGRATION_TLS_ERROR: 'Проверка TLS не прошла.',
       INTEGRATION_INVALID_RESPONSE: 'Панель вернула неожиданный ответ.',
+      INTEGRATION_API_CONTRACT_UNCONFIRMED: 'Совместимость с этой версией Remnawave не подтверждена. Изменения недоступны.',
+      INTEGRATION_API_CONTRACT_CHANGED: 'Remnawave изменился после предпросмотра. Проверьте совместимость и создайте новый предпросмотр.',
       INTEGRATION_REMOTE_UNAVAILABLE: 'Панель недоступна.',
       INTEGRATION_DESTINATION_NOT_ALLOWED: 'Адрес заблокирован политикой установки.',
     },
