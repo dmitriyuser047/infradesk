@@ -98,6 +98,8 @@ object AuditAction {
   case object ServerProfileUnassigned extends AuditAction { val code = "SERVER_PROFILE_UNASSIGNED" }
   case object ServerProfileArchived extends AuditAction { val code = "SERVER_PROFILE_ARCHIVED" }
   case object ServerProfileApplyRequested extends AuditAction { val code = "SERVER_PROFILE_APPLY_REQUESTED" }
+  case object RemnawaveNodeOnboardingRequested extends AuditAction { val code = "REMNAWAVE_NODE_ONBOARDING_REQUESTED" }
+  case object RemnawaveNodeOnboardingCompleted extends AuditAction { val code = "REMNAWAVE_NODE_ONBOARDING_COMPLETED" }
 
   val All: List[AuditAction] = List(
     ProjectCreated,
@@ -170,7 +172,9 @@ object AuditAction {
     ServerProfileAssigned,
     ServerProfileUnassigned,
     ServerProfileArchived,
-    ServerProfileApplyRequested
+    ServerProfileApplyRequested,
+    RemnawaveNodeOnboardingRequested,
+    RemnawaveNodeOnboardingCompleted
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =

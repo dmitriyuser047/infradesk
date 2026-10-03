@@ -114,6 +114,8 @@ final case class ApplicationComponents(
   provisioningWorker: ProvisioningWorker[ConnectionIO],
   provisioningPlanCleanup: ProvisioningPlanCleanup[ConnectionIO],
   serverProfiles: ServerProfiles[IO, ConnectionIO],
+  remnawaveOnboarding: application.integration.RemnawaveOnboarding[ConnectionIO],
+  remnawaveOnboardingWorker: application.integration.RemnawaveOnboardingWorker[ConnectionIO],
   configurationPromotions: ConfigurationPromotions[IO, ConnectionIO],
   configurationRollouts: ConfigurationRollouts[IO, ConnectionIO],
   configurationRolloutWorker: ConfigurationRolloutWorker[ConnectionIO],
@@ -419,6 +421,28 @@ object ApplicationModule {
       rolloutSettings.batchSize, rolloutSettings.maxConcurrency, rolloutSettings.claimLease,
       rolloutSettings.verifyTimeout, UUID.randomUUID())
 
+    val integrationBindingsService = new IntegrationBindings[ConnectionIO](integrationRepository,
+      integrationInventoryRepository,integrationBindingRepository,transactionIdGenerator,transactionTimeProvider,auditRecorder)
+    val integrationDesiredStatesService = new IntegrationDesiredStates[ConnectionIO](integrationRepository,
+      integrationInventoryRepository,integrationDesiredStateRepository,integrations.integrationProviderRegistry,
+      transactionIdGenerator,transactionTimeProvider,auditRecorder,config.integrations.desiredStateOperational)
+    val onboardingRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveOnboardingRepository
+    val onboardingQuery = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveOnboardingQuery
+    val onboardingRemote = new integration.ssh.SshRemnawaveNodeRemote(integrations.configurationTransport)
+    val onboardingOperations = new application.integration.ExistingRemnawaveOnboardingOperations[ConnectionIO](
+      onboardingRepository,onboardingQuery,integrationRepository,integrationSecretRepository,integrations.integrationCredentialCipher,
+      provisioningTargetQuery,serverProfileRepository,provisioningRunRepository,integrations.serverProfileRemote,
+      provisioningRuns,integrationSync,integrationInventoryRepository,integrationBindingRepository,integrationBindingsService,
+      integrationDesiredStateRepository,integrationDesiredStatesService,transactionRunner)
+    val remnawaveOnboarding = new application.integration.RemnawaveOnboarding[ConnectionIO](onboardingRepository,onboardingQuery,
+      integrationRepository,integrationSecretRepository,integrations.integrationCredentialCipher,integrations.integrationProviderRegistry,
+      provisioningTargetQuery,serverProfiles,integrationInventoryQuery,transactionRunner,onboardingRemote,auditRecorder,
+      config.provisioning,provisioningRunRepository)
+    val remnawaveOnboardingWorker = new application.integration.RemnawaveOnboardingWorker[ConnectionIO](onboardingRepository,
+      onboardingOperations,integrations.integrationProviderRegistry,onboardingRemote,
+      integration.secret.NodeInstallationCipher.fromConfig(config.secretEncryption),transactionRunner,auditRecorder,
+      config.provisioning,loggers.integration)
+
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
       listEnvironmentResources = ListEnvironmentResources[ConnectionIO](resourceRepository),
@@ -449,6 +473,8 @@ object ApplicationModule {
       provisioningWorker = provisioningWorker,
       provisioningPlanCleanup = provisioningPlanCleanup,
       serverProfiles = serverProfiles,
+      remnawaveOnboarding = remnawaveOnboarding,
+      remnawaveOnboardingWorker = remnawaveOnboardingWorker,
       configurationPromotions = new ConfigurationPromotions[IO, ConnectionIO](
         configurationPromotionRepository, configurationProfileQuery, transactionTimeProvider, auditRecorder,
         readOnlySnapshotRunner, transactionRunner),
@@ -632,9 +658,7 @@ object ApplicationModule {
       integrationActions = integrationActions,
       integrationActionWorker = integrationActionWorker,
       integrationActionsEnabled = actionSettings.enabled,
-      integrationDesiredStates = new IntegrationDesiredStates[ConnectionIO](integrationRepository,
-        integrationInventoryRepository, integrationDesiredStateRepository, integrations.integrationProviderRegistry,
-        transactionIdGenerator, transactionTimeProvider, auditRecorder, config.integrations.desiredStateOperational),
+      integrationDesiredStates = integrationDesiredStatesService,
       // Desired state and execution stay apart: this worker is given no provider, client or credential.
       integrationDesiredStateWorker = new IntegrationDesiredStateWorker[ConnectionIO](
         integrationDesiredStateRepository, transactionRunner, timeProvider, loggers.integration,
@@ -646,9 +670,7 @@ object ApplicationModule {
       integrationConfigDeploymentWorker = integrationConfigDeploymentWorker,
       integrationConfigRollouts = integrationConfigRolloutService,
       integrationConfigRolloutWorker = integrationConfigRolloutWorker,
-      integrationBindings = new IntegrationBindings[ConnectionIO](integrationRepository,
-        integrationInventoryRepository, integrationBindingRepository, transactionIdGenerator,
-        transactionTimeProvider, auditRecorder),
+      integrationBindings = integrationBindingsService,
       // Its own claims, lease and instance identity: never the connection scheduler's.
       integrationSyncScheduler = new IntegrationSyncScheduler[ConnectionIO](integrationSync,
         integrationSyncStateRepository, transactionRunner, timeProvider, loggers.integration,

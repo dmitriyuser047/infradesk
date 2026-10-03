@@ -37,8 +37,9 @@ private[ssh] final class ProfileManagedFiles(session: RemoteConfigurationSession
 
   def replace(path: String, marker: String, bytes: Array[Byte], expectedHash: Option[String],
     installOwned: Boolean = false, validate: Option[List[String]] = None,
-    activate: Option[List[String]] = None): IO[Unit] = {
-    require(allowedPath(path) && marker.nonEmpty && !marker.contains('\n'))
+    activate: Option[List[String]] = None, targetMode: Int = 420,
+    validationFailureCode: String = "PROVISIONING_CADDY_VALIDATION_FAILED"): IO[Unit] = {
+    require(allowedPath(path) && marker.nonEmpty && !marker.contains('\n') && Set(384,420)(targetMode))
     require(expectedHash.forall(_.matches("[0-9a-f]{64}")))
     val nonce = UUID.randomUUID().toString
     val userDir = s"/tmp/infradesk-$runId-$nonce"
@@ -53,7 +54,7 @@ private[ssh] final class ProfileManagedFiles(session: RemoteConfigurationSession
       action.flatMap(r => if (r.exitCode == 0) IO.unit else IO.raiseError(ProfileRemoteFailure(code)))
     val prepareUser = commands.shell("umask 077; mkdir -m 0700 -- \"$1\"", List(userDir), privileged = false)
     val prepareRoot = commands.shell(Prepare, List(path, upload, rootDir, sshUid.toString, hash, expected,
-      marker, installOwned.toString))
+      marker, installOwned.toString, if (targetMode == 384) "0600" else "0644"))
     val cleanupUser = commands.shell("[ ! -L \"$1\" ] && [ -d \"$1\" ] && [ \"$(stat -c '%u:%a' \"$1\")\" = \"$2:700\" ] || exit 1; [ ! -L \"$1/input\" ] || exit 1; rm -f -- \"$1/input\"; rmdir -- \"$1\"",
       List(userDir, sshUid.toString), privileged = false).attempt.void
     val cleanupRoot = commands.shell("[ ! -L \"$1\" ] && [ -d \"$1\" ] && [ \"$(stat -c '%u:%a' \"$1\")\" = '0:700' ] || exit 1; for f in candidate previous; do [ ! -L \"$1/$f\" ] || exit 1; done; rm -f -- \"$1/candidate\" \"$1/previous\"; rmdir -- \"$1\"",
@@ -61,8 +62,9 @@ private[ssh] final class ProfileManagedFiles(session: RemoteConfigurationSession
     checked(prepareUser, "PROVISIONING_MANAGED_FILE_UNSAFE") *> (
       session.create(upload, bytes, RemoteFileCreation(Integer.parseInt("600", 8), None)) *>
       checked(prepareRoot, "PROVISIONING_MANAGED_FILE_UNSAFE") *>
-      validate.traverse_(argv => checked(commands.capture(argv.head, argv.tail :+ candidate),
-        "PROVISIONING_CADDY_VALIDATION_FAILED")) *>
+      validate.traverse_(argv => checked(commands.capture(argv.head,
+        if (argv.exists(_ == "{candidate}")) argv.tail.map(a => if (a == "{candidate}") candidate else a) else argv.tail :+ candidate),
+        validationFailureCode)) *>
       checked(commands.shell(Commit, List(path, candidate, backup, expected, hash)),
         "PROVISIONING_MANAGED_FILE_CHANGED") *>
       activate.traverse_ { argv => commands.capture(argv.head, argv.tail).flatMap { activation =>
@@ -87,6 +89,7 @@ private[ssh] object ProfileManagedFiles {
     "/etc/security/limits.d/99-infradesk.conf", "/etc/systemd/system.conf.d/99-infradesk.conf",
     "/etc/fail2ban/jail.d/99-infradesk.conf", "/etc/caddy/Caddyfile",
     "/etc/apt/keyrings/infradesk-caddy.asc", "/etc/apt/sources.list.d/infradesk-caddy.list")(path) ||
+    path.matches("/opt/infradesk/remnawave/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(compose\\.yml|\\.env|managed\\.json)") ||
     path.matches("/var/www/infradesk/[a-z0-9][a-z0-9-]{0,62}/index.html")
   private val SafeParents = """
     safe_parents() {
@@ -106,7 +109,7 @@ private[ssh] object ProfileManagedFiles {
     hash_file() { sha256sum "$1" | cut -d' ' -f1; }
   """
   private[ssh] val Prepare = "set -eu; " + SafeParents + """
-    dest=$1; source=$2; stage=$3; uid=$4; newhash=$5; expected=$6; marker=$7; installowned=$8
+    dest=$1; source=$2; stage=$3; uid=$4; newhash=$5; expected=$6; marker=$7; installowned=$8; target_mode=$9
     safe_parents "$dest" || exit 42
     [ ! -L "$(dirname "$source")" ] && [ "$(stat -c '%u:%a' "$(dirname "$source")")" = "$uid:700" ] || exit 42
     [ ! -L "$source" ] && [ -f "$source" ] && [ "$(stat -c '%u:%a:%h' "$source")" = "$uid:600:1" ] || exit 42
@@ -117,7 +120,7 @@ private[ssh] object ProfileManagedFiles {
     else [ "$expected" = MISSING ] || exit 43; fi
     umask 077; mkdir -m 0700 -- "$stage" || exit 42
     [ "$(stat -c '%u:%a' "$stage")" = '0:700' ] || exit 42
-    install -o root -g root -m 0644 -- "$source" "$stage/candidate"
+    install -o root -g root -m "$target_mode" -- "$source" "$stage/candidate"
     safe_file "$stage/candidate" && [ "$(hash_file "$stage/candidate")" = "$newhash" ] || exit 42
   """
   private[ssh] val Commit = "set -eu; " + SafeParents + """

@@ -9,7 +9,7 @@ marker='# managed'
 target=/etc/profile-tests/config
 stage=/etc/profile-tests/.candidate
 expect_failure() { want=$1; shift; set +e; "$@"; got=$?; set -e; [ "$got" = "$want" ] || { echo "expected $want got $got"; exit 1; }; }
-prepare() { sh /checks/Prepare.sh "$target" /tmp/infradesk-check/input "$stage" 0 "$new" "$1" "$marker" false; }
+prepare() { sh /checks/Prepare.sh "$target" /tmp/infradesk-check/input "$stage" 0 "$new" "$1" "$marker" false 0644; }
 commit() { sh /checks/Commit.sh "$target" "$stage/candidate" "$stage/previous" "$1" "$new"; }
 prepare MISSING
 [ "$(stat -c '%u:%a:%h' "$stage/candidate")" = '0:644:1' ]
@@ -17,6 +17,14 @@ commit MISSING
 [ "$(sha256sum "$target" | cut -d' ' -f1)" = "$new" ]
 echo 'PASS exclusive private staging and first atomic commit'
 rm -f "$target"; rmdir "$stage"
+secret_target=/etc/profile-tests/.env
+secret_stage=/etc/profile-tests/.env-stage
+sh /checks/Prepare.sh "$secret_target" /tmp/infradesk-check/input "$secret_stage" 0 "$new" MISSING "$marker" true 0600
+[ "$(stat -c '%u:%a:%h' "$secret_stage/candidate")" = '0:600:1' ]
+sh /checks/Commit.sh "$secret_target" "$secret_stage/candidate" "$secret_stage/previous" MISSING "$new"
+[ "$(stat -c '%u:%a:%h' "$secret_target")" = '0:600:1' ]
+rm -f "$secret_target"; rmdir "$secret_stage"
+echo 'PASS secret file is atomically installed with mode 0600'
 printf '# managed\nold\n' >"$target"
 old=$(sha256sum "$target" | cut -d' ' -f1)
 prepare "$old"; commit "$old"
@@ -76,4 +84,48 @@ expect_failure 54 sh /checks/Simulate.sh curl
 APT_EXIT=1; export APT_EXIT
 expect_failure 53 sh /checks/Simulate.sh curl
 echo 'PASS simulation rejects upgrades, broken packages, removals and apt failure'
+# Exercise the actual extracted Stage25C proof and start helpers in a disposable Linux container.
+mkdir -p /opt/infradesk/remnawave
+node_dir=/opt/infradesk/remnawave/11111111-1111-1111-1111-111111111111
+mkdir -m 0755 "$node_dir"
+node_marker='# infradesk-managed test'
+printf '%s\nservices: {}\n' "$node_marker" >"$node_dir/compose.yml"
+printf 'SECRET_KEY=c2VjcmV0\nNODE_PORT=2222\n' >"$node_dir/.env"
+chmod 0600 "$node_dir/.env"
+env_hash=$(sha256sum "$node_dir/.env" | cut -d' ' -f1)
+compose_hash=$(sha256sum "$node_dir/compose.yml" | cut -d' ' -f1)
+prefix='{"managedBy":"infradesk","envSha256":"'
+printf '%s%s"}\n' "$prefix" "$env_hash" >"$node_dir/managed.json"
+cat >/mocks/docker <<'MOCK'
+#!/bin/sh
+if [ "$1" = image ]; then printf sha256:mock; exit 0; fi
+if [ "$1" = compose ]; then
+  case "$*" in *'up -d'*) touch /tmp/node-started;; esac
+  exit 0
+fi
+exit 0
+MOCK
+cat >/mocks/ss <<'MOCK'
+#!/bin/sh
+exit "${SS_EXIT:-0}"
+MOCK
+chmod +x /mocks/docker /mocks/ss
+export PATH=/mocks:$PATH
+node_proof() { sh /checks/NodeInstallationProof.sh "$node_dir" "$node_marker" remnawave/node:2.8.0 2222 "$compose_hash" "$prefix"; }
+node_start() { sh /checks/NodeStart.sh "$node_dir" "$node_marker" remnawave/node:2.8.0 2222 "$compose_hash" "$prefix" test-node; }
+[ "$(node_proof)" = '1:1' ]
+[ "$(node_start)" = STARTED ] && [ -e /tmp/node-started ]
+rm /tmp/node-started
+printf 'SECRET_KEY=c2VjcmV0\nNODE_PORT=2223\n' >"$node_dir/.env"
+[ "$(node_proof)" = '0:1' ] && [ "$(node_start)" = FILES ] && [ ! -e /tmp/node-started ]
+printf 'SECRET_KEY=c2VjcmV0\nNODE_PORT=2222\n' >"$node_dir/.env"
+chmod 0644 "$node_dir/.env"
+[ "$(node_proof)" = '0:1' ]
+chmod 0600 "$node_dir/.env"; ln "$node_dir/.env" "$node_dir/env-link"
+[ "$(node_proof)" = '0:1' ]
+rm "$node_dir/env-link"; mv "$node_dir/.env" "$node_dir/env-save"; ln -s "$node_dir/env-save" "$node_dir/.env"
+[ "$(node_proof)" = '0:1' ] && [ "$(node_start)" = FILES ]
+[ "$(SS_EXIT=1 sh /checks/NodePreflight.sh 2222 1)" = UNKNOWN ]
+[ "$(sh /checks/NodePreflight.sh 2222 1)" = FOREIGN ]
+echo 'PASS node install recovery and start reject credential drift, public modes, hardlinks, symlinks, and failed port probes'
 echo 'LINUX SAFETY CHECKS PASSED'

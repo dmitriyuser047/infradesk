@@ -86,7 +86,7 @@ Node/keygen contracts; compose must be generated from controlled backend values.
 data and reconciliation. `ProvisionedNode` is a sanitized projection; provider DTOs and
 registration credentials do not enter onboarding snapshots. `NodeInstallationData` has no
 JSON encoder and redacts its string representation. Durable encrypted secret storage remains
-part of the pending onboarding implementation.
+part of the implemented [durable onboarding workflow](stage25c-onboarding.md).
 
 | Capability | PROFILE_PUBKEY / PROFILE_SECRET_KEY, confirmed at runtime | Unknown or unreviewed release |
 | --- | --- | --- |
@@ -106,9 +106,8 @@ prereleases, custom builds and missing/malformed metadata do not receive write c
 Read-only synchronization retains its existing strict decoder and remains usable whenever
 that contract validates.
 
-Existing Remnawave actions and configuration updates through the provider are also gated.
-Consequently a deployment that cannot supply compatible metadata can still synchronize but
-will no longer perform provider mutations. This is intentional fail-closed behavior.
+The compatibility gate applies only to Node provisioning. Existing Stage 24 actions and
+configuration updates retain their independent contracts and do not require provisioningReady.
 Low-level HTTP methods are transport primitives; application services must use the provider
 interfaces, including the guarded Node provisioning transport.
 
@@ -135,9 +134,9 @@ does not prove non-creation and never triggers another POST. Duplicate/mismatchi
 remain unproven. These markers are not upstream idempotency keys, and tags can be edited;
 the coordinator must preserve UNKNOWN whenever proof is unavailable.
 
-The future durable coordinator must journal the in-flight create boundary before calling
-this adapter. This adapter's no-retry property alone does not implement crash-safe workflow
-or claim/lease/fencing. There is no automatic deletion on install failure.
+The durable coordinator journals the in-flight create boundary before calling this adapter
+and adds claim/lease/fencing and recovery by reconciliation. There is no automatic deletion
+on install failure. See the [implementation report](stage25c-onboarding.md).
 
 ## Actual deployment verification
 
@@ -171,7 +170,7 @@ Source-derived tests cover all 16 enabled releases, exact authenticated create p
 generation-specific credential decoding, invalid intent, unknown/future/custom versions,
 version changes after preview, duplicate and mismatching reconciliation, timeout/restart
 without a second POST, upstream A124 partial creation, and safe error/redaction behavior.
-The full Stage 25C acceptance suite will be added with the durable workflow and installer.
+The durable workflow and installer suite is recorded in the [implementation report](stage25c-onboarding.md).
 
 Validation on Windows with JDK 21: the full backend suite passed with an isolated temporary
 PostgreSQL container (984 passed, 19 skipped, 0 failed). The container was removed afterwards;
@@ -179,9 +178,7 @@ the working database was not used. Skips comprise the opt-in live deployment con
 and 18 existing Linux/SSH tests. The targeted frontend localization and integration-page
 suite passed 85 tests, and the frontend production build passed.
 
-Stage 25C is not complete. Remaining work includes deployment contract confirmation, image
-compatibility policy, durable run/phases/migration, shared resource conflict locking, child
-25B apply, safe managed files/firewall/SSH canary, Panel wait, reuse of sync/binding/desired
-state, final verification, wizard/progress/history, and their tests. The disposable VPS canary
-comes after code and test completion. Stage 25D/25E fleet reconciliation/rollout and Stage 25F
-Node upgrades remain outside this stage.
+The main Stage25C code, migration, installer, wizard and tests are now implemented; current
+validation results are in the [implementation report](stage25c-onboarding.md). Live deployment
+contract confirmation and a disposable VPS canary remain after code review. Stage25D/25E
+fleet reconciliation/rollout and Stage25F Node upgrades remain outside this stage.

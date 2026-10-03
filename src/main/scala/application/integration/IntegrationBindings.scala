@@ -19,6 +19,15 @@ final class IntegrationBindings[Tx[_]: MonadThrow](integrations: IntegrationRepo
   inventory: IntegrationInventoryRepository[Tx], bindings: IntegrationBindingRepository[Tx],
   ids: IdGenerator[Tx], time: TimeProvider[Tx], audit: AuditRecorder[Tx]) {
 
+  /** Reviewed onboarding may create a link, but can never replace somebody else's link. */
+  def bindCreated(actor: ActorContext, integrationId: UUID, objectId: UUID, resourceId: UUID): Tx[IntegrationResourceBinding] = for {
+    node <- lockedNode(actor.organizationId,integrationId,objectId)
+    existing <- bindings.find(actor.organizationId,node.id)
+    _ <- MonadThrow[Tx].raiseUnless(existing.forall(_.resourceId==resourceId))(
+      IntegrationError("REMNAWAVE_ONBOARDING_BINDING_CONFLICT","The node is already bound elsewhere"))
+    result <- bind(actor,integrationId,objectId,resourceId)
+  } yield result
+
   /** Binding to the resource already bound changes nothing, not even the update time, and is not
     * audited. Binding to another resource replaces the link in place.
     */

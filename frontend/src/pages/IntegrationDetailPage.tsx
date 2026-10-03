@@ -24,6 +24,7 @@ import { RefreshWarning, isUnavailableError } from '../components/layout/Refresh
 import { IntegrationDialog } from '../components/integrations/IntegrationDialog'
 import { useI18n } from '../i18n'
 import { describeIntegrationError } from '../components/integrations/integrationPresentation'
+import { NodeOnboarding } from '../components/integrations/NodeOnboarding'
 import type {
   InventoryObject, IntegrationManagementMode, IntegrationOverview, IntegrationResponse, IntegrationSyncSession,
   RemnawaveConfigProfileSummary, RemnawaveHostSummary, RemnawaveNodeSummary,
@@ -266,6 +267,7 @@ function NodesTab({ organizationId, integrationId, managementMode }: {
   const unbind = useUnbindNode(organizationId, integrationId)
   const orgPath = `/organizations/${encodeURIComponent(organizationId)}`
   return <>
+    <NodeOnboarding organizationId={organizationId} integrationId={integrationId} />
     {unbind.isError ? <InlineAlert tone="danger" title={t.bindError}>{describeIntegrationError(unbind.error, i18n)}</InlineAlert> : null}
     <InventoryTable<RemnawaveNodeSummary> kind="nodes" organizationId={organizationId} integrationId={integrationId}
       title={t.tabs.nodes} emptyTitle={t.emptyNodes} withState

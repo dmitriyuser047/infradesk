@@ -62,10 +62,12 @@ final class PostgresServerProfileRepository extends ServerProfileRepository[Conn
 
   override def hasActiveRun(org: UUID, resourceId: UUID): ConnectionIO[Boolean] = sql"""
     select exists(select 1 from provisioning_run where organization_id=$org and resource_id=$resourceId and status in ('QUEUED','RUNNING'))
+      or exists(select 1 from remnawave_node_onboarding where organization_id=$org and resource_id=$resourceId and state in ('QUEUED','RUNNING'))
   """.query[Boolean].unique
 
   override def executionGeneration(org: UUID, resourceId: UUID): ConnectionIO[Long] = sql"""
-    select count(*) from provisioning_run where organization_id=$org and resource_id=$resourceId and request_id is not null
+    select (select count(*) from provisioning_run where organization_id=$org and resource_id=$resourceId and request_id is not null)
+      + (select count(*) from remnawave_node_onboarding where organization_id=$org and resource_id=$resourceId and request_id is not null)
   """.query[Long].unique
 
   override def assignment(org: UUID, resourceId: UUID): ConnectionIO[Option[ServerProfileAssignment]] =

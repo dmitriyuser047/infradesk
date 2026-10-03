@@ -11,3 +11,12 @@ for file,names in [('SshProfileObserver.scala',['FileProbe']),('ProfilePackageIn
  for name in names:
   body=re.search(r'val '+name+r'\s*=\s*"""(.*?)"""',s,re.S).group(1)
   (out/(name+'.sh')).write_text(body,encoding='utf-8',newline='\n')
+
+s=(repo/'src/main/scala/integration/ssh/SshRemnawaveNodeRemote.scala').read_text(encoding='utf-8')
+proof=re.search(r'private val ManagedFileProof = """(.*?)"""\.stripMargin',s,re.S).group(1)
+def margin(text): return '\n'.join(line.split('|',1)[1] if '|' in line and line.split('|',1)[0].strip()=='' else line for line in text.splitlines())
+for name in ['InstallationProof','Start']:
+ body=re.search(r'private val '+name+r' = "set -u; " \+ ManagedFileProof \+ """(.*?)"""\.stripMargin',s,re.S).group(1)
+ (out/('Node'+name+'.sh')).write_text('set -u; '+margin(proof)+margin(body),encoding='utf-8',newline='\n')
+body=re.search(r'private val Preflight = """(.*?)"""\.stripMargin',s,re.S).group(1)
+(out/'NodePreflight.sh').write_text(margin(body),encoding='utf-8',newline='\n')
