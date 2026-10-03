@@ -14,7 +14,10 @@ object NodeProvisioningCapability {
   case object CreateReconciliation extends NodeProvisioningCapability("NODE_CREATE_RECONCILIATION")
 }
 
-/** Runtime evidence, not the provider's static feature advertisement. Never contains credentials. */
+/** Runtime evidence for node provisioning only, not permission for actions or config deployment.
+  * The provider advertises those independent contracts through IntegrationCapability.
+  * Never contains credentials.
+  */
 final case class NodeApiCompatibility(serverVersion: Option[String], apiGeneration: Option[String],
   sourceCommit: Option[String], capabilities: Set[NodeProvisioningCapability], blocker: Option[String]) {
   def provisioningReady: Boolean = blocker.isEmpty && Set[NodeProvisioningCapability](

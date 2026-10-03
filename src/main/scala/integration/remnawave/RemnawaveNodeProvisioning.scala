@@ -87,12 +87,13 @@ final class RemnawaveNodeProvisioning(client: RemnawaveClient) extends NodeProvi
     case _ => NodeCreateReconciliation.NotProven
   }
 
-  private[remnawave] def requireCompatible(context: IntegrationRuntimeContext): IO[NodeApiCompatibility] =
+  // This gate belongs only to the reviewed create/install/reconciliation contract.
+  private def requireProvisioningCompatible(context: IntegrationRuntimeContext): IO[NodeApiCompatibility] =
     inspect(context).flatMap(actual => IO.raiseUnless(actual.provisioningReady)(
       RemnawaveErrors.error(actual.blocker.getOrElse(unconfirmed))).as(actual))
 
   private def requireReviewed(context: IntegrationRuntimeContext, reviewed: NodeApiCompatibility): IO[NodeApiCompatibility] =
-    requireCompatible(context).flatMap { actual =>
+    requireProvisioningCompatible(context).flatMap { actual =>
       IO.raiseUnless(reviewed.provisioningReady && reviewed.serverVersion == actual.serverVersion &&
         reviewed.apiGeneration == actual.apiGeneration && reviewed.sourceCommit == actual.sourceCommit)(
         RemnawaveErrors.error(changed)).as(actual)

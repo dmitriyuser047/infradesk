@@ -5,6 +5,7 @@ import application.integration.{IntegrationError, IntegrationRuntimeContext}
 import cats.effect.{IO, Ref}
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
+import domain.configuration.CanonicalJson
 import domain.integration._
 import io.circe.Json
 import io.circe.parser.parse
@@ -58,6 +59,9 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
           case "/prefix/api/system/metadata" => IO.pure(Response[IO](Status.Ok).withEntity(metadataBody.getOrElse(metadata(version))))
           case "/prefix/api/system/stats" => IO.pure(Response[IO](Status.Ok).withEntity("{\"response\":{\"uptime\":1,\"users\":{\"totalUsers\":0}}}"))
           case "/prefix/api/nodes" if request.method == Method.GET => IO.pure(listing(items))
+          case "/prefix/api/hosts" => IO.pure(listing(Nil))
+          case "/prefix/api/config-profiles" if request.method == Method.GET =>
+            IO.pure(envelope(Json.obj("configProfiles" -> Json.arr())))
           case path if path == s"/prefix/api/nodes/$nodeId" && request.method == Method.GET => IO.pure(envelope(node()))
           case "/prefix/api/keygen" => IO.pure(envelope(Json.obj(keyField -> Json.fromString(registrationSecret))))
           case _ => write(request)
@@ -99,18 +103,18 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
   }
 
   test("unknown versions, future patches, prereleases, custom builds and malformed metadata fail closed") {
-    List("3.4.5", "3.5.0", "4.0.0", "3.4.4-beta.1", "2.7.4").foreach { version =>
-      val (transport, provider, seen) = setup(version, List(node()))
+    List("3.4.5", "3.5.0", "3.5-custom", "4.0.0", "3.4.4-beta.1", "2.7.4").foreach { version =>
+      val (transport, _, seen) = setup(version, List(node()))
       val api = transport.inspect(context).unsafeRunSync()
       assert(!api.provisioningReady)
       assertEquals(api.capabilities, Set[NodeProvisioningCapability](
         NodeProvisioningCapability.Inventory, NodeProvisioningCapability.Status))
-      assert(transport.createNode(context, intent, api).unsafeRunSync().isInstanceOf[NodeCreateOutcome.Rejected])
-      assert(transport.installationData(context, api).attempt.unsafeRunSync().isLeft)
-      assert(provider.executeAction(context, nodeId.toString, IntegrationActionCode.NodeRestart).unsafeRunSync()
-        .isInstanceOf[IntegrationActionRemoteOutcome.DefinitelyFailed])
-      assert(provider.updateConfigProfile(context, UUID.randomUUID().toString, Json.obj(), "0" * 64).unsafeRunSync()
-        .isInstanceOf[IntegrationActionRemoteOutcome.DefinitelyFailed])
+      assertEquals(transport.createNode(context, intent, api).unsafeRunSync(),
+        NodeCreateOutcome.Rejected("INTEGRATION_API_CONTRACT_UNCONFIRMED"))
+      assertEquals(transport.installationData(context, api).attempt.unsafeRunSync().left.toOption
+        .collect { case e: IntegrationError => e.code }, Some("INTEGRATION_API_CONTRACT_UNCONFIRMED"))
+      assertEquals(transport.reconcileCreate(context, intent, api).attempt.unsafeRunSync().left.toOption
+        .collect { case e: IntegrationError => e.code }, Some("INTEGRATION_API_CONTRACT_UNCONFIRMED"))
       assertEquals(transport.getNode(context, nodeId).unsafeRunSync().externalId, nodeId)
       assert(!seen.get.unsafeRunSync().exists(c => c._1 != "GET" || c._2.endsWith("/keygen")))
     }
@@ -120,6 +124,66 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
       assert(!api.provisioningReady)
       transport.createNode(context, intent, api).unsafeRunSync()
       assert(!seen.get.unsafeRunSync().exists(_._1 == "POST"))
+    }
+  }
+
+  test("unconfirmed provisioning does not block sync with a valid Stage 24 inventory contract") {
+    val inventoryNode = node().deepMerge(Json.obj(
+      "lastStatusChange" -> Json.Null, "isTrafficTrackingActive" -> Json.False,
+      "trafficLimitBytes" -> Json.Null, "trafficUsedBytes" -> Json.Null,
+      "countryCode" -> Json.fromString("FI"), "providerUuid" -> Json.Null,
+      "provider" -> Json.Null, "versions" -> Json.Null, "system" -> Json.Null,
+      "xrayUptime" -> Json.fromInt(0), "usersOnline" -> Json.fromInt(0)))
+    val (transport, provider, seen) = setup("3.5-custom", List(inventoryNode))
+    assert(!transport.inspect(context).unsafeRunSync().provisioningReady)
+    seen.set(Nil).unsafeRunSync()
+    val inventory = provider.observe(context).unsafeRunSync()
+    assertEquals(inventory.objects.map(_.externalId), List(nodeId.toString))
+    assertEquals(inventory.completeObjectTypes, IntegrationObjectType.All.toSet)
+    assertEquals(seen.get.unsafeRunSync().map(c => (c._1, c._2)).toSet, Set(
+      ("GET", "/prefix/api/nodes"), ("GET", "/prefix/api/hosts"), ("GET", "/prefix/api/config-profiles")))
+  }
+
+  private val unconfirmedMetadata = List(metadata("3.5-custom"), metadata("3.4.4", Some("f" * 40)), "{}", "not json")
+
+  test("provisioning blocked but enable, disable and restart still use their own validated action contract") {
+    unconfirmedMetadata.foreach { raw =>
+      val (transport, provider, seen) = setup(metadataBody = Some(raw), write = request =>
+        IO.pure(if (request.uri.path.renderString.endsWith("/restart")) Response[IO](Status.Accepted)
+          else envelope(Json.obj("uuid" -> Json.fromString(nodeId.toString)))))
+      val api = transport.inspect(context).unsafeRunSync()
+      assert(!api.provisioningReady)
+      assertEquals(transport.createNode(context, intent, api).unsafeRunSync(),
+        NodeCreateOutcome.Rejected("INTEGRATION_API_CONTRACT_UNCONFIRMED"))
+      seen.set(Nil).unsafeRunSync()
+      List(IntegrationActionCode.NodeEnable, IntegrationActionCode.NodeDisable,
+        IntegrationActionCode.NodeRestart).foreach { action =>
+        assertEquals(provider.executeAction(context, nodeId.toString, action).unsafeRunSync(),
+          IntegrationActionRemoteOutcome.Succeeded)
+      }
+      assertEquals(seen.get.unsafeRunSync(), List(
+        ("POST", s"/prefix/api/nodes/$nodeId/actions/enable", ""),
+        ("POST", s"/prefix/api/nodes/$nodeId/actions/disable", ""),
+        ("POST", s"/prefix/api/nodes/$nodeId/actions/restart", "{\"forceRestart\":false}")))
+    }
+  }
+
+  test("provisioning blocked but config deployment still validates its independent PATCH contract") {
+    val profileId = intent.configProfileId.toString
+    val config = Json.obj("inbounds" -> Json.arr())
+    unconfirmedMetadata.foreach { raw =>
+      val (transport, provider, seen) = setup(metadataBody = Some(raw), write = _ => IO.pure(envelope(Json.obj(
+        "uuid" -> Json.fromString(profileId), "config" -> config,
+        "updatedAt" -> Json.fromString("2026-10-03T10:00:00Z")))))
+      val api = transport.inspect(context).unsafeRunSync()
+      assert(!api.provisioningReady)
+      assertEquals(transport.createNode(context, intent, api).unsafeRunSync(),
+        NodeCreateOutcome.Rejected("INTEGRATION_API_CONTRACT_UNCONFIRMED"))
+      seen.set(Nil).unsafeRunSync()
+      assertEquals(provider.updateConfigProfile(context, profileId, config, CanonicalJson.sha256(config)).unsafeRunSync(),
+        IntegrationActionRemoteOutcome.Succeeded)
+      assertEquals(seen.get.unsafeRunSync(), List(("PATCH", "/prefix/api/config-profiles",
+        Json.obj("uuid" -> Json.fromString(profileId), "config" -> config).noSpaces)))
     }
   }
 

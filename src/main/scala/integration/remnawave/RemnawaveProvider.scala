@@ -29,11 +29,7 @@ final class RemnawaveProvider(client: RemnawaveClient)
 
   override def updateConfigProfile(context: IntegrationRuntimeContext, externalId: String,
     config: io.circe.Json, desiredSha256: String): IO[IntegrationActionRemoteOutcome] =
-    (nodes.requireCompatible(context) *> credentialOf(context).flatMap(
-      client.updateConfigProfile(context.baseUrl, _, externalId, config, desiredSha256))).handleError {
-      case e: application.integration.IntegrationError => IntegrationActionRemoteOutcome.DefinitelyFailed(e.code)
-      case _ => IntegrationActionRemoteOutcome.DefinitelyFailed("INTEGRATION_API_CONTRACT_UNCONFIRMED")
-    }
+    credentialOf(context).flatMap(client.updateConfigProfile(context.baseUrl, _, externalId, config, desiredSha256))
 
   override def testConnection(context: IntegrationRuntimeContext): IO[IntegrationTestResult] =
     credentialOf(context).flatMap(credential => IO.monotonic.flatMap(started =>
@@ -46,11 +42,7 @@ final class RemnawaveProvider(client: RemnawaveClient)
 
   override def executeAction(context: IntegrationRuntimeContext, externalId: String,
     action: IntegrationActionCode): IO[IntegrationActionRemoteOutcome] =
-    (nodes.requireCompatible(context) *> credentialOf(context).flatMap(
-      client.action(context.baseUrl, _, externalId, action))).handleError {
-      case e: application.integration.IntegrationError => IntegrationActionRemoteOutcome.DefinitelyFailed(e.code)
-      case _ => IntegrationActionRemoteOutcome.DefinitelyFailed("INTEGRATION_API_CONTRACT_UNCONFIRMED")
-    }
+    credentialOf(context).flatMap(client.action(context.baseUrl, _, externalId, action))
 
   private def credentialOf(context: IntegrationRuntimeContext): IO[RemnawaveCredential] = context.credential match {
     case credential: RemnawaveCredential => IO.pure(credential)
