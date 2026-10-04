@@ -103,7 +103,7 @@ final class RemnawaveFleetRolloutWorker[Tx[_]: MonadThrow](rollouts: RemnawaveFl
     token: UUID): IO[Unit] = {
     val running = r.copy(state = FleetRolloutState.Running, startedAt = r.startedAt.orElse(Some(now)))
     r.phase match {
-      case FleetRolloutPhase.Validate => service.drift(r.organizationId, r).pipe(runner.run(_)).flatMap {
+      case FleetRolloutPhase.Validate => service.drift(r.organizationId, r, now).pipe(runner.run(_)).flatMap {
         case Some(code) => finalize(terminal(running, FleetRolloutState.Failed, Some(code), now), token)
         case None =>
           val next = if (r.snapshot.shared.required) FleetRolloutPhase.ApplySharedConfig else firstApply(r)
@@ -143,17 +143,21 @@ final class RemnawaveFleetRolloutWorker[Tx[_]: MonadThrow](rollouts: RemnawaveFl
           for {
             recovered <- if (base.configRolloutId.nonEmpty) IO.pure(base.configRolloutId)
               else child.configByRequest(r.organizationId, base.childRequestId)
-            impact <- child.sharedImpact(r.organizationId, r.integrationId, shared.inventoryConfigProfileId,
-              shared.revisionNumber).attempt
             started <- recovered match {
               case Some(cid) => IO.pure(Right(cid))
-              case None => impact match {
-                case Right(None) => IO.pure(Left(ChildOutcome.Succeeded))
-                case Left(e) => IO.pure(Left(ChildOutcome.Failed(FleetRolloutChildren.codeOf(e))))
-                case Right(Some(_)) => saveAction(base, token) *> child.startConfig(actor, r.integrationId,
-                  shared.inventoryConfigProfileId, shared.revisionNumber, base.childRequestId).attempt
-                  .map(_.leftMap(e => ChildOutcome.Failed(FleetRolloutChildren.codeOf(e))))
-              }
+              case None => for {
+                impact <- child.sharedImpact(r.organizationId, r.integrationId, shared.inventoryConfigProfileId,
+                  shared.revisionNumber).attempt
+                checkAt <- IO.realTimeInstant
+                admission <- impact.traverse(value => runner.run(service.sharedAdmission(r.organizationId, r, value, checkAt)))
+                result <- admission match {
+                  case Left(e) => IO.pure(Left(ChildOutcome.Failed(FleetRolloutChildren.codeOf(e))))
+                  case Right(Some(code)) => IO.pure(Left(ChildOutcome.Failed(code)))
+                  case Right(None) => saveAction(base, token) *> child.startConfig(actor, r.integrationId,
+                    shared.inventoryConfigProfileId, shared.revisionNumber, base.childRequestId).attempt
+                    .map(_.leftMap(e => ChildOutcome.Failed(FleetRolloutChildren.codeOf(e))))
+                }
+              } yield result
             }
             result <- started match {
               case Left(done) => IO.pure(done)

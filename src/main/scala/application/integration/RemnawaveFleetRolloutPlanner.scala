@@ -31,7 +31,7 @@ object RemnawaveFleetRolloutPlanner {
   def estimatedMutations(snapshot: FleetRolloutSnapshot): Int =
     snapshot.members.filter(_.mutable).map(_.actions.size).sum + (if (snapshot.shared.required) 1 else 0)
 
-  private def actionsFor(reasons: Set[FleetDriftReason]): List[FleetActionKind] = {
+  private[integration] def actionsFor(reasons: Set[FleetDriftReason]): List[FleetActionKind] = {
     import FleetDriftReason._
     List(
       Option.when(reasons(ServerProfileAssignmentMismatch))(FleetActionKind.ServerProfileAssign),
@@ -42,7 +42,7 @@ object RemnawaveFleetRolloutPlanner {
     ).flatten
   }
 
-  private def unsupported(reasons: Set[FleetDriftReason]): List[String] = {
+  private[integration] def unsupported(reasons: Set[FleetDriftReason]): List[String] = {
     import FleetDriftReason._
     val handled: Set[FleetDriftReason] = Set(ServerProfileAssignmentMismatch, ServerProfileContentDrift,
       PanelCidrDrift, DesiredNodeStateDrift, ActualNodeStateDrift, ConfigRevisionDrift)

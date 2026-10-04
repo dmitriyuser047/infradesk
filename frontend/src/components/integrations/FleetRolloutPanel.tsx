@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ApiError } from '../../api/httpClient'
 import { activeRolloutState, useFleetRollout, useFleetRolloutControl, useFleetRollouts, usePreviewFleetRollout, useRefreshFleet,
   useStartFleetRollout } from '../../api/remnawaveFleets'
 import { useI18n } from '../../i18n'
@@ -56,6 +57,8 @@ const texts = {
       NETWORK_FIREWALL: 'Firewall', NODE_PORT: 'Node port', DESIRED_STATE: 'Node state', VERIFY: 'Verify',
       CONFIG_ROLLOUT: 'Shared configuration' } as Record<string, string>,
     issues: {
+      REMNAWAVE_FLEET_ROLLOUT_REFRESH_REQUIRED: 'Fresh evidence is required. Refresh the fleet before starting or resuming.',
+      REMNAWAVE_FLEET_ROLLOUT_PLAN_CHANGED: 'The approved conditions changed. Refresh the fleet and build a new plan.',
       REFRESH_REQUIRED: 'Evidence is stale', REMNAWAVE_FLEET_ARCHIVED: 'The fleet is archived',
       NODE_PORT_CHANGE_UNSUPPORTED: 'Changing the node port is not supported',
       REMNAWAVE_FLEET_SHARED_CONFIG_EXTERNAL_DEPENDENCY: 'Nodes outside the fleet depend on the shared configuration and cannot be verified',
@@ -173,6 +176,8 @@ const texts = {
       NETWORK_FIREWALL: 'Файрвол', NODE_PORT: 'Порт узла', DESIRED_STATE: 'Состояние узла', VERIFY: 'Проверка',
       CONFIG_ROLLOUT: 'Общая конфигурация' } as Record<string, string>,
     issues: {
+      REMNAWAVE_FLEET_ROLLOUT_REFRESH_REQUIRED: 'Нужны свежие данные. Обновите fleet перед запуском или продолжением.',
+      REMNAWAVE_FLEET_ROLLOUT_PLAN_CHANGED: 'Условия согласованного плана изменились. Обновите fleet и постройте новый план.',
       REFRESH_REQUIRED: 'Данные устарели', REMNAWAVE_FLEET_ARCHIVED: 'Fleet в архиве',
       NODE_PORT_CHANGE_UNSUPPORTED: 'Смена порта узла не поддерживается',
       REMNAWAVE_FLEET_SHARED_CONFIG_EXTERNAL_DEPENDENCY: 'От общей конфигурации зависят узлы вне fleet, их нельзя проверить',
@@ -254,6 +259,9 @@ const stateTone = (state: string): StatusTone => state === 'SUCCEEDED' ? 'succes
 const issueLabel = (copy: Copy, issue: RolloutIssue) =>
   `${copy.issues[issue.code] ?? issue.code}${issue.node ? ` · ${issue.node}` : ''}`
 
+const errorLabel = (copy: Copy, error: unknown) =>
+  error instanceof ApiError ? copy.issues[error.code] ?? copy.requestError : copy.requestError
+
 export function FleetRolloutPanel({ organizationId, integrationId, fleetId, desiredRevisionId, members, canControl }: {
   organizationId: string; integrationId: string; fleetId: string; desiredRevisionId: string | null
   members: FleetMember[]; canControl: boolean
@@ -272,7 +280,7 @@ export function FleetRolloutPanel({ organizationId, integrationId, fleetId, desi
     actions={canControl && desiredRevisionId && !active
       ? <button className="secondary-button" type="button" onClick={() => setPlanning(true)}>{copy.deploy}</button>
       : undefined}>
-    {control.isError ? <InlineAlert tone="danger" title={copy.requestError}>{copy.requestError}</InlineAlert> : null}
+    {control.isError ? <InlineAlert tone="danger" title={copy.requestError}>{errorLabel(copy, control.error)}</InlineAlert> : null}
     {active ? <InlineAlert tone="info" title={copy.inProgress}>{copy.states[active.state]}</InlineAlert> : null}
     {shown ? <RolloutCard copy={copy} organizationId={organizationId} integrationId={integrationId}
       fleetId={fleetId} rollout={shown} canControl={canControl} busy={control.isPending}
@@ -390,7 +398,10 @@ function PlanDialog({ copy, organizationId, integrationId, fleetId, revisionId, 
         onClick={() => { setPreviewKey(optionsKey); preview.mutate({ revisionId, canaryMemberIds: canary, waveSize,
           automaticRollback: automatic, pauseAfterCanary: pauseAfter }) }}>{copy.makePlan}</button>
       {result?.status === 'READY' ? <button className="primary-button" type="button" disabled={start.isPending}
-        onClick={() => start.mutate({ planId: result.planId, requestId }, { onSuccess: onClose })}>{copy.start}</button> : null}
+        onClick={() => start.mutate({ planId: result.planId, requestId }, { onSuccess: onClose,
+          onError: error => { if (error instanceof ApiError && (error.code === 'REMNAWAVE_FLEET_ROLLOUT_REFRESH_REQUIRED' ||
+            error.code === 'REMNAWAVE_FLEET_ROLLOUT_PLAN_CHANGED')) setPreviewKey(null) },
+        })}>{copy.start}</button> : null}
     </>}>
     <p className="muted">{copy.planDetail}</p>
     <fieldset><legend>{copy.canary}</legend>
@@ -407,7 +418,8 @@ function PlanDialog({ copy, organizationId, integrationId, fleetId, revisionId, 
     <label className="checkbox-row"><input type="checkbox" checked={pauseAfter}
       onChange={e => { setPreviewKey(null); setPauseAfter(e.target.checked) }} />{copy.pauseAfterCanary}</label>
 
-    {preview.isError || start.isError || refresh.isError ? <InlineAlert tone="danger" title={copy.requestError}>{copy.requestError}</InlineAlert> : null}
+    {preview.isError || start.isError || refresh.isError ? <InlineAlert tone="danger" title={copy.requestError}>
+      {errorLabel(copy, start.error ?? preview.error ?? refresh.error)}</InlineAlert> : null}
     {result?.status === 'REFRESH_REQUIRED' ? <>
       <InlineAlert tone="warning" title={copy.refreshRequired}>{copy.refreshDetail}</InlineAlert>
       <ul>{result.issues.map((i, n) => <li key={n}>{issueLabel(copy, i)}</li>)}</ul>

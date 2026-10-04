@@ -206,4 +206,22 @@ describe('FleetRolloutPanel', () => {
     fireEvent.click(screen.getByText('Details'))
     expect((await screen.findAllByText('desired-action-1')).length).toBe(2)
   })
+
+  it.each(['en', 'ru'] as const)('invalidates a plan rejected at Start for stale evidence and explains refresh in %s', async locale => {
+    const { calls } = mount(null, (url, method) => {
+      if (url.endsWith('/rollouts/preview')) return json({ status: 'READY', planId: 'p1',
+        plan: rollout().snapshot, expiresAt: '2026-10-06T10:00:00Z', estimatedMutations: 1, warnings: [] })
+      if (url.endsWith('/rollouts') && method === 'POST') return json({
+        code: 'REMNAWAVE_FLEET_ROLLOUT_REFRESH_REQUIRED', message: 'Fresh evidence required' }, 409)
+      return undefined
+    }, { locale })
+    fireEvent.click(await screen.findByText(locale === 'en' ? 'Deploy' : 'Развернуть'))
+    fireEvent.click(screen.getByText(locale === 'en' ? 'Build plan' : 'Построить план'))
+    fireEvent.click(await screen.findByText(locale === 'en' ? 'Start rollout' : 'Запустить раскатку'))
+    expect(await screen.findByText(locale === 'en'
+      ? 'Fresh evidence is required. Refresh the fleet before starting or resuming.'
+      : 'Нужны свежие данные. Обновите fleet перед запуском или продолжением.')).toBeTruthy()
+    expect(screen.queryByText(locale === 'en' ? 'Start rollout' : 'Запустить раскатку')).toBeNull()
+    expect(calls.filter(c => c.url.endsWith('/rollouts') && c.method === 'POST')).toHaveLength(1)
+  })
 })

@@ -164,4 +164,46 @@ final class FleetRolloutPlannerSpec extends FunSuite {
     assertEquals(verdict(fresh), GateResult.Waiting)
     assertEquals(verdict(fresh.copy(assessment = fresh.assessment.map(_.copy(localObservedAt = Some(now.plusSeconds(4)))))), GateResult.Passed)
   }
+
+  test("resume admission requires a fresh compliant healthy completed canary and fresh pending waves") {
+    val canary = row("canary", FleetCompliance.Drifted, drift)
+    val pending = row("wave", FleetCompliance.Drifted, drift)
+    val snapshot = plan(facts(canary, pending)) match {
+      case RolloutPlanOutcome.Ready(s, _) => s
+      case other => fail(s"unexpected $other")
+    }
+    val completed = canary.copy(assessment = canary.assessment.map(_.copy(compliance = FleetCompliance.Compliant, driftReasons = Nil)))
+    def check(rows: List[FleetMemberRow]) = FleetRolloutPreconditions.members(snapshot, rows,
+      Set(canary.membership.id), Some(now.minusSeconds(20)), now, stale)
+    assertEquals(check(List(completed, pending)), None)
+    assertEquals(check(List(canary, pending)), Some(FleetRolloutPreconditions.PlanChanged))
+    assertEquals(check(List(completed.copy(assessment = completed.assessment.map(_.copy(health = FleetHealth.Degraded))), pending)),
+      Some(FleetRolloutPreconditions.PlanChanged))
+    assertEquals(check(List(completed.copy(assessment = completed.assessment.map(_.copy(computedAt = now.minusSeconds(3600)))), pending)),
+      Some(FleetRolloutPreconditions.RefreshRequired))
+    assertEquals(check(List(completed, pending.copy(assessment = None))), Some(FleetRolloutPreconditions.RefreshRequired))
+  }
+
+  test("admission refuses different revision/version, absent required evidence, and new unplanned drift") {
+    val r = row("node", FleetCompliance.Drifted, drift)
+    val snapshot = plan(facts(r)) match {
+      case RolloutPlanOutcome.Ready(s, _) => s
+      case other => fail(s"unexpected $other")
+    }
+    def check(row: FleetMemberRow) = FleetRolloutPreconditions.members(snapshot, List(row), Set.empty,
+      Some(now.minusSeconds(20)), now, stale)
+    assertEquals(check(r), None)
+    assertEquals(check(r.copy(connected = false)), Some(FleetRolloutPreconditions.PlanChanged))
+    assertEquals(check(r.copy(membership = r.membership.copy(version = 2))), Some(FleetRolloutPreconditions.PlanChanged))
+    List(r.copy(assessment = r.assessment.map(_.copy(fleetRevisionId = uid))),
+      r.copy(assessment = r.assessment.map(_.copy(membershipVersion = 2))),
+      r.copy(assessment = r.assessment.map(_.copy(localObservedAt = None))),
+      r.copy(assessment = r.assessment.map(_.copy(serverObservedAt = None)))).foreach { changed =>
+        assertEquals(check(changed), Some(FleetRolloutPreconditions.RefreshRequired))
+      }
+    assertEquals(check(r.copy(assessment = r.assessment.map(_.copy(driftReasons = drift :+ FleetDriftReason.PanelCidrDrift)))),
+      Some(FleetRolloutPreconditions.PlanChanged))
+    assertEquals(check(r.copy(assessment = r.assessment.map(_.copy(health = FleetHealth.Unknown)))),
+      Some(FleetRolloutPreconditions.PlanChanged))
+  }
 }

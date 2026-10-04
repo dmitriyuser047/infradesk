@@ -42,9 +42,9 @@ reported with the delivered GitHub pull request; they are not inferred from loca
 | 32. Permissions | Organization read for detail/history. Preview/start/pause/resume/rollback require ManageIntegrations + ManageConfigurations + ExecuteOperations. UI hides mutation controls from readers. |
 | 33. Audit | Requested, paused, resumed, rollback-requested and finished outcomes use typed audit actions. Payload/logging contains IDs and stable codes, not secrets or configuration content. |
 | 34. RU / EN | Rollout controls, phases, states, preview issues, baselines, rollback capability and shared consumers in both languages. Child-engine codes remain available for diagnosis. |
-| 35. Backend tests | Full `testFull` with PostgreSQL enabled: 1120 total, 1101 passed, 19 skipped, zero failures/errors. Includes planner, gates, crash recovery and pause/rollback tests. |
+| 35. Backend tests | Local full `testFull` with PostgreSQL enabled: 1141 total, 1122 passed, 19 skipped, zero failures/errors. Includes planner, gates, crash recovery, pause/rollback and current admission evidence tests. |
 | 36. PostgreSQL tests | Separate disposable PostgreSQL 17 cluster, no production DB. Nine Fleet rollout integration cases cover admission/idempotency, active locks, controls, fencing, snapshot immutability, owned desired-state correlation, terminal guards and source pinning; migration/upgrade and existing integration suites run too. |
-| 37. Frontend tests | Full Vitest run: 682 passed in 79 files. Rollout panel: 16 tests, including invalidated preview, permissions, consumers, capabilities, history and UNKNOWN. |
+| 37. Frontend tests | Full Vitest run: 684 passed in 79 files. Rollout panel: 18 tests, including invalidated preview/Start admission, permissions, consumers, capabilities, history and UNKNOWN. |
 | 38. Production build | `npm run build` and `Universal / stage`; production Docker topology and backup/restore are verified by the full GitHub CI workflow. Exact completion status is in delivery. |
 | 39. CI | Push triggers the full workflow for the implementation SHA. Acceptance requires all job groups, including images and both self-hosted jobs. The CI run is linked in delivery; local results do not substitute for it. |
 | 40. Stage 24 regression | Existing configuration deployment/rollout and desired-state suites included in full backend/frontend verification. |
@@ -55,6 +55,30 @@ reported with the delivered GitHub pull request; they are not inferred from loca
 | 45. Disposable Fleet canary | NOT RUN: no disposable Fleet / trusted SSH / test Panel access supplied. Unit and PostgreSQL tests are not a real VPS canary. Operational acceptance remains pending. |
 | 46. Limitations | Node port changes, config-profile rebinding, active inbound changes, unmanaged local installation changes and image lifecycle are blocked. No guaranteed complete rollback without prior baselines. Uncertain remote outcome requires manual inspection. Shared Config changes affect every consumer and cannot be node-canary isolated. Real Panel/SSH behavior awaits disposable canary. |
 | 47. Stage 25F | Not started. Desired image/version, compatibility matrix, digest policy, update detection, controlled pull, rolling upgrade/restart/recreate, version verification and upgrade rollback remain separate work after 25E acceptance. |
+
+## Safety follow-up: current admission evidence
+
+Start, Resume and worker VALIDATE recheck every snapshot member against current Stage25D evidence.
+The assessment must name the exact revision and membership version; computed time, oldest evidence,
+inventory evidence and required ServerProfile/local evidence must be fresh, as must the last sync.
+UNKNOWN/BLOCKED, new unsupported/unplanned drift, newly relevant blockers and health regression reject
+admission. Completed canaries must still be COMPLIANT + HEALTHY before later waves can resume.
+An explicitly previewed DEGRADED baseline remains permitted for unfinished members; a later regression
+from HEALTHY does not. Current inventory health flags are checked alongside the assessment.
+
+Stale or missing evidence returns `REMNAWAVE_FLEET_ROLLOUT_REFRESH_REQUIRED`, without changing the
+Start/Resume state or launching remote mutations. Changed safe preconditions return PLAN_CHANGED.
+The UI explains both codes in RU/EN and invalidates a Start plan rejected on these grounds.
+
+Immediately before the first shared Config child, current inventory consumer identities, freshness,
+enabled external health and baseline Config hash are checked again. The new impact must match the
+approved baseline/target revisions and hashes and the current consumer/health counts. Drift blocks the
+child. Recovery of an existing Config child bypasses new-child admission and observes its durable
+outcome, without restarting or interpreting the post-mutation Config as an approved baseline.
+
+Regression tests cover Start/Resume refusals with zero mutations, stale queued VALIDATE, completed
+canary freshness, changed shared health/identities/hash/impact, successful fresh admission, child
+recovery, and RU/EN rejection of stale Start plans.
 
 ## Disposable canary procedure
 

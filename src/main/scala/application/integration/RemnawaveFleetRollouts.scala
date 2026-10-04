@@ -119,8 +119,42 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
     } yield result
   }
 
-  /** Why the snapshot no longer matches the world, or none. Reads only the database. */
-  def drift(org: UUID, rollout: RemnawaveFleetRollout): Tx[Option[String]] = {
+  /** Rechecks current Stage25D observations even while the approved snapshot is still unexpired. */
+  def admissionEvidence(org: UUID, rollout: RemnawaveFleetRollout, now: Instant): Tx[Option[String]] = for {
+    rows <- query.memberRows(org, rollout.fleetId)
+    members <- rollouts.members(rollout.id)
+    sync <- query.lastSuccessfulSyncAt(org, rollout.integrationId)
+    consumers <- if (rollout.snapshot.shared.required)
+      query.configConsumers(org, rollout.integrationId, rollout.snapshot.content.externalConfigProfileId.toString)
+      else List.empty[FleetRolloutConfigConsumer].pure[Tx]
+  } yield FleetRolloutPreconditions.members(rollout.snapshot, rows,
+    members.filter(_.state == FleetRolloutMemberState.Succeeded).map(_.membershipId).toSet, sync, now, settings.staleAfter)
+    .orElse(Option.when(rollout.snapshot.shared.required)(
+      FleetRolloutPreconditions.consumers(rollout.snapshot, consumers, now, settings.staleAfter)).flatten)
+
+  /** Used only before the first Config child; recovery must observe the existing child instead. */
+  def sharedAdmission(org: UUID, rollout: RemnawaveFleetRollout,
+    impact: Option[IntegrationConfigRolloutPreview], now: Instant): Tx[Option[String]] = for {
+    evidence <- admissionEvidence(org, rollout, now)
+    consumers <- query.configConsumers(org, rollout.integrationId, rollout.snapshot.content.externalConfigProfileId.toString)
+    config <- inventory.findObject(org, rollout.integrationId, rollout.snapshot.content.inventoryConfigProfileId, forUpdate = false)
+    hash = config.filter(n => n.isActive && n.externalId == rollout.snapshot.content.externalConfigProfileId.toString).flatMap(_.summary match {
+      case p: RemnawaveConfigProfileSummary => p.configSha256
+      case _ => None
+    })
+  } yield evidence.orElse(FleetRolloutPreconditions.consumers(rollout.snapshot, consumers, now, settings.staleAfter))
+    .orElse(Option.when(config.exists(n => !n.lastSeenAt.isAfter(now.minusMillis(settings.staleAfter.toMillis)) ||
+      n.lastSeenAt.isAfter(now)))(FleetRolloutPreconditions.RefreshRequired))
+    .orElse(FleetRolloutPreconditions.impact(rollout.snapshot, consumers, impact, hash))
+
+  /** Why current admission evidence or immutable snapshot pins no longer permit execution. */
+  def drift(org: UUID, rollout: RemnawaveFleetRollout, now: Instant): Tx[Option[String]] =
+    admissionEvidence(org, rollout, now).flatMap {
+      case Some(code) => Option(code).pure[Tx]
+      case None => snapshotDrift(org, rollout)
+    }
+
+  private def snapshotDrift(org: UUID, rollout: RemnawaveFleetRollout): Tx[Option[String]] = {
     val snapshot = rollout.snapshot
     for {
       integration <- integrations.findById(org, rollout.integrationId)
@@ -183,7 +217,7 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
         _ <- MonadThrow[Tx].raiseUnless(plan.expiresAt.isAfter(now))(error("REMNAWAVE_FLEET_ROLLOUT_PLAN_EXPIRED"))
         active <- fleets.rolloutActive(actor.organizationId, fleetId)
         _ <- MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_FLEET_ROLLOUT_ACTIVE"))
-        changed <- drift(actor.organizationId, plan)
+        changed <- drift(actor.organizationId, plan, now)
         _ <- changed.traverse_(code => MonadThrow[Tx].raiseError[Unit](error(code)))
         started <- rollouts.start(actor.organizationId, planId, requestId, now)
         _ <- MonadThrow[Tx].raiseUnless(started)(error("REMNAWAVE_FLEET_ROLLOUT_ACTIVE"))
@@ -238,7 +272,7 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
       current <- loadedRollout(actor.organizationId, integrationId, fleetId, id)
       result <- current.state match {
         case FleetRolloutState.Paused => for {
-          changed <- drift(actor.organizationId, current)
+          changed <- drift(actor.organizationId, current, now)
           _ <- changed.traverse_(code => MonadThrow[Tx].raiseError[Unit](error(code)))
           moved <- rollouts.resume(actor.organizationId, id, now)
           _ <- MonadThrow[Tx].raiseUnless(moved)(error("REMNAWAVE_FLEET_ROLLOUT_NOT_PAUSED"))
@@ -290,6 +324,7 @@ object RemnawaveFleetRollouts {
     case "REMNAWAVE_FLEET_ROLLOUT_NOT_FOUND" => "Rollout was not found"
     case "REMNAWAVE_FLEET_ROLLOUT_ACTIVE" => "A rollout is already in progress for this fleet"
     case "REMNAWAVE_FLEET_ROLLOUT_PLAN_CHANGED" => "The fleet or its nodes changed since the preview; preview again"
+    case "REMNAWAVE_FLEET_ROLLOUT_REFRESH_REQUIRED" => "Fresh fleet evidence is required; refresh the fleet and try again"
     case "REMNAWAVE_FLEET_ROLLOUT_PLAN_EXPIRED" => "The preview expired; preview again"
     case "REMNAWAVE_FLEET_ROLLOUT_PLAN_USED" => "This preview was already started"
     case "REMNAWAVE_FLEET_ROLLOUT_REQUEST_REUSED" => "This request id belongs to another rollout"

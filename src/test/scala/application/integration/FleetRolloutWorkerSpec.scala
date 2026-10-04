@@ -37,6 +37,12 @@ final class FleetRolloutWorkerSpec extends FunSuite {
         throw new AssertionError(s"Unexpected dependency call: ${kind.getSimpleName}.${method.getName}")
     }).asInstanceOf[A]
 
+  private def port[A](kind: Class[A])(read: PartialFunction[String, AnyRef]): A =
+    Proxy.newProxyInstance(kind.getClassLoader, Array(kind), new InvocationHandler {
+      def invoke(proxy: Any, method: Method, args: Array[AnyRef]): AnyRef =
+        read.applyOrElse(method.getName, (name: String) => throw new AssertionError(s"Unexpected ${kind.getSimpleName}.$name"))
+    }).asInstanceOf[A]
+
   private def plan(wave: Int, actions: List[FleetActionKind]) = FleetRolloutMemberPlan(uid, 1L, uid, uid,
     "external-node", s"edge-$wave", wave, wave, None, actions,
     FleetMemberBaseline(Some(uid), Some(4), Some(IntegrationDesiredNodeState.Disabled), "DRIFTED", "HEALTHY"))
@@ -76,19 +82,21 @@ final class FleetRolloutWorkerSpec extends FunSuite {
   private final class MemoryRepository(var current: RemnawaveFleetRollout,
     var memberList: List[RemnawaveFleetRolloutMember], var journal: List[RemnawaveFleetRolloutAction] = Nil)
     extends RemnawaveFleetRolloutRepository[IO] {
+    var startWrites = 0
+    var resumeWrites = 0
     private def no[A]: IO[A] = IO.raiseError(new AssertionError("Unexpected repository operation"))
     def insertPlan(r: RemnawaveFleetRollout, m: List[RemnawaveFleetRolloutMember]): IO[Unit] = no
     def rollout(o: UUID, f: UUID, id: UUID): IO[Option[RemnawaveFleetRollout]] = IO(Some(current))
     def rolloutForUpdate(o: UUID, f: UUID, id: UUID): IO[Option[RemnawaveFleetRollout]] = rollout(o, f, id)
     def rolloutById(id: UUID): IO[Option[RemnawaveFleetRollout]] = IO(Some(current))
-    def byRequest(o: UUID, id: UUID): IO[Option[RemnawaveFleetRollout]] = no
+    def byRequest(o: UUID, id: UUID): IO[Option[RemnawaveFleetRollout]] = IO.pure(None)
     def history(o: UUID, f: UUID, limit: Int): IO[List[RemnawaveFleetRollout]] = no
     def activeOf(o: UUID, f: UUID): IO[Option[RemnawaveFleetRollout]] = no
-    def start(o: UUID, id: UUID, request: UUID, now: Instant): IO[Boolean] = no
+    def start(o: UUID, id: UUID, request: UUID, now: Instant): IO[Boolean] = IO { startWrites += 1; true }
     def members(id: UUID): IO[List[RemnawaveFleetRolloutMember]] = IO.pure(memberList)
     def actions(id: UUID): IO[List[RemnawaveFleetRolloutAction]] = IO.pure(journal)
     def requestPause(o: UUID, id: UUID, by: UUID, now: Instant): IO[Boolean] = no
-    def resume(o: UUID, id: UUID, now: Instant): IO[Boolean] = no
+    def resume(o: UUID, id: UUID, now: Instant): IO[Boolean] = IO { resumeWrites += 1; true }
     def requestRollback(o: UUID, id: UUID, by: UUID, scope: FleetRollbackScope, now: Instant): IO[Boolean] = no
     def claimDue(owner: UUID, token: UUID, now: Instant, until: Instant, limit: Int) = IO {
       current = current.copy(claimToken = Some(token)); List(current)
@@ -114,8 +122,9 @@ final class FleetRolloutWorkerSpec extends FunSuite {
     def purgeExpired(now: Instant, limit: Int): IO[Int] = IO.pure(0)
   }
 
-  private final class MemoryQuery(rows: List[FleetMemberRow]) extends RemnawaveFleetQuery[IO] {
-    def configConsumers(o: UUID, i: UUID, p: String) = IO.pure(List.empty[FleetRolloutConfigConsumer])
+  private final class MemoryQuery(var rows: List[FleetMemberRow],
+    var consumers: List[FleetRolloutConfigConsumer] = Nil) extends RemnawaveFleetQuery[IO] {
+    def configConsumers(o: UUID, i: UUID, p: String) = IO(consumers)
     private def no[A]: IO[A] = IO.raiseError(new AssertionError("Unexpected query"))
     def memberRows(o: UUID, f: UUID): IO[List[FleetMemberRow]] = IO.pure(rows)
     def summaries(o: UUID, i: UUID, ids: List[UUID]): IO[Map[UUID, RemnawaveFleetSummary]] = no
@@ -124,7 +133,7 @@ final class FleetRolloutWorkerSpec extends FunSuite {
     def provenance(o: UUID, i: UUID, r: UUID, n: UUID): IO[Option[FleetLocalProvenance]] = no
     def serverProfileName(o: UUID, id: UUID): IO[Option[String]] = no
     def configurationProfileName(o: UUID, id: UUID): IO[Option[String]] = no
-    def lastSuccessfulSyncAt(o: UUID, i: UUID): IO[Option[Instant]] = no
+    def lastSuccessfulSyncAt(o: UUID, i: UUID): IO[Option[Instant]] = IO.realTimeInstant.map(t => Some(t.minusSeconds(30)))
   }
 
   private final class FakeChildren extends FleetRolloutChildren {
@@ -135,6 +144,12 @@ final class FleetRolloutWorkerSpec extends FunSuite {
     var refreshCalls = 0
     var verifyCalls = 0
     var desiredCalls = 0
+    var configStarts = 0
+    var configReads = 0
+    var impactReads = 0
+    var recoveredConfig: Option[UUID] = None
+    var impact: Option[IntegrationConfigRolloutPreview] = Some(IntegrationConfigRolloutPreview(8, 9, "a" * 64,
+      "b" * 64, 1, 1, 0))
     var afterApply: () => Unit = () => ()
     var restored: ChildOutcome = ChildOutcome.Running
     private def no[A]: IO[A] = IO.raiseError(new AssertionError("Unexpected child mutation"))
@@ -154,18 +169,20 @@ final class FleetRolloutWorkerSpec extends FunSuite {
     def setDesired(a: ActorContext, i: UUID, n: UUID, state: IntegrationDesiredNodeState): IO[Unit] =
       IO { desiredCalls += 1 }
     def removeDesired(a: ActorContext, i: UUID, n: UUID): IO[Unit] = no
-    def sharedImpact(o: UUID, i: UUID, id: UUID, n: Int): IO[Option[IntegrationConfigRolloutPreview]] = no
-    def startConfig(a: ActorContext, i: UUID, id: UUID, n: Int, request: UUID): IO[UUID] = no
-    def configOutcome(o: UUID, id: UUID): IO[ChildOutcome] = no
-    def configByRequest(o: UUID, request: UUID): IO[Option[UUID]] = no
+    def sharedImpact(o: UUID, i: UUID, id: UUID, n: Int): IO[Option[IntegrationConfigRolloutPreview]] = IO {
+      impactReads += 1; impact
+    }
+    def startConfig(a: ActorContext, i: UUID, id: UUID, n: Int, request: UUID): IO[UUID] = IO { configStarts += 1; uid }
+    def configOutcome(o: UUID, id: UUID): IO[ChildOutcome] = IO { configReads += 1; ChildOutcome.Succeeded }
+    def configByRequest(o: UUID, request: UUID): IO[Option[UUID]] = IO(recoveredConfig)
     def verifyRestored(a: ActorContext, i: UUID, f: UUID, p: FleetRolloutMemberPlan,
       kinds: Set[FleetActionKind], cidrs: Option[List[String]], port: Int, after: Instant): IO[ChildOutcome] =
       IO { verifyCalls += 1; restored }
     def refresh(o: UUID, i: UUID, f: UUID, when: Instant): IO[Unit] = IO { refreshCalls += 1 }
   }
 
-  private def worker(repo: MemoryRepository, rows: List[FleetMemberRow], children: FakeChildren) = {
-    val query = new MemoryQuery(rows)
+  private def service(repo: MemoryRepository, query: MemoryQuery, children: FakeChildren,
+    configHash: String = "a" * 64) = {
     val auditEvents = new AuditEventRepository[IO] {
       def save(event: AuditEvent): IO[Unit] = IO.unit
       def saveAll(events: List[AuditEvent]): IO[Unit] = IO.unit
@@ -173,12 +190,29 @@ final class FleetRolloutWorkerSpec extends FunSuite {
     }
     val audit = new AuditRecorder[IO](auditEvents, new IdGenerator[IO] { def nextId: IO[UUID] = IO(uid) },
       new TimeProvider[IO] { def now: IO[Instant] = IO.realTimeInstant })
-    val service = new RemnawaveFleetRollouts[IO](unused(classOf[RemnawaveFleetRepository[IO]]), query, repo,
-      unused(classOf[IntegrationRepository[IO]]), unused(classOf[IntegrationInventoryRepository[IO]]),
+    val fleetPort = port(classOf[RemnawaveFleetRepository[IO]]) {
+      case "lockFleet" => IO.unit
+      case "rolloutActive" => IO.pure(false)
+    }
+    val integrationPort = port(classOf[IntegrationRepository[IO]]) {
+      case "findById" => IO.pure(Some(Integration(integrationId, org, "panel", IntegrationProviderType.Remnawave,
+        IntegrationBaseUrl.parse("https://panel.example.test").toOption.get, true, uid, false, at, at)))
+    }
+    val inventoryPort = port(classOf[IntegrationInventoryRepository[IO]]) {
+      case "findObject" => IO.realTimeInstant.map(_.minusSeconds(30)).map(t => Some(IntegrationInventoryObject(content.inventoryConfigProfileId,
+        org, integrationId, IntegrationObjectType.ConfigProfile, content.externalConfigProfileId.toString, "Config",
+        RemnawaveConfigProfileSummary(0, t, t, Nil, Nil, Some(configHash)), true, t, t, uid)))
+    }
+    new RemnawaveFleetRollouts[IO](fleetPort, query, repo, integrationPort, inventoryPort,
       unused(classOf[IntegrationBindingRepository[IO]]), children, audit, tx, FleetRolloutSettings(1.hour, 15.minutes, 25))
+  }
+
+  private def worker(repo: MemoryRepository, rows: List[FleetMemberRow], children: FakeChildren,
+    consumers: List[FleetRolloutConfigConsumer] = Nil, configHash: String = "a" * 64) = {
+    val query = new MemoryQuery(rows, consumers)
     val memberRunner = new FleetRolloutMemberRunner[IO](repo, children, tx,
       FleetMemberRunnerSettings(actionTimeout = 1.minute, pollInterval = 1.millis))
-    new RemnawaveFleetRolloutWorker[IO](repo, query, children, memberRunner, service, tx, logger,
+    new RemnawaveFleetRolloutWorker[IO](repo, query, children, memberRunner, service(repo, query, children, configHash), tx, logger,
       RemnawaveFleetRolloutWorkerSettings(pollInterval = 1.millis, claimLease = 60.seconds,
         verifyTimeout = 36500.days, maxMemberConcurrency = 1))
   }
@@ -334,7 +368,7 @@ final class FleetRolloutWorkerSpec extends FunSuite {
 
   test("pause requested during a child finishes it, but starts neither its next action nor the next member") {
     val plans = List(plan(0, List(FleetActionKind.ServerProfileApply, FleetActionKind.NetworkFirewall)),
-      plan(0, List(FleetActionKind.ServerProfileApply)))
+      plan(0, List(FleetActionKind.ServerProfileApply, FleetActionKind.NetworkFirewall)).copy(position = 1))
     val r = rollout(snapshot(plans), FleetRolloutPhase.ApplyCanary)
     val repo = new MemoryRepository(r, plans.map(p => member(r, p, FleetRolloutMemberState.Pending)))
     val children = new FakeChildren
@@ -342,10 +376,109 @@ final class FleetRolloutWorkerSpec extends FunSuite {
     worker(repo, Nil, children).tick.unsafeRunSync()
     assertEquals(repo.current.state, FleetRolloutState.Paused)
     assertEquals(repo.current.phase, FleetRolloutPhase.ApplyCanary)
-    assertEquals(repo.memberList.map(_.state), List(FleetRolloutMemberState.Running, FleetRolloutMemberState.Pending))
+    assertEquals(repo.memberList.count(_.state == FleetRolloutMemberState.Running), 1)
+    assertEquals(repo.memberList.count(_.state == FleetRolloutMemberState.Pending), 1)
     assertEquals(children.startCalls, 1)
     assertEquals(children.firewallCalls, 0)
     assertEquals(repo.journal.map(_.kind), List(FleetActionKind.ServerProfileApply))
     assertEquals(repo.journal.head.state, FleetActionState.Succeeded)
+  }
+
+  private def freshEvidence(p: FleetRolloutMemberPlan) = {
+    val t = Instant.now().minusSeconds(30)
+    val row = evidence(p, FleetCompliance.Drifted, FleetHealth.Healthy, List(FleetDriftReason.ServerProfileContentDrift))
+    row.copy(assessment = row.assessment.map(_.copy(computedAt = t,
+      inventoryObservedAt = Some(t), serverObservedAt = Some(t), localObservedAt = Some(t))))
+  }
+
+  List("computedAt", "oldestEvidenceAt", "UNKNOWN", "BLOCKED", "health", "blocker").foreach { problem =>
+    List(false, true).foreach { resume =>
+      test(s"${if (resume) "resume" else "start"} rejects current $problem before any state transition or mutation") {
+        val p = plan(0, List(FleetActionKind.ServerProfileApply))
+        val r = rollout(snapshot(List(p)), if (resume) FleetRolloutPhase.ApplyWaves else FleetRolloutPhase.Validate)
+          .copy(state = if (resume) FleetRolloutState.Paused else FleetRolloutState.Planned,
+            expiresAt = Instant.now().plusSeconds(3600))
+        val base = freshEvidence(p)
+        val row = base.copy(assessment = base.assessment.map(a => problem match {
+          case "computedAt" => a.copy(computedAt = Instant.now().minusSeconds(3600))
+          case "oldestEvidenceAt" => a.copy(serverObservedAt = Some(Instant.now().minusSeconds(3600)))
+          case "UNKNOWN" => a.copy(compliance = FleetCompliance.Unknown)
+          case "BLOCKED" => a.copy(compliance = FleetCompliance.Blocked)
+          case "health" => a.copy(health = FleetHealth.Degraded)
+          case _ => a.copy(rolloutBlockers = List(FleetRolloutBlocker.NoTrustedSsh))
+        }))
+        val repo = new MemoryRepository(r, List(member(r, p, FleetRolloutMemberState.Pending)))
+        val children = new FakeChildren
+        val svc = service(repo, new MemoryQuery(List(row)), children)
+        val result = (if (resume) svc.resume(ActorContext(actorId, org), integrationId, fleetId, r.id)
+          else svc.start(ActorContext(actorId, org), integrationId, fleetId, r.id, uid)).attempt.unsafeRunSync()
+        val expected = if (problem == "computedAt" || problem == "oldestEvidenceAt") FleetRolloutPreconditions.RefreshRequired
+          else FleetRolloutPreconditions.PlanChanged
+        assertEquals(result.left.toOption.collect { case e: IntegrationError => e.code }, Some(expected))
+        assertEquals(repo.startWrites + repo.resumeWrites, 0)
+        assertEquals(repo.current.state, r.state)
+        assertEquals(children.startCalls + children.configStarts + children.firewallCalls + children.desiredCalls, 0)
+      }
+    }
+  }
+
+  test("worker VALIDATE rejects evidence that expired after queue admission, with zero mutations") {
+    val p = plan(0, List(FleetActionKind.ServerProfileApply))
+    val r = rollout(snapshot(List(p)), FleetRolloutPhase.Validate)
+    val repo = new MemoryRepository(r, List(member(r, p, FleetRolloutMemberState.Pending)))
+    val children = new FakeChildren
+    worker(repo, List(evidence(p, FleetCompliance.Drifted, FleetHealth.Healthy)), children).tick.unsafeRunSync()
+    assertEquals(repo.current.state, FleetRolloutState.Failed)
+    assertEquals(repo.current.failureCode, Some(FleetRolloutPreconditions.RefreshRequired))
+    assertEquals(repo.journal, Nil)
+    assertEquals(children.startCalls + children.configStarts + children.firewallCalls, 0)
+  }
+
+  List("disconnected", "stale", "identities", "baseline", "impact").foreach { problem =>
+    test(s"first shared Config child is not started when current $problem differs from approval") {
+      val p = plan(0, List(FleetActionKind.ServerProfileApply))
+      val consumer = FleetRolloutConfigConsumer(uid, "external-01", "external", false, true, Instant.now().minusSeconds(30))
+      val s = snapshot(List(p), shared = true)
+      val r = rollout(s.copy(shared = s.shared.copy(consumers = List(consumer), externalNodes = 1)),
+        FleetRolloutPhase.ApplySharedConfig)
+      val current = problem match {
+        case "disconnected" => consumer.copy(connected = false)
+        case "stale" => consumer.copy(observedAt = Instant.now().minusSeconds(3600))
+        case "identities" => consumer.copy(externalNodeId = "replacement")
+        case _ => consumer
+      }
+      val repo = new MemoryRepository(r, List(member(r, p, FleetRolloutMemberState.Pending)))
+      val children = new FakeChildren
+      if (problem == "impact") children.impact = children.impact.map(_.copy(preexistingUnhealthyNodes = 1, healthyNodes = 0))
+      worker(repo, List(freshEvidence(p)), children, List(current),
+        if (problem == "baseline") "c" * 64 else "a" * 64).tick.unsafeRunSync()
+      assertEquals(children.configStarts, 0)
+      assertEquals(children.configReads, 0)
+      assertEquals(repo.current.state, FleetRolloutState.Failed)
+      assertEquals(repo.current.failureCode, Some(if (problem == "stale") FleetRolloutPreconditions.RefreshRequired
+        else FleetRolloutPreconditions.PlanChanged))
+    }
+  }
+
+  test("a first shared child starts with fresh matching approval; recovered child skips preflight and is only observed") {
+    val p = plan(0, List(FleetActionKind.ServerProfileApply))
+    val consumer = FleetRolloutConfigConsumer(uid, "external-01", "external", false, true, Instant.now().minusSeconds(30))
+    val s = snapshot(List(p), shared = true)
+    val r = rollout(s.copy(shared = s.shared.copy(consumers = List(consumer), externalNodes = 1)), FleetRolloutPhase.ApplySharedConfig)
+    val repo = new MemoryRepository(r, List(member(r, p, FleetRolloutMemberState.Pending)))
+    val children = new FakeChildren
+    worker(repo, List(freshEvidence(p)), children, List(consumer)).tick.unsafeRunSync()
+    assertEquals(children.configStarts, 1)
+    assertEquals(children.configReads, 1)
+    assertEquals(repo.current.phase, FleetRolloutPhase.VerifySharedConfig)
+
+    val recoveredRepo = new MemoryRepository(r, repo.memberList)
+    val recovered = new FakeChildren
+    recovered.recoveredConfig = Some(uid)
+    worker(recoveredRepo, Nil, recovered).tick.unsafeRunSync()
+    assertEquals(recovered.configStarts, 0)
+    assertEquals(recovered.impactReads, 0)
+    assertEquals(recovered.configReads, 1)
+    assertEquals(recoveredRepo.current.phase, FleetRolloutPhase.VerifySharedConfig)
   }
 }
