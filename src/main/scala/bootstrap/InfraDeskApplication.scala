@@ -80,7 +80,8 @@ object InfraDeskApplication {
             (if (config.integrations.desiredStateOperational) List(application.integrationDesiredStateWorker.run) else Nil) ++
             List(application.integrationConfigDeploymentWorker.run) ++
             (if (config.integrations.configRolloutsOperational)
-              List(application.integrationConfigRolloutWorker.run) else Nil)
+              List(application.integrationConfigRolloutWorker.run) else Nil) ++
+            (if (config.integrations.fleetsOperational) List(application.remnawaveFleetObserver.run) else Nil)
         val provisioningWorkers = (if (config.provisioning.enabled) List(application.provisioningWorker.run,application.remnawaveOnboardingWorker.run) else Nil) ++
           List(application.provisioningPlanCleanup.run)
         val workers = schedulerWorkers ++ notificationWorkers ++ configurationWorkers ++ ruleWorkers ++ provisioningWorkers ++

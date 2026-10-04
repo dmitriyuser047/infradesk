@@ -25,6 +25,7 @@ import { IntegrationDialog } from '../components/integrations/IntegrationDialog'
 import { useI18n } from '../i18n'
 import { describeIntegrationError } from '../components/integrations/integrationPresentation'
 import { NodeOnboarding } from '../components/integrations/NodeOnboarding'
+import { FleetSection } from '../components/integrations/FleetSection'
 import type {
   InventoryObject, IntegrationManagementMode, IntegrationOverview, IntegrationResponse, IntegrationSyncSession,
   RemnawaveConfigProfileSummary, RemnawaveHostSummary, RemnawaveNodeSummary,
@@ -32,7 +33,7 @@ import type {
 import { InvalidRoutePage } from './InvalidRoutePage'
 import '../styles/pages/integrations.css'
 
-const Tabs = ['overview', 'nodes', 'hosts', 'profiles', 'history', 'actions'] as const
+const Tabs = ['overview', 'nodes', 'hosts', 'profiles', 'fleet', 'history', 'actions'] as const
 type Tab = typeof Tabs[number]
 const PageSize = 50
 
@@ -122,6 +123,7 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
       {test.error instanceof ApiError ? errorText(test.error.code) : describeIntegrationError(test.error, i18n)}</InlineAlert> : null}
     <WorkspaceTabs tabs={[{ id: 'overview', label: t.tabs.overview }, { id: 'nodes', label: t.tabs.nodes, count: integration.overview?.inventory.nodes.active },
       { id: 'hosts', label: t.tabs.hosts, count: integration.overview?.inventory.hosts.active }, { id: 'profiles', label: t.tabs.profiles, count: integration.overview?.inventory.configProfiles.active }, { id: 'history', label: t.tabs.history },
+      { id: 'fleet', label: t.tabs.fleet },
       { id: 'actions', label: t.actionTab.title }]}
     active={active} onChange={selectTab} />
     <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
@@ -131,6 +133,7 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
         managementMode={integration.managementMode} /> : null}
       {active === 'hosts' ? <HostsTab organizationId={organizationId} integrationId={integrationId} /> : null}
       {active === 'profiles' ? <ProfilesTab organizationId={organizationId} integrationId={integrationId} /> : null}
+      {active === 'fleet' ? <FleetSection organizationId={organizationId} integrationId={integrationId} /> : null}
       {active === 'history' ? <HistoryTab organizationId={organizationId} integrationId={integrationId} /> : null}
       {active === 'actions' ? <ActionsTab organizationId={organizationId} integrationId={integrationId} /> : null}
     </div>

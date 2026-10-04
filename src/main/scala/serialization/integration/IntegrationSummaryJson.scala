@@ -35,7 +35,8 @@ object IntegrationSummaryJson {
       "activeConfigProfileUuid" -> node.activeConfigProfileUuid.asJson,
       "tags" -> node.tags.asJson,
       "providerUuid" -> node.providerUuid.asJson,
-      "providerName" -> node.providerName.asJson)
+      "providerName" -> node.providerName.asJson,
+      "activeInboundIds" -> node.activeInboundIds.asJson)
     case host: RemnawaveHostSummary => Json.obj(
       "address" -> host.address.asJson,
       "port" -> host.port.asJson,
@@ -93,8 +94,11 @@ object IntegrationSummaryJson {
     tags <- c.get[List[String]]("tags")
     providerUuid <- c.get[Option[String]]("providerUuid")
     providerName <- c.get[Option[String]]("providerName")
+    // Absent in rows stored before active inbounds were observed; None means unobserved, not empty.
+    inbounds <- c.get[Option[List[String]]]("activeInboundIds")
   } yield RemnawaveNodeSummary(address, port, connected, connecting, disabled, lastStatusChange, xray, nodeVersion,
-    uptime, tracking, limit, used, online, country, cpuCount, cpuModel, ram, profile, tags, providerUuid, providerName)
+    uptime, tracking, limit, used, online, country, cpuCount, cpuModel, ram, profile, tags, providerUuid, providerName,
+    inbounds)
 
   private def host(c: HCursor): Decoder.Result[IntegrationObjectSummary] = for {
     address <- c.get[String]("address")

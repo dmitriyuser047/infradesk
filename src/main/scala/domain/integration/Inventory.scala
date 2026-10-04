@@ -55,7 +55,9 @@ final case class RemnawaveNodeSummary(
   activeConfigProfileUuid: Option[String],
   tags: List[String],
   providerUuid: Option[String],
-  providerName: Option[String]
+  providerName: Option[String],
+  /** None when the snapshot that stored this row predates the field, which is not an empty set. */
+  activeInboundIds: Option[List[String]] = None
 ) extends IntegrationObjectSummary {
   def state: RemnawaveNodeState = RemnawaveNodeState.of(isDisabled, isConnected, isConnecting)
 }

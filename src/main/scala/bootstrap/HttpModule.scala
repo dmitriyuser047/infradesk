@@ -180,6 +180,7 @@ object HttpModule {
         new IntegrationDesiredStateRoutes(application.integrationDesiredStates, transactionRunner, authorization,
           loggers.integration).routes <+>
         new infrastructure.http.RemnawaveOnboardingRoutes(application.remnawaveOnboarding,authorization,loggers.integration).routes <+>
+        new infrastructure.http.RemnawaveFleetRoutes(application.remnawaveFleets,authorization,loggers.integration).routes <+>
         new IntegrationConfigProfileRoutes(application.integrationConfigProfiles,
           application.integrationConfigRollouts, authorization).routes <+>
         new AuditRoutes(application.listAuditEvents, transactionRunner, authorization).routes <+>

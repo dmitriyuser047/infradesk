@@ -58,6 +58,8 @@ object RemnawaveInventory {
     country <- string(c.downField("countryCode"))
     tags <- list(c.downField("tags"))(string)
     activeProfile <- nullable(c.downField("configProfile").downField("activeConfigProfileUuid"))(uuid)
+    activeInbounds <- list(c.downField("configProfile").downField("activeInbounds"))(inbound =>
+      uuid(inbound.downField("uuid"))).filter(ids => ids.distinct.size == ids.size)
     providerUuid <- nullable(c.downField("providerUuid"))(uuid)
     providerName <- nullable(c.downField("provider"))(provider => string(provider.downField("name")))
     versions <- nullable(c.downField("versions"))(v =>
@@ -89,7 +91,8 @@ object RemnawaveInventory {
     activeConfigProfileUuid = activeProfile,
     tags = tags,
     providerUuid = providerUuid,
-    providerName = providerName
+    providerName = providerName,
+    activeInboundIds = Some(activeInbounds)
   ))
 
   private def host(c: HCursor): Option[ObservedIntegrationObject] = for {

@@ -44,6 +44,17 @@ final case class IntegrationConfigRolloutsConfig(enabled: Boolean = true,
   require(pollInterval > Duration.Zero && batchSize > 0 && maxConcurrency > 0 &&
     claimLease > Duration.Zero && verifyTimeout > Duration.Zero)
 }
+/** Read-only fleet drift detection. When disabled, no assessment is computed and nothing observes. */
+final case class RemnawaveFleetConfig(enabled: Boolean = true, pollInterval: FiniteDuration = 10.seconds,
+  batchSize: Int = 20, maxConcurrency: Int = 2, claimLease: FiniteDuration = 120.seconds,
+  observationTimeout: FiniteDuration = 45.seconds, recheckInterval: FiniteDuration = 300.seconds,
+  staleAfter: FiniteDuration = 900.seconds) {
+  require(pollInterval > Duration.Zero && batchSize > 0 && maxConcurrency > 0,
+    "Fleet observer concurrency and batch size must be positive")
+  require(claimLease > observationTimeout, "Fleet claim lease must exceed the observation timeout")
+  require(recheckInterval > Duration.Zero && staleAfter > Duration.Zero,
+    "Fleet recheck and staleness windows must be positive")
+}
 final case class IntegrationsConfig(
   requestTimeout: FiniteDuration,
   allowPrivateDestinations: Boolean,
@@ -51,6 +62,7 @@ final case class IntegrationsConfig(
   actions: IntegrationActionsConfig = IntegrationActionsConfig(),
   desiredState: IntegrationDesiredStateConfig = IntegrationDesiredStateConfig(),
   configRollouts: IntegrationConfigRolloutsConfig = IntegrationConfigRolloutsConfig(),
+  fleets: RemnawaveFleetConfig = RemnawaveFleetConfig(),
   inventoryMaxResponseBytes: Int = 8 * 1024 * 1024,
   inventoryMaxObjects: Int = 10000
 ) {
@@ -58,6 +70,8 @@ final case class IntegrationsConfig(
 
   val desiredStateOperational: Boolean = desiredState.enabled && sync.enabled && actions.enabled
   val configRolloutsOperational: Boolean = configRollouts.enabled && sync.enabled
+  /** Drift detection compares against observed inventory, so it needs synchronization to run. */
+  val fleetsOperational: Boolean = fleets.enabled && sync.enabled
 }
 final case class SchedulerConfig(
   enabled: Boolean,
@@ -138,6 +152,7 @@ object AppConfig {
       integrationActions <- parseIntegrationActions(values)
       integrationDesiredState <- parseIntegrationDesiredState(values)
       integrationConfigRollouts <- parseIntegrationConfigRollouts(values)
+      remnawaveFleets <- parseRemnawaveFleets(values)
       _ <- Either.cond(!integrationDesiredState.enabled || (integrationSync.enabled && integrationActions.enabled),
         (), new IllegalArgumentException("INFRADESK_INTEGRATIONS_DESIRED_STATE_ENABLED requires " +
           "INFRADESK_INTEGRATIONS_SYNC_ENABLED=true and INFRADESK_INTEGRATIONS_ACTIONS_ENABLED=true"))
@@ -156,7 +171,25 @@ object AppConfig {
       notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment, provisioning,
       ConfigurationRuleSettings(enabled = ruleEnabled, reconcileInterval = ruleInterval.seconds),
       IntegrationsConfig(integrationTimeout.seconds, integrationAllowPrivate, integrationSync,
-        integrationActions, integrationDesiredState, integrationConfigRollouts, inventoryMaxBytes, inventoryMaxObjects))
+        integrationActions, integrationDesiredState, integrationConfigRollouts, remnawaveFleets,
+        inventoryMaxBytes, inventoryMaxObjects))
+
+  private def parseRemnawaveFleets(
+    values: Map[String, String]): Either[IllegalArgumentException, RemnawaveFleetConfig] =
+    for {
+      enabled <- parseBoolean(values, "INFRADESK_INTEGRATIONS_FLEETS_ENABLED", default = true)
+      poll <- bounded(values, "INFRADESK_INTEGRATIONS_FLEETS_POLL_INTERVAL_SECONDS", 10, 1, 3600)
+      batch <- bounded(values, "INFRADESK_INTEGRATIONS_FLEETS_BATCH_SIZE", 20, 1, 500)
+      concurrency <- bounded(values, "INFRADESK_INTEGRATIONS_FLEETS_MAX_CONCURRENCY", 2, 1, 32)
+      observation <- bounded(values, "INFRADESK_INTEGRATIONS_FLEETS_OBSERVATION_TIMEOUT_SECONDS", 45, 5, 600)
+      lease <- bounded(values, "INFRADESK_INTEGRATIONS_FLEETS_CLAIM_LEASE_SECONDS", 120, 10, 3600)
+      recheck <- bounded(values, "INFRADESK_INTEGRATIONS_FLEETS_RECHECK_SECONDS", 300, 30, 86400)
+      stale <- bounded(values, "INFRADESK_INTEGRATIONS_FLEETS_STALE_AFTER_SECONDS", 900, 60, 604800)
+      _ <- Either.cond(lease > observation, (), new IllegalArgumentException(
+        "INFRADESK_INTEGRATIONS_FLEETS_CLAIM_LEASE_SECONDS must exceed " +
+          "INFRADESK_INTEGRATIONS_FLEETS_OBSERVATION_TIMEOUT_SECONDS"))
+    } yield RemnawaveFleetConfig(enabled, poll.seconds, batch, concurrency, lease.seconds,
+      observation.seconds, recheck.seconds, stale.seconds)
 
   private def parseIntegrationConfigRollouts(
     values: Map[String, String]): Either[IllegalArgumentException, IntegrationConfigRolloutsConfig] =

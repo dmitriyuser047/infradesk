@@ -585,7 +585,7 @@ export const ru: Messages = {
     autoDisabled: 'Автоматическая синхронизация отключена',
     autoDisabledDetail: 'Включите интеграцию, чтобы наблюдать Remnawave автоматически. Ручная синхронизация работает всегда.',
     readOnly: 'Наблюдаемое состояние Remnawave. Действия показаны отдельно.',
-    tabs: { overview: 'Обзор', nodes: 'Ноды', hosts: 'Хосты', profiles: 'Профили конфигурации', history: 'История синхронизаций' },
+    tabs: { overview: 'Обзор', nodes: 'Ноды', hosts: 'Хосты', profiles: 'Профили конфигурации', fleet: 'Fleet', history: 'История синхронизаций' },
     lastSync: 'Последняя синхронизация', lastSuccess: 'Последняя успешная', nextRun: 'Следующая синхронизация', never: 'Никогда',
     notScheduled: 'Не запланирована', lastError: 'Последняя ошибка',
     counts: (active: number, inactive: number) => inactive > 0 ? `${active} · ${inactive} больше не найдено` : `${active}`,

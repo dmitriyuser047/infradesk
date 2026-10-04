@@ -116,6 +116,8 @@ final case class ApplicationComponents(
   serverProfiles: ServerProfiles[IO, ConnectionIO],
   remnawaveOnboarding: application.integration.RemnawaveOnboarding[ConnectionIO],
   remnawaveOnboardingWorker: application.integration.RemnawaveOnboardingWorker[ConnectionIO],
+  remnawaveFleets: application.integration.RemnawaveFleets[ConnectionIO],
+  remnawaveFleetObserver: application.integration.RemnawaveFleetObserver[ConnectionIO],
   configurationPromotions: ConfigurationPromotions[IO, ConnectionIO],
   configurationRollouts: ConfigurationRollouts[IO, ConnectionIO],
   configurationRolloutWorker: ConfigurationRolloutWorker[ConnectionIO],
@@ -439,6 +441,21 @@ object ApplicationModule {
       integrationRepository,integrationSecretRepository,integrations.integrationCredentialCipher,integrations.integrationProviderRegistry,
       provisioningTargetQuery,serverProfiles,integrationInventoryQuery,transactionRunner,onboardingRemote,auditRecorder,
       config.provisioning,provisioningRunRepository)
+    val fleetRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetRepository
+    val fleetQuery = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetQuery
+    val fleetConfig = config.integrations.fleets
+    val remnawaveFleets = new application.integration.RemnawaveFleets[ConnectionIO](fleetRepository, fleetQuery,
+      integrationRepository, integrationInventoryRepository, integrationBindingRepository,
+      integrationConfigRepository, configurationProfileQuery, serverProfileRepository,
+      integrationSyncStateRepository, auditRecorder, transactionRunner,
+      application.integration.FleetSettings(fleetConfig.staleAfter, fleetConfig.recheckInterval))
+    // Read-only: the observer gets the node transport for observation and no mutation service at all.
+    val remnawaveFleetObserver = new application.integration.RemnawaveFleetObserver[ConnectionIO](fleetRepository,
+      fleetQuery, provisioningTargetQuery, onboardingRemote, transactionRunner, loggers.integration,
+      application.integration.RemnawaveFleetObserverSettings(fleetConfig.enabled, fleetConfig.pollInterval,
+        fleetConfig.batchSize, fleetConfig.maxConcurrency, fleetConfig.claimLease,
+        fleetConfig.observationTimeout, fleetConfig.recheckInterval, fleetConfig.staleAfter),
+      UUID.randomUUID())
     val remnawaveOnboardingWorker = new application.integration.RemnawaveOnboardingWorker[ConnectionIO](onboardingRepository,
       onboardingOperations,integrations.integrationProviderRegistry,onboardingRemote,
       integration.secret.NodeInstallationCipher.fromConfig(config.secretEncryption),transactionRunner,auditRecorder,
@@ -476,6 +493,8 @@ object ApplicationModule {
       serverProfiles = serverProfiles,
       remnawaveOnboarding = remnawaveOnboarding,
       remnawaveOnboardingWorker = remnawaveOnboardingWorker,
+      remnawaveFleets = remnawaveFleets,
+      remnawaveFleetObserver = remnawaveFleetObserver,
       configurationPromotions = new ConfigurationPromotions[IO, ConnectionIO](
         configurationPromotionRepository, configurationProfileQuery, transactionTimeProvider, auditRecorder,
         readOnlySnapshotRunner, transactionRunner),

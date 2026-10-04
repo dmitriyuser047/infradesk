@@ -575,7 +575,7 @@ export const en = {
     autoDisabled: 'Automatic synchronization is disabled',
     autoDisabledDetail: 'Enable the integration to observe Remnawave automatically. Sync now works either way.',
     readOnly: 'Observed state from Remnawave. Actions appear separately.',
-    tabs: { overview: 'Overview', nodes: 'Nodes', hosts: 'Hosts', profiles: 'Configuration profiles', history: 'Sync history' },
+    tabs: { overview: 'Overview', nodes: 'Nodes', hosts: 'Hosts', profiles: 'Configuration profiles', fleet: 'Fleet', history: 'Sync history' },
     lastSync: 'Last sync', lastSuccess: 'Last successful sync', nextRun: 'Next synchronization', never: 'Never',
     notScheduled: 'Not scheduled', lastError: 'Last error',
     counts: (active: number, inactive: number) => inactive > 0 ? `${active} · ${inactive} no longer found` : `${active}`,
