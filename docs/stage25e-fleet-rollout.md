@@ -42,9 +42,9 @@ reported with the delivered GitHub pull request; they are not inferred from loca
 | 32. Permissions | Organization read for detail/history. Preview/start/pause/resume/rollback require ManageIntegrations + ManageConfigurations + ExecuteOperations. UI hides mutation controls from readers. |
 | 33. Audit | Requested, paused, resumed, rollback-requested and finished outcomes use typed audit actions. Payload/logging contains IDs and stable codes, not secrets or configuration content. |
 | 34. RU / EN | Rollout controls, phases, states, preview issues, baselines, rollback capability and shared consumers in both languages. Child-engine codes remain available for diagnosis. |
-| 35. Backend tests | Local full `testFull` with PostgreSQL enabled: 1141 total, 1122 passed, 19 skipped, zero failures/errors. Includes planner, gates, crash recovery, pause/rollback and current admission evidence tests. |
+| 35. Backend tests | Local full `testFull` with PostgreSQL enabled: 1146 total, 1127 passed, 19 skipped, zero failures/errors. Includes planner, gates, crash recovery, pause/rollback and admission before new wave actions. |
 | 36. PostgreSQL tests | Separate disposable PostgreSQL 17 cluster, no production DB. Nine Fleet rollout integration cases cover admission/idempotency, active locks, controls, fencing, snapshot immutability, owned desired-state correlation, terminal guards and source pinning; migration/upgrade and existing integration suites run too. |
-| 37. Frontend tests | Full Vitest run: 684 passed in 79 files. Rollout panel: 18 tests, including invalidated preview/Start admission, permissions, consumers, capabilities, history and UNKNOWN. |
+| 37. Frontend tests | Full Vitest run: 686 passed in 79 files. Rollout panel: 20 tests, including invalidated preview/Start admission, paused stale admission, permissions, consumers, capabilities, history and UNKNOWN. |
 | 38. Production build | `npm run build` and `Universal / stage`; production Docker topology and backup/restore are verified by the full GitHub CI workflow. Exact completion status is in delivery. |
 | 39. CI | Push triggers the full workflow for the implementation SHA. Acceptance requires all job groups, including images and both self-hosted jobs. The CI run is linked in delivery; local results do not substitute for it. |
 | 40. Stage 24 regression | Existing configuration deployment/rollout and desired-state suites included in full backend/frontend verification. |
@@ -79,6 +79,34 @@ outcome, without restarting or interpreting the post-mutation Config as an appro
 Regression tests cover Start/Resume refusals with zero mutations, stale queued VALIDATE, completed
 canary freshness, changed shared health/identities/hash/impact, successful fresh admission, child
 recovery, and RU/EN rejection of stale Start plans.
+
+## Final follow-up: admission before every new wave action
+
+`RemnawaveFleetRolloutWorker.applyWave` uses the existing `RemnawaveFleetRollouts.drift`
+guard before starting a pending member. It passes the same current admission check to
+`FleetRolloutMemberRunner`, which checks it again before every new forward action. The check
+uses current time and current persisted members on every invocation, including after downtime.
+Previous completed waves must remain COMPLIANT and HEALTHY; current-wave successes wait for
+the existing post-wave verification boundary rather than requiring an assessment between
+parallel member actions.
+
+Stale evidence pauses the parent with `PAUSED_REFRESH_REQUIRED` and the public
+`REMNAWAVE_FLEET_ROLLOUT_REFRESH_REQUIRED` code. A pending member remains PENDING and no
+action journal or child is created. No automatic refresh-and-mutate occurs. Operators refresh
+and explicitly resume through the same admission guard. Changed approved conditions fail the
+parent with PLAN_CHANGED, without automatic rollback caused by admission refusal.
+
+Journaled RUNNING work is recovered and observed before admission to new work: the existing
+profile child is read, its result is saved, and its next new action is refused if evidence has
+expired. Firewall uncertainty remains UNKNOWN and does not replay. UNKNOWN takes precedence
+over admission refusal and never advances or triggers automatic compensation.
+
+Regression coverage includes durable APPLY_WAVES downtime, freshly degraded canary, UNKNOWN
+previous wave, healthy positive progression, and stale recovery of an existing child followed
+by refusal of the next firewall mutation. RU/EN UI tests show the resumable pause reason.
+Targeted backend checks: 49 passed (36 worker + 13 planner). Frontend: 686 passed, production
+build passed. Full backend/PostgreSQL: 1146 total, 1127 passed, 19 platform skips, zero failures.
+`Universal / stage` passed. The delivery message records the exact fix SHA and its full GitHub CI result.
 
 ## Disposable canary procedure
 

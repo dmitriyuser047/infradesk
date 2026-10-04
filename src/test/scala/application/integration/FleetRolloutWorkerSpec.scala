@@ -193,18 +193,41 @@ final class FleetRolloutWorkerSpec extends FunSuite {
     val fleetPort = port(classOf[RemnawaveFleetRepository[IO]]) {
       case "lockFleet" => IO.unit
       case "rolloutActive" => IO.pure(false)
+      case "fleet" => IO.pure(Some(RemnawaveFleet(fleetId, org, integrationId, "fleet", "Fleet", None,
+        Some(revisionId), 1L, false, actorId, at, at)))
+      case "revision" => IO.pure(Some(RemnawaveFleetRevision(revisionId, org, fleetId, 3, 1,
+        "h" * 64, content, actorId, at)))
+      case "members" => IO(query.rows.map(_.membership))
+      case "membership" => IO.pure(None)
     }
     val integrationPort = port(classOf[IntegrationRepository[IO]]) {
       case "findById" => IO.pure(Some(Integration(integrationId, org, "panel", IntegrationProviderType.Remnawave,
         IntegrationBaseUrl.parse("https://panel.example.test").toOption.get, true, uid, false, at, at)))
     }
-    val inventoryPort = port(classOf[IntegrationInventoryRepository[IO]]) {
-      case "findObject" => IO.realTimeInstant.map(_.minusSeconds(30)).map(t => Some(IntegrationInventoryObject(content.inventoryConfigProfileId,
-        org, integrationId, IntegrationObjectType.ConfigProfile, content.externalConfigProfileId.toString, "Config",
-        RemnawaveConfigProfileSummary(0, t, t, Nil, Nil, Some(configHash)), true, t, t, uid)))
-    }
-    new RemnawaveFleetRollouts[IO](fleetPort, query, repo, integrationPort, inventoryPort,
-      unused(classOf[IntegrationBindingRepository[IO]]), children, audit, tx, FleetRolloutSettings(1.hour, 15.minutes, 25))
+    val inventoryPort = Proxy.newProxyInstance(classOf[IntegrationInventoryRepository[IO]].getClassLoader,
+      Array(classOf[IntegrationInventoryRepository[IO]]), new InvocationHandler {
+        def invoke(proxy: Any, method: Method, args: Array[AnyRef]): AnyRef = IO.realTimeInstant.map(_.minusSeconds(30)).map { t =>
+          val id = args(2).asInstanceOf[UUID]
+          Some(IntegrationInventoryObject(id, org, integrationId, IntegrationObjectType.ConfigProfile,
+            if (id == content.inventoryConfigProfileId) content.externalConfigProfileId.toString else "external-node",
+            "Inventory", RemnawaveConfigProfileSummary(0, t, t, Nil, Nil, Some(configHash)), true, t, t, uid))
+        }
+      }).asInstanceOf[IntegrationInventoryRepository[IO]]
+    val completeFleetPort = Proxy.newProxyInstance(classOf[RemnawaveFleetRepository[IO]].getClassLoader,
+      Array(classOf[RemnawaveFleetRepository[IO]]), new InvocationHandler {
+        def invoke(proxy: Any, method: Method, args: Array[AnyRef]): AnyRef =
+          if (method.getName == "membership") IO(query.rows.find(_.membership.id == args(2)).map(_.membership))
+          else method.invoke(fleetPort, args: _*)
+      }).asInstanceOf[RemnawaveFleetRepository[IO]]
+    val bindingPort = Proxy.newProxyInstance(classOf[IntegrationBindingRepository[IO]].getClassLoader,
+      Array(classOf[IntegrationBindingRepository[IO]]), new InvocationHandler {
+        def invoke(proxy: Any, method: Method, args: Array[AnyRef]): AnyRef = IO {
+          query.rows.find(_.membership.inventoryNodeId == args(1)).map(row => IntegrationResourceBinding(uid,
+            org, integrationId, row.membership.inventoryNodeId, row.membership.resourceId, actorId, at, at))
+        }
+      }).asInstanceOf[IntegrationBindingRepository[IO]]
+    new RemnawaveFleetRollouts[IO](completeFleetPort, query, repo, integrationPort, inventoryPort,
+      bindingPort, children, audit, tx, FleetRolloutSettings(1.hour, 15.minutes, 25))
   }
 
   private def worker(repo: MemoryRepository, rows: List[FleetMemberRow], children: FakeChildren,
@@ -373,7 +396,7 @@ final class FleetRolloutWorkerSpec extends FunSuite {
     val repo = new MemoryRepository(r, plans.map(p => member(r, p, FleetRolloutMemberState.Pending)))
     val children = new FakeChildren
     children.afterApply = () => { repo.current = repo.current.copy(pauseRequestedAt = Some(at)) }
-    worker(repo, Nil, children).tick.unsafeRunSync()
+    worker(repo, plans.map(freshEvidence), children).tick.unsafeRunSync()
     assertEquals(repo.current.state, FleetRolloutState.Paused)
     assertEquals(repo.current.phase, FleetRolloutPhase.ApplyCanary)
     assertEquals(repo.memberList.count(_.state == FleetRolloutMemberState.Running), 1)
@@ -382,6 +405,62 @@ final class FleetRolloutWorkerSpec extends FunSuite {
     assertEquals(children.firewallCalls, 0)
     assertEquals(repo.journal.map(_.kind), List(FleetActionKind.ServerProfileApply))
     assertEquals(repo.journal.head.state, FleetActionState.Succeeded)
+  }
+
+  List("stale", "degraded canary", "unknown previous wave", "fresh").foreach { condition =>
+    test(s"durable APPLY_WAVES admission after downtime: $condition") {
+      val prior = plan(if (condition == "unknown previous wave") 1 else 0, List(FleetActionKind.ServerProfileApply))
+      val next = plan(prior.wave + 1, List(FleetActionKind.ServerProfileApply))
+      val r = rollout(snapshot(List(prior, next)), FleetRolloutPhase.ApplyWaves).copy(currentWave = next.wave)
+      val repo = new MemoryRepository(r, List(member(r, prior, FleetRolloutMemberState.Succeeded),
+        member(r, next, FleetRolloutMemberState.Pending)))
+      val healthy = freshEvidence(prior)
+      val completed = healthy.copy(assessment = healthy.assessment.map(_.copy(compliance = FleetCompliance.Compliant,
+        driftReasons = Nil, health = if (condition == "degraded canary") FleetHealth.Degraded else FleetHealth.Healthy)))
+      val previous = condition match {
+        case "stale" => completed.copy(assessment = completed.assessment.map(_.copy(computedAt = at)))
+        case "unknown previous wave" => completed.copy(assessment = completed.assessment.map(_.copy(compliance = FleetCompliance.Unknown)))
+        case _ => completed
+      }
+      val children = new FakeChildren
+      worker(repo, List(previous, freshEvidence(next)), children).tick.unsafeRunSync()
+      if (condition == "fresh") {
+        assertEquals(children.startCalls, 1)
+        assertEquals(repo.current.phase, FleetRolloutPhase.VerifyWave)
+      } else {
+        assertEquals(repo.memberList.last.state, FleetRolloutMemberState.Pending)
+        assertEquals(children.startCalls, 0)
+        assertEquals(children.firewallCalls, 0)
+        assertEquals(children.desiredCalls, 0)
+        assertEquals(children.configStarts, 0)
+        assertEquals(children.refreshCalls, 0)
+        assertEquals(repo.journal, Nil)
+        assertEquals(repo.current.failureCode, Some(if (condition == "stale") FleetRolloutPreconditions.RefreshRequired
+          else FleetRolloutPreconditions.PlanChanged))
+        if (condition == "stale") {
+          assertEquals(repo.current.state, FleetRolloutState.Paused)
+          assertEquals(repo.current.pauseReason, Some("PAUSED_REFRESH_REQUIRED"))
+        }
+      }
+    }
+  }
+
+  test("recovered existing child is observed with stale evidence but its next new mutation is denied") {
+    val p = plan(0, List(FleetActionKind.ServerProfileApply, FleetActionKind.NetworkFirewall))
+    val r = rollout(snapshot(List(p)), FleetRolloutPhase.ApplyCanary)
+    val m = member(r, p, FleetRolloutMemberState.Running)
+    val runId = uid
+    val a = action(r, m, FleetActionKind.ServerProfileApply, FleetActionState.Running)
+      .copy(serverProfilePlanId = Some(uid), serverProfileRunId = Some(runId))
+    val repo = new MemoryRepository(r, List(m), List(a))
+    val children = new FakeChildren
+    worker(repo, List(evidence(p, FleetCompliance.Drifted, FleetHealth.Healthy)), children).tick.unsafeRunSync()
+    assertEquals(children.observedRuns, List(runId))
+    assertEquals(children.startCalls, 0)
+    assertEquals(children.firewallCalls, 0)
+    assertEquals(repo.journal.head.state, FleetActionState.Succeeded)
+    assertEquals(repo.current.state, FleetRolloutState.Paused)
+    assertEquals(repo.current.pauseReason, Some("PAUSED_REFRESH_REQUIRED"))
   }
 
   private def freshEvidence(p: FleetRolloutMemberPlan) = {

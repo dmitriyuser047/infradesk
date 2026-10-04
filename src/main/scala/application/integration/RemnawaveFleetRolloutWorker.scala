@@ -212,6 +212,7 @@ final class RemnawaveFleetRolloutWorker[Tx[_]: MonadThrow](rollouts: RemnawaveFl
     token: UUID): IO[Unit] = {
     val todo = waveMembers(r, all, r.currentWave).filter(m => m.state == FleetRolloutMemberState.Pending ||
       m.state == FleetRolloutMemberState.Running)
+    val admission = IO.realTimeInstant.flatMap(at => runner.run(service.drift(r.organizationId, r, at)))
     for {
       _ <- write(r, token, release = false)
       results <- todo.parTraverseN(settings.maxMemberConcurrency) { m =>
@@ -221,23 +222,31 @@ final class RemnawaveFleetRolloutWorker[Tx[_]: MonadThrow](rollouts: RemnawaveFl
             result <- if (control.exists(value => value.pauseRequestedAt.nonEmpty || value.rollbackRequestedAt.nonEmpty))
               IO.pure[MemberResult](MemberResult.Stopped)
             else for {
-            started <- IO.realTimeInstant
-            running <- writeMember(m.copy(state = FleetRolloutMemberState.Running, startedAt = m.startedAt.orElse(Some(started))), token)
-            result <- members.forward(r, running, plan, token)
-            finished <- IO.realTimeInstant
-            _ <- writeMember(running.copy(finishedAt = if (result == MemberResult.Stopped) None else Some(finished), state = result match {
-              case MemberResult.Done => FleetRolloutMemberState.Succeeded
-              case MemberResult.Stopped => FleetRolloutMemberState.Running
-              case MemberResult.Unknown(_) => FleetRolloutMemberState.Unknown
-              case _ => FleetRolloutMemberState.Failed
-            }, failureCode = result match {
-              case MemberResult.Failed(c) => Some(c)
-              case MemberResult.Unknown(c) => Some(c)
-              case MemberResult.Incomplete(c) => Some(c)
-              case MemberResult.Done => None
-              case MemberResult.Waiting => None
-              case MemberResult.Stopped => None
-            }), token)
+              denied <- if (m.state == FleetRolloutMemberState.Pending) admission else IO.pure(None)
+              result <- denied match {
+                case Some(code) => IO.pure[MemberResult](MemberResult.AdmissionDenied(code))
+                case None => for {
+                    started <- IO.realTimeInstant
+                    running <- writeMember(m.copy(state = FleetRolloutMemberState.Running, startedAt = m.startedAt.orElse(Some(started))), token)
+                    result <- members.forward(r, running, plan, token, admission)
+                    finished <- IO.realTimeInstant
+                    _ <- writeMember(running.copy(finishedAt = if (result == MemberResult.Stopped || result.isInstanceOf[MemberResult.AdmissionDenied]) None else Some(finished), state = result match {
+                      case MemberResult.Done => FleetRolloutMemberState.Succeeded
+                      case MemberResult.Stopped => FleetRolloutMemberState.Running
+                      case MemberResult.AdmissionDenied(_) => FleetRolloutMemberState.Running
+                      case MemberResult.Unknown(_) => FleetRolloutMemberState.Unknown
+                      case _ => FleetRolloutMemberState.Failed
+                    }, failureCode = result match {
+                      case MemberResult.Failed(c) => Some(c)
+                      case MemberResult.Unknown(c) => Some(c)
+                      case MemberResult.Incomplete(c) => Some(c)
+                      case MemberResult.Done => None
+                      case MemberResult.Waiting => None
+                      case MemberResult.Stopped => None
+                      case MemberResult.AdmissionDenied(_) => None
+                    }), token)
+                } yield result
+              }
             } yield result
           } yield result
         }
@@ -245,9 +254,16 @@ final class RemnawaveFleetRolloutWorker[Tx[_]: MonadThrow](rollouts: RemnawaveFl
       finished <- IO.realTimeInstant
       unknown = results.collectFirst { case MemberResult.Unknown(c) => c }
       failed = results.collectFirst { case MemberResult.Failed(c) => c }
+      denied = results.collectFirst { case MemberResult.AdmissionDenied(c) => c }
       _ <- (unknown, failed) match {
         case (Some(code), _) => finalize(terminal(r, FleetRolloutState.Unknown, Some(code), finished), token)
         case (None, Some(code)) => failure(r, code, finished, token)
+        case _ if denied.nonEmpty =>
+          if (denied.contains(FleetRolloutPreconditions.RefreshRequired))
+            write(r.copy(state = FleetRolloutState.Paused, pausedAt = Some(finished),
+              pauseReason = Some("PAUSED_REFRESH_REQUIRED"), failureCode = denied), token,
+              release = true, clearPause = true)
+          else finalize(terminal(r, FleetRolloutState.Failed, denied, finished), token)
         case _ if results.contains(MemberResult.Stopped) =>
           runner.run(rollouts.rolloutById(r.id)).flatMap {
             case Some(latest) if latest.rollbackRequestedAt.nonEmpty =>
@@ -357,6 +373,7 @@ final class RemnawaveFleetRolloutWorker[Tx[_]: MonadThrow](rollouts: RemnawaveFl
           case MemberResult.Done => None
           case MemberResult.Waiting => None
           case MemberResult.Stopped => None
+          case MemberResult.AdmissionDenied(c) => Some(c)
         }), token)
       }
       unknown = results.collectFirst { case (_, MemberResult.Unknown(c)) => c }

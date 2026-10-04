@@ -22,6 +22,7 @@ object MemberResult {
   case object Done extends MemberResult
   case object Waiting extends MemberResult
   case object Stopped extends MemberResult
+  final case class AdmissionDenied(code: String) extends MemberResult
   final case class Failed(code: String) extends MemberResult
   final case class Unknown(code: String) extends MemberResult
   /** Compensation that cannot be completed automatically, with the reason. */
@@ -194,7 +195,8 @@ final class FleetRolloutMemberRunner[Tx[_]](rollouts: RemnawaveFleetRolloutRepos
   }
 
   private def run(actor: ActorContext, rollout: RemnawaveFleetRollout, member: RemnawaveFleetRolloutMember,
-    plan: FleetRolloutMemberPlan, rollback: Boolean, kinds: List[FleetActionKind], token: UUID): IO[MemberResult] = {
+    plan: FleetRolloutMemberPlan, rollback: Boolean, kinds: List[FleetActionKind], token: UUID,
+    admission: IO[Option[String]] = IO.pure(None)): IO[MemberResult] = {
     val program: R[Unit] = for {
       all <- lift(runner.run(rollouts.actions(rollout.id)))
       mine = all.filter(a => a.memberId.contains(member.id))
@@ -211,6 +213,11 @@ final class FleetRolloutMemberRunner[Tx[_]](rollouts: RemnawaveFleetRolloutRepos
           _ <- if (!rollback && !existing.exists(_.state == FleetActionState.Running) &&
             control.exists(r => r.pauseRequestedAt.nonEmpty || r.rollbackRequestedAt.nonEmpty))
             stop[Unit](MemberResult.Stopped) else EitherT.rightT[IO, MemberResult](())
+          // Observe journaled work first; admission only authorizes a new mutation.
+          denied <- if (!rollback && !existing.exists(_.state == FleetActionState.Running)) lift(admission)
+            else EitherT.rightT[IO, MemberResult](Option.empty[String])
+          _ <- denied.fold(EitherT.rightT[IO, MemberResult](()))(code =>
+            stop[Unit](MemberResult.AdmissionDenied(code)))
           _ <- one(actor, rollout, member, plan, rollback, kind, existing, forward, token)
         } yield ()
       }
@@ -219,9 +226,9 @@ final class FleetRolloutMemberRunner[Tx[_]](rollouts: RemnawaveFleetRolloutRepos
   }
 
   def forward(rollout: RemnawaveFleetRollout, member: RemnawaveFleetRolloutMember, plan: FleetRolloutMemberPlan,
-    token: UUID): IO[MemberResult] = new FleetRolloutMemberRunner(rollouts, children.owned(rollout.id, token), runner, settings)
+    token: UUID, admission: IO[Option[String]] = IO.pure(None)): IO[MemberResult] = new FleetRolloutMemberRunner(rollouts, children.owned(rollout.id, token), runner, settings)
     .run(ActorContext(rollout.createdBy, rollout.organizationId), rollout, member, plan,
-    rollback = false, Order.filter(plan.actions.contains), token)
+    rollback = false, Order.filter(plan.actions.contains), token, admission)
 
   /** Compensation runs the kinds that actually succeeded going forward, in reverse. */
   def compensate(rollout: RemnawaveFleetRollout, member: RemnawaveFleetRolloutMember, plan: FleetRolloutMemberPlan,

@@ -128,7 +128,9 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
       query.configConsumers(org, rollout.integrationId, rollout.snapshot.content.externalConfigProfileId.toString)
       else List.empty[FleetRolloutConfigConsumer].pure[Tx]
   } yield FleetRolloutPreconditions.members(rollout.snapshot, rows,
-    members.filter(_.state == FleetRolloutMemberState.Succeeded).map(_.membershipId).toSet, sync, now, settings.staleAfter)
+    members.filter(m => m.state == FleetRolloutMemberState.Succeeded &&
+      (!(rollout.phase == FleetRolloutPhase.ApplyCanary || rollout.phase == FleetRolloutPhase.ApplyWaves) ||
+        m.wave < rollout.currentWave)).map(_.membershipId).toSet, sync, now, settings.staleAfter)
     .orElse(Option.when(rollout.snapshot.shared.required)(
       FleetRolloutPreconditions.consumers(rollout.snapshot, consumers, now, settings.staleAfter)).flatten)
 

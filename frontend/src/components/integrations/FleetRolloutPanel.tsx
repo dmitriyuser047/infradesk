@@ -42,6 +42,7 @@ const texts = {
     sharedRollback: 'Shared configuration rollback', sharedRollbackSafe: 'Available when all affected waves are included',
     connected: 'Connected', disconnected: 'Disconnected', enabled: 'Enabled', disabled: 'Disabled',
     pausedEvidence: 'Paused: fresh verification evidence did not arrive. Refresh the fleet and inspect it before resuming.',
+    pausedRefresh: 'Paused: evidence is stale. Refresh the fleet, wait for fresh observations, then resume.',
     baselines: { COMPLIANT: 'Compliant', DRIFTED: 'Drifted', UNKNOWN: 'Unknown', BLOCKED: 'Blocked',
       HEALTHY: 'Healthy', DEGRADED: 'Degraded' } as Record<string, string>,
     phases: { VALIDATE: 'Validation', PREPARE_SHARED_CONFIG: 'Prepare shared configuration',
@@ -161,6 +162,7 @@ const texts = {
     sharedRollback: 'Откат общей конфигурации', sharedRollbackSafe: 'Доступен при включении всех затронутых волн',
     connected: 'Подключён', disconnected: 'Отключён', enabled: 'Включён', disabled: 'Выключен',
     pausedEvidence: 'Пауза: свежие данные проверки не поступили. Обновите и проверьте fleet перед продолжением.',
+    pausedRefresh: 'Пауза: данные устарели. Обновите fleet, дождитесь свежих наблюдений и продолжите раскатку.',
     baselines: { COMPLIANT: 'Соответствует', DRIFTED: 'Расхождение', UNKNOWN: 'Неизвестно', BLOCKED: 'Заблокировано',
       HEALTHY: 'Здоров', DEGRADED: 'Нездоров' } as Record<string, string>,
     phases: { VALIDATE: 'Валидация', PREPARE_SHARED_CONFIG: 'Подготовка общей конфигурации',
@@ -319,7 +321,8 @@ function RolloutCard({ copy, organizationId, integrationId, fleetId, rollout, ca
   const pausedText = rollout.state !== 'PAUSED' ? null
     : rollout.pauseReason === 'PAUSED_HEALTH_GATE' ? copy.pausedGate
       : rollout.pauseReason === 'PAUSED_AFTER_CANARY' ? copy.pausedCanary
-        : rollout.pauseReason === 'PAUSED_EVIDENCE_TIMEOUT' ? copy.pausedEvidence : copy.pausedByOperator
+        : rollout.pauseReason === 'PAUSED_REFRESH_REQUIRED' ? copy.pausedRefresh
+          : rollout.pauseReason === 'PAUSED_EVIDENCE_TIMEOUT' ? copy.pausedEvidence : copy.pausedByOperator
   const activeNow = activeRolloutState(rollout.state)
   const failedMember = data?.members.find(m => m.state === 'UNKNOWN' || m.state === 'FAILED')
   const lastRun = data?.actions.filter(a => a.serverProfileRunId || a.configRolloutId || a.desiredStateActionId).slice(-1)[0]

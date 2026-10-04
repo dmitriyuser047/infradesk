@@ -170,6 +170,15 @@ describe('FleetRolloutPanel', () => {
     expect(screen.queryByText('VERIFY_CANARY')).toBeNull()
   })
 
+  it.each(['en', 'ru'] as const)('shows a resumable stale admission pause in %s', async locale => {
+    mount(rollout({ state: 'PAUSED', phase: 'APPLY_WAVES', pauseReason: 'PAUSED_REFRESH_REQUIRED',
+      failureCode: 'REMNAWAVE_FLEET_ROLLOUT_REFRESH_REQUIRED' }), undefined, { locale })
+    expect(await screen.findByText(locale === 'ru'
+      ? 'Пауза: данные устарели. Обновите fleet, дождитесь свежих наблюдений и продолжите раскатку.'
+      : 'Paused: evidence is stale. Refresh the fleet, wait for fresh observations, then resume.')).toBeTruthy()
+    expect(screen.getByText(locale === 'ru' ? 'Продолжить' : 'Resume')).toBeTruthy()
+  })
+
   it.each(['en', 'ru'] as const)('shows exact shared consumers and rollback capabilities in %s', async locale => {
     const plan = { ...rollout().snapshot,
       sharedConfig: { required: true, revisionNumber: 9, baselineRevisionNumber: 8, rollbackSupported: true,
