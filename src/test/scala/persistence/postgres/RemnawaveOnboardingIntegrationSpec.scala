@@ -21,6 +21,7 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
   import ConfigurationDeploymentWorld.run
 
   private val repo = new PostgresRemnawaveOnboardingRepository
+  private val query = new PostgresRemnawaveOnboardingQuery
   private val provisioning = new PostgresProvisioningRunRepository
   private val cipher = NodeInstallationCipher.fromConfig(SecretEncryptionConfig.fromEnvironment(Map(
     "INFRADESK_SECRET_MASTER_KEY_BASE64" -> Base64.getEncoder.encodeToString(Array.fill[Byte](32)(11)))).toOption.get)
@@ -205,6 +206,96 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
         assertEquals(claimedAgain, Nil)
         assertEquals(replay.state, ProvisioningRunState.Failed)
         assertEquals(read.map(_._1.state), Some(ProvisioningRunState.Failed))
+      }
+    }
+  }
+
+  test("a baseline attached before a crash is started once by its deterministic request, and only by its own parent") {
+    inWorld { w =>
+      for {
+        pair <- integration(w, w.org, "onboarding-baseline-recovery")
+        (integrationId, secretId) = pair
+        target <- w.node("onboarding-baseline-recovery")
+        other <- w.node("onboarding-baseline-other")
+        targetAt <- connectionUpdated(w, target.connectionId)
+        otherAt <- connectionUpdated(w, other.connectionId)
+        now <- IO.realTimeInstant
+        childId = uid
+        _ <- w.run(provisioning.insertPlan(approvedProfileApplyPlan(w, target, childId, now)))
+        parent <- plan(w, integrationId, secretId, target.resourceId, target.connectionId, targetAt, now,
+          childId, baselineNeeded = true)
+        _ <- w.run(repo.start(w.org, integrationId, parent.id, uid, AuthorizationFixtures.ActorUserId, now))
+        token = uid
+        claimed <- w.run(repo.claim(uid, token, now, now.plusSeconds(90), 1))
+        // The crash window: the attach committed, and nothing has started the child yet.
+        attached <- w.run(repo.attachBaseline(claimed.head, token, now))
+        plannedStill <- w.run(provisioning.find(w.org, childId))
+        parentLink <- w.run(query.baselinePlanParent(w.org, childId))
+        afterAttach <- w.run(repo.find(w.org, integrationId, parent.id))
+        // Recovery repeats the same attach and the same request; both are the same operation.
+        reattached <- w.run(repo.attachBaseline(claimed.head, token, now.plusSeconds(1)))
+        request = RemnawaveNodeOnboardingRun.baselineRequestId(parent.id)
+        first <- w.run(provisioning.start(w.org, childId, request, AuthorizationFixtures.ActorUserId, now))
+        again <- w.run(provisioning.start(w.org, childId, request, AuthorizationFixtures.ActorUserId, now.plusSeconds(2)))
+        runsForTarget <- w.run(sql"select count(*) from provisioning_run where organization_id=${w.org} and resource_id=${target.resourceId}".query[Int].unique)
+        // An onboarding of another server may not adopt this approved child.
+        foreignParent <- plan(w, integrationId, secretId, other.resourceId, other.connectionId, otherAt, now,
+          childId, baselineNeeded = true)
+        foreignToken = uid
+        _ <- w.run(repo.start(w.org, integrationId, foreignParent.id, uid, AuthorizationFixtures.ActorUserId, now))
+        foreignClaimed <- w.run(repo.claim(uid, foreignToken, now, now.plusSeconds(90), 10))
+        stolen <- w.run(repo.attachBaseline(foreignClaimed.find(_.id == foreignParent.id).get, foreignToken,
+          now.plusSeconds(3)).attempt)
+        ownerAfterTheft <- w.run(query.baselinePlanParent(w.org, childId))
+      } yield {
+        assertEquals(attached, childId)
+        assertEquals(plannedStill.map(_._1.state), Some(ProvisioningRunState.Planned))
+        assertEquals(parentLink, Some(parent.id))
+        assertEquals(afterAttach.map(_._1.baselineRunId), Some(Some(childId)))
+        assertEquals(reattached, childId)
+        assertEquals(first.map(_._2), Some(true))
+        assertEquals(again.map(_._2), Some(false))
+        assertEquals(again.map(_._1.id), Some(childId))
+        assertEquals(again.map(_._1.state), Some(ProvisioningRunState.Queued))
+        assertEquals(runsForTarget, 1)
+        assertEquals(errorCode(stolen), Some("REMNAWAVE_ONBOARDING_BASELINE_CHANGED"))
+        assertEquals(ownerAfterTheft, Some(parent.id))
+      }
+    }
+  }
+
+  test("the synchronization session a phase depends on is stored under the lease and can be replaced") {
+    inWorld { w =>
+      for {
+        pair <- integration(w, w.org, "onboarding-sync-attach")
+        (integrationId, secretId) = pair
+        target <- w.node("onboarding-sync-attach")
+        targetAt <- connectionUpdated(w, target.connectionId)
+        now <- IO.realTimeInstant
+        parent <- plan(w, integrationId, secretId, target.resourceId, target.connectionId, targetAt, now)
+        _ <- w.run(repo.start(w.org, integrationId, parent.id, uid, AuthorizationFixtures.ActorUserId, now))
+        token = uid
+        claimed <- w.run(repo.claim(uid, token, now, now.plusSeconds(90), 1))
+        foreignSession = uid
+        ownSession = uid
+        _ <- List(foreignSession -> "COMPLETED", ownSession -> "RUNNING").traverse_ { case (id, status) =>
+          w.run(sql"""insert into integration_sync_session(id,organization_id,integration_id,trigger,requested_by_user_id,
+            started_at,recover_after_at,finished_at,status,nodes_count,hosts_count,config_profiles_count,deactivated_count)
+            values($id,${w.org},$integrationId,'MANUAL',${AuthorizationFixtures.ActorUserId},$now,${now.plusSeconds(60)},
+            ${Option.when(status == "COMPLETED")(now)},$status,1,0,0,0)""".update.run)
+        }
+        _ <- w.run(repo.attachSync(claimed.head, token, foreignSession, now))
+        afterForeign <- w.run(repo.find(w.org, integrationId, parent.id))
+        // A session that did not observe the new node is replaced by the onboarding's own.
+        _ <- w.run(repo.attachSync(claimed.head, token, ownSession, now.plusSeconds(1)))
+        afterOwn <- w.run(repo.find(w.org, integrationId, parent.id))
+        stale <- w.run(repo.attachSync(claimed.head, uid, foreignSession, now.plusSeconds(2)).attempt)
+        unchanged <- w.run(repo.find(w.org, integrationId, parent.id))
+      } yield {
+        assertEquals(afterForeign.map(_._1.syncSessionId), Some(Some(foreignSession)))
+        assertEquals(afterOwn.map(_._1.syncSessionId), Some(Some(ownSession)))
+        assertEquals(errorCode(stale), Some("REMNAWAVE_ONBOARDING_LEASE_LOST"))
+        assertEquals(unchanged.map(_._1.syncSessionId), Some(Some(ownSession)))
       }
     }
   }

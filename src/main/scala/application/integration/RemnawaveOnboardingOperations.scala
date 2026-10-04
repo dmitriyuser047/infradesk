@@ -9,6 +9,7 @@ import cats.effect.IO
 import cats.syntax.all._
 import domain.integration._
 import domain.provisioning._
+import java.time.Instant
 import java.util.UUID
 
 final class ExistingRemnawaveOnboardingOperations[Tx[_]: MonadThrow](
@@ -16,6 +17,7 @@ final class ExistingRemnawaveOnboardingOperations[Tx[_]: MonadThrow](
   integrations: IntegrationRepository[Tx], secrets: IntegrationSecretRepository[Tx], cipher: IntegrationCryptography,
   targets: ProvisioningTargetQuery[Tx], profiles: ServerProfileRepository[Tx], provisioning: ProvisioningRunRepository[Tx],
   profileRemote: ServerProfileRemote[IO], provisioningService: ProvisioningRuns[IO,Tx], syncService: IntegrationSync[Tx],
+  syncTransactions: IntegrationSyncTransactions[Tx], syncSessions: IntegrationSyncSessionRepository[Tx],
   inventory: IntegrationInventoryRepository[Tx], bindings: IntegrationBindingRepository[Tx], bindingService: IntegrationBindings[Tx],
   desired: IntegrationDesiredStateRepository[Tx], desiredService: IntegrationDesiredStates[Tx],
   runner: TransactionRunner[IO,Tx]) extends RemnawaveOnboardingOperations[IO] {
@@ -49,30 +51,68 @@ final class ExistingRemnawaveOnboardingOperations[Tx[_]: MonadThrow](
       IO.raiseUnless(o.failureCode.isEmpty && o.blockingProblems.isEmpty && ServerProfileDiff.assess(content,o.content).compliant)(
         error("REMNAWAVE_ONBOARDING_PROFILE_NOT_COMPLIANT")))
   }
-  def startBaseline(r: RemnawaveNodeOnboardingRun, token: UUID): IO[UUID] = for {
-    now <- IO.realTimeInstant
-    id <- runner.run(runs.attachBaseline(r,token,now))
-    child <- provisioningService.start(ActorContext(r.createdBy,r.organizationId),id,
-      UUID.nameUUIDFromBytes((r.id.toString+":baseline").getBytes(java.nio.charset.StandardCharsets.UTF_8)))
-  } yield child.id
+  /** Nothing but the exact approved child of this onboarding may be started on its behalf. */
+  private def identical(r: RemnawaveNodeOnboardingRun, child: ProvisioningRun, parent: Option[UUID]): Boolean =
+    child.id==r.snapshot.baselinePlanId && child.organizationId==r.organizationId && child.resourceId==r.resourceId &&
+      child.input.runKind==ProvisioningRunKind.ServerProfileApply && parent.contains(r.id) &&
+      child.input.profileApply.exists(p => p.assignmentId==r.snapshot.assignmentId && p.assignmentVersion==r.snapshot.assignmentVersion &&
+        p.profileId==r.snapshot.profileId && p.revisionId==r.snapshot.revisionId && p.revisionNumber==r.snapshot.revisionNumber &&
+        p.revisionHash==r.snapshot.revisionHash)
+  def ensureBaselineStarted(r: RemnawaveNodeOnboardingRun, token: UUID): IO[ProvisioningRun] = for {
+    child <- baseline(r,r.snapshot.baselinePlanId)
+    // A PLANNED child carries no parent link on the first pass, where attachBaseline proves it
+    // atomically instead. In every other state the link must already be this onboarding.
+    parent <- runner.run(query.baselinePlanParent(r.organizationId,child.id))
+    _ <- IO.raiseUnless(identical(r,child,parent.orElse(Option.when(child.state==ProvisioningRunState.Planned)(r.id))))(
+      error("REMNAWAVE_ONBOARDING_BASELINE_CHANGED"))
+    // Only PLANNED is ours to start. QUEUED and RUNNING are waited on and a terminal child is read
+    // as it stands; none of them is ever restarted.
+    started <- if (child.state!=ProvisioningRunState.Planned) IO.pure(child) else for {
+      now <- IO.realTimeInstant
+      // Fenced and idempotent: it proves tenant, resource and parent link in one statement.
+      id <- runner.run(runs.attachBaseline(r,token,now))
+      _ <- provisioningService.start(ActorContext(r.createdBy,r.organizationId),id,
+        RemnawaveNodeOnboardingRun.baselineRequestId(r.id))
+      current <- baseline(r,id)
+    } yield current
+  } yield started
   def baseline(r: RemnawaveNodeOnboardingRun,id: UUID): IO[ProvisioningRun] = runner.run(provisioning.find(r.organizationId,id))
     .flatMap(_.map(_._1).liftTo[IO](error("REMNAWAVE_ONBOARDING_BASELINE_MISSING")))
-  def sync(r: RemnawaveNodeOnboardingRun): IO[IntegrationSyncSession] =
-    syncService.manual(ActorContext(r.createdBy,r.organizationId),r.integrationId)
-  private def fenced[A](r: RemnawaveNodeOnboardingRun,token: UUID)(op: Tx[A]): IO[A] = IO.realTimeInstant.flatMap(now => runner.run(for {
+  def claimSync(r: RemnawaveNodeOnboardingRun,token: UUID): IO[OnboardingSyncClaim[IO]] = fenced(r,token) { now =>
+    syncTransactions.prepare(r.organizationId,r.integrationId,IntegrationSyncTrigger.Manual,
+      Some(ActorContext(r.createdBy,r.organizationId)),syncService.recoveryWindow,requireEnabled = false)
+      .flatMap[OnboardingSyncClaim[IO]] {
+      case None => error("INTEGRATION_NOT_FOUND").raiseError[Tx,OnboardingSyncClaim[IO]]
+      // The session row and the reference to it commit together, so no crash can leave a RUNNING
+      // session this onboarding is unable to name.
+      case Some((Some(owned),_)) => runs.attachSync(r,token,owned.session.id,now)
+        .as[OnboardingSyncClaim[IO]](OnboardingSyncClaim.Owned(owned.session,syncService.execute(owned)))
+      case Some((None,_)) => for {
+        recent <- syncSessions.recent(r.organizationId,r.integrationId,8)
+        holder <- recent.find(s => s.status==IntegrationSyncStatus.Running && s.organizationId==r.organizationId &&
+          s.integrationId==r.integrationId).liftTo[Tx](error("REMNAWAVE_ONBOARDING_SYNC_UNKNOWN"))
+        _ <- runs.attachSync(r,token,holder.id,now)
+      } yield OnboardingSyncClaim.Foreign[IO](holder)
+    }
+  }
+  def syncSession(r: RemnawaveNodeOnboardingRun,id: UUID): IO[Option[IntegrationSyncSession]] =
+    runner.run(syncSessions.find(r.organizationId,id)).map(_.filter(_.integrationId==r.integrationId))
+  def inventoryHasNode(r: RemnawaveNodeOnboardingRun): IO[Boolean] = r.externalNodeId.fold(IO.pure(false))(id =>
+    runner.run(query.externalNode(r.organizationId,r.integrationId,id)).map(_.exists(_.isActive)))
+  private def fenced[A](r: RemnawaveNodeOnboardingRun,token: UUID)(op: Instant => Tx[A]): IO[A] = IO.realTimeInstant.flatMap(now => runner.run(for {
     _ <- runs.lockResource(r.organizationId,r.resourceId)
     valid <- runs.renew(r,token,now,now.plusSeconds(900))
     _ <- MonadThrow[Tx].raiseUnless(valid)(error("REMNAWAVE_ONBOARDING_LEASE_LOST"))
     _ <- checked(r)
-    result <- op
+    result <- op(now)
   } yield result))
-  def bind(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Unit] = fenced(r,token)(for {
+  def bind(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Unit] = fenced(r,token)(_ => for {
     node <- query.externalNode(r.organizationId,r.integrationId,r.externalNodeId.get).flatMap(_.filter(_.isActive).liftTo[Tx](error("REMNAWAVE_ONBOARDING_INVENTORY_MISSING")))
     existing <- bindings.find(r.organizationId,node.id)
     _ <- MonadThrow[Tx].raiseUnless(existing.forall(_.resourceId==r.resourceId))(error("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
     _ <- bindingService.bindCreated(ActorContext(r.createdBy,r.organizationId),r.integrationId,node.id,r.resourceId)
   } yield ())
-  def setDesiredState(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Unit] = fenced(r,token)(for {
+  def setDesiredState(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Unit] = fenced(r,token)(_ => for {
     node <- query.externalNode(r.organizationId,r.integrationId,r.externalNodeId.get).flatMap(_.filter(_.isActive).liftTo[Tx](error("REMNAWAVE_ONBOARDING_INVENTORY_MISSING")))
     _ <- desiredService.set(ActorContext(r.createdBy,r.organizationId),r.integrationId,node.id,IntegrationDesiredNodeState.Enabled)
   } yield ())

@@ -379,10 +379,10 @@ object ApplicationModule {
       integrationSyncStateRepository, integrationActionRepository, integrationInventoryRepository,
       integrationConfigRepository, integrationConfigRollouts)
     val integrationSyncSettings = config.integrations.sync
-    val integrationSync = new IntegrationSync[ConnectionIO](
-      new IntegrationSyncTransactions[ConnectionIO](integrationRepository, integrationSecretRepository,
-        integrationSyncSessionRepository, integrationInventoryRepository, transactionIdGenerator,
-        transactionTimeProvider, auditRecorder, integrationDesiredStateRepository),
+    val integrationSyncTransactions = new IntegrationSyncTransactions[ConnectionIO](integrationRepository,
+      integrationSecretRepository, integrationSyncSessionRepository, integrationInventoryRepository,
+      transactionIdGenerator, transactionTimeProvider, auditRecorder, integrationDesiredStateRepository)
+    val integrationSync = new IntegrationSync[ConnectionIO](integrationSyncTransactions,
       transactionRunner, integrations.integrationCredentialCipher, integrations.integrationProviderRegistry,
       loggers.integration, integrationSyncSettings.attemptTimeout, config.integrations.inventoryMaxObjects)
     val integrationActions = new IntegrationActions[ConnectionIO](integrationRepository,
@@ -432,7 +432,8 @@ object ApplicationModule {
     val onboardingOperations = new application.integration.ExistingRemnawaveOnboardingOperations[ConnectionIO](
       onboardingRepository,onboardingQuery,integrationRepository,integrationSecretRepository,integrations.integrationCredentialCipher,
       provisioningTargetQuery,serverProfileRepository,provisioningRunRepository,integrations.serverProfileRemote,
-      provisioningRuns,integrationSync,integrationInventoryRepository,integrationBindingRepository,integrationBindingsService,
+      provisioningRuns,integrationSync,integrationSyncTransactions,integrationSyncSessionRepository,
+      integrationInventoryRepository,integrationBindingRepository,integrationBindingsService,
       integrationDesiredStateRepository,integrationDesiredStatesService,transactionRunner)
     val remnawaveOnboarding = new application.integration.RemnawaveOnboarding[ConnectionIO](onboardingRepository,onboardingQuery,
       integrationRepository,integrationSecretRepository,integrations.integrationCredentialCipher,integrations.integrationProviderRegistry,

@@ -23,6 +23,9 @@ final class PostgresRemnawaveOnboardingQuery extends RemnawaveOnboardingQuery[Co
         and (cast($expected as uuid) is null or o.external_id<>cast($expected as text) or o.integration_id is distinct from
           (select n.integration_id from remnawave_node_onboarding n where n.organization_id=$org and n.resource_id=$resource
             and n.state='RUNNING' and n.external_node_id=cast($expected as uuid) limit 1)))""".query[Boolean].unique
+  def baselinePlanParent(org: UUID, planId: UUID): ConnectionIO[Option[UUID]] =
+    sql"select onboarding_parent_id from provisioning_run where organization_id=$org and id=$planId"
+      .query[Option[UUID]].option.map(_.flatten)
   def externalNode(org: UUID, integration: UUID, external: UUID): ConnectionIO[Option[IntegrationInventoryObject]] = {
     import IntegrationInventoryRows._
     (fr"select" ++ objectColumns ++ fr"from integration_inventory_object o where o.organization_id=$org and o.integration_id=$integration and o.object_type='NODE' and o.external_id=${external.toString}")

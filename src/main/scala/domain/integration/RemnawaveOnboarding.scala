@@ -72,6 +72,13 @@ final case class RemnawaveNodeOnboardingRun(id: UUID, organizationId: UUID, inte
   externalNodeId: Option[UUID] = None, baselineRunId: Option[UUID] = None, syncSessionId: Option[UUID] = None,
   failureCode: Option[String] = None, startedAt: Option[Instant] = None, finishedAt: Option[Instant] = None,
   claimToken: Option[UUID] = None, claimDeadline: Option[Instant] = None)
+object RemnawaveNodeOnboardingRun {
+  /** One request ID per onboarding baseline. Starting the approved child again - after a crash
+    * between the attach and the start - is therefore the same Stage25A request, not a second one.
+    */
+  def baselineRequestId(onboardingId: UUID): UUID =
+    UUID.nameUUIDFromBytes((onboardingId.toString + ":baseline").getBytes(java.nio.charset.StandardCharsets.UTF_8))
+}
 final case class OnboardingPhaseRecord(phase: OnboardingPhase, state: String,
   startedAt: Option[Instant], finishedAt: Option[Instant], failureCode: Option[String])
 

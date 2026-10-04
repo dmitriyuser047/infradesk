@@ -117,6 +117,17 @@ final class IntegrationSync[Tx[_]](transactions: IntegrationSyncTransactions[Tx]
   // A session outlives its attempt only when the process died; the grace covers the final transaction.
   private val recoverAfter = attemptTimeout + RecoveryGrace
 
+  /** The one deadline policy for abandoned sessions. An orchestration that claims a session itself
+    * passes this to `IntegrationSyncTransactions.prepare` instead of inventing a second policy.
+    */
+  val recoveryWindow: FiniteDuration = recoverAfter
+
+  /** Performs the observation of a session another transaction already claimed. This exists so that
+    * an orchestration can record the session ID durably before the provider is read; the manual and
+    * scheduled flows below are unchanged.
+    */
+  def execute(prepared: PreparedIntegrationSync): IO[IntegrationSyncSession] = run(prepared)
+
   /** Works whether or not the integration is enabled; only automatic runs require it. */
   def manual(actor: ActorContext, integrationId: UUID): IO[IntegrationSyncSession] =
     runner.run(transactions.prepare(actor.organizationId, integrationId, IntegrationSyncTrigger.Manual,

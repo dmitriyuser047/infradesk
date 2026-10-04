@@ -73,6 +73,38 @@ These source checks do not establish compatibility of the user's installed Panel
 | 39. Disposable VPS canary | Not performed. Linux harness uses a disposable local container and mocks Docker commands; it is not a VPS installation canary. |
 | 40. Later stages | Offboarding/cleanup/reinstall, terminal UNKNOWN recovery UX, fleet rollout and lifecycle automation remain outside Stage25C. No Stage25D/25E/25F implementation started. |
 
+## Crash-recovery addendum (durability fix, same stage)
+
+Two crash windows were closed after the review of the implementation above. No migration was added;
+`V48` is unchanged and the existing nullable `sync_session_id` column carries the correlation.
+
+**PREPARE_SERVER.** `attachBaseline` and the child start are separate durable steps, so a crash
+between them used to leave the approved child PLANNED while the parent only polled it to
+`baselineTimeout`. The worker now calls `ensureBaselineStarted`, which reads the durable child and
+starts it only while it is PLANNED, through the existing `ProvisioningRuns.start` with the request ID
+`RemnawaveNodeOnboardingRun.baselineRequestId(onboardingId)`. Repeating that start is therefore the
+same Stage25A request, not a second one, and no new plan or run is ever created. QUEUED and RUNNING
+are waited on; SUCCEEDED is verified for compliance and continues; FAILED and UNKNOWN propagate. None
+of those states is restarted. Before any start the child must match the snapshot exactly - plan ID,
+tenant, resource, `SERVER_PROFILE_APPLY` kind, `onboarding_parent_id` and the assignment/revision pin
+- otherwise the phase stops with `REMNAWAVE_ONBOARDING_BASELINE_CHANGED`.
+
+**SYNC_INVENTORY.** The session is claimed and recorded in one transaction
+(`IntegrationSyncTransactions.prepare` plus the fenced `attachSync`), so a crash can no longer leave a
+RUNNING session the onboarding cannot name. The observation then runs outside that transaction through
+`IntegrationSync.execute`. A recovered worker reads the stored session by ID: RUNNING waits, FAILED
+fails the onboarding with the stored code, a session the storage no longer holds is UNKNOWN, and a
+RUNNING session past its own `recover_after_at` is re-claimed so the existing stale recovery retires
+it. When another synchronization of the same integration holds the single slot, its ID is recorded and
+its outcome awaited - `INTEGRATION_SYNC_ALREADY_RUNNING` is never surfaced as a failure. A COMPLETED
+session counts only once the stored inventory holds this onboarding's external node; otherwise one
+fresh observation is started per pass. All waiting is bounded by `syncTimeout`
+(`REMNAWAVE_ONBOARDING_SYNC_TIMEOUT`), and no path retries the claim in a loop. The external node is
+never deleted, and `externalNodeId` and `syncSessionId` survive every failure.
+
+CREATE_NODE, firewall, install, start, binding and desired-state recovery are unchanged, as is the
+wizard: new codes reach the existing generic terminal explanation.
+
 Reproduce backend checks with JDK21 and the existing PostgreSQL integration-test environment flags.
 Reproduce frontend checks with `npm test -- --run` and `npm run build` in `frontend`.
 Linux extraction/verification is the existing CI `server-profile-safety` step, extended for Node files and start/recovery guards.

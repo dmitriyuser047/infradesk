@@ -112,6 +112,13 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
     _ <- if(count!=1) fail("REMNAWAVE_ONBOARDING_BASELINE_CHANGED") else ().pure[ConnectionIO]
     _ <- sql"update remnawave_node_onboarding set baseline_run_id=${r.snapshot.baselinePlanId},updated_at=$now where id=${r.id}".update.run
   } yield r.snapshot.baselinePlanId
+  def attachSync(r: RemnawaveNodeOnboardingRun, token: UUID, sessionId: UUID, now: Instant): ConnectionIO[Unit] = for {
+    valid <- fence(r,token,now)
+    _ <- if (!valid) fail("REMNAWAVE_ONBOARDING_LEASE_LOST") else ().pure[ConnectionIO]
+    count <- sql"""update remnawave_node_onboarding set sync_session_id=$sessionId,updated_at=$now
+      where id=${r.id} and organization_id=${r.organizationId} and integration_id=${r.integrationId}""".update.run
+    _ <- if (count!=1) fail("REMNAWAVE_ONBOARDING_SYNC_UNKNOWN") else ().pure[ConnectionIO]
+  } yield ()
   def saveSecret(r: RemnawaveNodeOnboardingRun, token: UUID, secret: IntegrationSecret, now: Instant): ConnectionIO[Unit] = for {
     valid <- fence(r,token,now)
     _ <- if(!valid) fail("REMNAWAVE_ONBOARDING_LEASE_LOST") else ().pure[ConnectionIO]

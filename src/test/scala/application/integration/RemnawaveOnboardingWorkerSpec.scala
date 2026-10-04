@@ -96,6 +96,12 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       }
     }
     override def attachBaseline(r: RemnawaveNodeOnboardingRun, claimToken: UUID, at: Instant) = IO.pure(uid)
+    var attachedSyncSessions = List.empty[UUID]
+    override def attachSync(r: RemnawaveNodeOnboardingRun, claimToken: UUID, sessionId: UUID, at: Instant) = IO {
+      if (!record.claimToken.contains(claimToken)) { staleRejected = true; throw IntegrationError("REMNAWAVE_ONBOARDING_LEASE_LOST", "stale") }
+      attachedSyncSessions :+= sessionId
+      record = record.copy(syncSessionId = Some(sessionId), updatedAt = at)
+    }
     override def saveSecret(r: RemnawaveNodeOnboardingRun, claimToken: UUID, s: IntegrationSecret, at: Instant) = IO {
       storedSecret = Some(s); savedSecrets :+= s.copy(nonce = s.nonce.clone(), ciphertext = s.ciphertext.clone())
     }
@@ -121,6 +127,22 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     var childStartCount = 0
     var validateCompliant = true
     var childSequence = List.empty[ProvisioningRunState]
+    var baselineIdentityProven = true
+    /** The durable approved child, exactly as the snapshot pinned it. */
+    var childPlan: ProvisioningRun = ProvisioningRun(baselineSnap.baselinePlanId, org, resource, None, None,
+      ProvisioningInputSnapshot(1, ProvisioningRunKind.ServerProfileApply, org, resource, "SERVER", "LINUX",
+        connection.id, connection.updatedAt, Nil), ProvisioningRunState.Planned, now, now)
+    val sessions = mutable.Map.empty[UUID, IntegrationSyncSession]
+    /** A synchronization of the same integration that already holds the single RUNNING slot. */
+    var slotHolder: Option[IntegrationSyncSession] = None
+    var ownedSyncs = 0
+    var nodeInInventory = true
+    var syncObservesNode = true
+    var sessionProgress = List.empty[IntegrationSyncStatus]
+    def session(id: UUID, status: IntegrationSyncStatus, recoverAfter: Instant = now.plusSeconds(60)) =
+      IntegrationSyncSession(id, org, integrationId, IntegrationSyncTrigger.Manual, None, now, recoverAfter,
+        Option.when(status != IntegrationSyncStatus.Running)(now), status,
+        Option.when(status == IntegrationSyncStatus.Failed)("INTEGRATION_TIMEOUT"), None, None)
     val remote = new RemnawaveNodeRemote[IO] {
       override def installationPrerequisites(c: Connection) = IO.pure(ProvisioningStepResult(Map.empty, None, Some(true)))
       override def preflight(c: Connection, r: UUID, p: Int) = IO { events += "preflight"; ProvisioningStepResult(Map.empty, None, Some(true)) }
@@ -140,20 +162,49 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
         events += (if (requireCompliant) "validate-compliant" else "validate");
         if (requireCompliant && !validateCompliant) throw IntegrationError("REMNAWAVE_ONBOARDING_PROFILE_NOT_COMPLIANT", "drift")
       }
-      override def startBaseline(r: RemnawaveNodeOnboardingRun, token: UUID) = IO { childStartCount += 1; events += "baseline-start"; uid }
-      override def baseline(r: RemnawaveNodeOnboardingRun, id: UUID) = IO {
-        events += "baseline-poll"
-        val state = childSequence.headOption.getOrElse(ProvisioningRunState.Succeeded)
+      override def ensureBaselineStarted(r: RemnawaveNodeOnboardingRun, token: UUID) = IO {
+        events += "baseline-ensure"
+        if (!baselineIdentityProven) throw IntegrationError("REMNAWAVE_ONBOARDING_BASELINE_CHANGED", "another child")
+        // Only a PLANNED child is started, and always the one the snapshot approved.
+        if (childPlan.state == ProvisioningRunState.Planned) {
+          childStartCount += 1
+          events += "baseline-start"
+          childPlan = childPlan.copy(state = ProvisioningRunState.Queued)
+        }
+        childPlan = childPlan.copy(state = childSequence.headOption.getOrElse(ProvisioningRunState.Succeeded),
+          failureCode = childSequence.headOption.collect {
+            case ProvisioningRunState.Failed | ProvisioningRunState.Unknown => "CHILD_FAILED" })
         if (childSequence.nonEmpty) childSequence = childSequence.tail
-        ProvisioningRun(id, org, resource, None, None,
-          ProvisioningInputSnapshot(1, ProvisioningRunKind.ServerBaselineCheck, org, resource, "SERVER", "LINUX",
-            connection.id, connection.updatedAt, Nil), state, now, now,
-          failureCode = if (state == ProvisioningRunState.Failed || state == ProvisioningRunState.Unknown) Some("CHILD_FAILED") else None)
+        childPlan
       }
-      override def sync(r: RemnawaveNodeOnboardingRun) = IO {
-        events += "sync"; IntegrationSyncSession(uid, org, integrationId, IntegrationSyncTrigger.Manual, None,
-          now, now.plusSeconds(10), Some(now), syncStatus, if (syncStatus == IntegrationSyncStatus.Completed) None else Some("SYNC_FAILED"), None, None)
+      override def baseline(r: RemnawaveNodeOnboardingRun, id: UUID) = IO { events += "baseline-poll"; childPlan }
+      override def claimSync(r: RemnawaveNodeOnboardingRun, token: UUID): IO[OnboardingSyncClaim[IO]] =
+        IO(events += "sync-claim") *> (slotHolder match {
+        // The single RUNNING slot is held elsewhere; the onboarding records that session, not a new one.
+        case Some(holder) => repo.attachSync(r, token, holder.id, now).as(OnboardingSyncClaim.Foreign[IO](holder))
+        case None =>
+          val claimed = session(uid, IntegrationSyncStatus.Running)
+          IO(sessions += claimed.id -> claimed) *> repo.attachSync(r, token, claimed.id, now).as(
+            OnboardingSyncClaim.Owned[IO](claimed, IO {
+              events += "sync-observe"
+              ownedSyncs += 1
+              nodeInInventory = nodeInInventory || syncStatus == IntegrationSyncStatus.Completed && syncObservesNode
+              val done = claimed.copy(status = syncStatus, finishedAt = Some(now),
+                errorCode = Option.when(syncStatus == IntegrationSyncStatus.Failed)("INTEGRATION_TIMEOUT"))
+              sessions += done.id -> done
+              done
+            }))
+      })
+      override def syncSession(r: RemnawaveNodeOnboardingRun, id: UUID) = IO {
+        events += "sync-read"
+        // Statuses the stored session reports on successive reads, as a background attempt would.
+        sessionProgress.headOption.foreach { status =>
+          sessionProgress = sessionProgress.tail
+          sessions.get(id).foreach(s => sessions += id -> session(id, status, s.recoverAfterAt))
+        }
+        sessions.get(id)
       }
+      override def inventoryHasNode(r: RemnawaveNodeOnboardingRun) = IO { events += "sync-evidence"; nodeInInventory }
       override def bind(r: RemnawaveNodeOnboardingRun, token: UUID) = IO {
         events += "bind"; if (bindConflict) throw IntegrationError("REMNAWAVE_ONBOARDING_BINDING_CONFLICT", "conflict")
       }
@@ -193,7 +244,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       leaseDuration = 60.seconds, stepTimeout = 30.seconds)
     val worker = new RemnawaveOnboardingWorker[IO](repo, operations,
       new IntegrationProviderRegistry[IO](List(provider)), remote, cipher, runner, auditPair._2, settings, NoOpLogger[IO],
-      RemnawaveOnboardingSettings(1.second, 6.seconds, 6.seconds), clock = IO.pure(now))
+      RemnawaveOnboardingSettings(1.second, 6.seconds, 6.seconds, 6.seconds), clock = IO.pure(now))
   }
 
   test("runs all thirteen durable phases and only succeeds with panel, local, and inventory evidence") {
@@ -226,7 +277,8 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     waited.worker.tick.unsafeRunSync()
     assertEquals(waited.childStartCount, 1)
     assertEquals(waited.repo.record.state, ProvisioningRunState.Succeeded)
-    assert(waited.events.count(_ == "baseline-poll") >= 2)
+    assertEquals(waited.repo.record.baselineRunId, Some(baselineSnap.baselinePlanId))
+    assert(waited.events.count(_ == "baseline-ensure") >= 2)
 
     List(ProvisioningRunState.Failed -> ProvisioningRunState.Failed,
       ProvisioningRunState.Unknown -> ProvisioningRunState.Unknown).foreach { case (childState, expected) =>
@@ -245,6 +297,175 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     drifted.worker.tick.unsafeRunSync()
     assertEquals(drifted.repo.record.state, ProvisioningRunState.Failed)
     assertEquals(drifted.repo.record.failureCode, Some("REMNAWAVE_ONBOARDING_PROFILE_NOT_COMPLIANT"))
+  }
+
+  test("a baseline attached before a crash is started from PLANNED instead of being polled to timeout") {
+    val h = new Harness(OnboardingPhase.PrepareServer)
+    // The crash window: attachBaseline committed, so the parent already names the child, but the
+    // child itself was never started.
+    h.repo.record = h.repo.record.copy(snapshot = baselineSnap, baselineRunId = Some(baselineSnap.baselinePlanId))
+    h.childPlan = h.childPlan.copy(state = ProvisioningRunState.Planned)
+    h.childSequence = List(ProvisioningRunState.Queued, ProvisioningRunState.Succeeded)
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.childStartCount, 1)
+    assertEquals(h.childPlan.id, baselineSnap.baselinePlanId)
+    assertEquals(h.repo.record.baselineRunId, Some(baselineSnap.baselinePlanId))
+    assertEquals(h.repo.record.state, ProvisioningRunState.Succeeded)
+    assertEquals(h.repo.completed, OnboardingPhase.all.drop(1))
+  }
+
+  test("the baseline request ID is derived from the onboarding, so repeating the start is one request") {
+    val id = uid
+    assertEquals(RemnawaveNodeOnboardingRun.baselineRequestId(id), RemnawaveNodeOnboardingRun.baselineRequestId(id))
+    assertNotEquals(RemnawaveNodeOnboardingRun.baselineRequestId(id), RemnawaveNodeOnboardingRun.baselineRequestId(uid))
+  }
+
+  test("a QUEUED or RUNNING baseline child is waited on and never started a second time") {
+    List(ProvisioningRunState.Queued, ProvisioningRunState.Running).foreach { inFlightState =>
+      val h = new Harness(OnboardingPhase.PrepareServer)
+      h.repo.record = h.repo.record.copy(snapshot = baselineSnap, baselineRunId = Some(baselineSnap.baselinePlanId))
+      h.childPlan = h.childPlan.copy(state = inFlightState)
+      h.childSequence = List(ProvisioningRunState.Running, ProvisioningRunState.Succeeded)
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.childStartCount, 0)
+      assert(!h.events.contains("baseline-start"))
+      assertEquals(h.repo.record.state, ProvisioningRunState.Succeeded)
+    }
+  }
+
+  test("a terminal baseline child is read as it stands and never restarted") {
+    List(ProvisioningRunState.Failed -> ProvisioningRunState.Failed,
+      ProvisioningRunState.Unknown -> ProvisioningRunState.Unknown,
+      ProvisioningRunState.Succeeded -> ProvisioningRunState.Succeeded).foreach { case (childState, expected) =>
+      val h = new Harness(OnboardingPhase.PrepareServer)
+      h.repo.record = h.repo.record.copy(snapshot = baselineSnap, baselineRunId = Some(baselineSnap.baselinePlanId))
+      h.childPlan = h.childPlan.copy(state = childState,
+        failureCode = Option.when(childState != ProvisioningRunState.Succeeded)("CHILD_FAILED"))
+      h.childSequence = List(childState)
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.childStartCount, 0)
+      assertEquals(h.repo.record.state, expected)
+    }
+  }
+
+  test("a PLANNED child whose identity does not match the approved plan is not started") {
+    val h = new Harness(OnboardingPhase.PrepareServer)
+    h.repo.record = h.repo.record.copy(snapshot = baselineSnap, baselineRunId = Some(baselineSnap.baselinePlanId))
+    h.childPlan = h.childPlan.copy(state = ProvisioningRunState.Planned)
+    h.baselineIdentityProven = false
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.childStartCount, 0)
+    assert(!h.events.contains("baseline-start"))
+    assertEquals(h.repo.record.state, ProvisioningRunState.Unknown)
+    assertEquals(h.repo.record.failureCode, Some("REMNAWAVE_ONBOARDING_BASELINE_CHANGED"))
+  }
+
+  test("a synchronization already running for the integration is awaited, not treated as a failure") {
+    val h = new Harness(OnboardingPhase.SyncInventory)
+    h.repo.inFlight = false
+    val holder = h.session(uid, IntegrationSyncStatus.Running)
+    h.slotHolder = Some(holder)
+    h.sessions += holder.id -> holder
+    // The observation under way elsewhere completes before the onboarding looks again.
+    h.sessionProgress = List(IntegrationSyncStatus.Completed)
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.syncSessionId, Some(holder.id))
+    assertEquals(h.repo.record.state, ProvisioningRunState.Succeeded)
+    assertEquals(h.ownedSyncs, 0)
+    assertEquals(h.repo.attachedSyncSessions, List(holder.id))
+    assert(h.events.contains("bind"))
+    assert(!h.repo.record.failureCode.contains("INTEGRATION_SYNC_ALREADY_RUNNING"))
+  }
+
+  test("waiting for a synchronization that never finishes is bounded and starts no second one") {
+    val h = new Harness(OnboardingPhase.SyncInventory, startedAt = now.minusSeconds(20))
+    h.repo.inFlight = false
+    val holder = h.session(uid, IntegrationSyncStatus.Running)
+    h.slotHolder = Some(holder)
+    h.sessions += holder.id -> holder
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.syncSessionId, Some(holder.id))
+    assertEquals(h.repo.record.state, ProvisioningRunState.Unknown)
+    assertEquals(h.repo.record.failureCode, Some("REMNAWAVE_ONBOARDING_SYNC_TIMEOUT"))
+    assertEquals(h.ownedSyncs, 0)
+    assert(!h.events.contains("bind"))
+  }
+
+  test("a recovered worker reads the stored session and starts no second synchronization") {
+    val h = new Harness(OnboardingPhase.SyncInventory)
+    val stored = h.session(uid, IntegrationSyncStatus.Running)
+    h.sessions += stored.id -> stored
+    h.repo.record = h.repo.record.copy(syncSessionId = Some(stored.id))
+    h.sessionProgress = List(IntegrationSyncStatus.Running, IntegrationSyncStatus.Completed)
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state, ProvisioningRunState.Succeeded)
+    assertEquals(h.repo.record.syncSessionId, Some(stored.id))
+    assertEquals(h.ownedSyncs, 0)
+    assertEquals(h.repo.attachedSyncSessions, Nil)
+    assertEquals(h.sessions.size, 1)
+    assert(h.events.count(_ == "sync-read") >= 2)
+  }
+
+  test("a stored session that failed ends the onboarding without deleting the external node") {
+    val h = new Harness(OnboardingPhase.SyncInventory)
+    val stored = h.session(uid, IntegrationSyncStatus.Failed)
+    h.sessions += stored.id -> stored
+    h.repo.record = h.repo.record.copy(syncSessionId = Some(stored.id))
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state, ProvisioningRunState.Failed)
+    assertEquals(h.repo.record.failureCode, Some("INTEGRATION_TIMEOUT"))
+    assertEquals(h.repo.record.externalNodeId, Some(nodeId))
+    assertEquals(h.repo.record.syncSessionId, Some(stored.id))
+    assertEquals(h.ownedSyncs, 0)
+    assert(!h.events.exists(_.contains("delete")))
+  }
+
+  test("a completed session without the new node is not evidence and a fresh one is observed") {
+    val h = new Harness(OnboardingPhase.SyncInventory)
+    // Somebody else's snapshot finished before this node existed.
+    val older = h.session(uid, IntegrationSyncStatus.Completed)
+    h.sessions += older.id -> older
+    h.repo.record = h.repo.record.copy(syncSessionId = Some(older.id))
+    h.nodeInInventory = false
+    h.syncObservesNode = true
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.ownedSyncs, 1)
+    assert(!h.repo.record.syncSessionId.contains(older.id))
+    assertEquals(h.repo.record.state, ProvisioningRunState.Succeeded)
+    assertEquals(h.nodeInInventory, true)
+
+    val blind = new Harness(OnboardingPhase.SyncInventory, startedAt = now.minusSeconds(20))
+    val stale = blind.session(uid, IntegrationSyncStatus.Completed)
+    blind.sessions += stale.id -> stale
+    blind.repo.record = blind.repo.record.copy(syncSessionId = Some(stale.id))
+    blind.nodeInInventory = false
+    blind.syncObservesNode = false
+    blind.worker.tick.unsafeRunSync()
+    // Binding is never reached without inventory evidence of the node.
+    assert(!blind.events.contains("bind"))
+    assertEquals(blind.repo.record.state, ProvisioningRunState.Unknown)
+    assertEquals(blind.repo.record.failureCode, Some("REMNAWAVE_ONBOARDING_SYNC_TIMEOUT"))
+  }
+
+  test("an abandoned running session is retired by the shared recovery instead of waiting forever") {
+    val h = new Harness(OnboardingPhase.SyncInventory)
+    // Its own deadline has passed, so this attempt died with the process that started it.
+    val abandoned = h.session(uid, IntegrationSyncStatus.Running, recoverAfter = now.minusSeconds(1))
+    h.sessions += abandoned.id -> abandoned
+    h.repo.record = h.repo.record.copy(syncSessionId = Some(abandoned.id))
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.ownedSyncs, 1)
+    assert(!h.repo.record.syncSessionId.contains(abandoned.id))
+    assertEquals(h.repo.record.state, ProvisioningRunState.Succeeded)
+  }
+
+  test("a session the storage no longer holds leaves the phase UNKNOWN without a new observation") {
+    val h = new Harness(OnboardingPhase.SyncInventory)
+    h.repo.record = h.repo.record.copy(syncSessionId = Some(uid))
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state, ProvisioningRunState.Unknown)
+    assertEquals(h.repo.record.failureCode, Some("REMNAWAVE_ONBOARDING_SYNC_UNKNOWN"))
+    assertEquals(h.ownedSyncs, 0)
   }
 
   test("recovers an in-flight create by reconciliation without posting create again") {

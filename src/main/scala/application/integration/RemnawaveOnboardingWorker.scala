@@ -17,8 +17,9 @@ import org.typelevel.log4cats.Logger
 import scala.concurrent.duration._
 
 final case class RemnawaveOnboardingSettings(panelPoll: FiniteDuration = 5.seconds,
-  panelTimeout: FiniteDuration = 180.seconds, baselineTimeout: FiniteDuration = 3600.seconds) {
-  require(panelPoll>=1.second && panelTimeout>panelPoll && baselineTimeout>panelPoll)
+  panelTimeout: FiniteDuration = 180.seconds, baselineTimeout: FiniteDuration = 3600.seconds,
+  syncTimeout: FiniteDuration = 900.seconds) {
+  require(panelPoll>=1.second && panelTimeout>panelPoll && baselineTimeout>panelPoll && syncTimeout>panelPoll)
 }
 
 /** Durable boundaries, short fenced transactions and read-only recovery before any uncertain mutation. */
@@ -96,14 +97,57 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
       n.correlationTags.contains("ID:"+i.correlationId.toString.replace("-","").toUpperCase(java.util.Locale.ROOT)) &&
       r.externalNodeId.forall(_==n.externalId)
   }
+  /** Recoverable inventory observation. The session this phase depends on is named durably before
+    * the provider is read, so a restart reads that exact session instead of starting another one,
+    * and an already running synchronization of the same integration is waited for rather than
+    * mistaken for a failure. A COMPLETED session counts only once the stored inventory holds the
+    * node this onboarding created, whoever observed it.
+    */
+  private def syncInventory(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Decision] = r.syncSessionId match {
+    case None => syncClaim(r,token)
+    case Some(id) => operations.syncSession(r,id).flatMap {
+      case None => IO.pure[Decision](Stop("REMNAWAVE_ONBOARDING_SYNC_UNKNOWN",true))
+      // The deadline of the session itself is the one stale policy; past it, claiming again lets
+      // the existing recovery retire the abandoned session rather than waiting for nothing.
+      case Some(session) if session.status==IntegrationSyncStatus.Running => clock.flatMap(at =>
+        if (at.isBefore(session.recoverAfterAt)) syncWaiting(r) else syncClaim(r,token))
+      case Some(session) => logger.info(s"remnawave.onboarding.sync.recovered onboardingId=${r.id} " +
+        s"phase=${r.phase.code} syncSessionId=${session.id} status=${session.status.code} recovered=true") *>
+        syncFinished(r,token,session,true)
+    }
+  }
+  private def syncWaiting(r: RemnawaveNodeOnboardingRun): IO[Decision] = elapsed(r,polling.syncTimeout).map(expired =>
+    if (expired) Stop("REMNAWAVE_ONBOARDING_SYNC_TIMEOUT",true,Some(r)) else Wait(r))
+  private def syncClaim(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Decision] = operations.claimSync(r,token).flatMap {
+    case OnboardingSyncClaim.Owned(claimed,observe) =>
+      val owned = r.copy(syncSessionId=Some(claimed.id))
+      observe.flatMap(session => syncFinished(owned,token,session,false))
+    case OnboardingSyncClaim.Foreign(session) =>
+      logger.info(s"remnawave.onboarding.sync.attached onboardingId=${r.id} phase=${r.phase.code} " +
+        s"syncSessionId=${session.id} owned=false recovered=true") *> syncWaiting(r.copy(syncSessionId=Some(session.id)))
+  }
+  private def syncFinished(r: RemnawaveNodeOnboardingRun,token: UUID,session: IntegrationSyncSession,
+    retry: Boolean): IO[Decision] = session.status match {
+    case IntegrationSyncStatus.Completed => operations.inventoryHasNode(r).flatMap(found =>
+      if (found) IO.pure[Decision](Advance(r))
+      // A snapshot taken before this node existed is not evidence of it. One fresh observation is
+      // started per pass, and the phase timeout bounds how long that may repeat.
+      else if (retry) syncClaim(r,token) else syncWaiting(r))
+    case IntegrationSyncStatus.Failed => IO.pure[Decision](Stop(
+      session.errorCode.getOrElse("REMNAWAVE_ONBOARDING_SYNC_FAILED"),false,Some(r)))
+    case _ => syncWaiting(r)
+  }
   private def execute(r: RemnawaveNodeOnboardingRun,token: UUID,fresh: Boolean): IO[Decision] = {
     import OnboardingPhase._
     r.phase match {
       case PrepareServer if r.snapshot.baselineNeeded => for {
         _ <- operations.validate(r,requireCompliant=false)
-        childId <- r.baselineRunId.fold(operations.startBaseline(r,token))(IO.pure)
-        child <- operations.baseline(r,childId)
-        updated = r.copy(baselineRunId=Some(childId))
+        // A crash between the attach and the start leaves the approved child PLANNED; it is started
+        // here, idempotently and only while it is still PLANNED, instead of being polled to timeout.
+        child <- operations.ensureBaselineStarted(r,token)
+        _ <- if (r.baselineRunId.isEmpty) IO.unit else logger.info(s"remnawave.onboarding.baseline.recovered " +
+          s"onboardingId=${r.id} phase=${r.phase.code} baselineRunId=${child.id} childState=${child.state.code} recovered=true")
+        updated = r.copy(baselineRunId=Some(child.id))
         expired <- elapsed(r,polling.baselineTimeout)
         decision <- child.state match {
           case ProvisioningRunState.Succeeded => operations.validate(updated,requireCompliant=true).as[Decision](Advance(updated))
@@ -169,8 +213,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
             else if(n.connected && !n.disabled) advance
             else elapsed(r,polling.panelTimeout).map(expired => if(expired) Stop("REMNAWAVE_NODE_CONNECTION_TIMEOUT",false) else Wait(r))
           }
-          case SyncInventory => operations.sync(r).map { s => if(s.status==IntegrationSyncStatus.Completed)
-            Advance(r.copy(syncSessionId=Some(s.id))) else Stop(s.errorCode.getOrElse("REMNAWAVE_ONBOARDING_SYNC_FAILED"),false,Some(r.copy(syncSessionId=Some(s.id)))) }
+          case SyncInventory => syncInventory(r,token)
           case BindResource => operations.bind(r,token) *> advance
           case SetDesiredState => operations.setDesiredState(r,token) *> advance
           case FinalVerify => for {
