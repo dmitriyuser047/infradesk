@@ -91,6 +91,15 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
       input.desiredNodeState).normalized.leftMap(code => error(code)).liftTo[Tx]
   } yield content
 
+  /** Reuses the same resolver at rollout admission; archived or re-bound managed objects are stale. */
+  def pinnedContentAvailable(org: UUID, integrationId: UUID, content: FleetDesiredContent): Tx[Boolean] =
+    (for {
+      integration <- remnawave(org, integrationId)
+      current <- resolve(org, integration, FleetDesiredInput(content.serverProfileId, content.serverProfileRevisionNumber,
+        content.inventoryConfigProfileId, content.configRevisionNumber, content.activeInboundIds, content.nodePort,
+        content.panelCidrs, content.desiredNodeState))
+    } yield current == content).handleError(_ => false)
+
   def create(actor: ActorContext, integrationId: UUID, code: String, name: String, description: Option[String],
     input: FleetDesiredInput, memberNodeIds: List[UUID]): IO[RemnawaveFleet] = for {
     _ <- IO.raiseUnless(RemnawaveFleet.validCode(code) && RemnawaveFleet.validName(name) &&
@@ -143,6 +152,8 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
     expectedVersion: Long): IO[RemnawaveFleet] = IO.realTimeInstant.flatMap(now => runner.run(for {
     _ <- remnawave(actor.organizationId, integrationId)
     _ <- repo.lockFleet(actor.organizationId, fleetId)
+    _ <- repo.rolloutActive(actor.organizationId, fleetId).flatMap(active =>
+      MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_FLEET_ROLLOUT_ACTIVE")))
     fleet <- repo.fleetForUpdate(actor.organizationId, integrationId, fleetId).flatMap(
       _.liftTo[Tx](error("REMNAWAVE_FLEET_NOT_FOUND")))
     _ <- MonadThrow[Tx].raiseWhen(fleet.archived)(error("REMNAWAVE_FLEET_ARCHIVED"))
@@ -189,6 +200,8 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
     expectedVersion: Long): IO[RemnawaveFleetMembership] = IO.realTimeInstant.flatMap(now => runner.run(for {
     _ <- remnawave(actor.organizationId, integrationId)
     _ <- repo.lockFleet(actor.organizationId, fleetId)
+    _ <- repo.rolloutActive(actor.organizationId, fleetId).flatMap(active =>
+      MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_FLEET_ROLLOUT_ACTIVE")))
     fleet <- loaded(actor.organizationId, integrationId, fleetId)
     _ <- MonadThrow[Tx].raiseWhen(fleet.archived)(error("REMNAWAVE_FLEET_ARCHIVED"))
     _ <- MonadThrow[Tx].raiseUnless(fleet.version == expectedVersion)(error("REMNAWAVE_FLEET_VERSION_CONFLICT"))
@@ -205,6 +218,8 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
     expectedVersion: Long): IO[Unit] = IO.realTimeInstant.flatMap(now => runner.run(for {
     _ <- remnawave(actor.organizationId, integrationId)
     _ <- repo.lockFleet(actor.organizationId, fleetId)
+    _ <- repo.rolloutActive(actor.organizationId, fleetId).flatMap(active =>
+      MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_FLEET_ROLLOUT_ACTIVE")))
     fleet <- loaded(actor.organizationId, integrationId, fleetId)
     _ <- MonadThrow[Tx].raiseUnless(fleet.version == expectedVersion)(error("REMNAWAVE_FLEET_VERSION_CONFLICT"))
     membership <- repo.membership(actor.organizationId, fleetId, membershipId).flatMap(
@@ -241,6 +256,8 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
     IO.realTimeInstant.flatMap(now => runner.run(for {
       _ <- remnawave(actor.organizationId, integrationId)
       _ <- repo.lockFleet(actor.organizationId, fleetId)
+      _ <- repo.rolloutActive(actor.organizationId, fleetId).flatMap(active =>
+        MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_FLEET_ROLLOUT_ACTIVE")))
       fleet <- repo.fleetForUpdate(actor.organizationId, integrationId, fleetId).flatMap(
         _.liftTo[Tx](error("REMNAWAVE_FLEET_NOT_FOUND")))
       // Archiving twice is the same archived fleet: no second release and no second journal entry.
@@ -335,6 +352,7 @@ object RemnawaveFleets {
     case "REMNAWAVE_FLEET_MEMBER_NOT_FOUND" => "Fleet member was not found"
     case "REMNAWAVE_FLEET_VERSION_CONFLICT" => "The fleet changed meanwhile; reload and try again"
     case "REMNAWAVE_FLEET_CODE_TAKEN" => "A fleet with this code already exists"
+    case "REMNAWAVE_FLEET_ROLLOUT_ACTIVE" => "A rollout is in progress for this fleet"
     case "REMNAWAVE_FLEET_NODE_ALREADY_MEMBER" => "This node already belongs to another fleet"
     case _ => "The fleet request could not be completed"
   }

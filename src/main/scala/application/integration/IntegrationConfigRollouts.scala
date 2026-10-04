@@ -95,6 +95,9 @@ final class IntegrationConfigRollouts[Tx[_]: MonadThrow](integrations: Integrati
       runner.run(rollouts.nodeHealth(org, id)).map(rollout -> _)
     }
 
+  def byRequest(org: UUID, requestId: UUID): IO[Option[IntegrationConfigRollout]] =
+    runner.run(rollouts.findByRequest(org, requestId))
+
   def history(org: UUID, integrationId: UUID, objectId: UUID, limit: Int) =
     runner.run(rollouts.recent(org, integrationId, objectId, limit))
 

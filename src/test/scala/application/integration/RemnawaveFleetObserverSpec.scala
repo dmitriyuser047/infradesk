@@ -105,9 +105,11 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
         IO { if (claimToken.contains(token) && leaseValid) { rescheduled += 1; true } else false }
       override def assessments(o: UUID, f: UUID) = IO.pure(saved)
       override def lockFleet(o: UUID, f: UUID) = IO.unit
+      override def rolloutActive(o: UUID, f: UUID) = IO.pure(false)
     }
 
     val query = new RemnawaveFleetQuery[IO] {
+      override def configConsumers(o: UUID, i: UUID, p: String) = IO.pure(Nil)
       override def summaries(o: UUID, i: UUID, ids: List[UUID]) = IO.pure(Map.empty)
       override def memberRows(o: UUID, f: UUID) = IO.pure(Nil)
       override def candidates(o: UUID, i: UUID, limit: Int) = IO.pure(Nil)
@@ -175,6 +177,7 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
       }
       override def installationPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO.pure(true)
       override def firewallPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO.pure(true)
+      override def managedPanelCidrs(c: Connection, s: RemnawaveNodeRemoteSpec) = IO.pure(s.panelCidrs)
     }
 
     val runner = new TransactionRunner[IO, IO] { override def run[A](program: IO[A]) = program }

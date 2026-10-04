@@ -69,9 +69,12 @@ trait RemnawaveFleetRepository[F[_]] {
   def reschedule(membership: RemnawaveFleetMembership, token: UUID, now: Instant, nextCheckAt: Instant): F[Boolean]
   def assessments(org: UUID, fleetId: UUID): F[List[RemnawaveFleetNodeAssessment]]
   def lockFleet(org: UUID, fleetId: UUID): F[Unit]
+  /** True while a rollout of this fleet holds it; promote, membership changes and archive wait. */
+  def rolloutActive(org: UUID, fleetId: UUID): F[Boolean]
 }
 
 trait RemnawaveFleetQuery[F[_]] {
+  def configConsumers(org: UUID, integrationId: UUID, externalConfigProfileId: String): F[List[FleetRolloutConfigConsumer]]
   def summaries(org: UUID, integrationId: UUID, fleetIds: List[UUID]): F[Map[UUID, RemnawaveFleetSummary]]
   def memberRows(org: UUID, fleetId: UUID): F[List[FleetMemberRow]]
   def candidates(org: UUID, integrationId: UUID, limit: Int): F[List[FleetCandidate]]

@@ -154,6 +154,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       override def observe(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "local-observe"; local }
       override def installationPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "install-present"; true }
       override def firewallPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "firewall-present"; true }
+      override def managedPanelCidrs(c: Connection, s: RemnawaveNodeRemoteSpec) = IO.pure(s.panelCidrs)
     }
     val operations = new RemnawaveOnboardingOperations[IO] {
       override def runtime(r: RemnawaveNodeOnboardingRun) = IO { events += "runtime"; IntegrationRuntimeContext(integrationId, org,

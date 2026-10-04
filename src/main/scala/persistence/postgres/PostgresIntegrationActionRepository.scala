@@ -83,7 +83,9 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
         and integration_id = $integration and status in ('QUEUED', 'RUNNING'))
       or exists(select 1 from integration_config_rollout where organization_id = $org
         and integration_id = $integration and status in
-          ('PREPARING','APPLYING','VERIFYING','ROLLBACK_APPLYING','ROLLBACK_VERIFYING'))""".query[Boolean].unique
+          ('PREPARING','APPLYING','VERIFYING','ROLLBACK_APPLYING','ROLLBACK_VERIFYING'))
+      or exists(select 1 from remnawave_fleet_rollout where organization_id=$org and integration_id=$integration
+        and state in ('QUEUED','RUNNING','PAUSED','ROLLING_BACK'))""".query[Boolean].unique
 
   override def recoverAndClaim(owner: UUID, token: UUID, at: Instant, recoverAfter: Instant,
     limit: Int): ConnectionIO[(Int, List[IntegrationActionExecution])] = for {

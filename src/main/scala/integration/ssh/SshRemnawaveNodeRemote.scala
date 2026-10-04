@@ -134,6 +134,13 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
     validate(spec) *> firewallRules(spec).flatMap(wanted => if (wanted.isEmpty) IO.pure(false) else firewallProof(c, spec))
   }
 
+  override def managedPanelCidrs(connection: Connection, spec: RemnawaveNodeRemoteSpec): IO[List[String]] =
+    withSession(connection) { (_, c, _) =>
+      validatePort(spec.nodePort) *> nodeRules(c, spec).map(_.filter(r => r.owned && r.rule.id == "node" &&
+        r.action == "allow" && r.rule.protocol == "tcp" && r.rule.port == spec.nodePort)
+        .flatMap(_.rule.sources).distinct.sorted)
+    }
+
   private def withSession[A](connection: Connection)(use: (RemoteConfigurationSession[IO], ProfileCommands, Int) => IO[A]): IO[A] =
     transport.withSessionBounded(connection, 65536) { s =>
       new ProfileCommands(s, root = false).capture("id", List("-u"), 5.seconds, privileged = false).flatMap { r =>

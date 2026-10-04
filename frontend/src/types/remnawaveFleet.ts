@@ -79,3 +79,62 @@ export interface CreateFleetRequest {
   code: string; name: string; description: string | null
   desiredConfiguration: FleetDesiredRequest; memberNodeIds: string[]
 }
+
+export type RolloutState = 'PLANNED' | 'QUEUED' | 'RUNNING' | 'PAUSED' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'
+  | 'ROLLING_BACK' | 'ROLLED_BACK'
+export type RolloutScope = 'CURRENT_WAVE' | 'ALL_COMPLETED'
+
+export interface RolloutIssue { code: string; node: string | null }
+
+export interface FleetRollout {
+  id: string; fleetId: string; integrationId: string; revisionId: string; state: RolloutState; phase: string
+  expired: boolean; currentWave: number; waveCount: number; pauseAfterCanary: boolean
+  automaticRollback: boolean; rollbackScope: RolloutScope; createdAt: string; expiresAt: string
+  startedAt: string | null; finishedAt: string | null; failureCode: string | null; rollbackIncomplete: boolean
+  pauseReason: string | null; pauseRequested: boolean; rollbackRequested: boolean; updatedAt: string
+}
+
+export interface RolloutPlanMember {
+  membershipId: string; inventoryNodeId: string; nodeName: string; wave: number; position: number
+  skipReason: string | null; actions: string[]; baselineCompliance: string; baselineHealth: string
+  rollbackCapabilities?: { kind: string; supported: boolean; reason: string | null }[]
+}
+
+export interface RolloutSnapshot {
+  revisionId: string; revisionNumber: number
+  policy: { waveSize: number; canaryMembershipIds: string[]; pauseAfterCanary: boolean
+    automaticRollback: boolean; rollbackScope: RolloutScope }
+  sharedConfig: { required: boolean; revisionNumber: number; externalNodes: number; externalUnhealthyNodes: number
+    baselineRevisionNumber?: number | null; rollbackSupported?: boolean
+    consumers?: { inventoryNodeId: string; externalNodeId: string; nodeName: string; disabled: boolean
+      connected: boolean; inFleet: boolean }[] }
+  waveCount: number; estimatedMutations: number; members: RolloutPlanMember[]
+}
+
+export type RolloutPreview =
+  | { status: 'READY'; planId: string; expiresAt: string; estimatedMutations: number
+      warnings: RolloutIssue[]; plan: RolloutSnapshot }
+  | { status: 'REFRESH_REQUIRED'; issues: RolloutIssue[] }
+  | { status: 'BLOCKED'; issues: RolloutIssue[]; warnings: RolloutIssue[] }
+
+export interface RolloutMember {
+  id: string; membershipId: string; nodeName: string | null; wave: number; position: number; state: string
+  skipReason: string | null; plannedActions: string[]; failureCode: string | null
+  rollbackFailureCode: string | null; finishedAt: string | null
+}
+
+export interface RolloutAction {
+  id: string; memberId: string | null; rollback: boolean; kind: string; sequence: number; state: string
+  serverProfileRunId: string | null; configRolloutId: string | null; failureCode: string | null
+  desiredStateActionId?: string | null
+  finishedAt: string | null
+}
+
+export interface FleetRolloutDetail extends FleetRollout {
+  snapshot: RolloutSnapshot; members: RolloutMember[]; actions: RolloutAction[]
+}
+
+export interface RolloutPreviewRequest {
+  revisionId: string; canaryMemberIds: string[]; waveSize: number; automaticRollback: boolean
+  pauseAfterCanary: boolean
+}

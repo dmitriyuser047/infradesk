@@ -79,6 +79,7 @@ import application.port.NotificationDeliveryScope
 import domain.notification.NotificationDeliveryTarget
 import application.workspace.{CreateEnvironment, CreateProject}
 import cats.effect.IO
+import cats.syntax.traverse._
 import infrastructure.config.AppConfig
 import infrastructure.database.{ConnectionIOIdGenerator, ConnectionIOTimeProvider}
 import infrastructure.runtime.{SystemIdGenerator, SystemTimeProvider}
@@ -118,6 +119,8 @@ final case class ApplicationComponents(
   remnawaveOnboardingWorker: application.integration.RemnawaveOnboardingWorker[ConnectionIO],
   remnawaveFleets: application.integration.RemnawaveFleets[ConnectionIO],
   remnawaveFleetObserver: application.integration.RemnawaveFleetObserver[ConnectionIO],
+  remnawaveFleetRollouts: application.integration.RemnawaveFleetRollouts[ConnectionIO],
+  remnawaveFleetRolloutWorker: application.integration.RemnawaveFleetRolloutWorker[ConnectionIO],
   configurationPromotions: ConfigurationPromotions[IO, ConnectionIO],
   configurationRollouts: ConfigurationRollouts[IO, ConnectionIO],
   configurationRolloutWorker: ConfigurationRolloutWorker[ConnectionIO],
@@ -456,6 +459,44 @@ object ApplicationModule {
         fleetConfig.batchSize, fleetConfig.maxConcurrency, fleetConfig.claimLease,
         fleetConfig.observationTimeout, fleetConfig.recheckInterval, fleetConfig.staleAfter),
       UUID.randomUUID())
+    val rolloutRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetRolloutRepository
+    def ownedRolloutChildren(id: UUID, token: UUID): application.integration.FleetRolloutChildren = {
+      val childRunner = new ru.bitec.app.ops.persistence.postgres.PostgresFleetRolloutChildRunner(transactionRunner, id, token)
+      val childProfiles = new ServerProfiles[IO,ConnectionIO](serverProfileRepository, provisioningTargetQuery,
+        provisioningRunRepository, integrations.serverProfileRemote, transactionIdGenerator, transactionTimeProvider,
+        auditRecorder, childRunner, childRunner, config.provisioning)
+      val childProvisioning = new ProvisioningRuns[IO,ConnectionIO](provisioningRunRepository,
+        provisioningTargetQuery, transactionIdGenerator, transactionTimeProvider, auditRecorder,
+        childRunner, childRunner, config.provisioning, Some(childProfiles))
+      val childConfigs = new application.integration.IntegrationConfigRollouts[ConnectionIO](integrationRepository,
+        integrationInventoryRepository, configurationProfileQuery, integrationConfigRepository,
+        integrationConfigDeployments, integrationConfigRollouts, transactionIdGenerator, transactionTimeProvider,
+        auditRecorder, integrationSyncStateRepository, childRunner, config.integrations.configRolloutsOperational)
+      new application.integration.LiveFleetRolloutChildren[ConnectionIO](childProfiles, childProvisioning,
+        childConfigs, integrationDesiredStatesService, integrationDesiredStateRepository, serverProfileRepository,
+        provisioningTargetQuery, fleetQuery, fleetRepository, integrationSyncStateRepository, onboardingRemote, childRunner)
+    }
+    val rolloutChildren = new application.integration.LiveFleetRolloutChildren[ConnectionIO](serverProfiles,
+      provisioningRuns, integrationConfigRolloutService, integrationDesiredStatesService,
+      integrationDesiredStateRepository, serverProfileRepository, provisioningTargetQuery, fleetQuery,
+      fleetRepository, integrationSyncStateRepository, onboardingRemote, transactionRunner, Some(ownedRolloutChildren))
+    val remnawaveFleetRollouts = new application.integration.RemnawaveFleetRollouts[ConnectionIO](fleetRepository,
+      fleetQuery, rolloutRepository, integrationRepository, integrationInventoryRepository,
+      integrationBindingRepository, rolloutChildren, auditRecorder, transactionRunner,
+      application.integration.FleetRolloutSettings(24.hours, fleetConfig.staleAfter, 25),
+      Some(remnawaveFleets.pinnedContentAvailable),
+      Some((org, members) => members.filter(m => m.actions.exists(a =>
+        a == domain.integration.FleetActionKind.ServerProfileApply || a == domain.integration.FleetActionKind.NetworkFirewall))
+        .traverse(m => provisioningTargetQuery.eligible(org, m.resourceId).map(_.exists(t =>
+          m.baseline.sourceConnectionId.contains(t.connectionId) && m.baseline.sourceUpdatedAt.contains(t.connectionUpdatedAt))))
+        .map(_.forall(identity))))
+    val remnawaveFleetRolloutWorker = new application.integration.RemnawaveFleetRolloutWorker[ConnectionIO](
+      rolloutRepository, fleetQuery, rolloutChildren,
+      new application.integration.FleetRolloutMemberRunner[ConnectionIO](rolloutRepository, rolloutChildren,
+        transactionRunner, application.integration.FleetMemberRunnerSettings()),
+      remnawaveFleetRollouts, transactionRunner, loggers.integration,
+      application.integration.RemnawaveFleetRolloutWorkerSettings(enabled = fleetConfig.enabled),
+      UUID.randomUUID())
     val remnawaveOnboardingWorker = new application.integration.RemnawaveOnboardingWorker[ConnectionIO](onboardingRepository,
       onboardingOperations,integrations.integrationProviderRegistry,onboardingRemote,
       integration.secret.NodeInstallationCipher.fromConfig(config.secretEncryption),transactionRunner,auditRecorder,
@@ -495,6 +536,8 @@ object ApplicationModule {
       remnawaveOnboardingWorker = remnawaveOnboardingWorker,
       remnawaveFleets = remnawaveFleets,
       remnawaveFleetObserver = remnawaveFleetObserver,
+      remnawaveFleetRollouts = remnawaveFleetRollouts,
+      remnawaveFleetRolloutWorker = remnawaveFleetRolloutWorker,
       configurationPromotions = new ConfigurationPromotions[IO, ConnectionIO](
         configurationPromotionRepository, configurationProfileQuery, transactionTimeProvider, auditRecorder,
         readOnlySnapshotRunner, transactionRunner),

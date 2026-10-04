@@ -107,6 +107,12 @@ object AuditAction {
   case object RemnawaveFleetRevisionPromoted extends AuditAction { val code = "REMNAWAVE_FLEET_REVISION_PROMOTED" }
   case object RemnawaveFleetMemberAdded extends AuditAction { val code = "REMNAWAVE_FLEET_MEMBER_ADDED" }
   case object RemnawaveFleetMemberRemoved extends AuditAction { val code = "REMNAWAVE_FLEET_MEMBER_REMOVED" }
+  case object RemnawaveFleetRolloutRequested extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_REQUESTED" }
+  case object RemnawaveFleetRolloutPaused extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_PAUSED" }
+  case object RemnawaveFleetRolloutResumed extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_RESUMED" }
+  case object RemnawaveFleetRolloutRollbackRequested extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_ROLLBACK_REQUESTED" }
+  case object RemnawaveFleetRolloutCompleted extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_COMPLETED" }
+  case object RemnawaveFleetRolloutFailed extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_FAILED" }
 
   val All: List[AuditAction] = List(
     ProjectCreated,
@@ -188,7 +194,13 @@ object AuditAction {
     RemnawaveFleetRevisionCreated,
     RemnawaveFleetRevisionPromoted,
     RemnawaveFleetMemberAdded,
-    RemnawaveFleetMemberRemoved
+    RemnawaveFleetMemberRemoved,
+    RemnawaveFleetRolloutRequested,
+    RemnawaveFleetRolloutPaused,
+    RemnawaveFleetRolloutResumed,
+    RemnawaveFleetRolloutRollbackRequested,
+    RemnawaveFleetRolloutCompleted,
+    RemnawaveFleetRolloutFailed
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =

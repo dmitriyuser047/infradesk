@@ -18,6 +18,13 @@ import java.util.UUID
 final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO] {
   private val repository = new PostgresRemnawaveFleetRepository
 
+  def configConsumers(org: UUID, integrationId: UUID, externalConfigProfileId: String): ConnectionIO[List[FleetRolloutConfigConsumer]] =
+    sql"""select id,external_id,display_name,coalesce((summary->>'isDisabled')::boolean,false),
+      coalesce((summary->>'isConnected')::boolean,false),last_seen_at
+      from integration_inventory_object where organization_id=$org and integration_id=$integrationId
+        and object_type='NODE' and is_active and summary->>'activeConfigProfileUuid'=$externalConfigProfileId
+      order by id""".query[FleetRolloutConfigConsumer].to[List]
+
   def summaries(org: UUID, integrationId: UUID,
     fleetIds: List[UUID]): ConnectionIO[Map[UUID, RemnawaveFleetSummary]] =
     if (fleetIds.isEmpty) Map.empty[UUID, RemnawaveFleetSummary].pure[ConnectionIO] else sql"""

@@ -27,4 +27,6 @@ trait RemnawaveNodeRemote[F[_]] {
   /** Read-only proof used after crash; absence is never permission to blindly repeat a mutation. */
   def installationPresent(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[Boolean]
   def firewallPresent(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[Boolean]
+  /** Read-only: the Panel sources currently allowed by this node's own rule namespace, sorted. */
+  def managedPanelCidrs(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[List[String]]
 }
