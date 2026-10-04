@@ -62,6 +62,10 @@ final class RemnawaveFleetObserver[Tx[_]: MonadThrow](
       case (Some(desired), Some(evidence)) =>
         val connection = target.toOption.map(_.connection)
         val managed = evidence.provenance.isDefined
+        // The exact SSH source this observation will use. TX2 proves it is still the current one,
+        // so a connection that was edited, replaced or made ineligible meanwhile is never read as
+        // if it had produced this evidence.
+        val pin = FleetSourcePin.of(target)
         for {
           // The remote read happens here: no transaction is open and nothing is written.
           local <- (connection, evidence.provenance) match {
@@ -80,21 +84,40 @@ final class RemnawaveFleetObserver[Tx[_]: MonadThrow](
             verdict.compliance, verdict.health, verdict.driftReasons, verdict.healthReasons,
             verdict.rolloutBlockers, evidence.inventoryObservedAt,
             evidence.serverObservation.map(_.observedAt), local.as(at), at)
-          // TX2: the verdict is written only while everything it rests on is still the same.
-          saved <- runner.run(repo.saveAssessment(assessment, token, at,
-            at.plusMillis(settings.recheckInterval.toMillis)))
+          // TX2: the verdict is written only while everything it rests on is still the same - the
+          // lease, the membership version, the desired revision, the binding and the SSH source.
+          // It reads the database and performs no remote call.
+          saved <- runner.run(for {
+            current <- targets.eligible(member.organizationId, member.resourceId)
+            result <- if (FleetSourcePin.of(current) != pin) false.pure[Tx]
+              else repo.saveAssessment(assessment, token, at,
+                at.plusMillis(settings.recheckInterval.toMillis))
+          } yield result)
           _ <- if (saved) logger.info(s"remnawave.fleet.assessed organizationId=${member.organizationId} " +
             s"integrationId=${member.integrationId} fleetId=${member.fleetId} revisionId=${desired.id} " +
             s"membershipId=${member.id} resourceId=${member.resourceId} inventoryNodeId=${member.inventoryNodeId} " +
             s"compliance=${verdict.compliance.code} health=${verdict.health.code}")
+          // A discarded result is never written as current. The reschedule is fenced too, so a
+          // worker that lost its lease changes nothing here and the owner decides when to look next.
           else logger.info(s"remnawave.fleet.discarded fleetId=${member.fleetId} membershipId=${member.id} " +
-            s"revisionId=${desired.id} reason=SOURCE_CHANGED")
+            s"revisionId=${desired.id} reason=SOURCE_CHANGED") *>
+            runner.run(repo.reschedule(member, token, at, at.plusMillis(settings.pollInterval.toMillis))).void
         } yield ()
       // Nothing to judge against yet, or the member is gone: release the claim and look again later.
       case _ => runner.run(repo.reschedule(member, token, now,
         now.plusMillis(settings.recheckInterval.toMillis))).void
     }
   } yield ()
+}
+
+/** The identity of the SSH source an observation used, in the same terms Stage25A pins a
+  * provisioning plan: the connection and the version of it. `None` means no eligible source, which
+  * is itself a pin - a connection that becomes eligible during a read also invalidates the result.
+  */
+final case class FleetSourcePin(connectionId: Option[UUID], connectionUpdatedAt: Option[Instant])
+object FleetSourcePin {
+  def of(target: Either[String, ProvisioningTarget]): FleetSourcePin = target.toOption.fold(
+    FleetSourcePin(None, None))(value => FleetSourcePin(Some(value.connectionId), Some(value.connectionUpdatedAt)))
 }
 
 object RemnawaveFleetObserver {

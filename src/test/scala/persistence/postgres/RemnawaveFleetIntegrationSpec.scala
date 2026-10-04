@@ -512,4 +512,143 @@ final class RemnawaveFleetIntegrationSpec extends FunSuite {
       }
     }
   }
+
+  test("archiving a fleet releases its nodes, keeps the history and changes nothing remote") {
+    inWorld { w =>
+      val fleets = service(w)
+      val context = application.auth.ActorContext(actor, w.org)
+      for {
+        node <- w.node("fleet-archive")
+        f <- fixture(w, node, w.org, "archive")
+        first <- fleets.create(context, f.integrationId, "europe", "Europe", None, desiredInput(f),
+          List(f.nodeObjectId))
+        second <- fleets.create(context, f.integrationId, "asia", "Asia", None, desiredInput(f), Nil)
+        beforeDetail <- fleets.detail(w.org, f.integrationId, first.id)
+        // While the fleet is active the node is owned and offered to no one else.
+        candidatesBefore <- fleets.candidates(w.org, f.integrationId)
+        takenBefore <- fleets.addMember(context, f.integrationId, second.id, f.nodeObjectId,
+          second.version).attempt
+        // A verdict exists for the member and is the current state of an active fleet.
+        now <- IO.realTimeInstant
+        revisionId = beforeDetail.desired.get.id
+        membershipId = beforeDetail.members.head.membership.id
+        token = uid
+        _ <- w.run(repo.claimDue(uid, token, now, now.plusSeconds(120), 10))
+        _ <- w.run(repo.saveAssessment(RemnawaveFleetNodeAssessment(uid, w.org, first.id, revisionId,
+          membershipId, 1L, f.nodeObjectId, node.resourceId, FleetCompliance.Drifted, FleetHealth.Healthy,
+          List(FleetDriftReason.ConfigRevisionDrift), Nil, Nil, Some(now), Some(now), Some(now), now),
+          token, now, now.plusSeconds(300)))
+        assessedBefore <- w.run(repo.assessments(w.org, first.id))
+        archived <- fleets.archive(context, f.integrationId, first.id, beforeDetail.fleet.version)
+        // Archiving twice is the same archived fleet: no second release, no second journal entry.
+        again <- fleets.archive(context, f.integrationId, first.id, archived.version)
+        membershipAfter <- w.run(repo.membership(w.org, first.id, membershipId))
+        activeAfter <- w.run(repo.activeMembershipOf(w.org, f.integrationId, f.nodeObjectId))
+        assessedAfter <- w.run(repo.assessments(w.org, first.id))
+        historyAfter <- w.run(repo.members(w.org, first.id))
+        // The released node is offered again and may join another active fleet.
+        candidatesAfter <- fleets.candidates(w.org, f.integrationId)
+        joined <- fleets.addMember(context, f.integrationId, second.id, f.nodeObjectId, second.version)
+        // Nothing remote was touched: no assignment, no desired state, no deployment, no action.
+        assignments <- w.run(sql"select count(*) from server_profile_assignment where organization_id=${w.org}"
+          .query[Int].unique)
+        desiredStates <- w.run(sql"select count(*) from integration_desired_state where organization_id=${w.org}"
+          .query[Int].unique)
+        deployments <- w.run(sql"""select count(*) from integration_config_deployment
+          where organization_id=${w.org}""".query[Int].unique)
+        actions <- w.run(sql"""select count(*) from integration_action_execution
+          where organization_id=${w.org}""".query[Int].unique)
+        bindings <- w.run(sql"""select count(*) from integration_resource_binding
+          where organization_id=${w.org} and inventory_object_id=${f.nodeObjectId}""".query[Int].unique)
+        archiveEvents <- w.run(sql"""select count(*) from audit_event
+          where organization_id=${w.org} and action='REMNAWAVE_FLEET_ARCHIVED'""".query[Int].unique)
+      } yield {
+        assertEquals(candidatesBefore.map(_.eligible), List(false))
+        assertEquals(errorCode(takenBefore), Some("REMNAWAVE_FLEET_NODE_ALREADY_MEMBER"))
+        assertEquals(assessedBefore.size, 1)
+        assertEquals(archived.archived, true)
+        assertEquals(again.archived, true)
+        assertEquals(again.version, archived.version)
+        // The membership is ended, not deleted: the fleet's history still names its former member.
+        assert(membershipAfter.flatMap(_.removedAt).nonEmpty)
+        assertEquals(membershipAfter.map(_.active), Some(false))
+        assertEquals(membershipAfter.map(_.version), Some(2L))
+        assertEquals(historyAfter.map(_.inventoryNodeId), List(f.nodeObjectId))
+        assertEquals(historyAfter.head.createdBy, actor)
+        assertEquals(activeAfter, None)
+        // The current derived verdict is gone with the ownership.
+        assertEquals(assessedAfter, Nil)
+        assertEquals(candidatesAfter.map(_.eligible), List(true))
+        assertEquals(joined.fleetId, second.id)
+        assertEquals(assignments, 0)
+        assertEquals(desiredStates, 0)
+        assertEquals(deployments, 0)
+        assertEquals(actions, 0)
+        // The node is still bound to its server: archiving unbinds nothing.
+        assertEquals(bindings, 1)
+        assertEquals(archiveEvents, 1)
+      }
+    }
+  }
+
+  test("an expired lease loses the right to write before any other worker reclaims it") {
+    inWorld { w =>
+      for {
+        node <- w.node("fleet-lease")
+        f <- fixture(w, node, w.org, "lease")
+        now <- IO.realTimeInstant
+        fleet = fleetOf(w.org, f.integrationId, "leased", now)
+        _ <- w.run(repo.insertFleet(fleet))
+        revision = RemnawaveFleetRevision(uid, w.org, fleet.id, 1, 1, f.content.hash, f.content, actor, now)
+        _ <- w.run(repo.insertRevision(revision))
+        _ <- w.run(repo.promote(w.org, fleet.id, revision.id, 1L, now))
+        member = RemnawaveFleetMembership(uid, w.org, fleet.id, f.integrationId, f.nodeObjectId,
+          node.resourceId, 1L, actor, now)
+        _ <- w.run(repo.insertMembership(member, now))
+        first = uid
+        claimed <- w.run(repo.claimDue(uid, first, now, now.plusSeconds(120), 10))
+        held = claimed.find(_.id == member.id).get
+        verdict = RemnawaveFleetNodeAssessment(uid, w.org, fleet.id, revision.id, member.id, held.version,
+          f.nodeObjectId, node.resourceId, FleetCompliance.Compliant, FleetHealth.Healthy, Nil, Nil, Nil,
+          Some(now), Some(now), Some(now), now)
+        // A fresh lease writes, which is the normal path.
+        fresh <- w.run(repo.saveAssessment(verdict, first, now, now.plusSeconds(300)))
+        _ <- w.run(repo.markDue(w.org, Some(fleet.id), f.integrationId, now))
+        second = uid
+        _ <- w.run(repo.claimDue(uid, second, now, now.plusSeconds(120), 10))
+        // The lease runs out in the database while this worker is still reading, and no other
+        // worker has reclaimed the row yet: the token alone must not be enough.
+        _ <- w.run(sql"""update remnawave_fleet_membership
+          set claim_deadline=clock_timestamp()-interval '1 second' where id=${member.id}""".update.run)
+        expiredSave <- w.run(repo.saveAssessment(verdict.copy(id = uid), second, now, now.plusSeconds(300)))
+        expiredReschedule <- w.run(repo.reschedule(held, second, now, now.plusSeconds(900)))
+        afterExpiry <- w.run(repo.membership(w.org, fleet.id, member.id))
+        stillClaimed <- w.run(sql"""select claim_token is not null from remnawave_fleet_membership
+          where id=${member.id}""".query[Boolean].unique)
+        nextBefore <- w.run(sql"select next_check_at from remnawave_fleet_membership where id=${member.id}"
+          .query[Instant].unique)
+        // A new worker reclaims the expired row and is the only one that may write.
+        third = uid
+        reclaimed <- w.run(repo.claimDue(uid, third, now, now.plusSeconds(120), 10))
+        staleAfterReclaim <- w.run(repo.saveAssessment(verdict.copy(id = uid), second, now,
+          now.plusSeconds(300)))
+        ownerSave <- w.run(repo.saveAssessment(verdict.copy(id = uid), third, now, now.plusSeconds(300)))
+        stored <- w.run(repo.assessments(w.org, fleet.id))
+        nextAfter <- w.run(sql"select next_check_at from remnawave_fleet_membership where id=${member.id}"
+          .query[Instant].unique)
+      } yield {
+        assertEquals(fresh, true)
+        assertEquals(expiredSave, false)
+        assertEquals(expiredReschedule, false)
+        // The expired worker changed nothing at all: the claim and the schedule are untouched.
+        assertEquals(stillClaimed, true)
+        assertEquals(afterExpiry.map(_.active), Some(true))
+        assertEquals(reclaimed.map(_.id), List(member.id))
+        assertEquals(staleAfterReclaim, false)
+        assertEquals(ownerSave, true)
+        assertEquals(stored.size, 1)
+        assert(nextAfter.isAfter(nextBefore))
+      }
+    }
+  }
 }

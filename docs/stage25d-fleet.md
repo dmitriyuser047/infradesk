@@ -78,6 +78,50 @@ revision that is no longer desired is not presented as the member's current stat
 | 36. Stage25C regression | Green: onboarding, create reconciliation without a second POST, the baseline and sync crash recovery of `ed2150a`, the installer, the firewall and auto-binding. |
 | Live verification | Not performed. The observer is read-only and needs no destructive canary, but production readiness still requires a read-only check against a real test fleet: inventory, server-profile observation and local observation with no remote write. |
 
+## Durability addendum (same stage)
+
+Three state-consistency problems were closed after the review of the implementation above. No
+migration was needed: V49 is unchanged and no new persistent field was added.
+
+**Archiving owned nodes forever.** Archiving set `fleet.archived` and left every membership with
+`removed_at IS NULL`, so the archived fleet still held the node under the one-active-fleet index and
+the node could never join another fleet. `archive` now runs in one transaction under the fleet
+advisory lock: it archives the fleet, ends every active membership (`removed_at`, version bumped,
+claim cleared) and drops those memberships' current verdicts, which are a derived cache. The rows
+themselves stay, so the fleet's history still names who was a member, who added them and when the
+fleet released them. Archiving twice returns the same archived fleet without a second release or a
+second journal entry. Nothing remote is touched: no node is disabled, unbound, re-firewalled,
+redeployed or unassigned, and the binding survives.
+
+**An expired lease could still write.** `saveAssessment` and `reschedule` checked only
+`claim_token = $token`, so a worker whose observation outran its lease could still write for as long
+as no other worker had reclaimed the row. Both now additionally require
+`claim_deadline IS NOT NULL AND claim_deadline > greatest($now, clock_timestamp())`, so expiry
+invalidates a worker immediately rather than at the next reclaim. `reschedule` is fenced for the same
+reason: a stale worker must not push the next check out from under the owner. Timing margins in the
+settings are still there, but nothing relies on them.
+
+**A connection could change under an observation.** TX2 proved the desired revision, the membership
+version and the binding, but not that the SSH source the read actually used was still the current
+one. The observation is now pinned to a `FleetSourcePin` - the connection id and its `updatedAt`,
+taken from the same `ProvisioningTargetQuery.eligible` that Stage25A pins a plan with - and TX2
+re-reads the eligible target and compares. An edited, replaced or withdrawn connection, and equally
+one that became eligible mid-read, discards the result: it never becomes the member's current state
+and never receives a current `localObservedAt`. TX2 reads the database only; it performs no second
+remote call. A read that simply failed while the source was unchanged still behaves as before -
+UNKNOWN with `LOCAL_OBSERVATION_UNAVAILABLE`.
+
+The observer therefore has two independent guards, both required: the lease proves this worker may
+still write, and the source pin proves the evidence still describes the current desired state,
+member, binding and connection. A lost lease is never a fleet failure - the observation is simply
+discarded and another worker recomputes.
+
+Added for this fix: 4 observer cases (source edited/replaced/withdrawn, unchanged source, expired
+lease writes and reschedules nothing) and 2 PostgreSQL cases (archive releases its nodes while
+keeping history and changing nothing remote; an expired lease loses the right to write before any
+reclaim, then the reclaiming worker is the only one that may write). Totals after the fix: backend
+1088 total / 1069 passed / 19 skipped, frontend 666 passed, both production builds green.
+
 ## Left for later stages
 
 **Stage 25E (rollout).** Applying a desired revision, full-fleet rollout preview, canary nodes,

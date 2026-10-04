@@ -168,7 +168,9 @@ final class PostgresRemnawaveFleetRepository extends RemnawaveFleetRepository[Co
       select 1 from remnawave_fleet_membership m
       join remnawave_fleet f on f.id=m.fleet_id and f.organization_id=m.organization_id
       where m.id=${assessment.membershipId} and m.organization_id=${assessment.organizationId}
-        and m.claim_token=$token and m.removed_at is null and m.version=${assessment.membershipVersion}
+        and m.claim_token=$token and m.claim_deadline is not null
+        and m.claim_deadline>greatest($now,clock_timestamp())
+        and m.removed_at is null and m.version=${assessment.membershipVersion}
         and m.inventory_node_id=${assessment.inventoryNodeId} and m.resource_id=${assessment.resourceId}
         and f.desired_revision_id=${assessment.fleetRevisionId}
         and exists(select 1 from integration_resource_binding b where b.organization_id=m.organization_id
@@ -196,16 +198,35 @@ final class PostgresRemnawaveFleetRepository extends RemnawaveFleetRepository[Co
       released <- sql"""update remnawave_fleet_membership set next_check_at=$nextCheckAt,claimed_by=null,
         claim_token=null,claim_deadline=null
         where id=${assessment.membershipId} and organization_id=${assessment.organizationId}
-          and claim_token=$token""".update.run
+          and claim_token=$token and claim_deadline is not null
+          and claim_deadline>greatest($now,clock_timestamp())""".update.run
     } yield released == 1
   } yield saved
 
+  /** Fenced like the write it replaces: a worker whose lease has run out changes nothing here
+    * either, so a stale attempt cannot push the next check out from under the worker that owns it.
+    */
   def reschedule(membership: RemnawaveFleetMembership, token: UUID, now: Instant,
     nextCheckAt: Instant): ConnectionIO[Boolean] = sql"""
     update remnawave_fleet_membership set next_check_at=$nextCheckAt,claimed_by=null,claim_token=null,
       claim_deadline=null
-    where id=${membership.id} and organization_id=${membership.organizationId} and claim_token=$token"""
+    where id=${membership.id} and organization_id=${membership.organizationId} and claim_token=$token
+      and claim_deadline is not null and claim_deadline>greatest($now,clock_timestamp())"""
     .update.run.map(_ == 1)
+
+  /** Ends every active membership of a fleet and drops their current verdicts. The rows stay: the
+    * fleet's history keeps who was a member, when they joined and when the fleet released them.
+    * Nothing remote is touched.
+    */
+  def releaseMemberships(org: UUID, fleetId: UUID, now: Instant): ConnectionIO[Int] = for {
+    _ <- sql"""delete from remnawave_fleet_node_assessment a
+      where a.organization_id=$org and a.fleet_id=$fleetId
+        and exists(select 1 from remnawave_fleet_membership m where m.id=a.membership_id
+          and m.removed_at is null)""".update.run
+    released <- sql"""update remnawave_fleet_membership
+      set removed_at=$now,version=version+1,claimed_by=null,claim_token=null,claim_deadline=null
+      where organization_id=$org and fleet_id=$fleetId and removed_at is null""".update.run
+  } yield released
 
   def assessments(org: UUID, fleetId: UUID): ConnectionIO[List[RemnawaveFleetNodeAssessment]] =
     (fr"select" ++ PostgresRemnawaveFleetRepository.assessmentColumns ++

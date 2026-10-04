@@ -38,7 +38,9 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
 
   private final class Harness(localVerified: Boolean = true, localFails: Boolean = false,
     revisionChangesDuringRead: Boolean = false, membershipRemovedDuringRead: Boolean = false,
-    bindingChangesDuringRead: Boolean = false) {
+    bindingChangesDuringRead: Boolean = false, connectionChangesDuringRead: Boolean = false,
+    connectionReplacedDuringRead: Boolean = false, connectionLostDuringRead: Boolean = false,
+    leaseExpiresDuringRead: Boolean = false) {
     val fleetId = uid
     val revisionId = uid
     val membershipId = uid
@@ -49,6 +51,9 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
     var membershipRecord = RemnawaveFleetMembership(membershipId, org, fleetId, integrationId, nodeId, resource,
       1L, uid, now)
     var bindingResource: Option[UUID] = Some(resource)
+    /** The SSH source as the target query currently reports it. */
+    var sourceConnection: Option[(UUID, Instant)] = Some(connection.id -> connection.updatedAt)
+    var leaseValid = true
     var saved = List.empty[RemnawaveFleetNodeAssessment]
     var rescheduled = 0
     var claimToken: Option[UUID] = None
@@ -85,14 +90,19 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
       /** Mirrors the real fencing: the verdict lands only while its sources still hold. */
       override def saveAssessment(value: RemnawaveFleetNodeAssessment, token: UUID, at: Instant,
         next: Instant) = IO {
-        val current = claimToken.contains(token) && membershipRecord.active &&
+        val current = claimToken.contains(token) && leaseValid && membershipRecord.active &&
           membershipRecord.version == value.membershipVersion &&
           fleetRecord.desiredRevisionId.contains(value.fleetRevisionId) &&
           bindingResource.contains(membershipRecord.resourceId)
         if (current) { saved :+= value; true } else false
       }
+      override def releaseMemberships(o: UUID, f: UUID, at: Instant) = IO {
+        membershipRecord = membershipRecord.copy(removedAt = Some(at), version = membershipRecord.version + 1)
+        saved = Nil
+        1
+      }
       override def reschedule(value: RemnawaveFleetMembership, token: UUID, at: Instant, next: Instant) =
-        IO { rescheduled += 1; true }
+        IO { if (claimToken.contains(token) && leaseValid) { rescheduled += 1; true } else false }
       override def assessments(o: UUID, f: UUID) = IO.pure(saved)
       override def lockFleet(o: UUID, f: UUID) = IO.unit
     }
@@ -120,8 +130,11 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
     }
 
     val targets = new ProvisioningTargetQuery[IO] {
-      override def eligible(o: UUID, r: UUID) =
-        IO.pure(Right(ProvisioningTarget("NODE", "VPS", connection.id, connection.updatedAt, connection)))
+      override def eligible(o: UUID, r: UUID) = IO.pure(sourceConnection match {
+        case Some((id, at)) => Right(ProvisioningTarget("NODE", "VPS", id, at, connection.copy(id = id,
+          updatedAt = at)))
+        case None => Left("PROVISIONING_TARGET_NOT_FOUND")
+      })
       override def unchanged(snapshot: ProvisioningInputSnapshot) = IO.pure(true)
     }
 
@@ -150,6 +163,11 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
         if (membershipRemovedDuringRead) membershipRecord =
           membershipRecord.copy(removedAt = Some(now), version = 2L)
         if (bindingChangesDuringRead) bindingResource = Some(uid)
+        // The SSH source is edited, replaced or withdrawn while this read is in flight.
+        if (connectionChangesDuringRead) sourceConnection = Some(connection.id -> now.plusSeconds(60))
+        if (connectionReplacedDuringRead) sourceConnection = Some(uid -> connection.updatedAt)
+        if (connectionLostDuringRead) sourceConnection = None
+        if (leaseExpiresDuringRead) leaseValid = false
         if (localFails) throw new java.io.IOException("ssh unavailable")
         RemnawaveNodeLocalEvidence(managedFiles = localVerified, imageMatches = localVerified,
           containerRunning = localVerified, portListening = localVerified, stable = localVerified,
@@ -223,6 +241,40 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
     assertEquals(h.saved, Nil)
     assertEquals(h.rescheduled, 1)
     assertEquals(h.localObservations.get(), 0)
+  }
+
+  test("an SSH source edited, replaced or withdrawn during the read discards the result") {
+    List[Harness](
+      new Harness(connectionChangesDuringRead = true),
+      new Harness(connectionReplacedDuringRead = true),
+      new Harness(connectionLostDuringRead = true),
+    ).foreach { h =>
+      h.observer.tick.unsafeRunSync()
+      // The observation happened against a source that is no longer the current one, so it is
+      // never written as this member's state - not even as an UNKNOWN of the old connection.
+      assertEquals(h.saved, Nil)
+      assertEquals(h.localObservations.get(), 1)
+      assertEquals(h.mutations.get(), 0)
+      // The lease is still ours, so the member is simply put back in the queue.
+      assertEquals(h.rescheduled, 1)
+    }
+  }
+
+  test("an unchanged SSH source keeps writing the verdict as before") {
+    val h = new Harness()
+    h.observer.tick.unsafeRunSync()
+    assertEquals(h.saved.map(_.compliance), List(FleetCompliance.Compliant))
+    assertEquals(h.saved.head.localObservedAt.nonEmpty, true)
+    assertEquals(h.rescheduled, 0)
+  }
+
+  test("a lease that expired during the read writes nothing and reschedules nothing") {
+    val h = new Harness(leaseExpiresDuringRead = true)
+    h.observer.tick.unsafeRunSync()
+    assertEquals(h.saved, Nil)
+    // A worker that lost its lease must not push the next check out from under the new owner.
+    assertEquals(h.rescheduled, 0)
+    assertEquals(h.mutations.get(), 0)
   }
 
   test("a disabled observer does nothing at all") {

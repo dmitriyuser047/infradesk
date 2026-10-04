@@ -232,20 +232,27 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
     } yield stored)
   } yield result
 
-  /** Archiving is metadata only: members, assessments and history stay readable and nothing remote
-    * is cleaned up.
+  /** Archiving is metadata only, in one transaction and with no external call. It also ends the
+    * fleet's ownership of its nodes: an archived fleet desires nothing, so each node is free to
+    * join another active fleet. The membership rows stay as history and nothing remote is touched -
+    * no node is disabled, unbound, re-firewalled, redeployed or unassigned.
     */
   def archive(actor: ActorContext, integrationId: UUID, fleetId: UUID, expectedVersion: Long): IO[RemnawaveFleet] =
     IO.realTimeInstant.flatMap(now => runner.run(for {
       _ <- remnawave(actor.organizationId, integrationId)
+      _ <- repo.lockFleet(actor.organizationId, fleetId)
       fleet <- repo.fleetForUpdate(actor.organizationId, integrationId, fleetId).flatMap(
         _.liftTo[Tx](error("REMNAWAVE_FLEET_NOT_FOUND")))
-      _ <- MonadThrow[Tx].raiseUnless(fleet.version == expectedVersion)(error("REMNAWAVE_FLEET_VERSION_CONFLICT"))
-      saved <- repo.updateFleet(fleet.copy(archived = true), expectedVersion, now)
-      _ <- MonadThrow[Tx].raiseUnless(saved)(error("REMNAWAVE_FLEET_VERSION_CONFLICT"))
-      _ <- audit.record(actor, AuditAction.RemnawaveFleetArchived, AuditTargetType.Integration, Some(integrationId))
-      stored <- loaded(actor.organizationId, integrationId, fleetId)
-    } yield stored))
+      // Archiving twice is the same archived fleet: no second release and no second journal entry.
+      result <- if (fleet.archived) fleet.pure[Tx] else for {
+        _ <- MonadThrow[Tx].raiseUnless(fleet.version == expectedVersion)(error("REMNAWAVE_FLEET_VERSION_CONFLICT"))
+        saved <- repo.updateFleet(fleet.copy(archived = true), expectedVersion, now)
+        _ <- MonadThrow[Tx].raiseUnless(saved)(error("REMNAWAVE_FLEET_VERSION_CONFLICT"))
+        _ <- repo.releaseMemberships(actor.organizationId, fleetId, now)
+        _ <- audit.record(actor, AuditAction.RemnawaveFleetArchived, AuditTargetType.Integration, Some(integrationId))
+        stored <- loaded(actor.organizationId, integrationId, fleetId)
+      } yield stored
+    } yield result))
 
   /** An observation action. It asks the existing synchronization scheduler for one integration-level
     * run - never one per member - and marks the fleet's members due. It applies nothing.

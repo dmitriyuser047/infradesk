@@ -54,6 +54,10 @@ trait RemnawaveFleetRepository[F[_]] {
   def members(org: UUID, fleetId: UUID): F[List[RemnawaveFleetMembership]]
   def activeMembershipOf(org: UUID, integrationId: UUID, inventoryNodeId: UUID): F[Option[RemnawaveFleetMembership]]
   def removeMembership(org: UUID, fleetId: UUID, id: UUID, now: Instant): F[Boolean]
+  /** Ends every active membership of a fleet and drops their current verdicts, keeping the rows as
+    * history. Archiving uses it so an archived fleet owns no node's desired state any more.
+    */
+  def releaseMemberships(org: UUID, fleetId: UUID, now: Instant): F[Int]
   /** Makes members due now, which is all a refresh or a promotion does to the observer. */
   def markDue(org: UUID, fleetId: Option[UUID], integrationId: UUID, at: Instant): F[Int]
   def claimDue(owner: UUID, token: UUID, now: Instant, until: Instant, limit: Int): F[List[RemnawaveFleetMembership]]
