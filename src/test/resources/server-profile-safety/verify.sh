@@ -128,4 +128,24 @@ rm "$node_dir/env-link"; mv "$node_dir/.env" "$node_dir/env-save"; ln -s "$node_
 [ "$(SS_EXIT=1 sh /checks/NodePreflight.sh 2222 1)" = UNKNOWN ]
 [ "$(sh /checks/NodePreflight.sh 2222 1)" = FOREIGN ]
 echo 'PASS node install recovery and start reject credential drift, public modes, hardlinks, symlinks, and failed port probes'
+# The software lifecycle may replace exactly one reviewed image line and no other owned byte.
+rm "$node_dir/.env"; mv "$node_dir/env-save" "$node_dir/.env"; chmod 0600 "$node_dir/.env"
+original_image=$(sed -n '1p' /checks/NodeImageRefs.txt)
+target_image=$(sed -n '2p' /checks/NodeImageRefs.txt)
+node_marker="# infradesk-managed test image=$original_image"
+printf '%s\nservices:\n  node:\n    image: %s\n    network_mode: host\n' "$node_marker" "$original_image" >"$node_dir/compose.yml"
+compose_hash=$(sha256sum "$node_dir/compose.yml" | cut -d' ' -f1)
+image_owned() { sh /checks/NodeImageOwnership.sh "$node_dir" "$node_marker" 2222 "$compose_hash" "$prefix"; }
+[ "$(image_owned)" = OWNED ]
+sed -i "s|^    image: .*|    image: $target_image|" "$node_dir/compose.yml"
+[ "$(image_owned)" = OWNED ]
+sed -i 's|network_mode: host|network_mode: bridge|' "$node_dir/compose.yml"
+[ "$(image_owned)" = UNMANAGED ]
+sed -i 's|network_mode: bridge|network_mode: host|' "$node_dir/compose.yml"
+printf '    image: %s\n' "$target_image" >>"$node_dir/compose.yml"
+[ "$(image_owned)" = UNMANAGED ]
+sed -i '$d' "$node_dir/compose.yml"
+sed -i 's|^    image: .*|    image: ghcr.io/evil/node:latest|' "$node_dir/compose.yml"
+[ "$(image_owned)" = UNMANAGED ]
+echo 'PASS controlled image ownership accepts reviewed upgrades and rejects other edits, duplicate images, and foreign references'
 echo 'LINUX SAFETY CHECKS PASSED'
