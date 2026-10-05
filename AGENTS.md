@@ -1,3 +1,13 @@
+# Mandatory development and Code Review standard
+
+Before planning an implementation, writing or changing code, or performing Code Review,
+every agent and developer MUST read the full
+[InfraDesk development and Code Review standard](docs/development-and-code-review-standard.md)
+and follow its requirements. Reading a summary does not replace reading the document.
+This requirement applies to the primary agent and every delegated agent for all code
+in this repository. Include the document path and the read-before-work requirement
+in each delegation packet.
+
 # Adaptive multi-agent development workflow
 
 The primary agent is the technical lead AND the default implementer.

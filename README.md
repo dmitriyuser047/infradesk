@@ -1,5 +1,9 @@
 # InfraDesk
 
+Before writing or changing code or performing Code Review, read the mandatory
+[InfraDesk development and Code Review standard](docs/development-and-code-review-standard.md).
+Agent workflow instructions are in [AGENTS.md](AGENTS.md).
+
 Requirements: JDK 21, sbt 2, PostgreSQL 17 (or a compatible version), Node.js 24 LTS and npm for the frontend.
 
 For the Docker Compose production topology, HTTPS boundary, backup/restore and rollback runbooks,
