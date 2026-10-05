@@ -81,7 +81,7 @@ final class IntegrationLifecycleSpec extends FunSuite {
         noSecret <- run.run(secrets.find(org, replaced.secretId))
         events <- run.run(sql"select action from audit_event where organization_id = $org".query[String].to[List])
       } yield {
-        assertEquals(schema, "51")
+        assertEquals(schema, "52")
         assert(!first.enabled)
         assertEquals(first.name, "Main")
         assertEquals(list.map(_.id), List(first.id))

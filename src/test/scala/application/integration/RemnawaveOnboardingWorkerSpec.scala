@@ -117,6 +117,12 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     val repo = new MemoryRepo(start, startedAt)
     val events = mutable.ListBuffer.empty[String]
     var panel: ProvisionedNode = initialPanelNode
+    var lookup: Option[NodeLookupOutcome] = None
+    var candidateNodes: Option[List[ProvisionedNode]] = None
+    var deletion: NodeDeleteOutcome = NodeDeleteOutcome.Deleted
+    var installationExists = true
+    var repairResult = ProvisioningStepResult(Map.empty,None,Some(true))
+    var observedOwner: Option[UUID] = None
     var recon = reconciliation
     var create = createOutcome
     var local = localGood
@@ -126,6 +132,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     var bindConflict = false
     var failPanelApi = false
     var inspectedApi = api
+    var enableOutcome: IntegrationActionRemoteOutcome = IntegrationActionRemoteOutcome.Succeeded
     var childStartCount = 0
     var validateCompliant = true
     var childSequence = List.empty[ProvisioningRunState]
@@ -146,6 +153,9 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
         Option.when(status != IntegrationSyncStatus.Running)(now), status,
         Option.when(status == IntegrationSyncStatus.Failed)("INTEGRATION_TIMEOUT"), None, None)
     val remote = new RemnawaveNodeRemote[IO] {
+      override def recoveryPreflight(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "recovery-preflight"; observedOwner=Some(s.onboardingId); ProvisioningStepResult(Map.empty,None,Some(true)) }
+      override def repair(c: Connection,s: RemnawaveNodeRemoteSpec,d: NodeInstallationData) = IO { events += "repair"; observedOwner=Some(s.onboardingId); if(repairResult.failureCode.isEmpty) local=localGood; repairResult }
+      override def retireInstallation(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "retire"; ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def installationPrerequisites(c: Connection) = IO.pure(ProvisioningStepResult(Map.empty, None, Some(true)))
       override def preflight(c: Connection, r: UUID, p: Int) = IO { events += "preflight"; ProvisioningStepResult(Map.empty, None, Some(true)) }
       override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "firewall"; firewallResult }
@@ -155,7 +165,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       }
       override def start(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "start"; ProvisioningStepResult(Map.empty, None, Some(true)) }
       override def observe(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "local-observe"; local }
-      override def installationPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "install-present"; true }
+      override def installationPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "install-present"; installationExists }
       override def firewallPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "firewall-present"; true }
       override def managedPanelCidrs(c: Connection, s: RemnawaveNodeRemoteSpec) = IO.pure(s.panelCidrs)
     }
@@ -217,11 +227,15 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     }
     val provisioning = new NodeProvisioningTransport[IO] {
       override def inspect(c: IntegrationRuntimeContext) = IO.pure(inspectedApi)
-      override def findNodes(c: IntegrationRuntimeContext) = IO.pure(List(panel))
+      override def findNodes(c: IntegrationRuntimeContext) = IO.pure(candidateNodes.getOrElse(List(panel)))
       override def getNode(c: IntegrationRuntimeContext, id: UUID) = IO {
         events += "get-node"; if (failPanelApi) throw IntegrationError("INTEGRATION_REMOTE_UNAVAILABLE", "offline") else panel
       }
-      override def createNode(c: IntegrationRuntimeContext, i: NodeCreateIntent, reviewed: NodeApiCompatibility) = IO { events += "create"; create }
+      override def lookupNode(c: IntegrationRuntimeContext,id: UUID) = IO { events += "lookup"; lookup.getOrElse(if(failPanelApi) NodeLookupOutcome.Unknown("INTEGRATION_REMOTE_UNAVAILABLE") else NodeLookupOutcome.Found(panel)) }
+      override def deleteNode(c: IntegrationRuntimeContext,id: UUID,reviewed: NodeApiCompatibility) = IO { events += "delete"; if(deletion==NodeDeleteOutcome.Deleted) { lookup=Some(NodeLookupOutcome.ConfirmedNotFound); candidateNodes=Some(Nil) }; deletion }
+      override def createNode(c: IntegrationRuntimeContext, i: NodeCreateIntent, reviewed: NodeApiCompatibility) = IO { events += "create"
+        create match { case NodeCreateOutcome.Created(n) if OnboardingRecovery.matches(n,i,None) => panel=n; candidateNodes=Some(List(n)); case _ => () }
+        create }
       override def installationData(c: IntegrationRuntimeContext, reviewed: NodeApiCompatibility) = IO {
         events += "installation-data"; NodeInstallationData.fromSecretKey(secretText)
       }
@@ -239,7 +253,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
             List(RemnawaveInboundSummary(inbound.toString, "in", "VLESS", None, None, None))))), Set(IntegrationObjectType.ConfigProfile))
       }
       override def executeAction(c: IntegrationRuntimeContext, externalId: String, action: IntegrationActionCode) =
-        IO.pure(IntegrationActionRemoteOutcome.Succeeded)
+        IO { events += "enable"; if(enableOutcome==IntegrationActionRemoteOutcome.Succeeded) panel=panel.copy(disabled=false); enableOutcome }
       override def nodeProvisioning = Some(provisioning)
     }
     val runner = new TransactionRunner[IO, IO] { override def run[A](program: IO[A]) = program }
@@ -484,16 +498,19 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     assert(failed.repo.completed.contains(OnboardingPhase.CreateNode))
     assert(failed.repo.completed.contains(OnboardingPhase.GetInstallationData))
     assertEquals(failed.repo.storedSecret,None)
-    val candidate = RemnawaveNodeOnboardingRun.firewallRecovery(List(terminal),integrationId,input,snap.imageReference,snap.connectionId).toOption.flatten.get
+    val candidate = RemnawaveNodeOnboardingRun.recoveryCandidate(List(terminal),integrationId,input,snap.imageReference,snap.connectionId).toOption.flatten.get
     val recovery = new Harness(OnboardingPhase.Validate)
     recovery.repo.inFlight = false
     recovery.repo.record = recovery.repo.record.copy(externalNodeId=candidate.externalNodeId,
-      snapshot=recovery.repo.record.snapshot.copy(correlationId=candidate.snapshot.correlationId))
+      snapshot=recovery.repo.record.snapshot.copy(correlationId=candidate.snapshot.correlationId,
+        recovery=Some(OnboardingRecovery(terminal.id,terminal.externalNodeId,terminal.snapshot.correlationId,terminal.id,"PRESENT_UNHEALTHY","RECOVER"))))
     recovery.worker.tick.unsafeRunSync()
     assertEquals(recovery.repo.record.state,ProvisioningRunState.Succeeded)
     assertEquals(recovery.repo.record.externalNodeId,terminal.externalNodeId)
     assertEquals(recovery.events.count(_ == "create"),0)
-    assertEquals(recovery.events.count(_ == "reconcile"),1)
+    assertEquals(recovery.events.count(_ == "reconcile"),0)
+    assert(recovery.events.contains("lookup"))
+    assertEquals(recovery.observedOwner,Some(terminal.id))
     failed.worker.tick.unsafeRunSync()
     assertEquals(failed.repo.record,terminal)
     assertEquals(failed.events.count(_ == "create"),1)
@@ -610,4 +627,123 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     assertEquals(conflict.repo.record.failureCode, Some("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
     assert(!conflict.events.contains("desired"))
   }
+  private def reviewedRecovery(h: Harness, state: String = "PRESENT_UNHEALTHY", action: String = "RECOVER"): UUID = {
+    val owner=uid
+    h.repo.inFlight=false
+    h.repo.record=h.repo.record.copy(externalNodeId=if(action=="RECOVER") Some(nodeId) else None,
+      snapshot=snap.copy(correlationId=if(action=="RECOVER") snap.correlationId else uid,
+        recovery=Some(OnboardingRecovery(uid,Some(nodeId),snap.correlationId,owner,state,action))))
+    owner
+  }
+
+  test("an exact existing installation is reused and repeated recovery performs no create or install") {
+    val h=new Harness(OnboardingPhase.Validate)
+    reviewedRecovery(h,"PRESENT_EXACT")
+    h.worker.tick.unsafeRunSync()
+    val terminal=h.repo.record
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record,terminal)
+    assertEquals(terminal.state,ProvisioningRunState.Succeeded)
+    assertEquals(h.events.count(_=="create"),0)
+    assertEquals(h.events.count(_=="install"),0)
+    assertEquals(h.events.count(_=="repair"),0)
+  }
+
+  test("disabled exact node with damaged local installation is repaired using its original owner and enabled") {
+    val h=new Harness(OnboardingPhase.Validate,initialPanelNode=node(disabled=true))
+    val owner=reviewedRecovery(h)
+    h.installationExists=false
+    h.local=localGood.copy(managedFiles=false,containerRunning=false)
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded)
+    assertEquals(h.observedOwner,Some(owner))
+    assertEquals(h.events.count(_=="repair"),1)
+    assertEquals(h.events.count(_=="enable"),1)
+    assertEquals(h.events.count(_=="create"),0)
+    assert(h.repo.completed.contains(OnboardingPhase.FinalVerify))
+  }
+
+  test("fresh identity conflict and uncertain exact lookup prevent all recovery mutations") {
+    List(NodeLookupOutcome.Found(node(wrongName=true)),NodeLookupOutcome.Unknown("INTEGRATION_REMOTE_UNAVAILABLE")).foreach { outcome =>
+      val h=new Harness(OnboardingPhase.CreateNode)
+      reviewedRecovery(h)
+      h.lookup=Some(outcome)
+      h.worker.tick.unsafeRunSync()
+      assert(h.repo.record.state.terminal)
+      assertEquals(h.events.count(_=="create"),0)
+      assertEquals(h.events.count(_=="firewall"),0)
+      assertEquals(h.events.count(_=="repair"),0)
+      assertEquals(h.events.count(_=="delete"),0)
+    }
+  }
+
+  test("uncertain remote delete ends UNKNOWN and never creates or retires a local installation") {
+    val h=new Harness(OnboardingPhase.DeleteNode)
+    reviewedRecovery(h,action="DELETE_RECREATE")
+    h.deletion=NodeDeleteOutcome.Unknown("REMNAWAVE_ONBOARDING_DELETE_UNKNOWN")
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Unknown)
+    assertEquals(h.events.count(_=="delete"),1)
+    assertEquals(h.events.count(_=="create"),0)
+    assertEquals(h.events.count(_=="retire"),0)
+    assert(!h.repo.completed.contains(OnboardingPhase.ConfirmNodeDeleted))
+  }
+
+  test("confirmed deletion and fresh exact NOT_FOUND precede one recreate with a new durable identity") {
+    val h=new Harness(OnboardingPhase.DeleteNode)
+    reviewedRecovery(h,action="DELETE_RECREATE")
+    val next=node(id=uid).copy(correlationTags=List("ID:"+h.repo.record.snapshot.correlationId.toString.replace("-","").toUpperCase(java.util.Locale.ROOT)))
+    h.create=NodeCreateOutcome.Created(next)
+    // The exact old lookup must report the previous identity until DELETE succeeds.
+    h.lookup=Some(NodeLookupOutcome.Found(node()))
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded)
+    assertEquals(h.repo.record.externalNodeId,Some(next.externalId))
+    assertEquals(h.events.count(_=="delete"),1)
+    assertEquals(h.events.count(_=="create"),1)
+    assert(h.repo.completed.contains(OnboardingPhase.ConfirmNodeDeleted))
+    assert(h.events.indexOf("delete")<h.events.indexOf("retire"))
+    assert(h.events.indexOf("retire")<h.events.indexOf("create"))
+    assertNotEquals(h.repo.record.snapshot.correlationId,snap.correlationId)
+    assertEquals(h.repo.record.snapshot.recovery.flatMap(_.previousExternalNodeId),Some(nodeId))
+  }
+
+  test("stale or uncertain absence on an approved recreate prevents POST") {
+    List(NodeLookupOutcome.Found(node()),NodeLookupOutcome.Unknown("INTEGRATION_REMOTE_UNAVAILABLE")).foreach { outcome =>
+      val h=new Harness(OnboardingPhase.CreateNode)
+      reviewedRecovery(h,"CONFIRMED_NOT_FOUND","RECREATE")
+      h.lookup=Some(outcome)
+      h.worker.tick.unsafeRunSync()
+      assert(h.repo.record.state.terminal)
+      assertEquals(h.events.count(_=="create"),0)
+      assertEquals(h.events.count(_=="retire"),0)
+    }
+  }
+
+  test("uncertain enable remains UNKNOWN even when the failure code does not contain UNKNOWN") {
+    val h=new Harness(OnboardingPhase.StartNode,initialPanelNode=node(disabled=true))
+    reviewedRecovery(h)
+    h.enableOutcome=IntegrationActionRemoteOutcome.OutcomeUnknown("INTEGRATION_TIMEOUT")
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Unknown)
+    assertEquals(h.events.count(_=="enable"),1)
+    assertEquals(h.events.count(_=="start"),0)
+    assertEquals(h.events.count(_=="create"),0)
+  }
+
+  test("a conflicting candidate appearing after preview blocks repair and DELETE") {
+    List(OnboardingPhase.ConfigureFirewall,OnboardingPhase.DeleteNode).foreach { phase =>
+      val h=new Harness(phase)
+      reviewedRecovery(h,action=if(phase==OnboardingPhase.DeleteNode) "DELETE_RECREATE" else "RECOVER")
+      h.candidateNodes=Some(List(node(),node(id=uid,wrongName=true)))
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record.state,ProvisioningRunState.Failed)
+      assertEquals(h.repo.record.failureCode,Some("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW"))
+      assertEquals(h.events.count(_=="delete"),0)
+      assertEquals(h.events.count(_=="create"),0)
+      assertEquals(h.events.count(_=="firewall"),0)
+      assertEquals(h.events.count(_=="repair"),0)
+    }
+  }
+
 }

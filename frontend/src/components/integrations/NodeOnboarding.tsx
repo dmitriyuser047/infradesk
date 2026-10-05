@@ -3,13 +3,13 @@ import { createRequestId } from '../../app/requestId'
 import { readPendingSubmission, storePendingSubmission, type PendingSubmission } from '../../app/pendingSubmission'
 import { ApiError } from '../../api/httpClient'
 import { Link, useSearchParams } from 'react-router-dom'
-import { useNodeOnboardingHistory, useNodeOnboardingOptions, useNodeOnboardingRun, usePreviewNodeOnboarding, useStartNodeOnboarding } from '../../api/nodeOnboarding'
+import { useNodeOnboardingHistory, useNodeOnboardingOptions, useNodeOnboardingRun, usePreviewNodeOnboarding, useReconcileNodeOnboarding, useStartNodeOnboarding } from '../../api/nodeOnboarding'
 import { useResource } from '../../api/resources'
 import { useOrganizationPermissions } from '../auth/authorization'
 import { useI18n } from '../../i18n'
 import { InlineAlert, PendingButton, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { IntegrationDialog } from './IntegrationDialog'
-import type { NodeOnboardingPreview, NodeOnboardingPreviewRequest, NodeOnboardingRun } from '../../types/nodeOnboarding'
+import type { NodeOnboardingPreview, NodeOnboardingPreviewRequest, NodeOnboardingRecoveryAction, NodeOnboardingRecoverySummary, NodeOnboardingRun } from '../../types/nodeOnboarding'
 
 const phases = ['VALIDATE', 'PREPARE_SERVER', 'CREATE_NODE', 'GET_INSTALLATION_DATA', 'CONFIGURE_NODE_FIREWALL', 'INSTALL_NODE', 'START_NODE', 'VERIFY_LOCAL_NODE', 'WAIT_FOR_PANEL', 'SYNC_INVENTORY', 'BIND_RESOURCE', 'SET_DESIRED_STATE', 'FINAL_VERIFY'] as const
 const texts = {
@@ -22,7 +22,13 @@ const texts = {
     changes: 'Changes', warnings: 'Warnings', blockers: 'Blocking problems', run: 'Run', phases: 'Progress', state: 'State', partial: 'Results so far', externalId: 'Remnawave node ID', baseline: 'Server preparation run', syncId: 'Inventory sync session',
     success: 'Node onboarding completed.', failed: 'Onboarding failed. Review the completed phases and safe error message before choosing a next step.', unknown: 'The outcome is unknown. Check Remnawave and the server before taking further action; do not repeat the whole onboarding run.', active: 'Onboarding is in progress. You can leave this page and return using this run.',
     requestError: 'The request could not be confirmed. Retry with the same request ID to safely recover the result.', formError: 'Enter a node name and address, a port from 1 to 65535, a configuration profile, and valid CIDR ranges.',
-    apiUnavailable: 'Provisioning support was not confirmed by the Remnawave API.', phaseNames: { VALIDATE: 'Validate request', PREPARE_SERVER: 'Prepare server', CREATE_NODE: 'Create Remnawave node', GET_INSTALLATION_DATA: 'Get installation data', CONFIGURE_NODE_FIREWALL: 'Configure node firewall', INSTALL_NODE: 'Install node', START_NODE: 'Start node', VERIFY_LOCAL_NODE: 'Verify local node', WAIT_FOR_PANEL: 'Wait for Remnawave panel', SYNC_INVENTORY: 'Sync inventory', BIND_RESOURCE: 'Bind server resource', SET_DESIRED_STATE: 'Set desired state', FINAL_VERIFY: 'Final verification' } },
+    checkAgain: 'Check again', restore: 'Restore existing node', recreate: 'Recreate node', deleteRecreate: 'Delete and recreate',
+    missingNode: 'The node was not found in Remnawave.', conflict: 'The Remnawave node conflicts with the previous installation identity. No action is available.',
+    recoveryUnknown: 'The remote state is still unknown. Check again to repeat the read-only observation.',
+    oldIdentity: 'Previous node UUID', oldCorrelation: 'Previous correlation ID',
+    recreateApproval: 'I reviewed the previous node UUID and approve creating a new Remnawave node with a new correlation ID.',
+    deleteApproval: 'I approve deleting the existing Remnawave node and creating a replacement with a new correlation ID.',
+    apiUnavailable: 'Provisioning support was not confirmed by the Remnawave API.', phaseNames: { VALIDATE: 'Validate request', PREPARE_SERVER: 'Prepare server', DELETE_NODE: 'Delete existing Remnawave node', CONFIRM_NODE_DELETED: 'Confirm node deletion', RETIRE_LOCAL_NODE: 'Retire previous local node installation', CREATE_NODE: 'Create Remnawave node', GET_INSTALLATION_DATA: 'Get installation data', CONFIGURE_NODE_FIREWALL: 'Configure node firewall', INSTALL_NODE: 'Install node', START_NODE: 'Start node', VERIFY_LOCAL_NODE: 'Verify local node', WAIT_FOR_PANEL: 'Wait for Remnawave panel', SYNC_INVENTORY: 'Sync inventory', BIND_RESOURCE: 'Bind server resource', SET_DESIRED_STATE: 'Set desired state', FINAL_VERIFY: 'Final verification' } },
   ru: { add: 'Добавить узел', title: 'Добавление узла Remnawave', steps: ['Сервер', 'Remnawave', 'Подготовка', 'Проверка', 'Выполнение'],
     unsupported: 'Подготовка узлов недоступна для этого подключения к API Remnawave. Синхронизация, инвентарь и настройка остаются доступны.',
     loading: 'Загрузка серверов и профилей…', server: 'Сервер', serverHint: 'Выберите сервер с назначенным серверным профилем.',
@@ -32,10 +38,17 @@ const texts = {
     changes: 'Изменения', warnings: 'Предупреждения', blockers: 'Блокирующие проблемы', run: 'Запуск', phases: 'Ход выполнения', state: 'Состояние', partial: 'Промежуточные результаты', externalId: 'ID узла Remnawave', baseline: 'Запуск подготовки сервера', syncId: 'Сессия синхронизации инвентаря',
     success: 'Добавление узла завершено.', failed: 'Не удалось добавить узел. Проверьте этапы и безопасное описание ошибки перед выбором дальнейших действий.', unknown: 'Результат неизвестен. Проверьте Remnawave и сервер перед дальнейшими действиями; не повторяйте весь процесс.', active: 'Добавление выполняется. Можно закрыть страницу и вернуться по этой ссылке.',
     requestError: 'Не удалось подтвердить запрос. Повторите отправку с тем же ID запроса, чтобы безопасно получить результат.', formError: 'Укажите имя и адрес узла, порт от 1 до 65535, профиль конфигурации и корректные CIDR.',
-    apiUnavailable: 'API Remnawave не подтвердил поддержку подготовки узлов.', phaseNames: { VALIDATE: 'Проверка запроса', PREPARE_SERVER: 'Подготовка сервера', CREATE_NODE: 'Создание узла Remnawave', GET_INSTALLATION_DATA: 'Получение данных установки', CONFIGURE_NODE_FIREWALL: 'Настройка межсетевого экрана', INSTALL_NODE: 'Установка узла', START_NODE: 'Запуск узла', VERIFY_LOCAL_NODE: 'Проверка узла на сервере', WAIT_FOR_PANEL: 'Ожидание панели Remnawave', SYNC_INVENTORY: 'Синхронизация инвентаря', BIND_RESOURCE: 'Привязка сервера', SET_DESIRED_STATE: 'Установка желаемого состояния', FINAL_VERIFY: 'Итоговая проверка' } },
+    checkAgain: 'Проверить снова', restore: 'Восстановить существующий узел', recreate: 'Пересоздать узел', deleteRecreate: 'Удалить и пересоздать',
+    missingNode: 'Узел больше не найден в Remnawave.', conflict: 'Узел Remnawave конфликтует с исходной идентичностью установки. Действие недоступно.',
+    recoveryUnknown: 'Удалённое состояние всё ещё неизвестно. Проверьте снова, чтобы повторить только чтение состояния.',
+    oldIdentity: 'Предыдущий UUID узла', oldCorrelation: 'Предыдущий ID корреляции',
+    recreateApproval: 'Я проверил предыдущий UUID узла и подтверждаю создание нового узла Remnawave с новым ID корреляции.',
+    deleteApproval: 'Я подтверждаю удаление существующего узла Remnawave и создание замены с новым ID корреляции.',
+    apiUnavailable: 'API Remnawave не подтвердил поддержку подготовки узлов.', phaseNames: { VALIDATE: 'Проверка запроса', PREPARE_SERVER: 'Подготовка сервера', DELETE_NODE: 'Удаление существующего узла Remnawave', CONFIRM_NODE_DELETED: 'Подтверждение удаления узла', RETIRE_LOCAL_NODE: 'Удаление предыдущей локальной установки узла', CREATE_NODE: 'Создание узла Remnawave', GET_INSTALLATION_DATA: 'Получение данных установки', CONFIGURE_NODE_FIREWALL: 'Настройка межсетевого экрана', INSTALL_NODE: 'Установка узла', START_NODE: 'Запуск узла', VERIFY_LOCAL_NODE: 'Проверка узла на сервере', WAIT_FOR_PANEL: 'Ожидание панели Remnawave', SYNC_INVENTORY: 'Синхронизация инвентаря', BIND_RESOURCE: 'Привязка сервера', SET_DESIRED_STATE: 'Установка желаемого состояния', FINAL_VERIFY: 'Итоговая проверка' } },
 } as const
 
 type Step = 0 | 1 | 2 | 3 | 4
+type OnboardingRunPhase = typeof phases[number] | 'DELETE_NODE' | 'CONFIRM_NODE_DELETED' | 'RETIRE_LOCAL_NODE'
 const activeRun = (state: NodeOnboardingRun['state']) => state === 'QUEUED' || state === 'RUNNING'
 function validCidr(value: string) {
   const [ip, mask, ...rest] = value.split('/')
@@ -59,6 +72,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const history = useNodeOnboardingHistory(organizationId, integrationId, canRead)
   const previewRequest = usePreviewNodeOnboarding(organizationId, integrationId)
   const start = useStartNodeOnboarding(organizationId, integrationId)
+  const reconcile = useReconcileNodeOnboarding(organizationId, integrationId)
   const [params, setParams] = useSearchParams()
   const runId = params.get('onboardingRun')
   const submissionKey = `node-onboarding:${organizationId}:${integrationId}`
@@ -71,6 +85,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const [cidrs, setCidrs] = useState(''); const [reviewed, setReviewed] = useState<{plan:NodeOnboardingPreview;requestId:string}|null>(null)
   const preview = reviewed?.plan
   const [workflowError,setWorkflowError] = useState(false)
+  const [recoveryConfirmed, setRecoveryConfirmed] = useState(false)
   const submitting=useRef(false)
   const selectedResource = useResource(organizationId, resourceId || undefined)
   const server = options.data?.servers.find(value => value.id === resourceId)
@@ -84,11 +99,23 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const exactBody = (): NodeOnboardingPreviewRequest => ({ resourceId, nodeName: nodeName.trim(), address: address.trim(), nodePort: Number(port), configProfileId, activeInboundIds, panelCidrs: cidrValues, desiredState: 'ENABLED' })
   const formValid = Boolean(server && nodeName.trim().length >= 3 && nodeName.trim().length <= 30 && !/[\x00-\x1f\x7f]/.test(nodeName) && address.trim() && Number.isInteger(Number(port)) && Number(port) >= 1 && Number(port) <= 65535 && profile && activeInboundIds.length > 0 && cidrValues.length > 0 && cidrValues.length <= 32 && new Set(cidrValues).size === cidrValues.length && cidrValues.every(validCidr))
   const makePreview = async () => { setWorkflowError(false); const value = await previewRequest.mutateAsync(exactBody()); start.reset(); setReviewed({plan:value,requestId:createRequestId()}); setStep(3) }
-  const apply = async (identity:PendingSubmission) => {
-    if (submitting.current || start.isPending || !canConfigure || (preview?.blockingProblems.length ?? 0)>0) {setWorkflowError(true);return}
+  const reconcileRun = async (sourceRunId: string, action: NodeOnboardingRecoveryAction) => {
+    if (!canConfigure || activeRun(run?.state ?? 'PLANNED') || reconcile.isPending) return
+    setWorkflowError(false); setRecoveryConfirmed(false)
+    try {
+      const value = await reconcile.mutateAsync({ runId: sourceRunId, action })
+      start.reset(); setReviewed({ plan: value, requestId: createRequestId() }); setStep(3); setOpen(true)
+    } catch { setWorkflowError(true) }
+  }
+  const recovery = preview?.recovery
+  const needsRecreateApproval = recovery?.action === 'RECREATE' || recovery?.action === 'DELETE_RECREATE'
+  const recoveryBlocked = recovery?.state === 'UNKNOWN' || recovery?.state === 'PRESENT_CONFLICT'
+  const apply = async (identity:PendingSubmission, retryConfirmed = false) => {
+    const confirmed = recoveryConfirmed || retryConfirmed
+    if (submitting.current || start.isPending || !canConfigure || (preview?.blockingProblems.length ?? 0)>0 || recoveryBlocked || (needsRecreateApproval && !confirmed)) {setWorkflowError(true);return}
     submitting.current=true;setWorkflowError(false)
     storePendingSubmission(submissionKey,identity)
-    try { const value = await start.mutateAsync(identity); storePendingSubmission(submissionKey,null);setUnresolved(null);setRunInUrl(value.id);setStep(4) }
+    try { const value = await start.mutateAsync({ ...identity, ...(needsRecreateApproval ? { confirmRecreate: true } : {}) }); storePendingSubmission(submissionKey,null);setUnresolved(null);setRunInUrl(value.id);setStep(4);setRecoveryConfirmed(false) }
     catch(error) { if (!(error instanceof ApiError) || error.status>=500 || error.status===408) setUnresolved(identity)
       else {storePendingSubmission(submissionKey,null);setUnresolved(null)} }
     finally {submitting.current=false}
@@ -117,17 +144,19 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
       {item.nodeName} · {item.address} · {item.state}</button>)}
     {hasRun && runQuery.isPending ? <p role="status">{copy.loading}</p> : null}
     {hasRun && runQuery.isError ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Не удалось загрузить запуск' : 'Could not load onboarding run'} /> : null}
-    {unresolved && !open ? <InlineAlert tone="warning" title={i18n.t.common.unresolvedSubmission} action={<PendingButton pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || !runQuery.isSuccess} onClick={()=>void apply(unresolved)}>{i18n.t.common.recoverSubmission}</PendingButton>} /> : null}
+    {unresolved && !open ? <InlineAlert tone="warning" title={i18n.t.common.unresolvedSubmission} action={<PendingButton pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || !runQuery.isSuccess} onClick={()=>void apply(unresolved, runQuery.data?.run.recovery?.action === 'RECREATE' || runQuery.data?.run.recovery?.action === 'DELETE_RECREATE')}>{i18n.t.common.recoverSubmission}</PendingButton>} /> : null}
     {workflowError && !previewRequest.isError ? <InlineAlert tone="danger" title={i18n.t.common.operationBlocked} /> : null}
     {!open && start.isError ? <InlineAlert tone="danger" title={copy.requestError} /> : null}
-    {open || hasRun ? <IntegrationDialog title={copy.title} size="large" onClose={closeWizard} busy={start.isPending || previewRequest.isPending}
+    {open || hasRun ? <IntegrationDialog title={copy.title} size="large" onClose={closeWizard} busy={start.isPending || previewRequest.isPending || reconcile.isPending}
       actionNote={step === 3 && preview?.blockingProblems.length ? i18n.t.common.blockedAction(preview.blockingProblems.length) : undefined}
       actionFeedback={previewRequest.isError || start.isError || workflowError ? <InlineAlert tone="danger" title={start.isError ? copy.requestError : i18n.t.common.operationBlocked} /> : undefined}
       actions={<>
-        {step > 0 && step < 4 ? <button className="secondary-button" type="button" disabled={!!unresolved || start.isPending || previewRequest.isPending} onClick={() => { setReviewed(null); setStep((step - 1) as Step) }}>{copy.back}</button> : null}
+        {step > 0 && step < 4 && !preview?.recovery ? <button className="secondary-button" type="button" disabled={!!unresolved || start.isPending || previewRequest.isPending} onClick={() => { setReviewed(null); setStep((step - 1) as Step) }}>{copy.back}</button> : null}
         {step < 3 ? <button className="primary-button" type="button" disabled={!canConfigure || unsupported || options.isPending || (step === 0 && (!resourceId || !server?.serverProfileName || server.blockingProblems.length > 0)) || (step === 1 && (!nodeName.trim() || !address.trim() || !Number(port) || !profile || activeInboundIds.length === 0)) || (step === 2 && !formValid)} onClick={() => setStep((step + 1) as Step)}>{copy.next}</button> : null}
-        {step === 3 ? <PendingButton className={preview ? 'secondary-button' : 'primary-button'} type="button" pending={previewRequest.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!!unresolved || !canConfigure || !formValid} onClick={() => void makePreview().catch(() => setWorkflowError(true))}>{copy.preview}</PendingButton> : null}
-        {step === 3 && reviewed ? <PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || reviewed.plan.blockingProblems.length > 0} onClick={() => void apply({planId:reviewed.plan.run.id,requestId:reviewed.requestId})}>{copy.apply}</PendingButton> : null}
+        {step === 3 && !preview?.recovery ? <PendingButton className={preview ? 'secondary-button' : 'primary-button'} type="button" pending={previewRequest.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!!unresolved || !canConfigure || !formValid} onClick={() => void makePreview().catch(() => setWorkflowError(true))}>{copy.preview}</PendingButton> : null}
+        {step === 3 && reviewed?.plan.recovery?.state === 'UNKNOWN' ? <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure} onClick={() => void reconcileRun(reviewed.plan.recovery!.sourceRunId, 'RECOVER')}>{copy.checkAgain}</PendingButton> : null}
+        {step === 3 && reviewed && !recoveryBlocked ? <PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || reviewed.plan.blockingProblems.length > 0 || (needsRecreateApproval && !recoveryConfirmed)} onClick={() => void apply({planId:reviewed.plan.run.id,requestId:reviewed.requestId})}>{recovery?.action === 'RECOVER' ? copy.restore : recovery?.action === 'RECREATE' ? copy.recreate : recovery?.action === 'DELETE_RECREATE' ? copy.deleteRecreate : copy.apply}</PendingButton> : null}
+        {step === 3 && recovery?.action === 'RECOVER' && (recovery.state === 'PRESENT_EXACT' || recovery.state === 'PRESENT_UNHEALTHY') ? <button className="secondary-button" type="button" disabled={!canConfigure || reconcile.isPending} onClick={() => void reconcileRun(recovery.sourceRunId, 'DELETE_RECREATE')}>{copy.deleteRecreate}</button> : null}
         {step === 4 || hasRun ? <button className="secondary-button" type="button" onClick={closeWizard}>{copy.close}</button> : null}
       </>}>
       {!canConfigure ? <InlineAlert tone="info" title={i18n.locale === 'ru' ? 'Недостаточно прав для подготовки узла' : 'Missing permissions to provision nodes'}>{i18n.locale === 'ru' ? 'Для подготовки требуются права управления интеграциями, конфигурациями и операциями.' : 'Provisioning requires manage integrations, manage configurations, and execute operations.'}</InlineAlert> : null}
@@ -149,25 +178,40 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
         {step === 2 ? <section><h3>{copy.steps[2]}</h3><label className="field">{copy.cidrs}<textarea value={cidrs} onChange={event => setCidrs(event.target.value)} /></label><p className="muted-copy">{copy.cidrHint}</p>{!formValid ? <p role="alert">{copy.formError}</p> : null}</section> : null}
         {step === 3 && preview ? <section><h3>{copy.steps[3]}</h3><p>{preview.serverName} · {preview.serverProfileName} · r{preview.revisionNumber}</p><p>{preview.configProfileName}: {preview.inboundNames.join(', ')}</p>
           <p>{preview.run.nodeName} · {preview.run.address}:{preview.run.nodePort}</p>
-          {preview.run.externalNodeId ? <InlineAlert tone="warning" title={i18n.locale === 'ru' ? 'Будет использован уже созданный узел' : 'The previously created node will be reused'}>
+          {preview.run.externalNodeId && !preview.recovery ? <InlineAlert tone="warning" title={i18n.locale === 'ru' ? 'Будет использован уже созданный узел' : 'The previously created node will be reused'}>
             {i18n.locale === 'ru' ? 'InfraDesk подтвердит исходную идентичность узла перед продолжением. Новый узел создаваться не будет.' : 'InfraDesk will verify the original node identity before continuing. A new node will not be created.'}
             <br /><span>{copy.externalId}: {preview.run.externalNodeId}</span>
           </InlineAlert> : null}
           <p>{preview.nodeImage}</p><p>{copy.cidrs}: {preview.panelCidrs?.join(', ') ?? cidrValues.join(', ')}</p>
           {preview.nodeApi ? <p>Remnawave {preview.nodeApi.serverVersion} · {preview.nodeApi.apiGeneration} · {preview.nodeApi.sourceCommit}</p> : null}
-          <ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings.filter(code => code !== 'REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE')} /><ReviewList title={copy.blockers} values={preview.blockingProblems.map(code => code === 'REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW'
+          <ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings.filter(code => code !== 'REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE')} /><ReviewList title={copy.blockers} values={preview.blockingProblems.map(code => ['REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW', 'REMNAWAVE_ONBOARDING_RECOVERY_CONFLICT'].includes(code)
             ? i18n.locale === 'ru' ? 'На сервере уже создан узел. Его состояние или новые параметры не допускают безопасное продолжение onboarding. Проверьте предыдущий запуск и узел; не создавайте дубликат.' : 'A node was already created on this server. Its state or the new inputs prevent safe onboarding recovery. Review the previous run and node; do not create a duplicate.'
             : code)} danger />
           </section> : null}
       </> : null}
-      {(step === 4 || hasRun) && current ? <RunStatus run={current} detail={runQuery.data} copy={copy} /> : null}
-      {(step === 4 || hasRun) && !current && !runQuery.isPending ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Запуск не найден' : 'Run not found'} /> : null}
+      {step === 3 && preview?.recovery ? <RecoveryReview recovery={preview.recovery} confirmed={recoveryConfirmed} onConfirm={setRecoveryConfirmed} copy={copy} /> : null}
+      {(step === 4 || (hasRun && step !== 3)) && current ? <RunStatus run={current} detail={runQuery.data} copy={copy} /> : null}
+      {(step === 4 || (hasRun && step !== 3)) && current && ['FAILED', 'UNKNOWN', 'SUCCEEDED'].includes(current.state) && canConfigure ? <div className="integration-row-actions">
+        <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={reconcile.isPending || runQuery.isPending} onClick={() => void reconcileRun(current.id, 'RECOVER')}>{copy.checkAgain}</PendingButton>
+      </div> : null}
+      {(step === 4 || (hasRun && step !== 3)) && !current && !runQuery.isPending ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Запуск не найден' : 'Run not found'} /> : null}
     </IntegrationDialog> : null}
   </WorkspaceSection>
 }
 
 function ReviewList({ title, values, danger = false }: { title: string; values: string[]; danger?: boolean }) {
   return <section><h4>{title}</h4>{values.length ? <ul>{values.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ul> : <p>—</p>}{danger && values.length ? <p role="alert">{title}</p> : null}</section>
+}
+function RecoveryReview({ recovery, confirmed, onConfirm, copy }: { recovery: NodeOnboardingRecoverySummary; confirmed: boolean; onConfirm: (value: boolean) => void; copy: typeof texts[keyof typeof texts] }) {
+  if (recovery.state === 'UNKNOWN') return <InlineAlert tone="warning" title={copy.recoveryUnknown} />
+  if (recovery.state === 'PRESENT_CONFLICT') return <InlineAlert tone="danger" title={copy.conflict} />
+  if (recovery.state === 'CONFIRMED_NOT_FOUND') return <section><InlineAlert tone="warning" title={copy.missingNode} />
+    <dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd><dt>{copy.oldCorrelation}</dt><dd>{recovery.previousCorrelationId}</dd></dl>
+    <label><input type="checkbox" checked={confirmed} onChange={event => onConfirm(event.target.checked)} />{copy.recreateApproval}</label></section>
+  if (recovery.action === 'DELETE_RECREATE') return <section><InlineAlert tone="warning" title={copy.deleteRecreate} />
+    <dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd><dt>{copy.oldCorrelation}</dt><dd>{recovery.previousCorrelationId}</dd></dl>
+    <label><input type="checkbox" checked={confirmed} onChange={event => onConfirm(event.target.checked)} />{copy.deleteApproval}</label></section>
+  return <section><InlineAlert tone="info" title={copy.restore} /><dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd></dl></section>
 }
 function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: ReturnType<typeof useNodeOnboardingRun>['data']; copy: typeof texts[keyof typeof texts] }) {
   const i18n = useI18n()
@@ -180,12 +224,16 @@ function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: Retu
   const tone = run.state === 'SUCCEEDED' ? 'success' : run.state === 'FAILED' ? 'danger' : run.state === 'UNKNOWN' ? 'warning' : 'info'
   const message = run.state === 'SUCCEEDED' ? copy.success : run.state === 'FAILED' ? copy.failed : run.state === 'UNKNOWN' ? copy.unknown : copy.active
   const byPhase = new Map(detail?.phases.map(phase => [phase.phase, phase]))
+  const runPhases: OnboardingRunPhase[] = run.recovery?.action === 'DELETE_RECREATE'
+    ? [...phases.slice(0, 2), 'DELETE_NODE', 'CONFIRM_NODE_DELETED', 'RETIRE_LOCAL_NODE', ...phases.slice(2)]
+    : run.recovery?.action === 'RECREATE' ? [...phases.slice(0, 2), 'RETIRE_LOCAL_NODE', ...phases.slice(2)] : [...phases]
   return <section><InlineAlert tone={tone} title={`${copy.run}: ${run.state}`}>{message}{run.failureCode ? <><br />{failure(run.failureCode)}</> : null}</InlineAlert>
-    <p>{run.nodeName} · {run.address}:{run.nodePort}</p><h3>{copy.phases}</h3><ol>{phases.map(phase => {
+    <p>{run.nodeName} · {run.address}:{run.nodePort}</p><h3>{copy.phases}</h3><ol>{runPhases.map(phase => {
       const record = byPhase.get(phase)
       const code = record?.failureCode ?? (run.phase === phase ? run.failureCode : null)
-      return <li key={phase}>{code ? <InlineAlert tone={record?.state === 'UNKNOWN' || run.state === 'UNKNOWN' ? 'warning' : 'danger'} title={`${copy.phaseNames[phase]} — ${record?.state ?? run.state}`}>{failure(code)}</InlineAlert>
-        : <><span>{copy.phaseNames[phase]}</span> — {record?.state ?? 'PENDING'}</>}</li>
+      const name = copy.phaseNames[phase]
+      return <li key={phase}>{code ? <InlineAlert tone={record?.state === 'UNKNOWN' || run.state === 'UNKNOWN' ? 'warning' : 'danger'} title={`${name} — ${record?.state ?? run.state}`}>{failure(code)}</InlineAlert>
+        : <><span>{name}</span> — {record?.state ?? 'PENDING'}</>}</li>
     })}</ol>
     {(run.externalNodeId || run.baselineRunId || run.syncSessionId) ? <><h3>{copy.partial}</h3><dl>
       {run.externalNodeId ? <><dt>{copy.externalId}</dt><dd>{run.externalNodeId}</dd></> : null}

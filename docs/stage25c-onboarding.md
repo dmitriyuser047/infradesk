@@ -71,7 +71,7 @@ These source checks do not establish compatibility of the user's installed Panel
 | 37. Stage25B regression | Included in full suite and disposable Ubuntu22.04 Linux safety harness. Atomic staging, 0600 credential install, guard/recovery/rollback/package simulation, Node proof/start safety all pass. |
 | 38. Live Remnawave contract | Not performed for this implementation. Authenticated installed-version/commit and create/keygen/status contract acceptance still required after review. Prior source inspection is not a live acceptance result. |
 | 39. Disposable VPS canary | Not performed. Linux harness uses a disposable local container and mocks Docker commands; it is not a VPS installation canary. |
-| 40. Later stages | Offboarding/cleanup/reinstall, terminal UNKNOWN recovery UX, fleet rollout and lifecycle automation remain outside Stage25C. No Stage25D/25E/25F implementation started. |
+| 40. Later stages | The subsequent recovery lifecycle addendum below supersedes the original terminal recovery limitation; fleet rollout/image lifecycle have their own Stage25D/25E/25F documents. |
 
 ## Crash-recovery addendum (durability fix, same stage)
 
@@ -130,18 +130,38 @@ re-observation proves the complete exact rule set and active UFW. Loss of that p
 remains UNKNOWN. Fleet rollout/rollback retain the engine's original approved source replacement
 path; a regression test exercises that path with Server Profile rules present.
 
-A terminal FAILED run is never resumed. A new preview may recover only a single previously created
-node whose latest run FAILED at CONFIGURE_NODE_FIREWALL, before install, with identical onboarding
-input, integration, connection and selected image. A bounded tenant/resource query returns the
-latest record per external UUID (at most two, sufficient to reject ambiguity), independently of
-paginated history. The new plan carries the same external UUID and original correlation ID and
-shows them for operator review. Admission checks that identity again under the resource lock.
-CREATE_NODE reconciles the existing node using the original correlation tag and full pinned Node
-identity; it never invokes create for this recovery. Missing/mismatched evidence yields UNKNOWN,
-without firewall/install mutations. Later-phase failures, UNKNOWN, changed input or multiple nodes
-produce `REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW`. Original terminal history and its
-phase journal remain immutable. Installation data is obtained afresh for the new run; the previous
-run's encrypted envelope stays deleted.
+Terminal runs are never resumed or edited. Recovery creates a separately approved intent and
+follows the external node/correlation chain, including a latest UNKNOWN CREATE_NODE with a known
+external UUID. A fresh exact provider lookup and candidate check classify PRESENT_EXACT,
+PRESENT_UNHEALTHY, CONFIRMED_NOT_FOUND, PRESENT_CONFLICT or UNKNOWN; stored inventory activity
+is not evidence of remote presence. Immutable identity includes integration, name, address,
+node port, config profile, active inbound set and correlation tag.
+
+Exact and unhealthy nodes reuse the external UUID and original installation owner. CREATE_NODE
+is a read-only identity check for these plans. Existing phases obtain fresh installation data,
+reconcile firewall access, conditionally repair safe owned local files, start the container,
+enable a disabled exact node, verify locally and in the Panel, synchronize inventory, bind the
+resource, set desired state and perform final verification. Foreign, unsafe or ambiguous local
+ownership fails closed.
+
+Only the typed provider node-not-found response at the exact UUID proves absence. Timeout, 5xx,
+wrong UUID, malformed response and unrelated 404 remain UNKNOWN. ?Check again? performs only
+read-only reconciliation. Conflicting remote identities retain the existing review blocker.
+
+Confirmed absence offers recreation, which requires explicit approval at Start. The new
+immutable snapshot records the source run, previous external UUID and correlation, installation
+owner, reviewed recovery state/action and a new durable correlation. The optional delete/recreate
+preview requires the same approval and adds DELETE_NODE and CONFIRM_NODE_DELETED. DELETE uses
+the typed provider transport once; an uncertain result ends UNKNOWN without CREATE. Fresh
+confirmed absence is required before guarded retirement of the exact old local installation
+and again before CREATE. Local retirement has its own RETIRE_LOCAL_NODE durable phase, avoiding
+an ambiguous POST outcome when only local cleanup ran. New inventory binding replaces only the
+approved inactive predecessor binding. No remote deletion is performed through shell commands.
+
+V52 adds the conditional phase sequences and exact predecessor-binding exception without
+rewriting old snapshots or terminal histories. Resource-lock admission permits only one winner
+among concurrent recovery/recreate plans, and request retries return the same durable run.
+Fleet observation continues using the original installation owner after successful repair.
 
 The localized UI shows the stable failure code and safe explanation directly beside the failed
 phase, including FIREWALL_RULE_UNSUPPORTED. It does not render backend exception prose or append
@@ -152,4 +172,9 @@ Regression coverage includes the three live Server Profile UFW rules and reviewe
 2.27.26.18/32, exact repeat/no duplicate, canonical /32, unsupported output, ownership conflicts,
 post-mutation proof, fleet source replacement, failed-create/firewall recovery, mismatched identity,
 real PostgreSQL admission/tenant scoping/terminal immutability, and localized phase errors/recovery
-preview. No migration or external HTTP API change is needed. No production Panel/VPS was mutated.
+preview. Lifecycle regression coverage also includes fresh classification, typed absence,
+unknown-create chains, damaged installation repair, uncertain deletion, extra durable phases,
+concurrent recovery approval, tenant isolation and immutable terminal phase journals.
+Reconciliation is POST /runs/{runId}/reconcile with RECOVER or DELETE_RECREATE; this returns a
+preview. Start accepts confirmRecreate=true for reviewed recreation actions. No production
+Panel/VPS was mutated during implementation checks.

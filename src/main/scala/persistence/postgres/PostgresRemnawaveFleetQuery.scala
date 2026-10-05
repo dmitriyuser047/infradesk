@@ -256,7 +256,9 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
     */
   def provenance(org: UUID, integrationId: UUID, resourceId: UUID,
     inventoryNodeId: UUID): ConnectionIO[Option[FleetLocalProvenance]] = sql"""
-    select ob.id, ob.external_node_id, ob.input_snapshot->>'imageReference',
+    select case when ob.input_snapshot->'recovery'->>'action'='RECOVER'
+      then (ob.input_snapshot->'recovery'->>'installationOwnerId')::uuid else ob.id end,
+      ob.external_node_id, ob.input_snapshot->>'imageReference',
       coalesce(ob.input_snapshot->>'apiGeneration','') <> '' and ob.input_snapshot->>'compatibilityBlocker' is null,
       ob.finished_at
     from remnawave_node_onboarding ob
@@ -272,7 +274,10 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
     })
 
   private def provenanceBatch(org: UUID, ids: List[UUID]): ConnectionIO[Map[UUID, FleetLocalProvenance]] =
-    sql"""select distinct on (m.id) m.id,ob.id,ob.external_node_id,ob.input_snapshot->>'imageReference',
+    sql"""select distinct on (m.id) m.id,
+      case when ob.input_snapshot->'recovery'->>'action'='RECOVER'
+        then (ob.input_snapshot->'recovery'->>'installationOwnerId')::uuid else ob.id end,
+      ob.external_node_id,ob.input_snapshot->>'imageReference',
       coalesce(ob.input_snapshot->>'apiGeneration','') <> '' and ob.input_snapshot->>'compatibilityBlocker' is null,
       ob.finished_at
       from remnawave_fleet_membership m

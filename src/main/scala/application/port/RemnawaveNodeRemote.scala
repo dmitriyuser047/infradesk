@@ -24,6 +24,13 @@ trait RemnawaveNodeRemote[F[_]] {
   def configureOnboardingFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[ProvisioningStepResult]
   def install(connection: Connection, spec: RemnawaveNodeRemoteSpec,
     credential: NodeInstallationData): F[ProvisioningStepResult]
+  /** Read-only proof for restart/recreate. Own or absent installations may proceed; foreign state fails closed. */
+  def recoveryPreflight(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[ProvisioningStepResult]
+  /** Reuses an intact own install, installs an absent one, or CAS-repairs damaged own files. */
+  def repair(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    credential: NodeInstallationData): F[ProvisioningStepResult]
+  /** Removes only the exact installation owned by this spec. */
+  def retireInstallation(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[ProvisioningStepResult]
   def start(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[ProvisioningStepResult]
   def observe(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[RemnawaveNodeLocalEvidence]
   /** Read-only proof used after crash; absence is never permission to blindly repeat a mutation. */

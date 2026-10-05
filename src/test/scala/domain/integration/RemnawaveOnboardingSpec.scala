@@ -31,19 +31,20 @@ final class RemnawaveOnboardingSpec extends FunSuite {
     assert(input.copy(nodePort = 0).normalized.isLeft)
   }
 
-  test("only one exact known pre-install firewall failure can seed an existing-node recovery") {
+  test("one terminal identity chain can seed reconciliation, independent of its last failure phase") {
     val integration = id
     val at = snapshot.integrationUpdatedAt
     val previous = RemnawaveNodeOnboardingRun(id,id,integration,input.resourceId,Some(id),id,
       domain.provisioning.ProvisioningRunState.Failed,OnboardingPhase.ConfigureFirewall,snapshot,at,at,externalNodeId=Some(id))
     def recover(rows: List[RemnawaveNodeOnboardingRun], candidate: OnboardingInput = input) =
-      RemnawaveNodeOnboardingRun.firewallRecovery(rows,integration,candidate,snapshot.imageReference,snapshot.connectionId)
+      RemnawaveNodeOnboardingRun.recoveryCandidate(rows,integration,candidate,snapshot.imageReference,snapshot.connectionId)
     assertEquals(recover(Nil),Right(None))
     assertEquals(recover(List(previous)),Right(Some(previous)))
     assert(recover(List(previous),input.copy(nodePort=2222)).isLeft)
-    assert(recover(List(previous),input.copy(panelCidrs=List("2.27.26.18/32"))).isLeft)
-    List(previous.copy(integrationId=id),previous.copy(state=domain.provisioning.ProvisioningRunState.Unknown),
-      previous.copy(phase=OnboardingPhase.InstallNode),previous.copy(externalNodeId=None),
+    assertEquals(recover(List(previous),input.copy(panelCidrs=List("2.27.26.18/32"))),Right(Some(previous)))
+    List(previous.copy(state=domain.provisioning.ProvisioningRunState.Unknown),previous.copy(phase=OnboardingPhase.InstallNode),
+      previous.copy(externalNodeId=None)).foreach(r => assertEquals(recover(List(r)),Right(Some(r))))
+    List(previous.copy(integrationId=id),previous.copy(state=domain.provisioning.ProvisioningRunState.Running),
       previous.copy(snapshot=snapshot.copy(connectionId=id)),previous.copy(snapshot=snapshot.copy(imageReference="different"))).foreach(r => assert(recover(List(r)).isLeft))
     assert(recover(List(previous,previous.copy(externalNodeId=Some(id)))).isLeft)
   }
@@ -51,6 +52,11 @@ final class RemnawaveOnboardingSpec extends FunSuite {
   test("snapshot JSON round trips pinned state and contains no installation credential") {
     val json = OnboardingSnapshotCodec.encode(snapshot)
     assertEquals(OnboardingSnapshotCodec.decode(json), snapshot.copy(input = input.copy(panelCidrs = input.panelCidrs.sorted)))
+    assertEquals(OnboardingSnapshotCodec.decode(json.mapObject(_.remove("recovery"))),
+      snapshot.copy(input = input.copy(panelCidrs = input.panelCidrs.sorted)))
+    val proof=OnboardingRecovery(id,Some(id),snapshot.correlationId,id,"PRESENT_UNHEALTHY","RECOVER")
+    assertEquals(OnboardingSnapshotCodec.decode(OnboardingSnapshotCodec.encode(snapshot.copy(recovery=Some(proof)))),
+      snapshot.copy(input=input.copy(panelCidrs=input.panelCidrs.sorted),recovery=Some(proof)))
     val serialized = json.noSpaces
     assert(!serialized.contains("secretKey"))
     assert(!serialized.contains("privateKey"))

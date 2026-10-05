@@ -42,10 +42,16 @@ final class RemnawaveOnboardingRoutes[Tx[_]](service: RemnawaveOnboardingApi,aut
         decoded.fold[IO[Response[IO]]](BadRequest(invalid))(input => respond(req,ctx)(service.preview(ctx.actor,id,input).flatMap(Ok(_))))
       }))
     case req @ POST -> Root / "api" / "v1" / "organizations" / _ / "integrations" / integration / "remnawave-node-onboarding" / "runs" =>
-      mutate(req)(ctx => withId(integration)(id => body(req,Set("planId","requestId")) { json =>
+      mutate(req)(ctx => withId(integration)(id => body(req,Set("planId","requestId"),Set("confirmRecreate")) { json =>
         val ids=for { p <- json.hcursor.get[String]("planId").toOption.flatMap(uuid); r <- json.hcursor.get[String]("requestId").toOption.flatMap(uuid) } yield p -> r
-        ids.fold[IO[Response[IO]]](BadRequest(invalid)) { case(p,r) => respond(req,ctx)(service.start(ctx.actor,id,p,r).flatMap(run => Accepted(OnboardingJson.run(run)))) }
+        val confirmed=json.hcursor.get[Option[Boolean]]("confirmRecreate").toOption
+        if(confirmed.isEmpty) BadRequest(invalid) else ids.fold[IO[Response[IO]]](BadRequest(invalid)) { case(p,r) => respond(req,ctx)(service.start(ctx.actor,id,p,r,confirmed.flatten.getOrElse(false)).flatMap(run => Accepted(OnboardingJson.run(run)))) }
       }))
+    case req @ POST -> Root / "api" / "v1" / "organizations" / _ / "integrations" / integration / "remnawave-node-onboarding" / "runs" / run / "reconcile" =>
+      mutate(req)(ctx => withId(integration)(id => withId(run)(r => body(req,Set("action")) { json =>
+        json.hcursor.get[String]("action").toOption.filter(Set("RECOVER","DELETE_RECREATE")).fold[IO[Response[IO]]](BadRequest(invalid))(
+          action => respond(req,ctx)(service.reconcile(ctx.actor,id,r,action).flatMap(Ok(_))))
+      })))
     case req @ GET -> Root / "api" / "v1" / "organizations" / _ / "integrations" / integration / "remnawave-node-onboarding" / "runs" / run =>
       authorization.require(req,OrganizationPermission.ReadOrganization)(ctx => withId(integration)(id => withId(run)(r =>
         respond(req,ctx)(service.detail(ctx.organizationId,id,r).flatMap(Ok(_))))))
@@ -59,11 +65,11 @@ final class RemnawaveOnboardingRoutes[Tx[_]](service: RemnawaveOnboardingApi,aut
         authorization.require(req,OrganizationPermission.ExecuteOperations)(next)))
   private def uuid(s: String): Option[UUID] = Try(UUID.fromString(s)).toOption.filter(_.toString==s)
   private def withId(s: String)(f: UUID => IO[Response[IO]]): IO[Response[IO]] = uuid(s).fold[IO[Response[IO]]](BadRequest(invalid))(f)
-  private def body(req: Request[IO],keys: Set[String])(f: Json => IO[Response[IO]]): IO[Response[IO]] =
+  private def body(req: Request[IO],keys: Set[String],optional: Set[String] = Set.empty)(f: Json => IO[Response[IO]]): IO[Response[IO]] =
     req.body.take(MaxBytes+1L).compile.to(Array).flatMap { bytes =>
       val decoded=Try(StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
         .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString).toOption
-      val json=decoded.flatMap(io.circe.parser.parse(_).toOption).filter(j => j.asObject.exists(_.keys.toSet==keys))
+      val json=decoded.flatMap(io.circe.parser.parse(_).toOption).filter(j => j.asObject.exists(o => keys.subsetOf(o.keys.toSet) && o.keys.toSet.subsetOf(keys++optional)))
       if(bytes.length>MaxBytes || json.isEmpty) BadRequest(invalid) else f(json.get)
     }
   private def respond(req: Request[IO],ctx: OrganizationAccessContext)(action: IO[Response[IO]]): IO[Response[IO]] = action.handleErrorWith {

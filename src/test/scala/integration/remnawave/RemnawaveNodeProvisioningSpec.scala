@@ -45,7 +45,9 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
 
   private def setup(version: String = "3.4.4", items: List[Json] = Nil,
     write: Request[IO] => IO[Response[IO]] = _ => IO.pure(envelope(node())),
-    keyField: String = "secretKey", metadataBody: Option[String] = None):
+    keyField: String = "secretKey", metadataBody: Option[String] = None,
+    readNode: Request[IO] => IO[Response[IO]] = _ => IO.pure(envelope(node())),
+    timeout: FiniteDuration = 2.seconds):
       (RemnawaveNodeProvisioning, RemnawaveProvider, Ref[IO, List[(String, String, String)]]) = {
     val seen = Ref.of[IO, List[(String, String, String)]](Nil).unsafeRunSync()
     val app = HttpApp[IO] { request =>
@@ -62,14 +64,69 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
           case "/prefix/api/hosts" => IO.pure(listing(Nil))
           case "/prefix/api/config-profiles" if request.method == Method.GET =>
             IO.pure(envelope(Json.obj("configProfiles" -> Json.arr())))
-          case path if path == s"/prefix/api/nodes/$nodeId" && request.method == Method.GET => IO.pure(envelope(node()))
+          case path if path == s"/prefix/api/nodes/$nodeId" && request.method == Method.GET => readNode(request)
           case "/prefix/api/keygen" => IO.pure(envelope(Json.obj(keyField -> Json.fromString(registrationSecret))))
           case _ => write(request)
         })
       }
     }
-    val client = new RemnawaveClient(Client.fromHttpApp(app), 2.seconds)
+    val client = new RemnawaveClient(Client.fromHttpApp(app), timeout)
     (new RemnawaveNodeProvisioning(client), new RemnawaveProvider(client), seen)
+  }
+
+  test("lookup distinguishes a typed node 404 at the exact path from other missing responses") {
+    val typed = Json.obj("timestamp" -> Json.fromString(java.time.Instant.now().toString),
+      "path" -> Json.fromString(s"/api/nodes/$nodeId"), "message" -> Json.fromString("Node not found"),
+      "errorCode" -> Json.fromString("A011")).noSpaces
+    val (found, _, foundCalls) = setup()
+    assertEquals(found.lookupNode(context, nodeId).unsafeRunSync(),
+      NodeLookupOutcome.Found(RemnawaveNodeApi.node(node().hcursor).get))
+    assertEquals(foundCalls.get.unsafeRunSync().count(c => c._1 == "GET" && c._2 == s"/prefix/api/nodes/$nodeId"), 1)
+
+    val typed404 = setup(readNode = _ => IO.pure(Response[IO](Status.NotFound).withEntity(typed)))._1
+    assertEquals(typed404.lookupNode(context, nodeId).unsafeRunSync(), NodeLookupOutcome.ConfirmedNotFound)
+    val unrelated404 = setup(readNode = _ => IO.pure(Response[IO](Status.NotFound)
+      .withEntity("{\"message\":\"not found\"}")))._1
+    assertEquals(unrelated404.lookupNode(context, nodeId).unsafeRunSync(),
+      NodeLookupOutcome.Unknown("INTEGRATION_NODE_LOOKUP_RESULT_UNKNOWN"))
+    val wrongPath = setup(readNode = _ => IO.pure(Response[IO](Status.NotFound).withEntity(
+      typed.replace(s"/api/nodes/$nodeId", "/api/hosts/" + nodeId))))._1
+    assertEquals(wrongPath.lookupNode(context, nodeId).unsafeRunSync(),
+      NodeLookupOutcome.Unknown("INTEGRATION_NODE_LOOKUP_RESULT_UNKNOWN"))
+  }
+
+  test("lookup keeps server errors, timeouts, invalid data, and wrong UUID unknown") {
+    val unknown = NodeLookupOutcome.Unknown("INTEGRATION_NODE_LOOKUP_RESULT_UNKNOWN")
+    List(Status.ServiceUnavailable -> "{\"response\":{}}", Status.Ok -> "not json",
+      Status.Ok -> Json.obj("response" -> node(id = UUID.randomUUID())).noSpaces).foreach { case (status, body) =>
+      val transport = setup(readNode = _ => IO.pure(Response[IO](status).withEntity(body)))._1
+      assertEquals(transport.lookupNode(context, nodeId).unsafeRunSync(), unknown)
+    }
+    val timeout = setup(readNode = _ => IO.never[Response[IO]], timeout = 30.millis)._1
+    assertEquals(timeout.lookupNode(context, nodeId).unsafeRunSync(), unknown)
+  }
+
+  test("reviewed delete sends one DELETE and treats uncertain responses as unknown") {
+    val (transport, _, seen) = setup(write = _ => IO.pure(Response[IO](Status.NoContent)))
+    val reviewed = transport.inspect(context).unsafeRunSync()
+    seen.set(Nil).unsafeRunSync()
+    assertEquals(transport.deleteNode(context, nodeId, reviewed).unsafeRunSync(), NodeDeleteOutcome.Deleted)
+    assertEquals(seen.get.unsafeRunSync().filter(_._1=="DELETE"), List(("DELETE", s"/prefix/api/nodes/$nodeId", "")))
+
+    val (missing, _, missingCalls) = setup(write = _ => IO.pure(Response[IO](Status.NotFound)
+      .withEntity("{\"errorCode\":\"A011\",\"message\":\"Node not found\"}")))
+    val reviewedMissing = missing.inspect(context).unsafeRunSync()
+    missingCalls.set(Nil).unsafeRunSync()
+    assertEquals(missing.deleteNode(context, nodeId, reviewedMissing).unsafeRunSync(),
+      NodeDeleteOutcome.Unknown("INTEGRATION_NODE_DELETE_RESULT_UNKNOWN"))
+    assertEquals(missingCalls.get.unsafeRunSync().count(_._1 == "DELETE"), 1)
+
+    val (timed, _, timedCalls) = setup(write = _ => IO.never[Response[IO]], timeout = 30.millis)
+    val reviewedTimed = timed.inspect(context).unsafeRunSync()
+    timedCalls.set(Nil).unsafeRunSync()
+    assertEquals(timed.deleteNode(context, nodeId, reviewedTimed).unsafeRunSync(),
+      NodeDeleteOutcome.Unknown("INTEGRATION_NODE_DELETE_RESULT_UNKNOWN"))
+    assertEquals(timedCalls.get.unsafeRunSync().count(_._1 == "DELETE"), 1)
   }
 
   test("reviewed released patches share generation adapters and never claim create idempotency") {

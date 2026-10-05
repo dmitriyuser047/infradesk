@@ -13,6 +13,9 @@ trait NodeProvisioningTransport[F[_]] {
   def inspect(context: IntegrationRuntimeContext): F[NodeApiCompatibility]
   def findNodes(context: IntegrationRuntimeContext): F[List[ProvisionedNode]]
   def getNode(context: IntegrationRuntimeContext, externalId: UUID): F[ProvisionedNode]
+  def lookupNode(context: IntegrationRuntimeContext, externalId: UUID): F[NodeLookupOutcome]
+  def deleteNode(context: IntegrationRuntimeContext, externalId: UUID,
+    reviewed: NodeApiCompatibility): F[NodeDeleteOutcome]
   def createNode(context: IntegrationRuntimeContext, intent: NodeCreateIntent,
     reviewed: NodeApiCompatibility): F[NodeCreateOutcome]
   def installationData(context: IntegrationRuntimeContext,

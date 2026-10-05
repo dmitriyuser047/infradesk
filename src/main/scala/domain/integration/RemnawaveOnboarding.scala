@@ -11,6 +11,9 @@ sealed abstract class OnboardingPhase(val code: String, val mutation: Boolean = 
 object OnboardingPhase {
   case object Validate extends OnboardingPhase("VALIDATE")
   case object PrepareServer extends OnboardingPhase("PREPARE_SERVER", true)
+  case object DeleteNode extends OnboardingPhase("DELETE_NODE", true)
+  case object ConfirmNodeDeleted extends OnboardingPhase("CONFIRM_NODE_DELETED")
+  case object RetireLocalNode extends OnboardingPhase("RETIRE_LOCAL_NODE", true)
   case object CreateNode extends OnboardingPhase("CREATE_NODE", true)
   case object GetInstallationData extends OnboardingPhase("GET_INSTALLATION_DATA")
   case object ConfigureFirewall extends OnboardingPhase("CONFIGURE_NODE_FIREWALL", true)
@@ -25,9 +28,33 @@ object OnboardingPhase {
   lazy val all: List[OnboardingPhase] = List(Validate, PrepareServer, CreateNode, GetInstallationData,
     ConfigureFirewall, InstallNode, StartNode, VerifyLocalNode, WaitForPanel, SyncInventory,
     BindResource, SetDesiredState, FinalVerify)
-  def fromCode(code: String): OnboardingPhase = all.find(_.code == code).getOrElse(
+  def forSnapshot(s: OnboardingSnapshot): List[OnboardingPhase] = s.recovery.filter(!_.reusesNode).fold(all)(proof =>
+    all.take(2) ++ (if(proof.action=="DELETE_RECREATE") List(DeleteNode,ConfirmNodeDeleted) else Nil) ++
+      List(RetireLocalNode) ++ all.drop(2))
+  def fromCode(code: String): OnboardingPhase = (all ++ List(DeleteNode,ConfirmNodeDeleted,RetireLocalNode)).find(_.code == code).getOrElse(
     throw new IllegalArgumentException("Invalid onboarding phase"))
   def next(phase: OnboardingPhase): Option[OnboardingPhase] = all.lift(all.indexOf(phase) + 1)
+  def next(phase: OnboardingPhase,snapshot: OnboardingSnapshot): Option[OnboardingPhase] = {
+    val phases=forSnapshot(snapshot); phases.lift(phases.indexOf(phase)+1)
+  }
+}
+
+/** Fresh provider evidence is separate from the immutable history of execution attempts. */
+final case class OnboardingRecovery(sourceRunId: UUID, previousExternalNodeId: Option[UUID],
+  previousCorrelationId: UUID, installationOwnerId: UUID, state: String, action: String) {
+  require(OnboardingRecovery.States(state) && OnboardingRecovery.Actions(action))
+  def reusesNode: Boolean = action=="RECOVER"
+}
+object OnboardingRecovery {
+  val States=Set("PRESENT_EXACT","PRESENT_UNHEALTHY","CONFIRMED_NOT_FOUND","PRESENT_CONFLICT","UNKNOWN")
+  val Actions=Set("RECOVER","RECREATE","DELETE_RECREATE")
+  def candidate(node: ProvisionedNode,intent: NodeCreateIntent): Boolean =
+    node.name==intent.name || node.address==intent.address ||
+      node.correlationTags.contains("ID:"+intent.correlationId.toString.replace("-","").toUpperCase(java.util.Locale.ROOT))
+  def matches(node: ProvisionedNode,intent: NodeCreateIntent,id: Option[UUID]): Boolean =
+    id.forall(_==node.externalId) && node.name==intent.name && node.address==intent.address && node.port.contains(intent.port) &&
+      node.configProfileId.contains(intent.configProfileId) && node.activeInboundIds.toSet==intent.activeInboundIds.toSet &&
+      node.correlationTags.contains("ID:"+intent.correlationId.toString.replace("-","").toUpperCase(java.util.Locale.ROOT))
 }
 
 final case class OnboardingInput(resourceId: UUID, nodeName: String, address: String, nodePort: Int,
@@ -62,7 +89,8 @@ final case class OnboardingSnapshot(input: OnboardingInput, integrationUpdatedAt
   assignmentId: UUID, assignmentVersion: Long, revisionHash: String, baselinePlanId: UUID,
   baselineNeeded: Boolean, compatibility: NodeApiCompatibility, imageReference: String,
   correlationId: UUID, serverName: String, serverProfileName: String, configProfileName: String,
-  inboundNames: List[String], changes: List[String], warnings: List[String], blockers: List[String]) {
+  inboundNames: List[String], changes: List[String], warnings: List[String], blockers: List[String],
+  recovery: Option[OnboardingRecovery] = None) {
   def intent: NodeCreateIntent = NodeCreateIntent(input.nodeName, input.address, input.nodePort,
     input.configProfileId, input.activeInboundIds, correlationId)
 }
@@ -73,16 +101,19 @@ final case class RemnawaveNodeOnboardingRun(id: UUID, organizationId: UUID, inte
   failureCode: Option[String] = None, startedAt: Option[Instant] = None, finishedAt: Option[Instant] = None,
   claimToken: Option[UUID] = None, claimDeadline: Option[Instant] = None)
 object RemnawaveNodeOnboardingRun {
-  /** Recovery is a new approval, limited to the known pre-install firewall failure boundary. */
-  def firewallRecovery(previous: List[RemnawaveNodeOnboardingRun], integration: UUID,
+  /** Ownership follows the node/correlation chain, regardless of the latest terminal phase. */
+  def recoveryCandidate(previous: List[RemnawaveNodeOnboardingRun], integration: UUID,
     input: OnboardingInput, image: String, connection: UUID): Either[String,Option[RemnawaveNodeOnboardingRun]] =
     previous match {
       case Nil => Right(None)
-      case r :: Nil if r.integrationId==integration && r.state==ProvisioningRunState.Failed &&
-        r.phase==OnboardingPhase.ConfigureFirewall && r.externalNodeId.nonEmpty && r.snapshot.input==input &&
+      case r :: Nil if r.integrationId==integration && r.state.terminal &&
+        r.snapshot.input.copy(panelCidrs=input.panelCidrs)==input &&
         r.snapshot.imageReference==image && r.snapshot.connectionId==connection => Right(Some(r))
       case _ => Left("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW")
     }
+
+  def installationOwner(r: RemnawaveNodeOnboardingRun): UUID =
+    r.snapshot.recovery.filter(_.reusesNode).fold(r.id)(_.installationOwnerId)
 
   /** One request ID per onboarding baseline. Starting the approved child again - after a crash
     * between the attach and the start - is therefore the same Stage25A request, not a second one.
@@ -120,14 +151,18 @@ object OnboardingSnapshotCodec {
     "compatibilityBlocker" -> s.compatibility.blocker.fold(Json.Null)(str), "imageReference" -> str(s.imageReference),
     "correlationId" -> id(s.correlationId), "serverName" -> str(s.serverName), "serverProfileName" -> str(s.serverProfileName),
     "configProfileName" -> str(s.configProfileName), "inboundNames" -> strings(s.inboundNames),
-    "changes" -> strings(s.changes), "warnings" -> strings(s.warnings), "blockers" -> strings(s.blockers))
+    "changes" -> strings(s.changes), "warnings" -> strings(s.warnings), "blockers" -> strings(s.blockers),
+    "recovery" -> s.recovery.fold(Json.Null)(encodeRecovery))
+  def encodeRecovery(r: OnboardingRecovery): Json = Json.obj("sourceRunId" -> id(r.sourceRunId),
+    "previousExternalNodeId" -> r.previousExternalNodeId.fold(Json.Null)(id),"previousCorrelationId" -> id(r.previousCorrelationId),
+    "installationOwnerId" -> id(r.installationOwnerId),"state" -> str(r.state),"action" -> str(r.action))
   def decode(json: Json): OnboardingSnapshot = {
     val expectedKeys = Set("resourceId", "nodeName", "address", "nodePort", "configProfileId", "activeInboundIds", "panelCidrs",
       "desiredState", "integrationUpdatedAt", "integrationSecretId", "connectionId", "connectionUpdatedAt", "profileId",
       "revisionId", "revisionNumber", "assignmentId", "assignmentVersion", "revisionHash", "baselinePlanId", "baselineNeeded",
       "serverVersion", "apiGeneration", "sourceCommit", "capabilities", "compatibilityBlocker", "imageReference", "correlationId",
       "serverName", "serverProfileName", "configProfileName", "inboundNames", "changes", "warnings", "blockers")
-    require(json.asObject.exists(_.keys.toSet == expectedKeys), "Invalid onboarding snapshot")
+    require(json.asObject.exists(o => o.keys.toSet == expectedKeys || o.keys.toSet == expectedKeys + "recovery"), "Invalid onboarding snapshot")
     val c = json.hcursor
     def s(k: String): String = c.get[String](k).fold(_ => throw new IllegalArgumentException("Invalid onboarding snapshot"), identity)
     def u(k: String) = UUID.fromString(s(k))
@@ -145,6 +180,14 @@ object OnboardingSnapshotCodec {
       c.get[Boolean]("baselineNeeded").toOption.get,NodeApiCompatibility(optional("serverVersion"),optional("apiGeneration"),
         optional("sourceCommit"),list("capabilities").map(code => capabilities.find(_.code == code).get).toSet,optional("compatibilityBlocker")),
       s("imageReference"),u("correlationId"),s("serverName"),s("serverProfileName"),s("configProfileName"),
-      list("inboundNames"),list("changes"),list("warnings"),list("blockers"))
+      list("inboundNames"),list("changes"),list("warnings"),list("blockers"),
+      c.downField("recovery").focus.filterNot(_.isNull).map { j =>
+        require(j.asObject.exists(_.keys.toSet==Set("sourceRunId","previousExternalNodeId","previousCorrelationId","installationOwnerId","state","action")),"Invalid recovery snapshot")
+        val r=j.hcursor
+        OnboardingRecovery(UUID.fromString(r.get[String]("sourceRunId").toOption.get),
+          r.get[Option[String]]("previousExternalNodeId").toOption.get.map(UUID.fromString),
+          UUID.fromString(r.get[String]("previousCorrelationId").toOption.get),UUID.fromString(r.get[String]("installationOwnerId").toOption.get),
+          r.get[String]("state").toOption.get,r.get[String]("action").toOption.get)
+      })
   }
 }

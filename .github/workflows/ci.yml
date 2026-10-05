@@ -246,11 +246,14 @@ jobs:
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
           # Build a representative production V29 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V30 through V51 to the restored database before the backend reports itself ready.
+          # V30 through V52 to the restored database before the backend reports itself ready.
           # Remove the additive tables and Stage 21 index; earlier schema stays as in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          -- Recovery lifecycle V52: reverse the additive phase trigger before dropping V48 tables.
+          drop function if exists infradesk_onboarding_phase_sequence() cascade;
+          drop function if exists infradesk_onboarding_history_delete_guard() cascade;
           -- Stage25F software lifecycle: remove only additive V51 objects.
           drop function infradesk_node_release_immutable() cascade;
           drop function infradesk_fleet_upgrade_snapshot_guard() cascade;
@@ -354,14 +357,14 @@ jobs:
           drop table terminal_session;
           drop table account_security_event;
           drop index ix_incident_resource_opened;
-          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49', '50', '51');
+          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49', '50', '51', '52');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V30 through V51.
+          # recover the marker and let Flyway apply V30 through V52.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -382,7 +385,7 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "51"
+          test "${migrated}" = "52"
           # What V26 built survives the upgrade: the notification_delivery.context column was in the
           # dump and is still there after Flyway ran V29 on the restored database.
           delivery_context="$(docker compose -f compose.prod.yml exec -T postgres \
@@ -555,9 +558,12 @@ jobs:
               '90000000-0000-0000-0000-000000000008', 'V40 observed node',
               (select id from user_account where email = 'terminal-ci@example.test'), 'SUCCEEDED', now(), now(), now());
           SQL
-          # Reverse V42 through V51's additive changes, so the dump is what a V41 production holds.
+          # Reverse V42 through V52's additive changes, so the dump is what a V41 production holds.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          -- Recovery lifecycle V52: reverse the additive phase trigger before dropping V48 tables.
+          drop function if exists infradesk_onboarding_phase_sequence() cascade;
+          drop function if exists infradesk_onboarding_history_delete_guard() cascade;
           -- Stage25F software lifecycle: remove only additive V51 objects.
           drop function infradesk_node_release_immutable() cascade;
           drop function infradesk_fleet_upgrade_snapshot_guard() cascade;
@@ -656,7 +662,7 @@ jobs:
             'INTEGRATION_ACTION_REQUESTED',
             'INTEGRATION_MANAGEMENT_MODE_CHANGED','INTEGRATION_DESIRED_STATE_SET','INTEGRATION_DESIRED_STATE_REMOVED'
           ));
-          delete from flyway_schema_history where version in ('42', '43', '44', '45', '46', '47', '48', '49', '50', '51');
+          delete from flyway_schema_history where version in ('42', '43', '44', '45', '46', '47', '48', '49', '50', '51', '52');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/v40-backups" ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/v40-backups" -name 'infradesk-*.dump' -type f -print -quit)"
@@ -669,7 +675,7 @@ jobs:
             sleep 5
           done
           curl --silent --fail "${base}/ready" > /dev/null
-          test "$(psql_value "select version from flyway_schema_history where success order by installed_rank desc limit 1")" = "51"
+          test "$(psql_value "select version from flyway_schema_history where success order by installed_rank desc limit 1")" = "52"
           test "$(psql_value "select count(*) from configuration_profile where code = 'v40-preserved' and kind = 'FILE_TEMPLATE'")" = "1"
           test "$(psql_value "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('configuration_revision_secure_payload','integration_config_profile_binding','integration_config_deployment','integration_config_rollout','integration_config_rollout_node_baseline')")" = "5"
           test "$(psql_value "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('integration', 'integration_secret', 'integration_sync_session', 'integration_inventory_object', 'integration_resource_binding', 'integration_sync_state', 'integration_action_execution', 'integration_desired_state')")" = "8"

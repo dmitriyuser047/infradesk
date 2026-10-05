@@ -48,6 +48,24 @@ final class RemnawaveNodeProvisioning(client: RemnawaveClient) extends NodeProvi
     }
   }
 
+  override def lookupNode(context: IntegrationRuntimeContext, externalId: UUID): IO[NodeLookupOutcome] =
+    credential(context).flatMap(client.lookupNodeWire(context.baseUrl, _, externalId)).handleError {
+      case e: IntegrationError => NodeLookupOutcome.Unknown(e.code)
+      case _ => NodeLookupOutcome.Unknown("INTEGRATION_NODE_LOOKUP_RESULT_UNKNOWN")
+    }
+
+  override def deleteNode(context: IntegrationRuntimeContext, externalId: UUID,
+    reviewed: NodeApiCompatibility): IO[NodeDeleteOutcome] = {
+    (for {
+      _ <- requireReviewed(context, reviewed)
+      auth <- credential(context)
+      outcome <- client.deleteNodeWire(context.baseUrl, auth, externalId)
+    } yield outcome).handleError {
+      case e: IntegrationError => NodeDeleteOutcome.Rejected(e.code)
+      case _ => NodeDeleteOutcome.Rejected("INTEGRATION_UNREACHABLE")
+    }
+  }
+
   override def createNode(context: IntegrationRuntimeContext, intent: NodeCreateIntent,
     reviewed: NodeApiCompatibility): IO[NodeCreateOutcome] = {
     if (!RemnawaveNodeApi.validIntent(intent)) IO.pure(NodeCreateOutcome.Rejected("INTEGRATION_NODE_INVALID_REQUEST"))

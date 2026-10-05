@@ -33,6 +33,20 @@ final case class ProvisionedNode(externalId: UUID, name: String, address: String
   connected: Boolean, connecting: Boolean, disabled: Boolean, configProfileId: Option[UUID],
   activeInboundIds: List[UUID], correlationTags: List[String])
 
+sealed trait NodeLookupOutcome
+object NodeLookupOutcome {
+  final case class Found(node: ProvisionedNode) extends NodeLookupOutcome
+  case object ConfirmedNotFound extends NodeLookupOutcome
+  final case class Unknown(code: String) extends NodeLookupOutcome
+}
+
+sealed trait NodeDeleteOutcome
+object NodeDeleteOutcome {
+  case object Deleted extends NodeDeleteOutcome
+  final case class Rejected(code: String) extends NodeDeleteOutcome
+  final case class Unknown(code: String) extends NodeDeleteOutcome
+}
+
 sealed trait NodeCreateOutcome
 object NodeCreateOutcome {
   final case class Created(node: ProvisionedNode) extends NodeCreateOutcome

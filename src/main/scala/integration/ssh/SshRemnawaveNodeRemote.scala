@@ -1,7 +1,7 @@
 package ru.bitec.app.ops
 package integration.ssh
 
-import application.port.{ProvisioningStepResult, RemoteConfigurationFailure, RemoteConfigurationSession, RemoteConfigurationTransport, RemnawaveNodeLocalEvidence, RemnawaveNodeRemote, RemnawaveNodeRemoteSpec}
+import application.port.{ProvisioningStepResult, RemoteConfigurationFailure, RemoteConfigurationFile, RemoteConfigurationSession, RemoteConfigurationTransport, RemnawaveNodeLocalEvidence, RemnawaveNodeRemote, RemnawaveNodeRemoteSpec}
 import cats.effect.IO
 import cats.effect.Ref
 import cats.syntax.all._
@@ -110,6 +110,12 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
   override def install(connection: Connection, spec: RemnawaveNodeRemoteSpec,
     credential: NodeInstallationData): IO[ProvisioningStepResult] = Ref.of[IO, Boolean](false).flatMap { changed =>
     stepTracked(changed)(withSession(connection) { (s, c, sshUid) =>
+      installInSession(s, c, sshUid, spec, credential, changed)
+    })
+  }
+
+  private def installInSession(s: RemoteConfigurationSession[IO], c: ProfileCommands, sshUid: Int,
+    spec: RemnawaveNodeRemoteSpec, credential: NodeInstallationData, changed: Ref[IO, Boolean]): IO[ProvisioningStepResult] = {
     val files = new ProfileManagedFiles(s, c, sshUid, spec.onboardingId)
     val dir = directory(spec)
     val marker = markerLine(spec)
@@ -128,7 +134,75 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
           installOwned = true).flatTap(_ => changed.set(true))
         _ <- checked(c, "docker", List("pull", spec.imageReference), 5.minutes).flatTap(_ => changed.set(true))
       } yield success("installed" -> "true")).handleErrorWith(sanitize)
-    })}
+  }
+
+  override def recoveryPreflight(connection: Connection, spec: RemnawaveNodeRemoteSpec): IO[ProvisioningStepResult] =
+    step(withSession(connection) { (_, c, _) =>
+      validate(spec) *> recoveryState(c, spec).flatMap {
+        case "ABSENT" => IO.pure(success("installation" -> "absent"))
+        case "OWNED" => IO.pure(success("installation" -> "owned"))
+        case "PORT" => IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_PORT_OCCUPIED"))
+        case "FOREIGN" => IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_INSTALLATION_UNMANAGED"))
+        case _ => IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_PREFLIGHT_UNAVAILABLE"))
+      }
+    })
+
+  override def repair(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    credential: NodeInstallationData): IO[ProvisioningStepResult] = Ref.of[IO, Boolean](false).flatMap { changed =>
+    stepTracked(changed)(withSession(connection) { (s, c, sshUid) =>
+      val files = new ProfileManagedFiles(s, c, sshUid, spec.onboardingId)
+      val dir = directory(spec)
+      val marker = markerLine(spec)
+      val env = s"SECRET_KEY=${credential.secretKey}\nNODE_PORT=${spec.nodePort}\n".getBytes(StandardCharsets.UTF_8)
+      val compose = renderCompose(spec).getBytes(StandardCharsets.UTF_8)
+      val managed = renderManaged(spec, ProfileManagedFiles.sha256(env)).getBytes(StandardCharsets.UTF_8)
+      val names = List(".env", "compose.yml", "managed.json")
+      val desired = Map(".env" -> env, "compose.yml" -> compose, "managed.json" -> managed)
+      validate(spec) *> validateSecret(credential.secretKey) *> recoveryState(c, spec).flatMap {
+        case "ABSENT" => installInSession(s, c, sshUid, spec, credential, changed)
+        case "OWNED" => for {
+          existing <- names.traverse(name => s.read(s"$dir/$name", 65536).map(name -> _))
+          current = existing.toMap
+          _ <- IO.raiseUnless(names.forall(name => safeExistingFile(current(name), name).isRight))(
+            ProfileRemoteFailure("PROVISIONING_NODE_INSTALLATION_UNMANAGED"))
+          alreadyExact = names.forall(name => current(name).exists && current(name).bytes.sameElements(desired(name)))
+          imageExists <- c.capture("docker", List("image", "inspect", "-f", "{{.Id}}", spec.imageReference), 20.seconds)
+          _ <- if (alreadyExact && imageExists.exitCode == 0 && imageExists.stdout.trim.nonEmpty) IO.unit
+            else if (alreadyExact) checked(c, "docker", List("pull", spec.imageReference), 5.minutes)
+              .flatTap(_ => changed.set(true))
+            else for {
+              _ <- files.replace(s"$dir/.env", marker, env, current(".env").sha256,
+                installOwned = true, targetMode = 384, beforeCommit = assertOwned(c, spec)).flatTap(_ => changed.set(true))
+              _ <- files.replace(s"$dir/compose.yml", marker, compose, current("compose.yml").sha256,
+                installOwned = true, validate = Some(List("docker", "compose", "-f", "{candidate}", "--env-file", s"$dir/.env", "config", "-q")),
+                validationFailureCode = "PROVISIONING_NODE_COMPOSE_INVALID", beforeCommit = assertOwned(c, spec))
+                .flatTap(_ => changed.set(true))
+              _ <- files.replace(s"$dir/managed.json", marker, managed, current("managed.json").sha256,
+                installOwned = true, beforeCommit = assertOwned(c, spec)).flatTap(_ => changed.set(true))
+              _ <- checked(c, "docker", List("pull", spec.imageReference), 5.minutes).flatTap(_ => changed.set(true))
+            } yield ()
+        } yield success("repaired" -> (!alreadyExact).toString)
+        case "PORT" => IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_PORT_OCCUPIED"))
+        case "FOREIGN" => IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_INSTALLATION_UNMANAGED"))
+        case _ => IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_PREFLIGHT_UNAVAILABLE"))
+      }
+    })
+  }
+
+  override def retireInstallation(connection: Connection, spec: RemnawaveNodeRemoteSpec): IO[ProvisioningStepResult] =
+    step(withSession(connection) { (_, c, _) =>
+      validate(spec) *> c.capture("sh", List("-c", RetireInstallation, "infradesk", directory(spec),
+        markerLine(spec), managedPrefix(spec), containerName(spec), spec.imageReference, spec.nodePort.toString), 2.minutes).flatMap { r =>
+        if (r.exitCode != 0 || r.stdoutTruncated || r.stderrTruncated)
+          IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_RETIREMENT_UNCERTAIN", uncertain = true))
+        else r.stdout.trim match {
+          case "RETIRED" => IO.pure(success("retired" -> "true"))
+          case "ABSENT" => IO.pure(success("retired" -> "false"))
+          case "FOREIGN" => IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_INSTALLATION_UNMANAGED"))
+          case _ => IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_RETIREMENT_UNCERTAIN", uncertain = true))
+        }
+      }
+    })
 
   override def start(connection: Connection, spec: RemnawaveNodeRemoteSpec): IO[ProvisioningStepResult] =
     step(withSession(connection) { (_, c, _) => validate(spec) *> startNode(c, spec) })
@@ -188,6 +262,25 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
       case "UNKNOWN" => IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_PREFLIGHT_UNAVAILABLE"))
       case _ => IO.raiseError(ProfileRemoteFailure("PROVISIONING_NODE_INSTALLATION_UNMANAGED"))
     }
+
+  private def recoveryState(c: ProfileCommands, spec: RemnawaveNodeRemoteSpec): IO[String] =
+    c.capture("sh", List("-c", RecoveryProbe, "infradesk", directory(spec), markerLine(spec),
+      managedPrefix(spec), containerName(spec), spec.imageReference, spec.nodePort.toString), 20.seconds)
+      .map(r => if (r.exitCode == 0 && !r.stdoutTruncated && !r.stderrTruncated &&
+        Set("ABSENT", "OWNED", "PORT", "FOREIGN", "UNKNOWN")(r.stdout.trim)) r.stdout.trim else "UNKNOWN")
+
+  private def assertOwned(c: ProfileCommands, spec: RemnawaveNodeRemoteSpec): IO[Unit] =
+    recoveryState(c, spec).flatMap(state => IO.raiseUnless(state == "OWNED")(
+      ProfileRemoteFailure("PROVISIONING_NODE_INSTALLATION_UNMANAGED")))
+
+  private def safeExistingFile(file: RemoteConfigurationFile, name: String): Either[String, Unit] = {
+    if (!file.exists) Right(())
+    else {
+      val mode = if (name == ".env") 384 else 420
+      Either.cond(file.metadata.exists(m => m.uid == 0 && m.gid == 0 && m.permissions == mode), (),
+        "PROVISIONING_NODE_INSTALLATION_UNMANAGED")
+    }
+  }
 
   private def startNode(c: ProfileCommands, spec: RemnawaveNodeRemoteSpec): IO[ProvisioningStepResult] = {
     val dir = directory(spec)
@@ -348,6 +441,43 @@ private[ssh] object SshRemnawaveNodeRemote {
     |printf '%s\n' "$containers" | grep -Eiq 'remnawave|node.*remna|remna.*node' && echo_result FOREIGN
     |echo_result CLEAR
     |""".stripMargin
+  private val RecoveryProbe = """set -u
+    |d=$1; marker=$2; managedPrefix=$3; name=$4; image=$5; port=$6
+    |result() { printf '%s' "$1"; exit 0; }
+    |for p in /opt /opt/infradesk /opt/infradesk/remnawave; do
+    |  [ ! -L "$p" ] || result FOREIGN
+    |  if [ -e "$p" ]; then [ -d "$p" ] && [ "$(stat -c '%u' "$p" 2>/dev/null)" = 0 ] || result FOREIGN; mode=$(stat -c '%a' "$p" 2>/dev/null) || result UNKNOWN; [ $((0$mode & 022)) -eq 0 ] || result FOREIGN; fi
+    |done
+    |[ ! -e /opt/remnawave ] && [ ! -L /opt/remnawave ] && [ ! -e /opt/remnawave-node ] && [ ! -L /opt/remnawave-node ] || result FOREIGN
+    |command -v ss >/dev/null 2>&1 || result UNKNOWN
+    |listeners=$(ss -H -ltn "sport = :$port" 2>/dev/null) || result UNKNOWN
+    |command -v docker >/dev/null 2>&1 || { [ ! -e "$d" ] && [ -z "$listeners" ] && result ABSENT; result UNKNOWN; }
+    |allContainers=$(docker ps -a --format '{{.Names}}') || result UNKNOWN
+    |ownContainer=0; printf '%s\n' "$allContainers" | grep -Fxq "$name" && ownContainer=1 || true
+    |if [ ! -e "$d" ] && [ ! -L "$d" ]; then [ "$ownContainer" = 0 ] || result FOREIGN; [ -z "$listeners" ] || result PORT; result ABSENT; fi
+    |[ ! -L "$d" ] && [ -d "$d" ] && [ "$(stat -c '%u:%a' "$d" 2>/dev/null)" = '0:755' ] || result FOREIGN
+    |for f in "$d"/* "$d"/.[!.]* "$d"/..?*; do
+    |  [ -e "$f" ] || [ -L "$f" ] || continue
+    |  case "$f" in "$d/compose.yml"|"$d/.env"|"$d/managed.json") ;; *) result FOREIGN ;; esac
+    |  [ ! -L "$f" ] && [ -f "$f" ] && [ "$(stat -c '%u:%h' "$f" 2>/dev/null)" = '0:1' ] || result FOREIGN
+    |  mode=$(stat -c '%a' "$f" 2>/dev/null) || result UNKNOWN
+    |  case "$f:$mode" in "$d/.env:600"|"$d/compose.yml:644"|"$d/managed.json:644") ;; *) result FOREIGN ;; esac
+    |done
+    |markerOwned=0; managedOwned=0
+    |if [ -f "$d/compose.yml" ]; then IFS= read -r first < "$d/compose.yml" || true; [ "$first" = "$marker" ] && markerOwned=1 || true; fi
+    |if [ -f "$d/managed.json" ]; then
+    |  metadata=$(cat "$d/managed.json") || result UNKNOWN
+    |  case "$metadata" in "$managedPrefix"*) tail=${metadata#"$managedPrefix"}; hash=${tail%??}; suffix=${tail#"$hash"}; [ "${#hash}" = 64 ] && [ "$suffix" = '"}' ] && case "$hash" in *[!a-f0-9]*) ;; *) managedOwned=1 ;; esac ;; esac
+    |fi
+    |[ "$markerOwned" = 1 ] || [ "$managedOwned" = 1 ] || result FOREIGN
+    |containerRunning=0
+    |if [ "$ownContainer" = 1 ]; then
+    |  info=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files" }}|{{.Config.Image}}|{{.State.Running}}' "$name" 2>/dev/null) || result UNKNOWN
+    |  case "$info" in "$d/compose.yml|$image|true") containerRunning=1 ;; "$d/compose.yml|$image|false") ;; *) result FOREIGN ;; esac
+    |fi
+    |if [ -n "$listeners" ]; then [ "$containerRunning" = 1 ] || result PORT; fi
+    |result OWNED
+    |""".stripMargin
   private[ssh] val ManagedFileProof = """managed_files() {
     |  d=$1; marker=$2; port=$3; composeHash=$4; managedPrefix=$5
     |  for p in /opt /opt/infradesk /opt/infradesk/remnawave; do
@@ -366,6 +496,37 @@ private[ssh] object SshRemnawaveNodeRemote {
     |  [ "$(grep -Ec '^SECRET_KEY=[A-Za-z0-9+/]+={0,2}$' "$d/.env")" = 1 ] &&
     |  [ "$(grep -Fxc "NODE_PORT=$port" "$d/.env")" = 1 ] && [ "$(wc -l < "$d/.env")" = 2 ]
     |}
+    |""".stripMargin
+  private val RetireInstallation = "recovery_probe() {\n" + RecoveryProbe + "\n}\n" + """set -u
+    |d=$1; marker=$2; managedPrefix=$3; name=$4; image=$5; port=$6
+    |result() { printf '%s' "$1"; exit 0; }
+    |for p in /opt /opt/infradesk /opt/infradesk/remnawave; do
+    |  [ ! -L "$p" ] || result FOREIGN
+    |  if [ -e "$p" ]; then [ -d "$p" ] && [ "$(stat -c '%u' "$p" 2>/dev/null)" = 0 ] || result FOREIGN; mode=$(stat -c '%a' "$p" 2>/dev/null) || result UNKNOWN; [ $((0$mode & 022)) -eq 0 ] || result FOREIGN; fi
+    |done
+    |command -v docker >/dev/null 2>&1 || result UNKNOWN
+    |allContainers=$(docker ps -a --format '{{.Names}}') || result UNKNOWN
+    |ownContainer=0; printf '%s\n' "$allContainers" | grep -Fxq "$name" && ownContainer=1 || true
+    |if [ ! -e "$d" ] && [ ! -L "$d" ]; then [ "$ownContainer" = 0 ] && result ABSENT || result FOREIGN; fi
+    |[ ! -L "$d" ] && [ -d "$d" ] && [ "$(stat -c '%u:%a' "$d" 2>/dev/null)" = '0:755' ] || result FOREIGN
+    |for f in "$d"/* "$d"/.[!.]* "$d"/..?*; do
+    |  [ -e "$f" ] || [ -L "$f" ] || continue
+    |  case "$f" in "$d/compose.yml"|"$d/.env"|"$d/managed.json") ;; *) result FOREIGN ;; esac
+    |done
+    |[ "$(recovery_probe "$d" "$marker" "$managedPrefix" "$name" "$image" "$port")" = OWNED ] || result FOREIGN
+    |if [ "$ownContainer" = 1 ]; then
+    |  info=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files" }}|{{.Config.Image}}|{{.State.Running}}' "$name" 2>/dev/null) || result UNKNOWN
+    |  case "$info" in "$d/compose.yml|$image|true"|"$d/compose.yml|$image|false") ;; *) result FOREIGN ;; esac
+    |  state=${info##*|}
+    |  if [ "$state" = true ]; then docker stop --time 15 "$name" >/dev/null 2>&1 || result UNCERTAIN; fi
+    |  docker rm "$name" >/dev/null 2>&1 || result UNCERTAIN
+    |  allContainers=$(docker ps -a --format '{{.Names}}') || result UNCERTAIN
+    |  printf '%s\n' "$allContainers" | grep -Fxq "$name" && result UNCERTAIN || true
+    |fi
+    |[ "$(recovery_probe "$d" "$marker" "$managedPrefix" "$name" "$image" "$port")" = OWNED ] || result UNCERTAIN
+    |rm -f -- "$d/compose.yml" "$d/.env" "$d/managed.json" || result UNCERTAIN
+    |rmdir -- "$d" || result UNCERTAIN
+    |result RETIRED
     |""".stripMargin
   private val InstallationProof = "set -u; " + ManagedFileProof + """
     |files=0; image=0

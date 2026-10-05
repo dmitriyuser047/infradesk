@@ -35,7 +35,9 @@ final class ExistingRemnawaveOnboardingOperations[Tx[_]: MonadThrow](
       a.revisionId==r.snapshot.revisionId) && revision.exists(v => v.id==r.snapshot.revisionId && v.contentHash==r.snapshot.revisionHash))(
       error("REMNAWAVE_ONBOARDING_PROFILE_CHANGED"))
     conflict <- query.bindingConflict(r.organizationId,r.resourceId,r.externalNodeId)
-    _ <- MonadThrow[Tx].raiseWhen(conflict)(error("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
+    previousConflict <- r.snapshot.recovery.filter(!_.reusesNode).fold(true.pure[Tx])(proof =>
+      query.bindingConflict(r.organizationId,r.resourceId,proof.previousExternalNodeId))
+    _ <- MonadThrow[Tx].raiseWhen(conflict && previousConflict)(error("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
   } yield integration -> target
   def runtime(r: RemnawaveNodeOnboardingRun): IO[(IntegrationRuntimeContext,domain.connection.Connection)] = runner.run(for {
     state <- checked(r)
@@ -108,6 +110,17 @@ final class ExistingRemnawaveOnboardingOperations[Tx[_]: MonadThrow](
   } yield result))
   def bind(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Unit] = fenced(r,token)(_ => for {
     node <- query.externalNode(r.organizationId,r.integrationId,r.externalNodeId.get).flatMap(_.filter(_.isActive).liftTo[Tx](error("REMNAWAVE_ONBOARDING_INVENTORY_MISSING")))
+    _ <- r.snapshot.recovery.filter(!_.reusesNode).traverse_ { proof => for {
+      old <- proof.previousExternalNodeId.traverse(query.externalNode(r.organizationId,r.integrationId,_)).map(_.flatten)
+      _ <- old.traverse_ { previous => for {
+        _ <- MonadThrow[Tx].raiseWhen(previous.isActive)(error("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW"))
+        bound <- bindings.find(r.organizationId,previous.id)
+        _ <- MonadThrow[Tx].raiseUnless(bound.forall(_.resourceId==r.resourceId))(error("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
+        actor=ActorContext(r.createdBy,r.organizationId)
+        _ <- desiredService.remove(actor,r.integrationId,previous.id)
+        _ <- bindingService.unbind(actor,r.integrationId,previous.id)
+      } yield () }
+    } yield () }
     existing <- bindings.find(r.organizationId,node.id)
     _ <- MonadThrow[Tx].raiseUnless(existing.forall(_.resourceId==r.resourceId))(error("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
     _ <- bindingService.bindCreated(ActorContext(r.createdBy,r.organizationId),r.integrationId,node.id,r.resourceId)

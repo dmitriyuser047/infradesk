@@ -186,14 +186,59 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
         existing <- w.run(repo.createdNodes(w.org,target.resourceId))
         foreign <- w.run(repo.createdNodes(w.foreignOrg,target.resourceId))
         staleStart <- w.run(repo.start(w.org,integrationId,stalePlan.id,uid,AuthorizationFixtures.ActorUserId,now)).attempt
-        candidate <- IO.fromEither(RemnawaveNodeOnboardingRun.firewallRecovery(existing,integrationId,
+        candidate <- IO.fromEither(RemnawaveNodeOnboardingRun.recoveryCandidate(existing,integrationId,
           approved.snapshot.input,approved.snapshot.imageReference,approved.snapshot.connectionId).leftMap(new RuntimeException(_)))
-        recovery = approved.copy(id=uid,createdAt=now.plusSeconds(2),externalNodeId=candidate.flatMap(_.externalNodeId))
+        recovery = approved.copy(id=uid,createdAt=now.plusSeconds(2),externalNodeId=candidate.flatMap(_.externalNodeId),
+          snapshot=approved.snapshot.copy(recovery=Some(OnboardingRecovery(failed.id,Some(external),
+            approved.snapshot.correlationId,approved.id,"PRESENT_UNHEALTHY","RECOVER"))))
         _ <- w.run(repo.insertPlan(recovery))
         readPlan <- w.run(repo.find(w.org,integrationId,recovery.id))
         queued <- w.run(repo.start(w.org,integrationId,recovery.id,uid,AuthorizationFixtures.ActorUserId,now))
+        token2=uid
+        claimed2 <- w.run(repo.claim(uid,token2,now,now.plusSeconds(300),1))
+        _ <- w.run(OnboardingPhase.all.take(2).foldLeftM(claimed2.head) { (r,phase) =>
+          val next=r.copy(phase=OnboardingPhase.next(phase).get)
+          repo.beginPhase(r,token2,now) *> repo.persist(r,token2,next,now,complete=true).as(next)
+        })
+        current2 <- w.run(repo.find(w.org,integrationId,recovery.id))
+        atCreate=current2.get._1
+        _ <- w.run(repo.beginPhase(atCreate,token2,now))
+        _ <- w.run(repo.persist(atCreate,token2,atCreate.copy(state=ProvisioningRunState.Unknown,
+          failureCode=Some("INTEGRATION_NODE_CREATE_RESULT_UNKNOWN")),now,complete=false))
+        heads <- w.run(repo.createdNodes(w.org,target.resourceId))
+        preservedUnknown <- w.run(repo.find(w.org,integrationId,recovery.id))
+        retry=recovery.copy(id=uid,createdAt=now.plusSeconds(3),snapshot=recovery.snapshot.copy(
+          recovery=recovery.snapshot.recovery.map(_.copy(sourceRunId=recovery.id))))
+        competitor=retry.copy(id=uid)
+        _ <- w.run(repo.insertPlan(retry))
+        _ <- w.run(repo.insertPlan(competitor))
+        winners <- List(retry,competitor).parTraverse(p =>
+          w.run(repo.start(w.org,integrationId,p.id,uid,AuthorizationFixtures.ActorUserId,now)).attempt)
         unchanged <- w.run(repo.find(w.org,integrationId,approved.id))
+        unknownAfter <- w.run(repo.find(w.org,integrationId,recovery.id))
+        journalMutation <- w.run(sql"update remnawave_node_onboarding_phase set failure_code='changed' where run_id=${recovery.id} and phase='CREATE_NODE'".update.run).attempt
+        finalToken=uid
+        finalClaim <- w.run(repo.claim(uid,finalToken,now,now.plusSeconds(300),1))
+        _ <- w.run(OnboardingPhase.all.foldLeftM(finalClaim.head) { (r,phase) =>
+          val next=OnboardingPhase.next(phase,r.snapshot)
+          val updated=r.copy(phase=next.getOrElse(phase),state=if(next.isEmpty) ProvisioningRunState.Succeeded else ProvisioningRunState.Running)
+          repo.beginPhase(r,finalToken,now) *> repo.persist(r,finalToken,updated,now,complete=true).as(updated)
+        })
+        syncId=uid
+        inventoryId=uid
+        _ <- w.run(sql"""insert into integration_sync_session(id,organization_id,integration_id,trigger,started_at,recover_after_at,finished_at,status)
+          values($syncId,${w.org},$integrationId,'MANUAL',$now,${now.plusSeconds(60)},$now,'COMPLETED')""".update.run)
+        _ <- w.run(sql"""insert into integration_inventory_object(id,organization_id,integration_id,object_type,external_id,display_name,
+          summary_version,summary,is_active,first_seen_at,last_seen_at,last_seen_sync_session_id,created_at,updated_at)
+          values($inventoryId,${w.org},$integrationId,'NODE',${external.toString},'Recovered node',1,'{}'::jsonb,true,$now,$now,$syncId,$now,$now)""".update.run)
+        provenance <- w.run(new PostgresRemnawaveFleetQuery().provenance(w.org,integrationId,target.resourceId,inventoryId))
       } yield {
+        assertEquals(provenance.map(_.onboardingId),Some(approved.id))
+        assertEquals(heads.map(_.id),List(recovery.id))
+        assertEquals(winners.count(_.isRight),1)
+        assertEquals(errorCode(winners.find(_.isLeft).get),Some("REMNAWAVE_ONBOARDING_RESOURCE_BUSY"))
+        assertEquals(unknownAfter,preservedUnknown)
+        assert(journalMutation.isLeft)
         assertEquals(existing.map(_.externalNodeId),List(Some(external)))
         assertEquals(foreign,Nil)
         assertEquals(errorCode(staleStart),Some("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
@@ -402,4 +447,67 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
       }
     }
   }
+  test("approved recreate has its own durable phases and identity; deletion plans require every extra phase") {
+    List("RECREATE","DELETE_RECREATE").foreach { action => inWorld { w => for {
+      pair <- integration(w,w.org,"recreate-"+action)
+      (integrationId,secretId)=pair
+      target <- w.node("recreate-"+action)
+      sourceAt <- connectionUpdated(w,target.connectionId)
+      now <- IO.realTimeInstant
+      original <- plan(w,integrationId,secretId,target.resourceId,target.connectionId,sourceAt,now)
+      _ <- w.run(repo.start(w.org,integrationId,original.id,uid,AuthorizationFixtures.ActorUserId,now))
+      token=uid
+      claimed <- w.run(repo.claim(uid,token,now,now.plusSeconds(300),1))
+      _ <- w.run(repo.beginPhase(claimed.head,token,now))
+      oldExternal=uid
+      _ <- w.run(repo.persist(claimed.head,token,claimed.head.copy(state=ProvisioningRunState.Failed,
+        externalNodeId=Some(oldExternal),failureCode=Some("TEST_FAILURE")),now,complete=false))
+      oldHistory <- w.run(repo.find(w.org,integrationId,original.id))
+      recovery=OnboardingRecovery(original.id,Some(oldExternal),original.snapshot.correlationId,original.id,
+        if(action=="RECREATE") "CONFIRMED_NOT_FOUND" else "PRESENT_EXACT",action)
+      draft=original.copy(id=uid,createdAt=now.plusSeconds(1),snapshot=original.snapshot.copy(correlationId=uid,recovery=Some(recovery)))
+      _ <- w.run(repo.insertPlan(draft))
+      phases <- w.run(repo.find(w.org,integrationId,draft.id))
+      foreignStart <- w.run(repo.start(w.foreignOrg,integrationId,draft.id,uid,AuthorizationFixtures.ActorUserId,now)).attempt
+      _ <- w.run(repo.start(w.org,integrationId,draft.id,uid,AuthorizationFixtures.ActorUserId,now))
+      newToken=uid
+      active <- w.run(repo.claim(uid,newToken,now,now.plusSeconds(300),1))
+      premature <- w.run(sql"update remnawave_node_onboarding set state='SUCCEEDED',phase='FINAL_VERIFY',finished_at=$now,claim_owner=null,claim_token=null,claim_deadline=null where id=${draft.id}".update.run).attempt
+      newExternal=uid
+      completed <- w.run(OnboardingPhase.forSnapshot(draft.snapshot).foldLeftM(active.head) { (r,phase) =>
+        val next=OnboardingPhase.next(phase,draft.snapshot)
+        val updated=r.copy(phase=next.getOrElse(phase),state=if(next.isEmpty) ProvisioningRunState.Succeeded else ProvisioningRunState.Running,
+          externalNodeId=if(phase==OnboardingPhase.CreateNode) Some(newExternal) else r.externalNodeId)
+        repo.beginPhase(r,newToken,now) *> repo.persist(r,newToken,updated,now,complete=true).as(updated)
+      })
+      oldAfter <- w.run(repo.find(w.org,integrationId,original.id))
+      historyDelete <- w.run(sql"delete from remnawave_node_onboarding where id=${original.id}".update.run).attempt
+      phaseDelete <- w.run(sql"delete from remnawave_node_onboarding_phase where run_id=${original.id}".update.run).attempt
+      heads <- w.run(repo.createdNodes(w.org,target.resourceId))
+      invalidPhase <- w.run(sql"update remnawave_node_onboarding_phase set phase='DELETE_NODE' where run_id=${draft.id} and position=0".update.run).attempt
+      syncId=uid
+      inventoryId=uid
+      _ <- w.run(sql"""insert into integration_sync_session(id,organization_id,integration_id,trigger,started_at,recover_after_at,finished_at,status)
+        values($syncId,${w.org},$integrationId,'MANUAL',$now,${now.plusSeconds(60)},$now,'COMPLETED')""".update.run)
+      _ <- w.run(sql"""insert into integration_inventory_object(id,organization_id,integration_id,object_type,external_id,display_name,
+        summary_version,summary,is_active,first_seen_at,last_seen_at,last_seen_sync_session_id,created_at,updated_at)
+        values($inventoryId,${w.org},$integrationId,'NODE',${newExternal.toString},'Recreated node',1,'{}'::jsonb,true,$now,$now,$syncId,$now,$now)""".update.run)
+      provenance <- w.run(new PostgresRemnawaveFleetQuery().provenance(w.org,integrationId,target.resourceId,inventoryId))
+    } yield {
+      assertEquals(phases.get._2.map(_.phase),OnboardingPhase.forSnapshot(draft.snapshot))
+      assertEquals(phases.get._2.length,if(action=="RECREATE") 14 else 16)
+      assertEquals(errorCode(foreignStart),Some("REMNAWAVE_ONBOARDING_NOT_FOUND"))
+      assert(premature.isLeft)
+      assert(invalidPhase.isLeft)
+      assertEquals(completed.state,ProvisioningRunState.Succeeded)
+      assertEquals(completed.externalNodeId,Some(newExternal))
+      assertEquals(oldAfter,oldHistory)
+      assert(historyDelete.isLeft)
+      assert(phaseDelete.isLeft)
+      assertEquals(heads.map(_.id),List(draft.id))
+      assertEquals(provenance.map(_.onboardingId),Some(draft.id))
+      assertNotEquals(completed.snapshot.correlationId,original.snapshot.correlationId)
+    } } }
+  }
+
 }

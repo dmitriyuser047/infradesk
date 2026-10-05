@@ -148,4 +148,81 @@ sed -i '$d' "$node_dir/compose.yml"
 sed -i 's|^    image: .*|    image: ghcr.io/evil/node:latest|' "$node_dir/compose.yml"
 [ "$(image_owned)" = UNMANAGED ]
 echo 'PASS controlled image ownership accepts reviewed upgrades and rejects other edits, duplicate images, and foreign references'
+# Recovery preflight may accept an exact damaged own install but must reject foreign
+# ownership evidence and unexpected hidden entries without changing any host files.
+recovery_run=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+recovery_resource=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb
+recovery_node=cccccccc-cccc-cccc-cccc-cccccccccccc
+recovery_image=remnawave/node:2.8.0
+recovery_port=32222
+recovery_name=infradesk-remnawave-$recovery_node
+recovery_dir=/opt/infradesk/remnawave/$recovery_node
+recovery_marker="# infradesk-managed run=$recovery_run node=$recovery_node resource=$recovery_resource image=$recovery_image"
+recovery_prefix="{\"managedBy\":\"infradesk\",\"runId\":\"$recovery_run\",\"nodeId\":\"$recovery_node\",\"resourceId\":\"$recovery_resource\",\"image\":\"$recovery_image\",\"envSha256\":\""
+mkdir -m 0755 "$recovery_dir"
+printf '%s\nservices: {}\n' "$recovery_marker" >"$recovery_dir/compose.yml"
+printf 'damaged but private\n' >"$recovery_dir/.env"; chmod 0600 "$recovery_dir/.env"
+node_recovery() { sh /checks/NodeRecoveryProbe.sh "$recovery_dir" "$recovery_marker" "$recovery_prefix" "$recovery_name" "$recovery_image" "$recovery_port"; }
+[ "$(node_recovery)" = OWNED ]
+foreign_dir=/opt/infradesk/remnawave/dddddddd-dddd-dddd-dddd-dddddddddddd
+mkdir -m 0755 "$foreign_dir"
+printf 'foreign\n' >"$foreign_dir/compose.yml"
+[ "$(sh /checks/NodeRecoveryProbe.sh "$foreign_dir" "$recovery_marker" "$recovery_prefix" "$recovery_name" "$recovery_image" "$recovery_port")" = FOREIGN ]
+printf 'hidden foreign data\n' >"$recovery_dir/..foreign"
+[ "$(node_recovery)" = FOREIGN ] && [ "$(cat "$recovery_dir/..foreign")" = 'hidden foreign data' ]
+rm -f "$recovery_dir/..foreign"
+rm -f "$recovery_dir/compose.yml" "$recovery_dir/.env" "$foreign_dir/compose.yml"; rmdir "$recovery_dir" "$foreign_dir"
+echo 'PASS recovery preflight recognizes damaged exact ownership and rejects foreign or hidden entries'
+
+# Retirement is limited to the exact owned files and container. Stop/rm failures
+# leave all files in place, while a successful retirement is idempotent.
+retire_dir=/opt/infradesk/remnawave/$recovery_node
+mkdir -m 0755 "$retire_dir"
+cat >"$retire_dir/compose.yml" <<EOF
+$recovery_marker
+services:
+  node:
+    image: $recovery_image
+    container_name: $recovery_name
+    network_mode: host
+    cap_add: ["NET_ADMIN"]
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    env_file: .env
+    restart: unless-stopped
+EOF
+printf 'SECRET_KEY=c2VjcmV0\nNODE_PORT=%s\n' "$recovery_port" >"$retire_dir/.env"
+chmod 0600 "$retire_dir/.env"
+retire_env_hash=$(sha256sum "$retire_dir/.env" | cut -d' ' -f1)
+printf '%s%s"}\n' "$recovery_prefix" "$retire_env_hash" >"$retire_dir/managed.json"
+compose_hash=$(sha256sum "$retire_dir/compose.yml" | cut -d' ' -f1)
+cat >/mocks/docker <<'MOCK'
+#!/bin/sh
+case "$1" in
+  ps) [ -e /tmp/remnawave-retire-removed ] || printf '%s' "${DOCKER_CONTAINERS:-}" ;;
+  inspect) printf '%s' "${DOCKER_INSPECT_INFO:-}" ;;
+  stop) [ "${DOCKER_STOP_EXIT:-0}" = 0 ] || exit "$DOCKER_STOP_EXIT" ;;
+  rm) [ "${DOCKER_RM_EXIT:-0}" = 0 ] || exit "$DOCKER_RM_EXIT"; touch /tmp/remnawave-retire-removed ;;
+  *) exit 0 ;;
+esac
+MOCK
+chmod 0755 /mocks/docker
+export DOCKER_CONTAINERS="$recovery_name"
+export DOCKER_INSPECT_INFO="$retire_dir/compose.yml|$recovery_image|true"
+node_retire() { sh /checks/NodeRetireInstallation.sh "$retire_dir" "$recovery_marker" "$recovery_prefix" "$recovery_name" "$recovery_image" "$recovery_port"; }
+rm -f /tmp/remnawave-retire-removed
+[ "$(DOCKER_STOP_EXIT=9 node_retire)" = UNCERTAIN ]
+[ -f "$retire_dir/.env" ] && [ ! -e /tmp/remnawave-retire-removed ]
+[ "$(DOCKER_RM_EXIT=9 node_retire)" = UNCERTAIN ]
+[ -f "$retire_dir/.env" ] && [ ! -e /tmp/remnawave-retire-removed ]
+# Owned damaged installation remains safely retireable after explicit recreate approval.
+printf 'damaged private credential\n' >"$retire_dir/.env"
+[ "$(node_retire)" = RETIRED ]
+[ ! -e "$retire_dir" ] && [ -e /tmp/remnawave-retire-removed ]
+export DOCKER_CONTAINERS=''
+[ "$(node_retire)" = ABSENT ]
+rm -f /tmp/remnawave-retire-removed
+echo 'PASS retirement stops/removes only an exact owned container and preserves files on uncertain failures'
 echo 'LINUX SAFETY CHECKS PASSED'

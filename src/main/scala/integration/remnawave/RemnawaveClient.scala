@@ -55,6 +55,71 @@ final class RemnawaveClient(client: Client[IO], requestTimeout: FiniteDuration,
         .flatMap(body => decodeConfigProfile(body, id).fold(invalidResponse[IntegrationConfigProfileDocument])(IO.pure))
     }
 
+  /** A single lookup. Only the provider's typed node-not-found response at this exact resource
+    * path proves absence; an unrelated 404 remains uncertain.
+    */
+  private[remnawave] def lookupNodeWire(baseUrl: IntegrationBaseUrl, credential: RemnawaveCredential,
+    externalId: java.util.UUID): IO[domain.integration.NodeLookupOutcome] = {
+    import domain.integration.NodeLookupOutcome._
+    val path = s"$NodesPath/$externalId"
+    val unknown = Unknown("INTEGRATION_NODE_LOOKUP_RESULT_UNKNOWN")
+    if (!credential.valid) IO.pure(Unknown("INTEGRATION_CREDENTIAL_INVALID"))
+    else IO.fromEither(Uri.fromString(baseUrl.endpoint(path).toASCIIString)
+      .leftMap(_ => RemnawaveErrors.error("INTEGRATION_INVALID_REQUEST"))).flatMap { uri =>
+      val request = Request[IO](Method.GET, uri).putHeaders(
+        Header.Raw(CIString("Authorization"), s"Bearer ${credential.apiToken}"))
+      val authenticated = credential.caddyApiKey.fold(request)(key =>
+        request.putHeaders(Header.Raw(CIString("X-Api-Key"), key)))
+      client.run(authenticated).use { response =>
+        if (response.status.code == 404) boundedBody(response, ConfigProfileMaxResponseBytes).map { body =>
+          if (body.exists(typedNodeNotFound(_, path))) ConfirmedNotFound else unknown
+        }
+        else if (response.status.isSuccess) boundedBody(response, ConfigProfileMaxResponseBytes).map { body =>
+          body.flatMap(parse(_).toOption).flatMap(_.hcursor.downField("response").success)
+            .flatMap(RemnawaveNodeApi.node).filter(_.externalId == externalId)
+            .fold[domain.integration.NodeLookupOutcome](unknown)(Found.apply)
+        }
+        else IO.pure(unknown)
+      }
+    }.timeout(requestTimeout).handleError(_ => unknown)
+  }
+
+  /** Exactly one DELETE. A lost or malformed response cannot be replayed safely. */
+  private[remnawave] def deleteNodeWire(baseUrl: IntegrationBaseUrl, credential: RemnawaveCredential,
+    externalId: java.util.UUID): IO[domain.integration.NodeDeleteOutcome] = {
+    import domain.integration.NodeDeleteOutcome._
+    val unknown = Unknown("INTEGRATION_NODE_DELETE_RESULT_UNKNOWN")
+    if (!credential.valid) IO.pure(Rejected("INTEGRATION_CREDENTIAL_INVALID"))
+    else IO.fromEither(Uri.fromString(baseUrl.endpoint(s"$NodesPath/$externalId").toASCIIString)
+      .leftMap(_ => RemnawaveErrors.error("INTEGRATION_INVALID_REQUEST"))).flatMap { uri =>
+      val request = Request[IO](Method.DELETE, uri).putHeaders(
+        Header.Raw(CIString("Authorization"), s"Bearer ${credential.apiToken}"))
+      val authenticated = credential.caddyApiKey.fold(request)(key =>
+        request.putHeaders(Header.Raw(CIString("X-Api-Key"), key)))
+      client.run(authenticated).use { response =>
+        if (response.status.code == 200 || response.status.code == 204) IO.pure(Deleted)
+        else if (response.status.code == 401) IO.pure(Rejected("INTEGRATION_AUTH_FAILED"))
+        else if (response.status.code == 403) IO.pure(Rejected("INTEGRATION_FORBIDDEN"))
+        else if (response.status.code == 405) IO.pure(Rejected("INTEGRATION_API_CONTRACT_UNCONFIRMED"))
+        else IO.pure(unknown)
+      }
+    }.timeout(requestTimeout).handleError(error =>
+      definiteBeforeWrite(error).map(Rejected.apply).getOrElse(unknown))
+  }
+
+  private def typedNodeNotFound(body: String, requestedPath: String): Boolean =
+    parse(body).toOption.flatMap { json =>
+      val cursor = json.hcursor
+      for {
+        errorCode <- cursor.get[String]("errorCode").toOption
+        message <- cursor.get[String]("message").toOption
+        path <- cursor.get[String]("path").toOption
+        timestamp <- cursor.get[String]("timestamp").toOption
+        _ <- Try(Instant.parse(timestamp)).toOption
+      } yield errorCode == "A011" && message == "Node not found" &&
+        path.stripPrefix("/") == requestedPath
+    }.contains(true)
+
   /** One PATCH. Anything ambiguous after the request may have left this process is UNKNOWN. */
   def updateConfigProfile(baseUrl: IntegrationBaseUrl, credential: RemnawaveCredential,
     externalId: String, config: Json, desiredSha256: String): IO[IntegrationActionRemoteOutcome] = {

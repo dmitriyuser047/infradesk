@@ -146,6 +146,9 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
 
     /** Only `observe` may ever be called. The rest exist to prove they are not. */
     val remote = new RemnawaveNodeRemote[IO] {
+      override def recoveryPreflight(c: Connection,s: RemnawaveNodeRemoteSpec) = preflight(c,s.resourceId,s.nodePort)
+      override def repair(c: Connection,s: RemnawaveNodeRemoteSpec,d: NodeInstallationData) = install(c,s,d)
+      override def retireInstallation(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { mutations.incrementAndGet(); ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def preflight(c: Connection, r: UUID, p: Int) = IO { mutations.incrementAndGet()
         ProvisioningStepResult(Map.empty, None, Some(true)) }
       override def installationPrerequisites(c: Connection) = IO { mutations.incrementAndGet()

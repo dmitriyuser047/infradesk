@@ -21,9 +21,14 @@ final class RemnawaveOnboardingRoutesSpec extends FunSuite {
   private final class Api extends RemnawaveOnboardingApi {
     var calls = 0
     var received: Option[OnboardingInput] = None
+    var confirmed: Option[Boolean] = None
     def options(o: UUID,i: UUID) = IO { calls += 1; Json.obj() }
     def preview(a: ActorContext,i: UUID,input: OnboardingInput) = IO { calls += 1; received=Some(input); Json.obj() }
-    def start(a: ActorContext,i: UUID,p: UUID,r: UUID): IO[RemnawaveNodeOnboardingRun] = IO.raiseError(new AssertionError("Invalid start reached service"))
+    def reconcile(a: ActorContext,i: UUID,r: UUID,action: String) = IO { calls += 1; Json.obj() }
+    def start(a: ActorContext,i: UUID,p: UUID,r: UUID,confirmRecreate: Boolean): IO[RemnawaveNodeOnboardingRun] = IO {
+      calls += 1; confirmed=Some(confirmRecreate)
+      throw application.integration.IntegrationError("REMNAWAVE_ONBOARDING_RECREATE_CONFIRMATION_REQUIRED","Explicit approval is required")
+    }
     def detail(o: UUID,i: UUID,r: UUID) = IO { calls += 1; Json.obj() }
     def history(o: UUID,i: UUID) = IO { calls += 1; Json.obj() }
   }
@@ -68,5 +73,30 @@ final class RemnawaveOnboardingRoutesSpec extends FunSuite {
     val req=Request[IO](Method.GET,Uri.unsafeFromString(root+"/runs"))
     assertEquals(route.run(AuthorizationFixtures.as(req,org,OrganizationRole.Member)).unsafeRunSync().status,Status.Ok)
     assertEquals(route.run(req).unsafeRunSync().status,Status.InternalServerError)
+  }
+  test("reconciliation is closed, permission protected, and separate from start") {
+    val path=s"/runs/${UUID.randomUUID()}/reconcile"
+    val api=new Api
+    assertEquals(response(api,path,"{\"action\":\"RECOVER\"}").status,Status.Ok)
+    assertEquals(api.calls,1)
+    assertEquals(api.confirmed,None)
+    List("{\"action\":\"RECREATE\"}","{\"action\":\"RECOVER\",\"confirm\":true}").foreach { body =>
+      val invalid=new Api
+      assertEquals(response(invalid,path,body).status,Status.BadRequest)
+      assertEquals(invalid.calls,0)
+    }
+    assertEquals(response(new Api,path,"{\"action\":\"RECOVER\"}",OrganizationRole.Member).status,Status.Forbidden)
+  }
+  test("start forwards explicit recreation approval and rejects nonboolean confirmation") {
+    val base=Json.obj("planId" -> Json.fromString(UUID.randomUUID().toString),"requestId" -> Json.fromString(UUID.randomUUID().toString))
+    val without=new Api
+    assertEquals(response(without,"/runs",base.noSpaces).status,Status.Conflict)
+    assertEquals(without.confirmed,Some(false))
+    val withApproval=new Api
+    assertEquals(response(withApproval,"/runs",base.mapObject(_.add("confirmRecreate",Json.True)).noSpaces).status,Status.Conflict)
+    assertEquals(withApproval.confirmed,Some(true))
+    val malformed=new Api
+    assertEquals(response(malformed,"/runs",base.mapObject(_.add("confirmRecreate",Json.fromString("true"))).noSpaces).status,Status.BadRequest)
+    assertEquals(malformed.calls,0)
   }
 }

@@ -15,12 +15,20 @@ export interface NodeOnboardingRun {
   nodeName: string; address: string; nodePort: number; externalNodeId: string | null; baselineRunId: string | null
   syncSessionId: string | null; failureCode: string | null; safeMessage: string | null; createdAt: string; updatedAt: string
   startedAt: string | null; finishedAt: string | null
+  recovery?: NodeOnboardingRecoverySummary
+}
+export type NodeOnboardingRecoveryState = 'PRESENT_EXACT' | 'PRESENT_UNHEALTHY' | 'CONFIRMED_NOT_FOUND' | 'PRESENT_CONFLICT' | 'UNKNOWN'
+export type NodeOnboardingRecoveryAction = 'RECOVER' | 'RECREATE' | 'DELETE_RECREATE'
+export interface NodeOnboardingRecoverySummary {
+  state: NodeOnboardingRecoveryState; action: NodeOnboardingRecoveryAction; sourceRunId: string
+  previousExternalNodeId: string | null; previousCorrelationId: string; installationOwnerId: string
 }
 export interface NodeOnboardingPreview {
   run: NodeOnboardingRun; serverName: string; serverProfileName: string; revisionNumber: number
   configProfileName: string; inboundNames: string[]; nodeImage: string | null
   changes: string[]; warnings: string[]; blockingProblems: string[]
   nodeApi?: NodeApiCompatibility; panelCidrs?: string[]
+  recovery?: NodeOnboardingRecoverySummary
 }
 export interface NodeOnboardingRunDetail {
   run: NodeOnboardingRun

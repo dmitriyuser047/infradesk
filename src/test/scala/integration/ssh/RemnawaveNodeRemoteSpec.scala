@@ -27,10 +27,11 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
   private class Session extends RemoteConfigurationSession[IO] {
     val calls = ListBuffer.empty[(String, List[String])]
     val uploads = ListBuffer.empty[(String, Array[Byte], RemoteFileCreation)]
+    val remoteFiles = scala.collection.mutable.Map.empty[String, RemoteConfigurationFile]
     var respond: (String, List[String]) => IO[RemoteCommandOutput] = (_, _) => IO.pure(ok)
     var createFailure = false
     def supportsAtomicReplace = IO.pure(true)
-    def read(path: String, maxBytes: Int) = IO.pure(RemoteConfigurationFile.Missing)
+    def read(path: String, maxBytes: Int) = IO.pure(remoteFiles.getOrElse(path, RemoteConfigurationFile.Missing))
     def create(path: String, bytes: Array[Byte], creation: RemoteFileCreation) = IO {
       uploads += ((path, bytes.clone(), creation)); if (createFailure) throw RemoteConfigurationFailure.Unavailable
     }
@@ -150,6 +151,138 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
       else if (ex == "sh" && args.exists(_.contains("docker image inspect"))) IO.pure(ok.copy(stdout = "0:1"))
       else IO.pure(ok)
     assert(!remote(s).installationPresent(connection, spec).unsafeRunSync())
+  }
+
+  private def ownFiles(s: Session, env: String, compose: String = SshRemnawaveNodeRemote.renderCompose(spec)): Unit = {
+    val envBytes = env.getBytes(StandardCharsets.UTF_8)
+    val managed = SshRemnawaveNodeRemote.managedPrefix(spec) +
+      ProfileManagedFiles.sha256(envBytes) + "\"}\n"
+    def file(bytes: Array[Byte], mode: Int) = RemoteConfigurationFile(true, bytes,
+      Some(RemoteFileMetadata(mode, 0, 0)))
+    val dir = SshRemnawaveNodeRemote.directory(spec)
+    s.remoteFiles.update(s"$dir/.env", file(envBytes, 384))
+    s.remoteFiles.update(s"$dir/compose.yml", file(compose.getBytes(StandardCharsets.UTF_8), 420))
+    s.remoteFiles.update(s"$dir/managed.json", file(managed.getBytes(StandardCharsets.UTF_8), 420))
+  }
+
+  private def recoveryOwned(s: Session): Unit = s.respond = (ex, args) => IO.pure {
+    if (ex == "id") ok.copy(stdout = "0")
+    else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) ok.copy(stdout = "OWNED")
+    else if (ex == "sh" && args.exists(_.contains("listeners=$(ss"))) ok.copy(stdout = "CLEAR")
+    else if (ex == "docker" && args.headOption.contains("image")) ok.copy(stdout = "node-image-id")
+    else ok
+  }
+
+  test("recovery preflight accepts only absent or proven owned local installations") {
+    val absent = new Session
+    absent.respond = (ex, args) => IO.pure {
+      if (ex == "id") ok.copy(stdout = "0")
+      else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) ok.copy(stdout = "ABSENT")
+      else ok
+    }
+    assertEquals(remote(absent).recoveryPreflight(connection, spec).unsafeRunSync().failureCode, None)
+    val probeArgs = absent.calls.find(_._1 == "sh").get._2
+    val probe = probeArgs.mkString(" ")
+    assert(probe.contains(s"run=${spec.onboardingId}"))
+    assert(probe.contains(s"node=${spec.externalNodeId}"))
+    assert(probe.contains("com.docker.compose.project.config_files"))
+    assert(!probe.contains("rm -rf") && !probe.contains("docker compose down"))
+
+    val owned = new Session
+    recoveryOwned(owned)
+    assertEquals(remote(owned).recoveryPreflight(connection, spec).unsafeRunSync().facts,
+      Map("installation" -> "owned"))
+    val foreign = new Session
+    foreign.respond = (ex, args) => IO.pure {
+      if (ex == "id") ok.copy(stdout = "0")
+      else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) ok.copy(stdout = "FOREIGN")
+      else ok
+    }
+    assertEquals(remote(foreign).recoveryPreflight(connection, spec).unsafeRunSync().failureCode,
+      Some("PROVISIONING_NODE_INSTALLATION_UNMANAGED"))
+  }
+
+  test("repair installs absent state, reuses exact state, and CAS-repairs damaged owned files") {
+    val secret = Base64.getEncoder.encodeToString("new-secret".getBytes(StandardCharsets.UTF_8))
+    val absent = new Session
+    absent.respond = (ex, args) => IO.pure {
+      if (ex == "id") ok.copy(stdout = "0")
+      else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) ok.copy(stdout = "ABSENT")
+      else if (ex == "sh" && args.exists(_.contains("listeners=$(ss"))) ok.copy(stdout = "CLEAR")
+      else ok
+    }
+    assertEquals(remote(absent).repair(connection, spec, NodeInstallationData.fromSecretKey(secret)).unsafeRunSync().failureCode, None)
+    assertEquals(absent.uploads.size, 3)
+    assert(!absent.calls.exists(_._2.exists(_.contains("up -d"))))
+
+    val exact = new Session
+    recoveryOwned(exact)
+    val expectedEnv = s"SECRET_KEY=$secret\nNODE_PORT=${spec.nodePort}\n"
+    ownFiles(exact, expectedEnv)
+    assertEquals(remote(exact).repair(connection, spec, NodeInstallationData.fromSecretKey(secret)).unsafeRunSync().failureCode, None)
+    assert(exact.uploads.isEmpty)
+    assert(!exact.calls.exists(_._2.headOption.contains("pull")))
+
+    val damaged = new Session
+    recoveryOwned(damaged)
+    val oldEnv = s"SECRET_KEY=$secret\nNODE_PORT=30223\n"
+    ownFiles(damaged, oldEnv, SshRemnawaveNodeRemote.renderCompose(spec).replace("30222", "30223"))
+    assertEquals(remote(damaged).repair(connection, spec, NodeInstallationData.fromSecretKey(secret)).unsafeRunSync().failureCode, None)
+    assertEquals(damaged.uploads.size, 3)
+    val envHash = ProfileManagedFiles.sha256(oldEnv.getBytes(StandardCharsets.UTF_8))
+    val commits = damaged.calls.filter { case (ex, args) => ex == "sh" && args.exists(_ == ProfileManagedFiles.Commit) }
+    assert(commits.exists(_._2.contains(envHash)), "repair must pass the observed file hash as the CAS expectation")
+    assert(damaged.calls.exists { case (ex, args) =>
+      ex=="docker" && args.headOption.contains("compose") && args.takeRight(2)==List("config","-q")
+    })
+  }
+
+  test("repair rejects foreign or unsafe owned files before upload") {
+    val foreign = new Session
+    foreign.respond = (ex, args) => IO.pure {
+      if (ex == "id") ok.copy(stdout = "0")
+      else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) ok.copy(stdout = "FOREIGN")
+      else ok
+    }
+    assertEquals(remote(foreign).repair(connection, spec, NodeInstallationData.fromSecretKey("c2VjcmV0"))
+      .unsafeRunSync().failureCode, Some("PROVISIONING_NODE_INSTALLATION_UNMANAGED"))
+    assert(foreign.uploads.isEmpty)
+
+    val unsafe = new Session
+    recoveryOwned(unsafe)
+    ownFiles(unsafe, "SECRET_KEY=c2VjcmV0\nNODE_PORT=30222\n")
+    val path = s"${SshRemnawaveNodeRemote.directory(spec)}/.env"
+    unsafe.remoteFiles.update(path, unsafe.remoteFiles(path).copy(metadata = Some(RemoteFileMetadata(420, 501, 0))))
+    assertEquals(remote(unsafe).repair(connection, spec, NodeInstallationData.fromSecretKey("c2VjcmV0"))
+      .unsafeRunSync().failureCode, Some("PROVISIONING_NODE_INSTALLATION_UNMANAGED"))
+    assert(unsafe.uploads.isEmpty)
+  }
+
+  test("retirement is idempotent for absence and removes only exact owned paths after proof") {
+    val absent = new Session
+    absent.respond = (ex, args) => IO.pure {
+      if (ex == "id") ok.copy(stdout = "0")
+      else if (ex == "sh" && args.exists(_.contains("recovery_probe()"))) ok.copy(stdout = "ABSENT")
+      else ok
+    }
+    assertEquals(remote(absent).retireInstallation(connection, spec).unsafeRunSync().failureCode, None)
+    assertEquals(absent.calls.find(_._1 == "sh").get._2.last,spec.nodePort.toString)
+
+    val owned = new Session
+    owned.respond = (ex, args) => IO.pure {
+      if (ex == "id") ok.copy(stdout = "0")
+      else if (ex == "sh" && args.exists(_.contains("recovery_probe()"))) ok.copy(stdout = "RETIRED")
+      else ok
+    }
+    val retired = remote(owned).retireInstallation(connection, spec).unsafeRunSync()
+    assertEquals(retired.failureCode, None)
+    val script = owned.calls.find(_._1 == "sh").get._2(1)
+    assert(script.contains("docker stop --time 15 \"$name\""))
+    assert(script.contains("docker rm \"$name\""))
+    assert(script.contains("rm -f -- \"$d/compose.yml\" \"$d/.env\" \"$d/managed.json\""))
+    assert(script.contains("rmdir -- \"$d\""))
+    assert(script.contains("for f in \"$d\"/* \"$d\"/.[!.]* \"$d\"/..?*"))
+    assert(!script.contains("rm -rf") && !script.contains("$d/*"))
   }
 
   test("preflight returns a known blocker for unknown read-only probes and install requires Docker") {

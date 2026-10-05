@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { requestJson } from './httpClient'
-import type { NodeOnboardingOptions, NodeOnboardingPreview, NodeOnboardingPreviewRequest, NodeOnboardingRun, NodeOnboardingRunDetail } from '../types/nodeOnboarding'
+import type { NodeOnboardingOptions, NodeOnboardingPreview, NodeOnboardingPreviewRequest, NodeOnboardingRecoveryAction, NodeOnboardingRun, NodeOnboardingRunDetail } from '../types/nodeOnboarding'
 
 const path = (org: string, integration: string) => `/api/v1/organizations/${encodeURIComponent(org)}/integrations/${encodeURIComponent(integration)}/remnawave-node-onboarding`
 const active = (state: NodeOnboardingRun['state']) => state === 'QUEUED' || state === 'RUNNING'
@@ -18,8 +18,12 @@ export function usePreviewNodeOnboarding(org: string, integration: string) {
     `${path(org, integration)}/preview`, { method: 'POST', body: JSON.stringify(body) }) })
 }
 export function useStartNodeOnboarding(org: string, integration: string) {
-  return useMutation({ mutationFn: (body: { planId: string; requestId: string }) => requestJson<NodeOnboardingRun>(
+  return useMutation({ mutationFn: (body: { planId: string; requestId: string; confirmRecreate?: boolean }) => requestJson<NodeOnboardingRun>(
     `${path(org, integration)}/runs`, { method: 'POST', body: JSON.stringify(body) }) })
+}
+export function useReconcileNodeOnboarding(org: string, integration: string) {
+  return useMutation({ mutationFn: ({ runId, action }: { runId: string; action: NodeOnboardingRecoveryAction }) => requestJson<NodeOnboardingPreview>(
+    `${path(org, integration)}/runs/${encodeURIComponent(runId)}/reconcile`, { method: 'POST', body: JSON.stringify({ action }) }) })
 }
 export function useNodeOnboardingRun(org: string, integration: string, id: string | null) {
   return useQuery({ queryKey: ['nodeOnboardingRun', org, integration, id], enabled: id !== null,
