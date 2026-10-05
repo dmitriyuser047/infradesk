@@ -144,6 +144,44 @@ final class ServerProfilesIntegrationSpec extends FunSuite {
       }
     }
   }
+  test("legacy IPv4 universal revisions normalize on read and Observe Preview Apply finish compliant") {
+    run { w => val s=new Services(w)
+      val legacy=ServerProfileFixtures.content.copy(firewall=FirewallModule(true,List(
+        FirewallRule("admin-ssh","tcp",22,List("0.0.0.0/0")))))
+      val canonical=ServerProfileContent.parse(legacy.canonical).toOption.get
+      s.remote.facts.set(ServerProfileFixtures.observed(canonical))
+      for {
+        node <- w.node("universal-firewall")
+        // Typed legacy content writes the same immutable JSON/hash as the previous version.
+        p <- s.profiles.create(w.actor,"universal","Universal",None,legacy)
+        _ <- s.profiles.assign(w.actor,node.resourceId,p._1.id,1)
+        observed <- s.profiles.observe(w.actor,node.resourceId)
+        plan <- s.profiles.preview(w.actor,node.resourceId)
+        _ <- s.approvals.start(w.actor,plan.run.id,UUID.randomUUID())
+        _ <- s.worker.tick
+        completed <- s.approvals.detail(w.org,plan.run.id)
+        same <- s.profiles.appendRevision(w.actor,p._1.id,canonical)
+        next <- s.profiles.preview(w.actor,node.resourceId)
+        // An old persisted snapshot must remain readable with its verified legacy hash.
+        _ <- w.run(sql"""update provisioning_run set profile_apply_snapshot=
+          jsonb_set(jsonb_set(profile_apply_snapshot,'{content}',cast(${legacy.canonical} as jsonb)),
+            '{revisionHash}',to_jsonb(cast(${legacy.hash} as text))) where id=${next.run.id}""".update.run)
+        _ <- s.approvals.start(w.actor,next.run.id,UUID.randomUUID())
+        _ <- s.worker.tick
+        repeated <- s.approvals.detail(w.org,next.run.id)
+        storedHash <- w.run(sql"select content_hash from server_profile_revision where id=${p._2.id}".query[String].unique)
+      } yield {
+        assert(ServerProfileDiff.assess(canonical,observed.content).compliant)
+        assert(plan.assessment.compliant && plan.assessment.changes.isEmpty)
+        assertEquals(plan.run.input.profileApply.map(_.content.firewall.rules.head.sources),Some(List("ANY")))
+        assertEquals(completed._1.state,ProvisioningRunState.Succeeded)
+        assertEquals(same.id,p._2.id)
+        assertEquals(repeated._1.state,ProvisioningRunState.Succeeded)
+        assertEquals(storedHash,legacy.hash)
+        assertNotEquals(storedHash,canonical.hash)
+      }
+    }
+  }
   test("timeout/output uncertainty is UNKNOWN without replay and later manual observation clears terminal override") {
     run { w => val s=new Services(w)
       s.remote.outcome.set(ProvisioningStepResult(Map.empty,None,None,outputTruncated=true))

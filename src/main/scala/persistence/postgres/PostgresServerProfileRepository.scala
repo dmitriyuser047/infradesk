@@ -115,8 +115,10 @@ private object ServerProfileRepositoryRows {
     def toDomain = ServerProfile(id,organizationId,name,code,description,archived,latestRevision,createdBy,createdAt,updatedAt)
   }
   final case class RevisionRow(id: UUID,organizationId: UUID,profileId: UUID,number: Int,contentJson: String,contentHash: String,createdBy: UUID,createdAt: Instant) {
-    def toDomain = ServerProfileRevision(id,organizationId,profileId,number,
-      ServerProfileContent.parse(contentJson).fold(code => throw new IllegalStateException(code),identity),contentHash,createdBy,createdAt)
+    def toDomain = {
+      val content=ServerProfileContent.parsePersisted(contentJson,contentHash).fold(code => throw new IllegalStateException(code),identity)
+      ServerProfileRevision(id,organizationId,profileId,number,content,content.hash,createdBy,createdAt)
+    }
   }
   final case class ObservationRow(id: UUID,organizationId: UUID,resourceId: UUID,sourceId: UUID,sourceAt: Instant,assignmentId: Option[UUID],
     assignmentVersion: Option[Long],revisionId: Option[UUID],contentJson: String,contentHash: String,observedAt: Instant,verifiedRunId: Option[UUID]) {

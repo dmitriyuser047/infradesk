@@ -230,13 +230,13 @@ private object PostgresProvisioningRunRepository {
   private def decodeProfileSnapshot(j: Json): Option[ServerProfileApplySnapshot] = for {
     _ <- Option.when(j.asObject.exists(_.keys.toSet == Set("assignmentId","assignmentVersion","profileId","revisionId","revisionNumber","revisionHash","content","observationId","observationHash","reviewedDiffHash","blockingProblems")))(())
     c <- j.hcursor.downField("content").focus
-    content <- ServerProfileContent.parse(c.noSpaces).toOption
     assignment <- uuid(j,"assignmentId"); av <- j.hcursor.get[Long]("assignmentVersion").toOption
     profile <- uuid(j,"profileId"); revision <- uuid(j,"revisionId"); rn <- j.hcursor.get[Int]("revisionNumber").toOption
     rh <- j.hcursor.get[String]("revisionHash").toOption; observation <- uuid(j,"observationId")
+    content <- ServerProfileContent.parsePersisted(c.noSpaces,rh).toOption
     oh <- j.hcursor.get[String]("observationHash").toOption; dh <- j.hcursor.get[String]("reviewedDiffHash").toOption
-    _ <- Option.when(av > 0 && rn > 0 && content.hash == rh && List(rh,oh,dh).forall(_.matches("[0-9a-f]{64}")))(())
+    _ <- Option.when(av > 0 && rn > 0 && List(rh,oh,dh).forall(_.matches("[0-9a-f]{64}")))(())
     blockers <- j.hcursor.get[List[String]]("blockingProblems").toOption.filter(xs => xs.size <= 64 && xs.forall(_.matches("[A-Z0-9_]{1,64}")))
-  } yield ServerProfileApplySnapshot(assignment,av,profile,revision,rn,rh,content,observation,oh,dh,blockers)
+  } yield ServerProfileApplySnapshot(assignment,av,profile,revision,rn,content.hash,content,observation,oh,dh,blockers)
   private def uuid(j: Json, key: String): Option[UUID] = j.hcursor.get[String](key).toOption.flatMap(s => scala.util.Try(UUID.fromString(s)).toOption)
 }

@@ -68,7 +68,18 @@ object ServerProfileContent {
   )
 
   /** Parse with exact keys at every object level; unknown, malformed and unsafe values fail closed. */
-  def parse(raw: String): Either[String, ServerProfileContent] = for {
+  def parse(raw: String): Either[String, ServerProfileContent] = parse(raw,ufwUniversal=true)
+
+  /** Immutable revisions/snapshots may still have the pre-normalization canonical hash.
+    * Validate that exact representation before exposing the normalized domain content.
+    */
+  def parsePersisted(raw: String, contentHash: String): Either[String, ServerProfileContent] = for {
+    content <- parse(raw)
+    _ <- Either.cond(content.hash == contentHash ||
+      parse(raw,ufwUniversal=false).exists(_.hash == contentHash),(),"PROFILE_CONTENT_HASH_INVALID")
+  } yield content
+
+  private def parse(raw: String, ufwUniversal: Boolean): Either[String, ServerProfileContent] = for {
     json <- io.circe.parser.parse(raw).left.map(_ => "PROFILE_INVALID_JSON")
     root <- exact(json, Set("schemaVersion","packages","network","limits","firewall","fail2ban","docker","caddy","site"))
     version <- int(root, "schemaVersion")
@@ -88,7 +99,7 @@ object ServerProfileContent {
     le <- bool(l,"enabled"); soft <- long(l,"nofileSoft"); hard <- long(l,"nofileHard"); systemd <- long(l,"systemdDefaultLimitNofile")
     _ <- Either.cond(List(soft,hard,systemd).forall(x => x >= 1024 && x <= 16777216) && soft <= hard, (), "PROFILE_LIMITS_INVALID")
     f <- exactField(root,"firewall",Set("enabled","rules")); fe <- bool(f,"enabled")
-    rules <- field(f,"rules").flatMap(_.asArray.toRight("PROFILE_FIREWALL_INVALID")).flatMap(_.toList.traverse(parseRule))
+    rules <- field(f,"rules").flatMap(_.asArray.toRight("PROFILE_FIREWALL_INVALID")).flatMap(_.toList.traverse(parseRule(_,ufwUniversal)))
     _ <- Either.cond(rules.size <= MaxFirewallRules && rules.map(_.id).distinct.size == rules.size, (), "PROFILE_FIREWALL_INVALID")
     fb <- exactField(root,"fail2ban",Set("enabled")); fbe <- bool(fb,"enabled")
     d <- exactField(root,"docker",Set("enabled")); de <- bool(d,"enabled")
@@ -108,10 +119,10 @@ object ServerProfileContent {
     LimitsModule(le,soft,hard,systemd), FirewallModule(fe,rules.sortBy(_.id)), ToggleModule(fbe), ToggleModule(de),
     CaddyModule(cae,domain,port,siteRoot,compression,redirect), SiteModule(se,sd,sr,template,tv))
 
-  private def parseRule(j: Json): Either[String, FirewallRule] = for {
+  private def parseRule(j: Json, ufwUniversal: Boolean): Either[String, FirewallRule] = for {
     c <- exact(j,Set("id","protocol","port","sources"))
     id <- string(c,"id"); protocol <- string(c,"protocol"); port <- int(c,"port"); rawSources <- strings(c,"sources")
-    sources <- rawSources.traverse(canonicalSource)
+    sources <- rawSources.traverse(canonicalSource(_,ufwUniversal))
     _ <- Either.cond(ruleId.matches(id) && Set("tcp","udp")(protocol) && port >= 1 && port <= 65535 &&
       sources.nonEmpty && sources.size <= 32 && sources.distinct.size == sources.size, (), "PROFILE_FIREWALL_RULE_INVALID")
   } yield FirewallRule(id,protocol,port,sources.sorted)
@@ -143,7 +154,7 @@ object ServerProfileContent {
   private def validateDomain(d: Option[String]): Either[String,Unit] = Either.cond(d.forall(x =>
     x.length <= 253 && x.matches("(?i)(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")),(),"PROFILE_DOMAIN_INVALID")
   private def safeManagedRoot(root: String): Boolean = root.matches("/var/www/infradesk/[a-z0-9][a-z0-9-]{0,62}") && !root.contains("..")
-  private def canonicalSource(s: String): Either[String,String] = {
+  private def canonicalSource(s: String, ufwUniversal: Boolean = true): Either[String,String] = {
     if (s == "ANY") Right(s)
     else if (s.contains("%")) Left("PROFILE_FIREWALL_RULE_INVALID")
     else {
@@ -167,7 +178,11 @@ object ServerProfileContent {
             }
             val address = if (v4) network.map(_ & 0xff).mkString(".")
               else network.grouped(2).map(g => f"${((g(0) & 0xff) << 8) | (g(1) & 0xff)}%x").mkString(":")
-            Right(s"$address/${prefix.toInt}")
+            // UFW show added renders IPv4 /0 as its short, source-less form (ANY).
+            // ANY is the managed UFW command representation, not a family-specific CIDR:
+            // applying it uses `from any`. Keep IPv6 /0 distinct; short output cannot
+            // prove an IPv6-only rule. Literal SSH coverage retains address families.
+            Right(if (ufwUniversal && v4 && mask == 0) "ANY" else s"$address/${prefix.toInt}")
           }
         }
       }
@@ -201,7 +216,7 @@ object ServerProfileContent {
   /** Literal addresses only: firewall safety checks never resolve a hostname. */
   def sourceCovers(source: String, host: String): Boolean = {
     if (source == "ANY") canonicalSource(host).isRight
-    else (canonicalSource(source),canonicalSource(host)) match {
+    else (canonicalSource(source,ufwUniversal=false),canonicalSource(host,ufwUniversal=false)) match {
       case (Right(network),Right(address)) if network.contains(":") == address.contains(":") =>
         def bytes(s: String): Array[Byte] = if (s.contains(":")) parseV6(s.takeWhile(_ != '/'))
           else s.takeWhile(_ != '/').split("\\.").map(_.toInt.toByte)

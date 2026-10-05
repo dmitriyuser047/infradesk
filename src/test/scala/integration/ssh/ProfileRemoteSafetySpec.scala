@@ -133,6 +133,61 @@ final class ProfileRemoteSafetySpec extends FunSuite {
     s
   }
   private val sshRule=FirewallRule("ssh","tcp",2222,List("ANY"))
+  test("IPv4 universal apply reobserves UFW short form, verifies, and repeated apply preserves owned rules") {
+    val raw=ServerProfileFixtures.disabled.copy(firewall=FirewallModule(true,List(
+      FirewallRule("private-ssh","tcp",22,List("172.28.0.0/24")),
+      FirewallRule("admin-web","tcp",8080,List("77.40.38.175")),
+      FirewallRule("admin-ssh","tcp",22,List("0.0.0.0/0")))),fail2ban=ToggleModule(true))
+    val c=ServerProfileContent.parse(raw.canonical).toOption.get
+    val existing=s"ufw allow from 172.28.0.0/24 to any port 22 proto tcp comment 'infradesk:$id:private-ssh'\n"+
+      s"ufw allow from 77.40.38.175 to any port 8080 proto tcp comment 'infradesk:$id:admin-web'\n"+
+      "ufw allow 443/tcp comment 'foreign'"
+    var added=existing
+    val s=new Session
+    s.respond=(ex,args) => IO {
+      if(ex=="id") ok.copy(stdout="0")
+      else if(ex=="sh" && args.exists(_.contains("SSH_CONNECTION"))) ok.copy(stdout="172.28.0.5 49152 198.51.100.1 22")
+      else if(args.exists(_.contains("for package in"))) ok.copy(stdout="ufw\nfail2ban\n")
+      else if(args.contains(SshProfileObserver.FileProbe)) ok.copy(stdout="MANAGED\n"+ServerProfileDiff.hashText(ServerProfileDiff.Fail2banContent))
+      else if(args.exists(_.contains("load=$(systemctl"))) ok.copy(stdout="enabled\nactive")
+      else if(ex=="ufw" && args==List("show","added")) ok.copy(stdout=added)
+      else if(ex=="ufw" && args==List("status")) ok.copy(stdout="Status: active\n22/tcp ALLOW IN Anywhere")
+      else if(ex=="ufw" && args.headOption.contains("allow")) {
+        assertEquals(args,List("allow","from","any","to","any","port","22","proto","tcp","comment",s"infradesk:$id:admin-ssh"))
+        added+=s"\nufw allow 22/tcp comment 'infradesk:$id:admin-ssh'"
+        ok
+      } else ok
+    }
+    val transport=new RemoteConfigurationTransport[IO] {
+      def withSession[A](connection:Connection)(use:RemoteConfigurationSession[IO] => IO[A])=use(s)
+    }
+    val remote=new SshServerProfileRemote(transport)
+    val before=remote.observe(connection,id,Some(c)).unsafeRunSync()
+    assertEquals(before.failureCode,None)
+    assertEquals(ServerProfileDiff.assess(c,before.content).changes.map(_.detail),List(Some("admin-ssh")))
+    val snapshot=ServerProfileApplySnapshot(id,1,id,id,1,c.hash,c,id,before.contentHash,"1"*64)
+    val applied=remote.applyModule(connection,id,snapshot,ProvisioningStepKind.ConfigureFirewall,
+      ProfileExecutionContext(id,Nil,before.content)).unsafeRunSync()
+    assertEquals(applied.failureCode,None)
+    val observed=remote.observe(connection,id,Some(c)).unsafeRunSync()
+    assertEquals(observed.failureCode,None)
+    assertEquals(observed.blockingProblems,Nil)
+    assertEquals(ServerProfileObservationCodec.validate(observed.content),Right(observed.content))
+    assert(ServerProfileDiff.assess(c,observed.content).compliant)
+    val verified=remote.applyModule(connection,id,snapshot,ProvisioningStepKind.Verify,
+      ProfileExecutionContext(id,Nil,observed.content)).unsafeRunSync()
+    assertEquals(verified.verificationResult,Some(true))
+    assertEquals(verified.failureCode,None)
+    val repeat=remote.applyModule(connection,id,snapshot,ProvisioningStepKind.ConfigureFirewall,
+      ProfileExecutionContext(id,Nil,observed.content)).unsafeRunSync()
+    assert(repeat.skipped)
+    // Also exercise reconciliation itself, including exact ownership preservation.
+    new ProfileFirewall(transport,connection,new ProfileCommands(s,true),id)
+      .apply(c.firewall,observed.content.hcursor.downField("firewall").focus).unsafeRunSync()
+    val mutations=s.calls.filter {case(ex,args) => ex=="ufw" && args!=List("show","added") && args!=List("status")}
+    assertEquals(mutations.size,1)
+    assertEquals(added,existing+s"\nufw allow 22/tcp comment 'infradesk:$id:admin-ssh'")
+  }
   test("foreign equivalent allow is reused and old owned deletion has the exact nonempty comment") {
     val s=ufwSession(s"ufw allow 2222/tcp comment 'foreign'\nufw allow 443/tcp comment 'infradesk:$id:old'")
     firewall(s).apply(FirewallModule(true,List(sshRule))).unsafeRunSync()

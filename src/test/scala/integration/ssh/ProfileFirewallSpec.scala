@@ -1,7 +1,9 @@
 package ru.bitec.app.ops
 package integration.ssh
 
-import domain.provisioning.{FirewallRule,ServerProfileContent}
+import domain.provisioning.{FirewallModule,FirewallRule,ServerProfileContent,ServerProfileDiff,ServerProfileObservationCodec}
+import support.ServerProfileFixtures
+import io.circe.Json
 import munit.FunSuite
 import java.util.UUID
 
@@ -50,6 +52,28 @@ final class ProfileFirewallSpec extends FunSuite {
         ProfileFirewallRule("allow",FirewallRule("ssh","tcp",22,List("ANY")),true),
         ProfileFirewallRule("allow",FirewallRule("foreign","tcp",443,List("ANY")),false))))
     }
+  }
+  test("desired IPv4 universal and ANY converge with owned short UFW output without fuzzy comparison") {
+    val observed=ProfileFirewall.parse(s"ufw allow 22/tcp comment 'infradesk:$resource:admin-ssh'",resource).toOption.get.head
+    List("0.0.0.0/0","ANY","10.0.0.0/8","192.168.1.1/32","::/0").foreach { source =>
+      val raw=ServerProfileFixtures.disabled.copy(firewall=FirewallModule(true,List(FirewallRule("admin-ssh","tcp",22,List(source)))))
+      val desired=ServerProfileContent.parse(raw.canonical).toOption.get
+      val rule=desired.firewall.rules.head
+      val compliant=Set("0.0.0.0/0","ANY")(source)
+      assertEquals(ProfileFirewall.equivalent(rule,observed.rule),compliant,source)
+      val facts=ServerProfileFixtures.observed(desired).deepMerge(Json.obj("firewall" -> Json.obj(
+        "managedRules" -> Json.arr(ProfileFirewall.json(observed.rule)))))
+      assertEquals(ServerProfileObservationCodec.validate(facts),Right(facts))
+      assertEquals(ServerProfileDiff.assess(desired,facts).compliant,compliant,source)
+      val foreign=observed.copy(owned=false)
+      assertEquals(ProfileFirewall.coveredByForeign(rule,List(foreign)),compliant,source)
+    }
+    val explicit=ProfileFirewall.parse("ufw allow from 0.0.0.0/0 to any port 22 proto tcp",resource).toOption.get.head
+    assertEquals(explicit.rule.sources,List("ANY"))
+    val ipv6=ProfileFirewall.parse("ufw allow from ::/0 to any port 22 proto tcp",resource).toOption.get.head
+    assertEquals(ipv6.rule.sources,List("0:0:0:0:0:0:0:0/0"))
+    assert(!ProfileFirewall.equivalent(explicit.rule,ipv6.rule))
+    assert(!ProfileFirewall.equivalent(observed.rule,ipv6.rule))
   }
   test("own comment, foreign equivalent allow and multisource rules remain separate") {
     val raw=s"""Added user rules (see 'ufw status' for running firewall)
