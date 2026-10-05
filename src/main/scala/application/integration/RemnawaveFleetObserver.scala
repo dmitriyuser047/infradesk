@@ -32,7 +32,8 @@ final class RemnawaveFleetObserver[Tx[_]: MonadThrow](
   repo: RemnawaveFleetRepository[Tx], query: RemnawaveFleetQuery[Tx],
   targets: ProvisioningTargetQuery[Tx], remote: RemnawaveNodeRemote[IO],
   runner: TransactionRunner[IO, Tx], logger: Logger[IO], settings: RemnawaveFleetObserverSettings,
-  owner: UUID = UUID.randomUUID(), clock: IO[Instant] = IO.realTimeInstant) {
+  owner: UUID = UUID.randomUUID(), clock: IO[Instant] = IO.realTimeInstant,
+  imageLifecycle: Option[(RemnawaveNodeImageRemote[IO], RemnawaveFleetUpgradeRepository[Tx])] = None) {
 
   def run: IO[Nothing] = (tick.handleErrorWith(_ => logger.warn("remnawave.fleet.poll_failed")) *>
     IO.sleep(settings.pollInterval)).foreverM
@@ -75,6 +76,13 @@ final class RemnawaveFleetObserver[Tx[_]: MonadThrow](
               .timeout(settings.observationTimeout).attempt.map(_.toOption)
             case _ => IO.pure(None)
           }
+          image <- (connection, evidence.provenance, imageLifecycle) match {
+            case (Some(value), Some(provenance), Some((images, _))) => images.observeImage(value,
+              RemnawaveNodeRemoteSpec(provenance.onboardingId, member.resourceId, provenance.externalNodeId,
+                desired.content.nodePort, provenance.imageReference, desired.content.panelCidrs))
+              .timeout(settings.observationTimeout).attempt.map(_.toOption)
+            case _ => IO.pure(None)
+          }
           at <- clock
           verdict = FleetAssessor.assess(RemnawaveFleetObserver.evidenceOf(evidence, desired.content, local,
             local.as(at), localObservationFailed = managed && local.isEmpty,
@@ -92,6 +100,13 @@ final class RemnawaveFleetObserver[Tx[_]: MonadThrow](
             result <- if (FleetSourcePin.of(current) != pin) false.pure[Tx]
               else repo.saveAssessment(assessment, token, at,
                 at.plusMillis(settings.recheckInterval.toMillis))
+            _ <- (result, image, evidence.provenance, target.toOption, imageLifecycle) match {
+              case (true, Some(observation), Some(provenance), Some(source), Some((_, upgrades))) =>
+                upgrades.saveObservation(FleetNodeImageObservation(member.organizationId, member.fleetId,
+                  member.id, member.version, member.inventoryNodeId, member.resourceId, provenance.onboardingId,
+                  source.connectionId, source.connectionUpdatedAt, observation, at))
+              case _ => ().pure[Tx]
+            }
           } yield result)
           _ <- if (saved) logger.info(s"remnawave.fleet.assessed organizationId=${member.organizationId} " +
             s"integrationId=${member.integrationId} fleetId=${member.fleetId} revisionId=${desired.id} " +

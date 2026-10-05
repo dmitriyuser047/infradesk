@@ -112,6 +112,12 @@ object AuditAction {
   case object RemnawaveFleetRolloutResumed extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_RESUMED" }
   case object RemnawaveFleetRolloutRollbackRequested extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_ROLLBACK_REQUESTED" }
   case object RemnawaveFleetRolloutCompleted extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_COMPLETED" }
+  case object RemnawaveNodeReleaseTargetChanged extends AuditAction { val code = "REMNAWAVE_NODE_RELEASE_TARGET_CHANGED" }
+  case object RemnawaveFleetUpgradeRequested extends AuditAction { val code = "REMNAWAVE_FLEET_UPGRADE_REQUESTED" }
+  case object RemnawaveFleetUpgradePaused extends AuditAction { val code = "REMNAWAVE_FLEET_UPGRADE_PAUSED" }
+  case object RemnawaveFleetUpgradeResumed extends AuditAction { val code = "REMNAWAVE_FLEET_UPGRADE_RESUMED" }
+  case object RemnawaveFleetUpgradeRollbackRequested extends AuditAction { val code = "REMNAWAVE_FLEET_UPGRADE_ROLLBACK_REQUESTED" }
+  case object RemnawaveFleetUpgradeCompleted extends AuditAction { val code = "REMNAWAVE_FLEET_UPGRADE_COMPLETED" }
   case object RemnawaveFleetRolloutFailed extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_FAILED" }
 
   val All: List[AuditAction] = List(
@@ -200,7 +206,9 @@ object AuditAction {
     RemnawaveFleetRolloutResumed,
     RemnawaveFleetRolloutRollbackRequested,
     RemnawaveFleetRolloutCompleted,
-    RemnawaveFleetRolloutFailed
+    RemnawaveFleetRolloutFailed,
+    RemnawaveNodeReleaseTargetChanged, RemnawaveFleetUpgradeRequested, RemnawaveFleetUpgradePaused,
+    RemnawaveFleetUpgradeResumed, RemnawaveFleetUpgradeRollbackRequested, RemnawaveFleetUpgradeCompleted
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =

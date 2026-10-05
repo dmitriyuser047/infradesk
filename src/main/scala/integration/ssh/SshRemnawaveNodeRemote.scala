@@ -6,7 +6,7 @@ import cats.effect.IO
 import cats.effect.Ref
 import cats.syntax.all._
 import domain.connection.Connection
-import domain.integration.NodeInstallationData
+import domain.integration.{NodeInstallationData, NodeImageObservation, NodeRelease, NodeReleasePlatform, RemnawaveNodeReleaseCatalog}
 import domain.provisioning.ServerProfileContent
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -14,8 +14,20 @@ import scala.concurrent.duration._
 import scala.util.control.NonFatal
 
 /** Typed, pinned-SSH implementation of the per-node host installation contract. */
-final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) extends RemnawaveNodeRemote[IO] {
+final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) extends RemnawaveNodeRemote[IO]
+  with application.port.RemnawaveNodeImageRemote[IO] {
   import SshRemnawaveNodeRemote._
+  private lazy val images = new SshManagedNodeImages(transport)
+  def observeImage(connection: Connection, spec: RemnawaveNodeRemoteSpec): IO[NodeImageObservation] = images.observeImage(connection, spec)
+  def prefetchImage(connection: Connection, spec: RemnawaveNodeRemoteSpec, release: NodeRelease,
+    platform: NodeReleasePlatform, baseline: NodeImageObservation, authorize: IO[Unit]): IO[Unit] =
+    images.prefetchImage(connection, spec, release, platform, baseline, authorize)
+  def switchImage(connection: Connection, spec: RemnawaveNodeRemoteSpec, reference: String,
+    expectedImageId: String, expectedComposeHash: String, expectedMarkerHash: String, authorize: IO[Unit]): IO[Unit] =
+    images.switchImage(connection, spec, reference, expectedImageId, expectedComposeHash, expectedMarkerHash, authorize)
+  def activateImage(connection: Connection, spec: RemnawaveNodeRemoteSpec, reference: String,
+    expectedImageId: String, expectedMarkerHash: String, authorize: IO[Unit]): IO[Unit] =
+    images.activateImage(connection, spec, reference, expectedImageId, expectedMarkerHash, authorize)
 
   override def installationPrerequisites(connection: Connection): IO[ProvisioningStepResult] = step(withSession(connection) { (_, c, _) =>
     for {
@@ -242,18 +254,19 @@ private[ssh] object SshRemnawaveNodeRemote {
   }
   private def validate(spec: RemnawaveNodeRemoteSpec): IO[Unit] = for {
     _ <- validatePort(spec.nodePort)
-    _ <- IO.raiseUnless(reviewedTags(spec.imageReference) || imageDigest.matches(spec.imageReference))(
+    _ <- IO.raiseUnless(reviewedTags(spec.imageReference) || imageDigest.matches(spec.imageReference) ||
+      RemnawaveNodeReleaseCatalog.managedReferences.contains(spec.imageReference))(
       ProfileRemoteFailure("PROVISIONING_NODE_IMAGE_UNPINNED"))
     _ <- IO.raiseUnless(spec.panelCidrs.nonEmpty && spec.panelCidrs.forall(c => c.contains("/") &&
       ServerProfileContent.canonicalFirewallSource(c).exists(x => x == c && x != "ANY" && !x.endsWith("/0"))))(
       ProfileRemoteFailure("PROVISIONING_NODE_INVALID_CIDR"))
   } yield ()
-  private def directory(s: RemnawaveNodeRemoteSpec) = s"/opt/infradesk/remnawave/${s.externalNodeId}"
-  private def containerName(s: RemnawaveNodeRemoteSpec) = s"infradesk-remnawave-${s.externalNodeId}"
-  private def markerLine(s: RemnawaveNodeRemoteSpec) = s"# infradesk-managed run=${s.onboardingId} node=${s.externalNodeId} resource=${s.resourceId} image=${s.imageReference}"
-  private def managedPrefix(s: RemnawaveNodeRemoteSpec) =
+  private[ssh] def directory(s: RemnawaveNodeRemoteSpec) = s"/opt/infradesk/remnawave/${s.externalNodeId}"
+  private[ssh] def containerName(s: RemnawaveNodeRemoteSpec) = s"infradesk-remnawave-${s.externalNodeId}"
+  private[ssh] def markerLine(s: RemnawaveNodeRemoteSpec) = s"# infradesk-managed run=${s.onboardingId} node=${s.externalNodeId} resource=${s.resourceId} image=${s.imageReference}"
+  private[ssh] def managedPrefix(s: RemnawaveNodeRemoteSpec) =
     s"{\"managedBy\":\"infradesk\",\"runId\":\"${s.onboardingId}\",\"nodeId\":\"${s.externalNodeId}\",\"resourceId\":\"${s.resourceId}\",\"image\":\"${s.imageReference}\",\"envSha256\":\""
-  private def renderCompose(s: RemnawaveNodeRemoteSpec): String =
+  private[ssh] def renderCompose(s: RemnawaveNodeRemoteSpec): String =
     s"""${markerLine(s)}
        |services:
        |  node:
@@ -319,7 +332,7 @@ private[ssh] object SshRemnawaveNodeRemote {
     |printf '%s\n' "$containers" | grep -Eiq 'remnawave|node.*remna|remna.*node' && echo_result FOREIGN
     |echo_result CLEAR
     |""".stripMargin
-  private val ManagedFileProof = """managed_files() {
+  private[ssh] val ManagedFileProof = """managed_files() {
     |  d=$1; marker=$2; port=$3; composeHash=$4; managedPrefix=$5
     |  for p in /opt /opt/infradesk /opt/infradesk/remnawave; do
     |    [ ! -L "$p" ] || return 1
@@ -344,10 +357,11 @@ private[ssh] object SshRemnawaveNodeRemote {
     |imageId=$(docker image inspect -f '{{.Id}}' "$3" 2>/dev/null) && [ -n "$imageId" ] && image=1 || true
     |printf '%s:%s' "$files" "$image"
     |""".stripMargin
-  private val Observe = "set -u; " + ManagedFileProof + """
+  private val Observe = "set -u; " + SshManagedNodeImages.ManagedImageProof + """
     |d=$1; marker=$2; image=$3; name=$4; port=$5; composeHash=$6; managedPrefix=$7
     |files=0; images=0; running=0; listener=0; stable=0
     |managed_files "$d" "$marker" "$port" "$composeHash" "$managedPrefix" && files=1 || true
+    |[ "$files" = 1 ] && image=$(sed -n 's/^    image: //p' "$d/compose.yml") || true
     |imageId=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null) && [ -n "$imageId" ] && images=1 || true
     |configImage=$(docker inspect -f '{{.Config.Image}}' "$name" 2>/dev/null || true)
     |containerImageId=$(docker inspect -f '{{.Image}}' "$name" 2>/dev/null || true)

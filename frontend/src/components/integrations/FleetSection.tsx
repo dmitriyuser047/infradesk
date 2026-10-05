@@ -9,6 +9,7 @@ import { useI18n } from '../../i18n'
 import { EmptyWorkspaceState, InlineAlert, PropertyGrid, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import type { StatusTone } from '../layout/WorkspacePrimitives'
 import { FleetRolloutPanel } from './FleetRolloutPanel'
+import { NodeVersionsPanel } from './NodeVersionsPanel'
 import { IntegrationDialog } from './IntegrationDialog'
 import type { Fleet, FleetCompliance, FleetDesiredRequest, FleetDetail, FleetHealth, FleetMember,
   FleetRevision, FleetRevisionImpact } from '../../types/remnawaveFleet'
@@ -272,6 +273,8 @@ function FleetDetailView({ copy, organizationId, integrationId, detail, canManag
     {!fleet.archived ? <FleetRolloutPanel organizationId={organizationId} integrationId={integrationId}
       fleetId={fleet.id} desiredRevisionId={fleet.desiredRevisionId} members={detail.members}
       canControl={canObserve} /> : null}
+    {!fleet.archived ? <NodeVersionsPanel organizationId={organizationId} integrationId={integrationId}
+      fleetId={fleet.id} canManage={canManage} canControl={canObserve} /> : null}
 
     {desired ? <WorkspaceSection title={copy.desired}>
       <PropertyGrid columns={2} items={[

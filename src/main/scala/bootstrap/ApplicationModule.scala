@@ -121,6 +121,8 @@ final case class ApplicationComponents(
   remnawaveFleetObserver: application.integration.RemnawaveFleetObserver[ConnectionIO],
   remnawaveFleetRollouts: application.integration.RemnawaveFleetRollouts[ConnectionIO],
   remnawaveFleetRolloutWorker: application.integration.RemnawaveFleetRolloutWorker[ConnectionIO],
+  remnawaveFleetUpgrades: application.integration.RemnawaveFleetUpgrades[ConnectionIO],
+  remnawaveFleetUpgradeWorker: application.integration.RemnawaveFleetUpgradeWorker[ConnectionIO],
   configurationPromotions: ConfigurationPromotions[IO, ConnectionIO],
   configurationRollouts: ConfigurationRollouts[IO, ConnectionIO],
   configurationRolloutWorker: ConfigurationRolloutWorker[ConnectionIO],
@@ -206,7 +208,8 @@ object ApplicationModule {
     loggers: AppLoggers,
     schedulerInstanceId: UUID,
     transports: NotificationTransports,
-    notificationDispatcherInstanceId: UUID = UUID.randomUUID()
+    notificationDispatcherInstanceId: UUID = UUID.randomUUID(),
+    nodeReleaseVerifier: Option[application.port.RemnawaveNodeReleaseVerifier] = None
   ): ApplicationComponents = {
     import persistence._
 
@@ -446,6 +449,7 @@ object ApplicationModule {
       config.provisioning,provisioningRunRepository)
     val fleetRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetRepository
     val fleetQuery = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetQuery
+    val upgradeRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetUpgradeRepository
     val fleetConfig = config.integrations.fleets
     val remnawaveFleets = new application.integration.RemnawaveFleets[ConnectionIO](fleetRepository, fleetQuery,
       integrationRepository, integrationInventoryRepository, integrationBindingRepository,
@@ -458,7 +462,7 @@ object ApplicationModule {
       application.integration.RemnawaveFleetObserverSettings(fleetConfig.enabled, fleetConfig.pollInterval,
         fleetConfig.batchSize, fleetConfig.maxConcurrency, fleetConfig.claimLease,
         fleetConfig.observationTimeout, fleetConfig.recheckInterval, fleetConfig.staleAfter),
-      UUID.randomUUID())
+      UUID.randomUUID(), imageLifecycle = Some(onboardingRemote -> upgradeRepository))
     val rolloutRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetRolloutRepository
     def ownedRolloutChildren(id: UUID, token: UUID): application.integration.FleetRolloutChildren = {
       val childRunner = new ru.bitec.app.ops.persistence.postgres.PostgresFleetRolloutChildRunner(transactionRunner, id, token)
@@ -501,6 +505,15 @@ object ApplicationModule {
       onboardingOperations,integrations.integrationProviderRegistry,onboardingRemote,
       integration.secret.NodeInstallationCipher.fromConfig(config.secretEncryption),transactionRunner,auditRecorder,
       config.provisioning,loggers.integration)
+    val remnawaveFleetUpgrades = new application.integration.RemnawaveFleetUpgrades[ConnectionIO](fleetRepository,
+      fleetQuery, upgradeRepository, integrationRepository, integrationSecretRepository, integrations.integrationCredentialCipher,
+      integrations.integrationProviderRegistry, provisioningTargetQuery, auditRecorder, transactionRunner,
+      application.integration.NodeUpgradeSettings(enabled = fleetConfig.enabled && config.provisioning.enabled, staleAfter = fleetConfig.staleAfter))
+    val remnawaveFleetUpgradeWorker = new application.integration.RemnawaveFleetUpgradeWorker[ConnectionIO](upgradeRepository,
+      remnawaveFleetUpgrades, onboardingRemote, nodeReleaseVerifier.getOrElse(new application.port.RemnawaveNodeReleaseVerifier {
+        def verify(release: domain.integration.NodeRelease, platform: domain.integration.NodeReleasePlatform): IO[Unit] =
+          IO.raiseError(application.port.NodeImageRemoteFailure("NODE_RELEASE_ARTIFACT_UNCONFIRMED"))
+      }), rolloutChildren.refresh, transactionRunner, loggers.integration)
 
     ApplicationComponents(
       getResource = GetResource[ConnectionIO](resourceRepository),
@@ -538,6 +551,8 @@ object ApplicationModule {
       remnawaveFleetObserver = remnawaveFleetObserver,
       remnawaveFleetRollouts = remnawaveFleetRollouts,
       remnawaveFleetRolloutWorker = remnawaveFleetRolloutWorker,
+      remnawaveFleetUpgrades = remnawaveFleetUpgrades,
+      remnawaveFleetUpgradeWorker = remnawaveFleetUpgradeWorker,
       configurationPromotions = new ConfigurationPromotions[IO, ConnectionIO](
         configurationPromotionRepository, configurationProfileQuery, transactionTimeProvider, auditRecorder,
         readOnlySnapshotRunner, transactionRunner),

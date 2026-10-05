@@ -53,7 +53,9 @@ final class PostgresRemnawaveFleetRepository extends RemnawaveFleetRepository[Co
 
   def rolloutActive(org: UUID, fleetId: UUID): ConnectionIO[Boolean] = sql"""
     select exists(select 1 from remnawave_fleet_rollout where organization_id=$org and fleet_id=$fleetId
-      and state in ('QUEUED','RUNNING','PAUSED','ROLLING_BACK'))""".query[Boolean].unique
+      and state in ('QUEUED','RUNNING','PAUSED','ROLLING_BACK')) or exists(
+      select 1 from remnawave_fleet_upgrade_run where organization_id=$org and fleet_id=$fleetId
+        and state in ('QUEUED','RUNNING','PAUSED','ROLLING_BACK'))""".query[Boolean].unique
 
   def insertFleet(fleet: RemnawaveFleet): ConnectionIO[Boolean] = sql"""
     insert into remnawave_fleet(id,organization_id,integration_id,code,name,description,version,archived,

@@ -85,11 +85,7 @@ final case class OnboardingPhaseRecord(phase: OnboardingPhase, state: String,
 object RemnawaveNodeImagePolicy {
   // Reviewed Node releases are deliberately independent of Panel patch versions.
   // Source evidence: Node commits 596f015a5c8f876dc9a9d61b6cb78d35bd8e379b / 44912631321664dbd5822e9bf8d96766ccff7c93.
-  def select(api: NodeApiCompatibility): Option[String] = if (!api.provisioningReady) None else api.apiGeneration match {
-    case Some("PROFILE_PUBKEY") => Some("remnawave/node:2.8.0")
-    case Some("PROFILE_SECRET_KEY") => Some("remnawave/node:3.4.1")
-    case _ => None
-  }
+  def select(api: NodeApiCompatibility): Option[String] = RemnawaveNodeReleaseCatalog.default(api).map(_.imageReference)
 }
 
 /** Same representation for persistence and safe API snapshots. Closed decoding rejects extra keys. */

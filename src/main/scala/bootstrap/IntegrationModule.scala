@@ -71,6 +71,13 @@ final case class IntegrationComponents(
 )
 
 object IntegrationModule {
+  def nodeReleaseVerifier: Resource[IO, application.port.RemnawaveNodeReleaseVerifier] = {
+    import scala.concurrent.duration._
+    val policy = OutboundDestinationPolicy.resolving(false, 15.seconds)
+    EmberClientBuilder.default[IO].withTimeout(15.seconds)
+      .withSocketGroup(new ValidatingSocketGroup(Network[IO], policy)).build
+      .map(client => new integration.remnawave.ReviewedNodeReleaseVerifier(client))
+  }
 
   def build(config: AppConfig, persistence: PersistenceComponents,
     providers: IntegrationProviderRegistry[IO]): IO[IntegrationComponents] = {

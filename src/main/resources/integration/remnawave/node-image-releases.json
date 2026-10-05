@@ -1,0 +1,95 @@
+[
+  {
+    "releaseId": "node-2.8.0",
+    "nodeVersion": "2.8.0",
+    "imageRepository": "ghcr.io/remnawave/node",
+    "manifestDigest": "sha256:03f14935751b4ab565181e2b1766ccd1a9ac349d6839acd3ee49014e543fa232",
+    "platforms": [
+      {
+        "platform": "linux/amd64",
+        "manifestDigest": "sha256:cee85e1b0a63a8a688939f47875b862172305b50772f4c5267bf35c422d48f2a",
+        "configDigest": "sha256:9c06e52ad275876be07b1527d5af9f0d0ef01cad4f8c186d4e694847d3ea1f93",
+        "compressedBytes": 116718797,
+        "provenanceManifestDigest": "sha256:2f4a8d150f53c42e886d08eeac28547e4140a3425bdd48471f40d7c70d6e3b59",
+        "provenanceBlobDigest": "sha256:6b4677aa2d9403ed9f225b7ca021d4dd139ae4cd60657aef622cf4a30e20b85e"
+      },
+      {
+        "platform": "linux/arm64",
+        "manifestDigest": "sha256:bf50826628efa030c2319f65b509b2b42301db9216448e5c89320f9d13445936",
+        "configDigest": "sha256:20f0d7a8887ff17aa5d858a152e54f067093b89e38a039912475653a5ded72e4",
+        "compressedBytes": 116019014,
+        "provenanceManifestDigest": "sha256:b0942eb0a7f5639285e28e0c7201b4ba0603eed01246db4937d5a650c5d06103",
+        "provenanceBlobDigest": "sha256:75d8a6792f2348fb6fe197921227c6b61108288b10b3f35fa29b4bfdc18027dc"
+      }
+    ],
+    "minimumPanelVersion": "2.8.0",
+    "maximumPanelVersionExclusive": "3.0.0",
+    "apiGeneration": "PROFILE_PUBKEY",
+    "sourceCommit": "596f015a5c8f876dc9a9d61b6cb78d35bd8e379b",
+    "releasedAt": "2026-06-29T16:04:37Z",
+    "status": "AVAILABLE",
+    "catalogVersion": 1
+  },
+  {
+    "releaseId": "node-3.4.0",
+    "nodeVersion": "3.4.0",
+    "imageRepository": "ghcr.io/remnawave/node",
+    "manifestDigest": "sha256:a2057585e2c40b8e15659063fdc4e1d82aedf81c571e8e4e8ffbe3a5cfabb906",
+    "platforms": [
+      {
+        "platform": "linux/amd64",
+        "manifestDigest": "sha256:43749d9d874b73f37b0edb38c7c2ff8ba805c2951d57c22ba03676167efd46e5",
+        "configDigest": "sha256:086ce4810413c018fbffc3619fa834afc2f6be77a3364830920b68cd1ed7c4c0",
+        "compressedBytes": 123678781,
+        "provenanceManifestDigest": "sha256:46cf1382c745035948dfddb7c6494f7def0f893c4a3a4c211520d8bee7aecb2c",
+        "provenanceBlobDigest": "sha256:f65aec792508a6801c52040f0ab83f123be6c9e1a246a9b6f5bfab8a4898e4f8"
+      },
+      {
+        "platform": "linux/arm64",
+        "manifestDigest": "sha256:8598271503e6f79626809c4bbaf218b7ab32c5997db4bf8f4f9e0d6852bbb6e9",
+        "configDigest": "sha256:3c4d54c5a5f753d970b8ac4f432d152fb11de8257d8bfaf824951326981232e5",
+        "compressedBytes": 122978800,
+        "provenanceManifestDigest": "sha256:4b26edc10a59baa29e5f4e6a1dd3521900d68c6e9d3ce5c054bdae0bd0c249d2",
+        "provenanceBlobDigest": "sha256:b9ad7dcdb1fb7f3c7b8a4092cf692e2aadf8dc9ac8f1d3bcb7f8305909122de1"
+      }
+    ],
+    "minimumPanelVersion": "3.4.0",
+    "maximumPanelVersionExclusive": "3.5.0",
+    "apiGeneration": "PROFILE_SECRET_KEY",
+    "sourceCommit": "c1fdad7656281c18d99f4e82045705fbfe32bab4",
+    "releasedAt": "2026-08-29T03:43:47Z",
+    "status": "AVAILABLE",
+    "catalogVersion": 1
+  },
+  {
+    "releaseId": "node-3.4.1",
+    "nodeVersion": "3.4.1",
+    "imageRepository": "ghcr.io/remnawave/node",
+    "manifestDigest": "sha256:0cdf386dd49f360fc885bb34bde21132e478e40f0deac62d616086ec0fa9257e",
+    "platforms": [
+      {
+        "platform": "linux/arm64",
+        "manifestDigest": "sha256:57b3f84137fc80923bff21dfaa561ba222fca0540530411960aa024f2de8c9bb",
+        "configDigest": "sha256:09897c855a5af6211c0f1c2a16ce07d11f8809ed80615f252f81bde6dd27bee9",
+        "compressedBytes": 123036445,
+        "provenanceManifestDigest": "sha256:4e72d462bbf08d3cf37f9f9cfca027c10dfc2cc532bb6de9a38843356bb3e601",
+        "provenanceBlobDigest": "sha256:8d303aed76c1c0ed3dd4c915f3b5122e683d34a4ef5a5c752c661c99f99793e5"
+      },
+      {
+        "platform": "linux/amd64",
+        "manifestDigest": "sha256:c6e9c0851ac725b75a26bdc5b6208980a49ae65a7d605ab96a5ad1732ea4df1f",
+        "configDigest": "sha256:de0551cf0a4555b30efb59b6466bb47fd4a7bab33ccc559e285aa05cfa08fcca",
+        "compressedBytes": 123736379,
+        "provenanceManifestDigest": "sha256:bea327b31ba8e7df822b3751aecd0e3caa9ed89aaf5b6bff20aca580863ca2fb",
+        "provenanceBlobDigest": "sha256:ec8ed05fb6c75df75aa335568b739f176195e3c6b079391cc614b7f0f9d7e46b"
+      }
+    ],
+    "minimumPanelVersion": "3.4.0",
+    "maximumPanelVersionExclusive": "3.5.0",
+    "apiGeneration": "PROFILE_SECRET_KEY",
+    "sourceCommit": "44912631321664dbd5822e9bf8d96766ccff7c93",
+    "releasedAt": "2026-08-30T21:46:14Z",
+    "status": "AVAILABLE",
+    "catalogVersion": 1
+  }
+]

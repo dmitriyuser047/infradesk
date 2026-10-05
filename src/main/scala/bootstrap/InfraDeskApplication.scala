@@ -44,13 +44,14 @@ object InfraDeskApplication {
       runtime = (
         Database.transactor(config.database),
         IntegrationModule.notificationTransports(config.notification, loggers.notification),
-        IntegrationModule.integrationProviders(config.integrations)
+        IntegrationModule.integrationProviders(config.integrations),
+        IntegrationModule.nodeReleaseVerifier
       ).tupled
-      _ <- runtime.use { case (xa, transports, providers) =>
+      _ <- runtime.use { case (xa, transports, providers, nodeReleaseVerifier) =>
         val persistence = PersistenceModule.build(xa, resourceTypes)
         IntegrationModule.build(config, persistence, providers).flatMap { integrations =>
         val application = ApplicationModule.build(config, persistence, integrations, loggers,
-          schedulerInstanceId, transports, dispatcherInstanceId)
+          schedulerInstanceId, transports, dispatcherInstanceId, Some(nodeReleaseVerifier))
         val schedulerWorkers =
           if (config.scheduler.enabled)
             List(application.scheduler.run(config.scheduler.pollInterval,
@@ -81,7 +82,8 @@ object InfraDeskApplication {
             List(application.integrationConfigDeploymentWorker.run) ++
             (if (config.integrations.configRolloutsOperational)
               List(application.integrationConfigRolloutWorker.run) else Nil) ++
-            (if (config.integrations.fleetsOperational) List(application.remnawaveFleetObserver.run, application.remnawaveFleetRolloutWorker.run) else Nil)
+            (if (config.integrations.fleetsOperational) List(application.remnawaveFleetObserver.run, application.remnawaveFleetRolloutWorker.run,
+              application.remnawaveFleetUpgradeWorker.run) else Nil)
         val provisioningWorkers = (if (config.provisioning.enabled) List(application.provisioningWorker.run,application.remnawaveOnboardingWorker.run) else Nil) ++
           List(application.provisioningPlanCleanup.run)
         val workers = schedulerWorkers ++ notificationWorkers ++ configurationWorkers ++ ruleWorkers ++ provisioningWorkers ++

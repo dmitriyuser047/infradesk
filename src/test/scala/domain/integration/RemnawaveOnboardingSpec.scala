@@ -41,11 +41,14 @@ final class RemnawaveOnboardingSpec extends FunSuite {
     intercept[IllegalArgumentException](OnboardingSnapshotCodec.decode(json.mapObject(_.add("secretKey", io.circe.Json.fromString("must-not-be-accepted")))))
   }
 
-  test("image selection is generation pinned and never floats on latest") {
-    assertEquals(RemnawaveNodeImagePolicy.select(api), Some("remnawave/node:2.8.0"))
-    val newer = api.copy(apiGeneration = Some("PROFILE_SECRET_KEY"))
-    assertEquals(RemnawaveNodeImagePolicy.select(newer), Some("remnawave/node:3.4.1"))
-    assert(!RemnawaveNodeImagePolicy.select(api).get.endsWith(":latest"))
-    assertEquals(RemnawaveNodeImagePolicy.select(api.copy(blocker = Some("unknown"))), None)
+  test("image selection uses the reviewed compatible catalog digest and rejects custom Panel metadata") {
+    val reviewed = api.copy(sourceCommit = Some("798d74986db5984364897464306928973bce3b67"))
+    assertEquals(RemnawaveNodeImagePolicy.select(reviewed), RemnawaveNodeReleaseCatalog.find("node-2.8.0").map(_.imageReference))
+    val newer = api.copy(serverVersion = Some("3.4.0"), apiGeneration = Some("PROFILE_SECRET_KEY"),
+      sourceCommit = Some("dd0eab160fd91a1c09345df459e146712581736f"))
+    assertEquals(RemnawaveNodeImagePolicy.select(newer), RemnawaveNodeReleaseCatalog.find("node-3.4.1").map(_.imageReference))
+    assert(NodeRelease.immutableReference(RemnawaveNodeImagePolicy.select(reviewed).get))
+    assertEquals(RemnawaveNodeImagePolicy.select(api), None)
+    assertEquals(RemnawaveNodeImagePolicy.select(reviewed.copy(blocker = Some("unknown"))), None)
   }
 }

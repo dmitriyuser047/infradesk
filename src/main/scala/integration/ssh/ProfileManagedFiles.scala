@@ -38,7 +38,8 @@ private[ssh] final class ProfileManagedFiles(session: RemoteConfigurationSession
   def replace(path: String, marker: String, bytes: Array[Byte], expectedHash: Option[String],
     installOwned: Boolean = false, validate: Option[List[String]] = None,
     activate: Option[List[String]] = None, targetMode: Int = 420,
-    validationFailureCode: String = "PROVISIONING_CADDY_VALIDATION_FAILED"): IO[Unit] = {
+    validationFailureCode: String = "PROVISIONING_CADDY_VALIDATION_FAILED",
+    beforeCommit: IO[Unit] = IO.unit): IO[Unit] = {
     require(allowedPath(path) && marker.nonEmpty && !marker.contains('\n') && Set(384,420)(targetMode))
     require(expectedHash.forall(_.matches("[0-9a-f]{64}")))
     val nonce = UUID.randomUUID().toString
@@ -65,7 +66,7 @@ private[ssh] final class ProfileManagedFiles(session: RemoteConfigurationSession
       validate.traverse_(argv => checked(commands.capture(argv.head,
         if (argv.exists(_ == "{candidate}")) argv.tail.map(a => if (a == "{candidate}") candidate else a) else argv.tail :+ candidate),
         validationFailureCode)) *>
-      checked(commands.shell(Commit, List(path, candidate, backup, expected, hash)),
+      beforeCommit *> checked(commands.shell(Commit, List(path, candidate, backup, expected, hash)),
         "PROVISIONING_MANAGED_FILE_CHANGED") *>
       activate.traverse_ { argv => commands.capture(argv.head, argv.tail).flatMap { activation =>
         if (activation.exitCode == 0) IO.unit
