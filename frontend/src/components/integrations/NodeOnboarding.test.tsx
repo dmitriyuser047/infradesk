@@ -14,7 +14,7 @@ const options: NodeOnboardingOptions = { nodeApi: { serverVersion: '2', apiGener
 const run = (state: NodeOnboardingRun['state'] = 'QUEUED'): NodeOnboardingRun => ({ id: 'run-1', organizationId: 'org', integrationId: 'integration', resourceId: 'resource-1', requestId: 'request-1', state, phase: state === 'RUNNING' ? 'INSTALL_NODE' : 'VALIDATE', nodeName: 'Frankfurt edge', address: '198.51.100.11', nodePort: 443, externalNodeId: 'external-1', baselineRunId: 'baseline-1', syncSessionId: 'sync-1', failureCode: state === 'FAILED' ? 'SAFE_FAILURE' : null, safeMessage: state === 'FAILED' ? 'A safe failure message.' : null, createdAt: '', updatedAt: '', startedAt: null, finishedAt: null })
 const preview: NodeOnboardingPreview = { run: { ...run('PLANNED'), id: 'plan-1', externalNodeId: null, baselineRunId: null, syncSessionId: null }, serverName: 'Frankfurt VPS', serverProfileName: 'Ubuntu', revisionNumber: 3, configProfileName: 'Default profile', inboundNames: ['VLESS TLS'], nodeImage: null, changes: ['Create node'], warnings: [], blockingProblems: [] }
 const recoverySummary = (state: NodeOnboardingRecoverySummary['state'], action: NodeOnboardingRecoverySummary['action'] = 'RECOVER'): NodeOnboardingRecoverySummary => ({ state, action, sourceRunId: 'run-1', previousExternalNodeId: 'external-1', previousCorrelationId: 'correlation-1', installationOwnerId: 'owner-1' })
-const recoveryPreview = (recovery: NodeOnboardingRecoverySummary): NodeOnboardingPreview => ({ ...preview, run: { ...preview.run, externalNodeId: recovery.previousExternalNodeId }, recovery, changes: ['Resume existing node'] })
+const recoveryPreview = (recovery: NodeOnboardingRecoverySummary): NodeOnboardingPreview => ({ ...preview, run: { ...preview.run, externalNodeId: recovery.previousExternalNodeId, correlationId: recovery.action==="RECOVER" ? recovery.previousCorrelationId : "new-correlation-1" }, recovery, changes: ['Resume existing node'] })
 const getRandomValues = crypto.getRandomValues.bind(crypto)
  beforeEach(() => vi.stubGlobal('crypto', {getRandomValues}))
 
@@ -250,6 +250,8 @@ describe('NodeOnboarding', () => {
     })
     fireEvent.click(await screen.findByRole('button', { name: 'Check again' }))
     expect(await screen.findByText('The node was not found in Remnawave.')).toBeTruthy()
+    expect(screen.getByText('New correlation ID')).toBeTruthy()
+    expect(screen.getByText('new-correlation-1')).toBeTruthy()
     const start = screen.getByRole('button', { name: 'Recreate node' }) as HTMLButtonElement
     expect(start.disabled).toBe(true)
     expect(calls.some(call => call.method === 'POST' && call.url.endsWith('/runs'))).toBe(false)

@@ -25,7 +25,7 @@ const texts = {
     checkAgain: 'Check again', restore: 'Restore existing node', recreate: 'Recreate node', deleteRecreate: 'Delete and recreate',
     missingNode: 'The node was not found in Remnawave.', conflict: 'The Remnawave node conflicts with the previous installation identity. No action is available.',
     recoveryUnknown: 'The remote state is still unknown. Check again to repeat the read-only observation.',
-    oldIdentity: 'Previous node UUID', oldCorrelation: 'Previous correlation ID',
+    oldIdentity: 'Previous node UUID', oldCorrelation: 'Previous correlation ID', newCorrelation: 'New correlation ID',
     recreateApproval: 'I reviewed the previous node UUID and approve creating a new Remnawave node with a new correlation ID.',
     deleteApproval: 'I approve deleting the existing Remnawave node and creating a replacement with a new correlation ID.',
     apiUnavailable: 'Provisioning support was not confirmed by the Remnawave API.', phaseNames: { VALIDATE: 'Validate request', PREPARE_SERVER: 'Prepare server', DELETE_NODE: 'Delete existing Remnawave node', CONFIRM_NODE_DELETED: 'Confirm node deletion', RETIRE_LOCAL_NODE: 'Retire previous local node installation', CREATE_NODE: 'Create Remnawave node', GET_INSTALLATION_DATA: 'Get installation data', CONFIGURE_NODE_FIREWALL: 'Configure node firewall', INSTALL_NODE: 'Install node', START_NODE: 'Start node', VERIFY_LOCAL_NODE: 'Verify local node', WAIT_FOR_PANEL: 'Wait for Remnawave panel', SYNC_INVENTORY: 'Sync inventory', BIND_RESOURCE: 'Bind server resource', SET_DESIRED_STATE: 'Set desired state', FINAL_VERIFY: 'Final verification' } },
@@ -41,7 +41,7 @@ const texts = {
     checkAgain: 'Проверить снова', restore: 'Восстановить существующий узел', recreate: 'Пересоздать узел', deleteRecreate: 'Удалить и пересоздать',
     missingNode: 'Узел больше не найден в Remnawave.', conflict: 'Узел Remnawave конфликтует с исходной идентичностью установки. Действие недоступно.',
     recoveryUnknown: 'Удалённое состояние всё ещё неизвестно. Проверьте снова, чтобы повторить только чтение состояния.',
-    oldIdentity: 'Предыдущий UUID узла', oldCorrelation: 'Предыдущий ID корреляции',
+    oldIdentity: 'Предыдущий UUID узла', oldCorrelation: 'Предыдущий ID корреляции', newCorrelation: 'Новый ID корреляции',
     recreateApproval: 'Я проверил предыдущий UUID узла и подтверждаю создание нового узла Remnawave с новым ID корреляции.',
     deleteApproval: 'Я подтверждаю удаление существующего узла Remnawave и создание замены с новым ID корреляции.',
     apiUnavailable: 'API Remnawave не подтвердил поддержку подготовки узлов.', phaseNames: { VALIDATE: 'Проверка запроса', PREPARE_SERVER: 'Подготовка сервера', DELETE_NODE: 'Удаление существующего узла Remnawave', CONFIRM_NODE_DELETED: 'Подтверждение удаления узла', RETIRE_LOCAL_NODE: 'Удаление предыдущей локальной установки узла', CREATE_NODE: 'Создание узла Remnawave', GET_INSTALLATION_DATA: 'Получение данных установки', CONFIGURE_NODE_FIREWALL: 'Настройка межсетевого экрана', INSTALL_NODE: 'Установка узла', START_NODE: 'Запуск узла', VERIFY_LOCAL_NODE: 'Проверка узла на сервере', WAIT_FOR_PANEL: 'Ожидание панели Remnawave', SYNC_INVENTORY: 'Синхронизация инвентаря', BIND_RESOURCE: 'Привязка сервера', SET_DESIRED_STATE: 'Установка желаемого состояния', FINAL_VERIFY: 'Итоговая проверка' } },
@@ -189,7 +189,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
             : code)} danger />
           </section> : null}
       </> : null}
-      {step === 3 && preview?.recovery ? <RecoveryReview recovery={preview.recovery} confirmed={recoveryConfirmed} onConfirm={setRecoveryConfirmed} copy={copy} /> : null}
+      {step === 3 && preview?.recovery ? <RecoveryReview recovery={preview.recovery} newCorrelation={preview.run.correlationId} confirmed={recoveryConfirmed} onConfirm={setRecoveryConfirmed} copy={copy} /> : null}
       {(step === 4 || (hasRun && step !== 3)) && current ? <RunStatus run={current} detail={runQuery.data} copy={copy} /> : null}
       {(step === 4 || (hasRun && step !== 3)) && current && ['FAILED', 'UNKNOWN', 'SUCCEEDED'].includes(current.state) && canConfigure ? <div className="integration-row-actions">
         <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={reconcile.isPending || runQuery.isPending} onClick={() => void reconcileRun(current.id, 'RECOVER')}>{copy.checkAgain}</PendingButton>
@@ -202,14 +202,14 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
 function ReviewList({ title, values, danger = false }: { title: string; values: string[]; danger?: boolean }) {
   return <section><h4>{title}</h4>{values.length ? <ul>{values.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ul> : <p>—</p>}{danger && values.length ? <p role="alert">{title}</p> : null}</section>
 }
-function RecoveryReview({ recovery, confirmed, onConfirm, copy }: { recovery: NodeOnboardingRecoverySummary; confirmed: boolean; onConfirm: (value: boolean) => void; copy: typeof texts[keyof typeof texts] }) {
+function RecoveryReview({ recovery, newCorrelation, confirmed, onConfirm, copy }: { recovery: NodeOnboardingRecoverySummary; newCorrelation?: string; confirmed: boolean; onConfirm: (value: boolean) => void; copy: typeof texts[keyof typeof texts] }) {
   if (recovery.state === 'UNKNOWN') return <InlineAlert tone="warning" title={copy.recoveryUnknown} />
   if (recovery.state === 'PRESENT_CONFLICT') return <InlineAlert tone="danger" title={copy.conflict} />
   if (recovery.state === 'CONFIRMED_NOT_FOUND') return <section><InlineAlert tone="warning" title={copy.missingNode} />
-    <dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd><dt>{copy.oldCorrelation}</dt><dd>{recovery.previousCorrelationId}</dd></dl>
+    <dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd><dt>{copy.oldCorrelation}</dt><dd>{recovery.previousCorrelationId}</dd><dt>{copy.newCorrelation}</dt><dd>{newCorrelation ?? '—'}</dd></dl>
     <label><input type="checkbox" checked={confirmed} onChange={event => onConfirm(event.target.checked)} />{copy.recreateApproval}</label></section>
   if (recovery.action === 'DELETE_RECREATE') return <section><InlineAlert tone="warning" title={copy.deleteRecreate} />
-    <dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd><dt>{copy.oldCorrelation}</dt><dd>{recovery.previousCorrelationId}</dd></dl>
+    <dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd><dt>{copy.oldCorrelation}</dt><dd>{recovery.previousCorrelationId}</dd><dt>{copy.newCorrelation}</dt><dd>{newCorrelation ?? '—'}</dd></dl>
     <label><input type="checkbox" checked={confirmed} onChange={event => onConfirm(event.target.checked)} />{copy.deleteApproval}</label></section>
   return <section><InlineAlert tone="info" title={copy.restore} /><dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd></dl></section>
 }

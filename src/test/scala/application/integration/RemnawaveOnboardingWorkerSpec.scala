@@ -705,6 +705,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     assert(h.events.indexOf("delete")<h.events.indexOf("retire"))
     assert(h.events.indexOf("retire")<h.events.indexOf("create"))
     assertNotEquals(h.repo.record.snapshot.correlationId,snap.correlationId)
+    assertEquals(OnboardingJson.run(h.repo.record).hcursor.get[String]("correlationId"),Right(h.repo.record.snapshot.correlationId.toString))
     assertEquals(h.repo.record.snapshot.recovery.flatMap(_.previousExternalNodeId),Some(nodeId))
   }
 

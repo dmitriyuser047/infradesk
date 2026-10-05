@@ -15,6 +15,7 @@ export interface NodeOnboardingRun {
   nodeName: string; address: string; nodePort: number; externalNodeId: string | null; baselineRunId: string | null
   syncSessionId: string | null; failureCode: string | null; safeMessage: string | null; createdAt: string; updatedAt: string
   startedAt: string | null; finishedAt: string | null
+  correlationId?: string
   recovery?: NodeOnboardingRecoverySummary
 }
 export type NodeOnboardingRecoveryState = 'PRESENT_EXACT' | 'PRESENT_UNHEALTHY' | 'CONFIRMED_NOT_FOUND' | 'PRESENT_CONFLICT' | 'UNKNOWN'

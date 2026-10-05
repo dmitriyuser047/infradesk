@@ -196,6 +196,7 @@ object OnboardingJson {
     "integrationId" -> id(r.integrationId),"resourceId" -> id(r.resourceId),"requestId" -> r.requestId.fold(Json.Null)(id),
     "state" -> str(r.state.code),"phase" -> str(r.phase.code),"nodeName" -> str(r.snapshot.input.nodeName),
     "address" -> str(r.snapshot.input.address),"nodePort" -> Json.fromInt(r.snapshot.input.nodePort),
+    "correlationId" -> id(r.snapshot.correlationId),
     "externalNodeId" -> r.externalNodeId.fold(Json.Null)(id),"baselineRunId" -> r.baselineRunId.fold(Json.Null)(id),
     "recovery" -> r.snapshot.recovery.fold(Json.Null)(OnboardingSnapshotCodec.encodeRecovery),
     "syncSessionId" -> r.syncSessionId.fold(Json.Null)(id),"failureCode" -> r.failureCode.fold(Json.Null)(str),
