@@ -42,6 +42,8 @@ export const en = {
   units: { day: 'd', hour: 'h', minute: 'm', second: 's', megabytes: 'MB', gigabytes: 'GB' },
 
   common: {
+    unresolvedSubmission: 'The submission result is unconfirmed. Check the operation or retry the same request before preparing another operation.',
+    recoverSubmission: 'Retry unconfirmed submission',
     operationBlocked: 'InfraDesk detected a problem that prevents this operation from being performed safely.',
     operationWarning: 'Review this warning before continuing the operation.',
     blockedAction: (n: number) => `Cannot apply: ${n} blocking ${n === 1 ? 'problem' : 'problems'} detected.`,

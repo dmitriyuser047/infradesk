@@ -3,9 +3,9 @@ import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n'
 
 /** Integration and operation dialogs share focus containment and return focus to their opener. */
-export function IntegrationDialog({ title, children, actions, onClose, busy = false, size = 'small', description, actionNote }: {
+export function IntegrationDialog({ title, children, actions, onClose, busy = false, size = 'small', description, actionNote, actionFeedback }: {
   title: string; children: ReactNode; actions: ReactNode; onClose: () => void; busy?: boolean
-  size?: 'small' | 'medium' | 'large'; description?: ReactNode; actionNote?: ReactNode
+  size?: 'small' | 'medium' | 'large'; description?: ReactNode; actionNote?: ReactNode; actionFeedback?: ReactNode
 }) {
   const { t } = useI18n()
   const titleId = useId()
@@ -38,6 +38,6 @@ export function IntegrationDialog({ title, children, actions, onClose, busy = fa
     aria-modal="true" aria-labelledby={titleId} aria-busy={busy} tabIndex={-1}>
     <div className="dialog-heading"><div className="dialog-title"><h2 id={titleId}>{title}</h2>{description ? <p className="muted-copy">{description}</p> : null}</div><button type="button" className="dialog-close"
       aria-label={t.common.close} title={t.common.close} disabled={busy} onClick={onClose}>×</button></div>
-    <div className="dialog-body">{children}</div><div className="dialog-footer">{actionNote ? <p className="dialog-action-note" role="status">{actionNote}</p> : null}<div className="dialog-actions">{actions}</div></div>
+    <div className="dialog-body">{children}</div><div className="dialog-footer">{actionFeedback}{actionNote ? <p className="dialog-action-note" role="status">{actionNote}</p> : null}<div className="dialog-actions">{actions}</div></div>
   </section></div>, document.body)
 }

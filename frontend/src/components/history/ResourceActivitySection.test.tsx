@@ -6,13 +6,14 @@ import { ResourceActivitySection } from './ResourceActivitySection'
 import { getHistoryActorLabel, getHistoryEventPresentation } from './historyEventPresentation'
 import type { HistoryEventResponse } from '../../types/historyEvent'
 import { createI18n, I18nProvider, type Locale } from '../../i18n'
+import { createRequestId } from '../../app/requestId'
 
 const en = createI18n('en')
 const ru = createI18n('ru')
 
 function event(overrides: Partial<HistoryEventResponse>): HistoryEventResponse {
   return {
-    id: crypto.randomUUID(),
+    id: createRequestId(),
     eventType: 'RESOURCE_DISCOVERED',
     source: 'SYSTEM',
     occurredAt: '2026-09-24T10:00:00Z',

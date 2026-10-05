@@ -2,7 +2,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient } from '../../app/queryClient'
 import { I18nProvider } from '../../i18n'
 import type { NodeOnboardingOptions, NodeOnboardingPreview, NodeOnboardingRun, NodeOnboardingRunDetail } from '../../types/nodeOnboarding'
@@ -13,6 +13,9 @@ const options: NodeOnboardingOptions = { nodeApi: { serverVersion: '2', apiGener
   profiles: [{ id: 'profile-uuid', name: 'Default profile', inbounds: [{ id: 'inbound-uuid', name: 'VLESS TLS' }] }] }
 const run = (state: NodeOnboardingRun['state'] = 'QUEUED'): NodeOnboardingRun => ({ id: 'run-1', organizationId: 'org', integrationId: 'integration', resourceId: 'resource-1', requestId: 'request-1', state, phase: state === 'RUNNING' ? 'INSTALL_NODE' : 'VALIDATE', nodeName: 'Frankfurt edge', address: '198.51.100.11', nodePort: 443, externalNodeId: 'external-1', baselineRunId: 'baseline-1', syncSessionId: 'sync-1', failureCode: state === 'FAILED' ? 'SAFE_FAILURE' : null, safeMessage: state === 'FAILED' ? 'A safe failure message.' : null, createdAt: '', updatedAt: '', startedAt: null, finishedAt: null })
 const preview: NodeOnboardingPreview = { run: { ...run('PLANNED'), id: 'plan-1', externalNodeId: null, baselineRunId: null, syncSessionId: null }, serverName: 'Frankfurt VPS', serverProfileName: 'Ubuntu', revisionNumber: 3, configProfileName: 'Default profile', inboundNames: ['VLESS TLS'], nodeImage: null, changes: ['Create node'], warnings: [], blockingProblems: [] }
+const getRandomValues = crypto.getRandomValues.bind(crypto)
+ beforeEach(() => vi.stubGlobal('crypto', {getRandomValues}))
+
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 
 function mount(entry = '/', locale: 'en' | 'ru' = 'en', configure: (url: string, method: string, body: unknown) => Response | undefined = () => undefined) {
@@ -39,9 +42,21 @@ function mount(entry = '/', locale: 'en' | 'ru' = 'en', configure: (url: string,
   </MemoryRouter></QueryClientProvider></I18nProvider>)
   return { calls, fetchMock }
 }
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
 
 describe('NodeOnboarding', () => {
+  it('recovers saved onboarding identity after reload without automatically submitting', async () => {
+    const identity={planId:'plan-1',requestId:'d1111111-1111-4111-8111-111111111111'}
+    sessionStorage.setItem('node-onboarding:org:integration',JSON.stringify(identity))
+    const {calls}=mount('/','en',url=>url.endsWith('/runs/plan-1') ? json({run:preview.run,phases:[]}) : undefined)
+    const retry=await screen.findByRole('button',{name:'Retry unconfirmed submission'}) as HTMLButtonElement
+    await waitFor(()=>expect(retry.disabled).toBe(false))
+    expect(calls.filter(c=>c.method==='POST')).toHaveLength(0)
+    fireEvent.click(retry)
+    await waitFor(()=>expect(calls.some(c=>c.method==='POST' && c.url.endsWith('/runs'))).toBe(true))
+    expect(calls.find(c=>c.method==='POST' && c.url.endsWith('/runs'))?.body).toEqual(identity)
+    await waitFor(()=>expect(sessionStorage.length).toBe(0))
+  })
   it('blocks mutation entry for a member without the required permissions', async () => {
     const { calls } = mount('/', 'en', url => url === '/api/v1/me/organizations'
       ? json([{ id: 'org', code: 'ORG', name: 'Org', role: 'MEMBER' }]) : undefined)

@@ -1,11 +1,13 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
 import {
   useCancelDeployment,
   useCreateDeployment,
   useDeployment,
   useDeploymentPreview,
+  type DeploymentRequest,
 } from '../../api/configurationDeployments'
+import { ApiError } from '../../api/httpClient'
 import { useResourceContext } from '../../api/infrastructure'
 import { createRequestId } from '../../app/requestId'
 import { useI18n } from '../../i18n'
@@ -89,6 +91,26 @@ export function executionOf(value: typeof EmptyExecution): DeploymentExecution {
   }
 }
 
+function savedDeploymentRequest(key: string): DeploymentRequest | null {
+  try {
+    const raw = sessionStorage.getItem(key)
+    if (!raw) return null
+    const request = JSON.parse(raw) as DeploymentRequest
+    if (typeof request.requestId === 'string' && typeof request.connectionId === 'string' &&
+      Number.isInteger(request.expectedAssignmentVersion) && typeof request.expectedRemoteMissing === 'boolean' &&
+      (request.expectedRemoteSha256 === null || typeof request.expectedRemoteSha256 === 'string') &&
+      validExecution(request.execution)) return request
+  } catch { /* Session storage can be unavailable; the mounted panel retains the request. */ }
+  return null
+}
+
+function storeDeploymentRequest(key: string, request: DeploymentRequest | null) {
+  try {
+    if (request) sessionStorage.setItem(key, JSON.stringify(request))
+    else sessionStorage.removeItem(key)
+  } catch { /* The in-memory identity still prevents duplicate attempts in this panel. */ }
+}
+
 /** Where a deployment is, in plain words; a failed rollback is shown as the emergency it is. */
 export function DeploymentStatusView({ deployment, onCancel, cancelling }: {
   deployment: DeploymentDetail
@@ -140,15 +162,61 @@ export function ConfigurationDeploymentPanel({ organizationId, assignment }: {
   const create = useCreateDeployment(organizationId, assignment.id)
   const cancel = useCancelDeployment(organizationId)
   const deployment = useDeployment(organizationId, deploymentId)
-  const approved = preview.data && preview.data.assignmentVersion === assignment.version &&
-    preview.data.connection.id === selected ? preview.data : null
+  const storageKey = `configuration-deployment-request:${organizationId}:${assignment.id}`
+  const [unresolved, setUnresolved] = useState<DeploymentRequest | null>(() => savedDeploymentRequest(storageKey))
+  const [blocked, setBlocked] = useState(false)
+  const submitting = useRef(false)
+  const identity = useRef<{ key: string; request: DeploymentRequest } | null>(null)
   const request = executionOf(execution)
-  const canDeploy = approved !== null && approved.atomicReplaceSupported && validExecution(request) && !create.isPending
+  const previewInputsKey = JSON.stringify([organizationId, assignment.id, assignment.version, assignment.profileRevisionNumber,
+    assignment.targetPath, selected, retryOf])
+  const inputsKey = JSON.stringify([previewInputsKey, request])
+  const currentInputs = useRef(inputsKey); currentInputs.current = inputsKey
+  const currentScope = useRef(storageKey); currentScope.current = storageKey
+  const previewEpoch = useRef(0)
+  const [approvedKey, setApprovedKey] = useState<string | null>(null)
+  useEffect(() => { identity.current = null; previewEpoch.current += 1 }, [inputsKey])
+  useEffect(() => { setApprovedKey(null) }, [previewInputsKey])
+  useEffect(() => {
+    setUnresolved(savedDeploymentRequest(storageKey)); identity.current = null
+    setDeploymentId(null); setRetryOf(null); setApprovedKey(null); preview.reset()
+  }, [storageKey])
+  const approved = approvedKey === previewInputsKey && !preview.isPending && preview.data && preview.data.assignmentVersion === assignment.version &&
+    preview.data.connection.id === selected ? preview.data : null
+  const canDeploy = Boolean(approved && approved.atomicReplaceSupported && validExecution(request) &&
+    connections.some(source => source.id === selected) && !create.isPending && !unresolved)
+  const canPreview = Boolean(selected && connections.some(source => source.id === selected) &&
+    !unresolved && !preview.isPending && !create.isPending)
   const finished = deployment.data && !ActiveDeploymentStates.includes(deployment.data.state)
 
+  const submitRequest = (submitted: DeploymentRequest) => {
+    if (submitting.current || create.isPending) { setBlocked(true); return }
+    const retained = savedDeploymentRequest(storageKey)
+    if (retained && retained.requestId !== submitted.requestId) { setUnresolved(retained); setBlocked(true); return }
+    submitting.current = true; setBlocked(false)
+    storeDeploymentRequest(storageKey, submitted)
+    create.mutate(submitted, {
+      onSuccess: value => {
+        storeDeploymentRequest(storageKey, null)
+        if (currentScope.current !== storageKey) return
+        setUnresolved(null); identity.current = null
+        setDeploymentId(value.deploymentId); setApprovedKey(null); preview.reset()
+      },
+      onError: error => {
+        if (currentScope.current !== storageKey) return
+        if (!(error instanceof ApiError) || error.status >= 500 || error.status === 408) setUnresolved(submitted)
+        else {
+          storeDeploymentRequest(storageKey, null); setUnresolved(null); identity.current = null
+          setApprovedKey(null); preview.reset()
+        }
+      },
+      onSettled: () => { submitting.current = false },
+    })
+  }
   const start = () => {
-    if (!approved || !canDeploy) return
-    create.mutate({
+    if (!approved || !canDeploy || submitting.current) { setBlocked(true); return }
+    const key = JSON.stringify([approvedKey, preview.submittedAt, approved.desired.sha256, approved.remote, request])
+    if (identity.current?.key !== key) identity.current = { key, request: {
       expectedAssignmentVersion: assignment.version,
       connectionId: approved.connection.id,
       expectedRemoteSha256: approved.remote.sha256,
@@ -156,7 +224,17 @@ export function ConfigurationDeploymentPanel({ organizationId, assignment }: {
       requestId: createRequestId(),
       execution: request,
       retryOfDeploymentId: retryOf,
-    }, { onSuccess: value => { setDeploymentId(value.deploymentId); preview.reset() } })
+    } }
+    submitRequest(identity.current.request)
+  }
+  const buildPreview = () => {
+    if (!canPreview || submitting.current) { setBlocked(true); return }
+    const requestedKey = inputsKey
+    const epoch = ++previewEpoch.current
+    setApprovedKey(null); identity.current = null; setBlocked(false)
+    preview.mutate({ expectedAssignmentVersion: assignment.version, connectionId: selected }, {
+      onSuccess: () => { if (currentInputs.current === requestedKey && previewEpoch.current === epoch) setApprovedKey(previewInputsKey) },
+    })
   }
 
   const retry = () => {
@@ -168,6 +246,10 @@ export function ConfigurationDeploymentPanel({ organizationId, assignment }: {
   }
 
   return <WorkspaceSection title={t.title} description={<>{t.description} {t.driftNote}</>}>
+    {unresolved ? <InlineAlert tone="warning" title={i18n.t.common.unresolvedSubmission}
+      action={<button type="button" className="secondary-button" disabled={create.isPending}
+        onClick={() => submitRequest(unresolved)}>{i18n.t.common.recoverSubmission}</button>} /> : null}
+    {blocked ? <InlineAlert tone="danger" title={i18n.t.common.operationBlocked} /> : null}
     {deploymentId === null ? <>
       <div className="configuration-field">
         <label htmlFor={connectionId}>{t.connection}</label>
@@ -179,8 +261,8 @@ export function ConfigurationDeploymentPanel({ organizationId, assignment }: {
       {context.isSuccess && connections.length === 0 ? <InlineAlert tone="warning" title={t.noConnection} /> : null}
       {retryOf ? <InlineAlert tone="info" title={t.retryHelp} /> : null}
       <div className="configuration-editor-actions">
-        <PendingButton type="button" pending={preview.isPending} pendingLabel={t.previewing} disabled={!selected}
-          onClick={() => preview.mutate({ expectedAssignmentVersion: assignment.version, connectionId: selected })}>
+        <PendingButton type="button" pending={preview.isPending} pendingLabel={t.previewing} disabled={!canPreview}
+          onClick={buildPreview}>
           {t.preview}
         </PendingButton>
       </div>

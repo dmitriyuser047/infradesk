@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { createRequestId } from '../../app/requestId'
+import { readPendingSubmission, storePendingSubmission, type PendingSubmission } from '../../app/pendingSubmission'
 
 import { useProvisioningHistory, useProvisioningRun, usePlanProvisioning, useStartProvisioning } from '../../api/provisioning'
 import { useI18n } from '../../i18n'
@@ -16,10 +18,20 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
   const history = useProvisioningHistory(organizationId, resourceId)
   const planner = usePlanProvisioning(organizationId)
   const starter = useStartProvisioning(organizationId, resourceId)
-  const [plan, setPlan] = useState<ProvisioningPlan | null>(null)
+  const [reviewed, setReviewed] = useState<{plan:ProvisioningPlan;requestId:string} | null>(null)
+  const plan = reviewed?.plan
+  const [workflowError, setWorkflowError] = useState(false)
+  const submitting = useRef(false)
+  const submissionKey = `provisioning-start:${organizationId}:${resourceId}`
+  const [unresolved, setUnresolved] = useState<PendingSubmission | null>(() => readPendingSubmission(submissionKey))
   const [focusedRunId, setFocusedRunId] = useState<string | null>(null)
-  const requestId = useRef<{ planId: string; requestId: string } | null>(null)
   const detail = useProvisioningRun(organizationId, focusedRunId)
+  const recovery = useProvisioningRun(organizationId, unresolved?.planId ?? null)
+  useEffect(() => {
+    if (!unresolved || !recovery.data || recovery.data.run.state === 'PLANNED') return
+    storePendingSubmission(submissionKey, null); setUnresolved(null); setReviewed(null)
+    setFocusedRunId(recovery.data.run.id); onRunQueued?.(recovery.data.run.id)
+  }, [unresolved, recovery.data, submissionKey])
   useEffect(() => { if (focusRunId) setFocusedRunId(focusRunId) }, [focusRunId])
   useEffect(() => {
     if (focusedRunId === null && history.data?.items?.[0]) setFocusedRunId(history.data.items[0].id)
@@ -43,21 +55,39 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
       : run.state === 'RUNNING' ? 'info' : 'neutral'
 
   const createPlan = async () => {
+    setWorkflowError(false)
     const value = await planner.mutateAsync(resourceId)
-    setPlan(value)
-    requestId.current = { planId: value.run.id, requestId: crypto.randomUUID() }
+    starter.reset()
+    setReviewed({plan:value,requestId:createRequestId()})
   }
-  const start = async () => {
-    if (!requestId.current) return
-    const queued = await starter.mutateAsync(requestId.current)
-    setFocusedRunId(queued.id)
-    onRunQueued?.(queued.id)
-    setPlan(null)
+  const start = async (identity:PendingSubmission) => {
+    if (submitting.current || starter.isPending || !canRun || (plan?.blockingProblems.length ?? 0) > 0) {
+      setWorkflowError(true)
+      return
+    }
+    submitting.current = true
+    setWorkflowError(false)
+    storePendingSubmission(submissionKey,identity)
+    try {
+      const queued = await starter.mutateAsync(identity)
+      storePendingSubmission(submissionKey,null); setUnresolved(null)
+      setFocusedRunId(queued.id)
+      onRunQueued?.(queued.id)
+      setReviewed(null)
+    } catch(error) {
+      if (!(error instanceof ApiError) || error.status >= 500 || error.status===408) setUnresolved(identity)
+      else { storePendingSubmission(submissionKey,null); setUnresolved(null) }
+      // React Query exposes the rejected submission beside the actions.
+    } finally { submitting.current = false }
   }
 
   return <WorkspaceSection title={text.title} className="provisioning-panel"
     actions={canRun ? <PendingButton type="button" pending={planner.isPending} pendingLabel={text.pending}
-      onClick={() => { void createPlan().catch(() => undefined) }}>{text.plan}</PendingButton> : undefined}>
+      disabled={!!unresolved} onClick={() => { void createPlan().catch(() => setWorkflowError(true)) }}>{text.plan}</PendingButton> : undefined}>
+    {workflowError && !planner.isError ? <InlineAlert tone="danger" title={t.common.operationBlocked} /> : null}
+    {!reviewed && unresolved ? <InlineAlert tone="warning" title={t.common.unresolvedSubmission} action={<PendingButton pending={starter.isPending} pendingLabel={text.starting} disabled={!canRun || !recovery.isSuccess} onClick={() => void start(unresolved)}>{t.common.recoverSubmission}</PendingButton>} /> : null}
+    {!reviewed && starter.isError ? <InlineAlert tone="danger" title={t.operations.startFailed}>{localizedFailure(starter.error,knownErrors,t.common.operationBlocked)}</InlineAlert> : null}
+    {recovery.isError ? <InlineAlert tone="danger" title={text.loadError} /> : null}
     {planner.isError ? <InlineAlert tone="danger" title={text.actionError}>{localizedFailure(planner.error, text.errors, text.actionError)}</InlineAlert> : null}
     {history.isError ? <InlineAlert tone="warning" title={text.loadError} /> : null}
     {history.isPending ? <p>{text.pending}</p> : null}
@@ -90,11 +120,12 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
       <StatusIndicator label={stateText(run.state)} tone={tone(run)} />
       <button type="button" className="text-button" aria-current={focusedRunId === run.id ? 'true' : undefined} onClick={() => setFocusedRunId(run.id)}>{t.common.open}</button>
     </div>)}</details> : null}
-    {plan ? <IntegrationDialog title={text.plan} size="large" description={resourceName} busy={starter.isPending} onClose={() => setPlan(null)}
+    {reviewed && plan ? <IntegrationDialog title={text.plan} size="large" description={resourceName} busy={starter.isPending} onClose={() => setReviewed(null)}
       actionNote={plan.blockingProblems.length ? t.common.blockedAction(plan.blockingProblems.length) : undefined}
-      actions={<><button type="button" className="secondary-button" disabled={starter.isPending} onClick={() => setPlan(null)}>{text.cancel}</button>
-        <PendingButton type="button" className="primary-button" pending={starter.isPending} pendingLabel={text.starting} disabled={plan.blockingProblems.length > 0}
-          onClick={() => { void start().catch(() => undefined) }}>{text.queue}</PendingButton></>}>
+      actionFeedback={starter.isError ? <InlineAlert tone="danger" title={t.operations.startFailed}>{localizedFailure(starter.error,knownErrors,t.common.operationBlocked)}</InlineAlert> : workflowError ? <InlineAlert tone="danger" title={t.common.operationBlocked} /> : undefined}
+      actions={<><button type="button" className="secondary-button" disabled={starter.isPending} onClick={() => setReviewed(null)}>{text.cancel}</button>
+        <PendingButton type="button" className="primary-button" pending={starter.isPending} pendingLabel={text.starting} disabled={!canRun || plan.blockingProblems.length > 0}
+          onClick={() => { void start({planId:reviewed.plan.run.id,requestId:reviewed.requestId}) }}>{text.queue}</PendingButton></>}>
       {plan.blockingProblems.map((problem,i) => <OperationProblem code={problem} messages={knownErrors} title={text.blocked} key={i} />)}
       {plan.warnings.map((warning,i) => <OperationProblem code={warning} messages={knownErrors} title={text.warnings} tone="warning" key={i} />)}
       <details className="operation-disclosure" open><summary>{t.common.executionSteps(plan.steps.length)}</summary><ol>{plan.steps.map(step => <li key={step.id}>{stepName(step.kind, step.displayName)}</li>)}</ol></details>
@@ -103,7 +134,6 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
       <p>{text.connection}: {plan.connectionName}</p>
       <p>{text.resourceKind}: {plan.approvalInput.resourceKind || '—'}</p>
       </details>
-      {starter.isError ? <InlineAlert tone="danger" title={text.actionError}>{localizedFailure(starter.error, text.errors, text.actionError)}</InlineAlert> : null}
     </IntegrationDialog> : null}
   </WorkspaceSection>
 }

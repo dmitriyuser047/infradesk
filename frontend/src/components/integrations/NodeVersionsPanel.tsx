@@ -1,4 +1,6 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createRequestId } from '../../app/requestId'
+import { readPendingSubmission, storePendingSubmission, type PendingSubmission } from '../../app/pendingSubmission'
 import { ApiError } from '../../api/httpClient'
 import { activeNodeUpgrade, useNodeImageStatus, useNodeUpgrade, useNodeUpgradeActions, useNodeUpgrades } from '../../api/remnawaveNodeUpgrades'
 import { useRefreshFleet } from '../../api/remnawaveFleets'
@@ -55,7 +57,7 @@ const texts = {
 export function NodeVersionsPanel({ organizationId, integrationId, fleetId, canManage, canControl }: {
   organizationId: string; integrationId: string; fleetId: string; canManage: boolean; canControl: boolean
 }) {
-  const { locale } = useI18n(); const copy = texts[locale]
+  const { locale, t } = useI18n(); const copy = texts[locale]
   const status = useNodeImageStatus(organizationId, integrationId, fleetId)
   const history = useNodeUpgrades(organizationId, integrationId, fleetId)
   const actions = useNodeUpgradeActions(organizationId, integrationId, fleetId)
@@ -68,6 +70,19 @@ export function NodeVersionsPanel({ organizationId, integrationId, fleetId, canM
   const [open, setOpen] = useState<string | null>(null)
   const [scope, setScope] = useState('CURRENT_WAVE')
   const startRequests = useRef<Record<string, string>>({})
+  const submissionKey = `node-upgrade:${organizationId}:${integrationId}:${fleetId}`
+  const [unresolved,setUnresolved] = useState<PendingSubmission|null>(()=>readPendingSubmission(submissionKey))
+  const submit = (identity:PendingSubmission) => {
+    storePendingSubmission(submissionKey,identity)
+    actions.start.mutate(identity,{onSuccess:r=>{storePendingSubmission(submissionKey,null);setUnresolved(null);setOpen(r.id);actions.preview.reset()},
+      onError:error=>{if (!(error instanceof ApiError) || error.status>=500 || error.status===408) setUnresolved(identity)
+        else {storePendingSubmission(submissionKey,null);setUnresolved(null)}}})
+  }
+  useEffect(()=>{
+    const found = unresolved && history.data?.items.find(item=>item.id===unresolved.planId && item.state!=='PLANNED')
+    if (!found) return
+    storePendingSubmission(submissionKey,null);setUnresolved(null);setOpen(found.id);actions.preview.reset()
+  },[unresolved,history.data,submissionKey])
   const active = status.data?.active ?? history.data?.items.find(r => activeNodeUpgrade(r.state)) ?? null
   const detail = useNodeUpgrade(organizationId, integrationId, fleetId, open ?? active?.id ?? null)
   const preview = actions.preview.data
@@ -82,6 +97,7 @@ export function NodeVersionsPanel({ organizationId, integrationId, fleetId, canM
     m.observation?.managedFiles && m.releaseId && status.data.releases.some(r => r.releaseId === m.releaseId &&
       r.status !== 'BLOCKED' && r.compatibility.state === 'COMPATIBLE')))
   return <WorkspaceSection title={copy.title} description={copy.detail}>
+    {unresolved && !preview ? <InlineAlert tone="warning" title={t.common.unresolvedSubmission} action={<button type="button" className="secondary-button" disabled={!canControl || !history.isSuccess || actions.start.isPending} onClick={()=>submit(unresolved)}>{t.common.recoverSubmission}</button>} /> : null}
     {status.isPending ? <p className="muted">{copy.loading}</p> : null}
     {error ? <InlineAlert tone="danger" title={copy.error}>{error instanceof ApiError ? issue(error.code) : copy.error}</InlineAlert> : null}
     <p>{copy.compatibility}: {status.data?.panel.serverVersion ?? label('UNKNOWN')}</p>
@@ -114,7 +130,7 @@ export function NodeVersionsPanel({ organizationId, integrationId, fleetId, canM
         onChange={e => { actions.preview.reset(); setAutomaticRollback(e.target.checked) }} />{copy.auto}</label>
       {!rollbackSupported ? <p className="muted">{copy.noPrevious}</p> : null}
       <label><input type="checkbox" checked={pauseAfterCanary} onChange={e => { actions.preview.reset(); setPauseAfterCanary(e.target.checked) }} />{copy.pauseCanary}</label>
-      <button type="button" className="secondary-button" disabled={actions.preview.isPending || waveSize < 1 || waveSize > 25} onClick={() =>
+      <button type="button" className="secondary-button" disabled={!!unresolved || actions.preview.isPending || waveSize < 1 || waveSize > 25} onClick={() =>
         actions.preview.mutate({ releaseRevisionId: target.id, canaryMemberIds: canary, waveSize, automaticRollback: automaticRollback && rollbackSupported, pauseAfterCanary })}>{copy.preview}</button>
     </div> : null}
     {preview ? <div>
@@ -127,8 +143,8 @@ export function NodeVersionsPanel({ organizationId, integrationId, fleetId, canM
       {canControl && !active && preview.status === 'READY' && preview.planId ? <button type="button" className="primary-button"
         disabled={actions.start.isPending || Date.parse(preview.expiresAt!) <= Date.now()} onClick={() => {
           const planId = preview.planId!
-          const requestId = startRequests.current[planId] ?? (startRequests.current[planId] = crypto.randomUUID())
-          actions.start.mutate({ planId, requestId }, { onSuccess: r => { setOpen(r.id); actions.preview.reset() } })
+          const requestId = startRequests.current[planId] ?? (startRequests.current[planId] = createRequestId())
+          submit({planId,requestId})
         }}>{copy.start}</button> : null}
     </div> : null}
     {canControl ? <button type="button" className="secondary-button" disabled={refresh.isPending} onClick={() => refresh.mutate()}>{copy.refresh}</button> : null}

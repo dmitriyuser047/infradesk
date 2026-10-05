@@ -38,8 +38,8 @@ const planData: ProvisioningPlan = {
 
 function setup(historyItems: ProvisioningRun[] = [], detail?: ProvisioningDetail, locale: 'en' | 'ru' = 'en') {
   mocks.history.mockReturnValue({ data: { items: historyItems }, isPending: false, isError: false })
-  mocks.plan.mockReturnValue({ mutateAsync: vi.fn().mockResolvedValue(planData), isPending: false, isError: false })
-  mocks.start.mockReturnValue({ mutateAsync: mocks.startMutation, isPending: false, isError: false })
+  mocks.plan.mockReturnValue({ reset: vi.fn(), mutateAsync: vi.fn().mockResolvedValue(planData), isPending: false, isError: false })
+  mocks.start.mockReturnValue({ reset: vi.fn(), mutateAsync: mocks.startMutation, isPending: false, isError: false })
   mocks.run.mockReturnValue({ data: detail, isPending: false, isError: false, refetch: vi.fn() })
   return render(<I18nProvider initialLocale={locale}><ProvisioningPanel organizationId="org-1"
     resourceId="resource-1" resourceName="Finland VPS" canRun={false} /></I18nProvider>)
@@ -48,7 +48,7 @@ function setup(historyItems: ProvisioningRun[] = [], detail?: ProvisioningDetail
 beforeEach(() => {
   mocks.startMutation = vi.fn().mockResolvedValue(baseRun('QUEUED'))
 })
-afterEach(() => { cleanup(); vi.clearAllMocks() })
+afterEach(() => { cleanup(); vi.clearAllMocks(); sessionStorage.clear() })
 
 describe('ProvisioningPanel', () => {
   it('puts the selected operation before history and identifies the selected history entry', () => {
@@ -64,7 +64,7 @@ describe('ProvisioningPanel', () => {
   it('localizes blockers before steps and never renders arbitrary warning text', async () => {
     setup()
     cleanup()
-    mocks.plan.mockReturnValue({mutateAsync:vi.fn().mockResolvedValue({...planData,
+    mocks.plan.mockReturnValue({reset: vi.fn(), mutateAsync:vi.fn().mockResolvedValue({...planData,
       blockingProblems:['PROVISIONING_DISK_INSUFFICIENT'],warnings:['secret backend exception']}),isPending:false,isError:false})
     render(<I18nProvider initialLocale="en"><ProvisioningPanel organizationId="org-1" resourceId="resource-1" resourceName="Finland VPS" canRun /></I18nProvider>)
     fireEvent.click(screen.getByRole('button', {name:'Review readiness check'}))
@@ -87,8 +87,8 @@ describe('ProvisioningPanel', () => {
     const mutate = vi.fn().mockRejectedValueOnce(new Error('network unavailable')).mockResolvedValue(baseRun('QUEUED'))
     mocks.startMutation = mutate
     mocks.history.mockReturnValue({ data: { items: [] }, isPending: false, isError: false })
-    mocks.plan.mockReturnValue({ mutateAsync: vi.fn().mockResolvedValue(planData), isPending: false, isError: false })
-    mocks.start.mockReturnValue({ mutateAsync: mutate, isPending: false, isError: false })
+    mocks.plan.mockReturnValue({ reset: vi.fn(), mutateAsync: vi.fn().mockResolvedValue(planData), isPending: false, isError: false })
+    mocks.start.mockReturnValue({ reset: vi.fn(), mutateAsync: mutate, isPending: false, isError: false })
     mocks.run.mockReturnValue({ data: undefined, isPending: false, isError: false, refetch: vi.fn() })
     render(<I18nProvider initialLocale="en"><ProvisioningPanel organizationId="org-1"
       resourceId="resource-1" resourceName="Finland VPS" canRun /></I18nProvider>)
@@ -110,7 +110,7 @@ describe('ProvisioningPanel', () => {
 
   it('shows the trusted connection name and resource kind with Russian labels', async () => {
     mocks.history.mockReturnValue({ data: { items: [] }, isPending: false, isError: false })
-    mocks.plan.mockReturnValue({ mutateAsync: vi.fn().mockResolvedValue(planData), isPending: false, isError: false })
+    mocks.plan.mockReturnValue({ reset: vi.fn(), mutateAsync: vi.fn().mockResolvedValue(planData), isPending: false, isError: false })
     mocks.run.mockReturnValue({ data: undefined, isPending: false, isError: false, refetch: vi.fn() })
     render(<I18nProvider initialLocale="ru"><ProvisioningPanel organizationId="org-1"
       resourceId="resource-1" resourceName="Finland VPS" canRun /></I18nProvider>)
@@ -160,14 +160,14 @@ describe('ProvisioningPanel', () => {
   it('automatically opens the newest history item and disables approval for blocked plans', async () => {
     const latest = baseRun('RUNNING')
     mocks.history.mockReturnValue({ data: { items: [latest] }, isPending: false, isError: false })
-    mocks.plan.mockReturnValue({ mutateAsync: vi.fn().mockResolvedValue({
+    mocks.plan.mockReturnValue({ reset: vi.fn(), mutateAsync: vi.fn().mockResolvedValue({
       ...planData, blockingProblems: ['PROVISIONING_DISK_INSUFFICIENT'],
     }), isPending: false, isError: false })
-    mocks.start.mockReturnValue({ mutateAsync: mocks.startMutation, isPending: false, isError: false })
+    mocks.start.mockReturnValue({ reset: vi.fn(), mutateAsync: mocks.startMutation, isPending: false, isError: false })
     mocks.run.mockReturnValue({ data: { run: latest, steps: [] }, isPending: false, isError: false })
     render(<I18nProvider initialLocale="en"><ProvisioningPanel organizationId="org-1"
       resourceId="resource-1" resourceName="Finland VPS" canRun /></I18nProvider>)
-    await waitFor(() => expect(mocks.run).toHaveBeenLastCalledWith('org-1', 'run-1'))
+    await waitFor(() => expect(mocks.run).toHaveBeenCalledWith('org-1', 'run-1'))
     fireEvent.click(screen.getByRole('button', { name: 'Review readiness check' }))
     await screen.findByRole('dialog')
     expect((screen.getByRole('button', { name: 'Approve and run checks' }) as HTMLButtonElement).disabled).toBe(true)

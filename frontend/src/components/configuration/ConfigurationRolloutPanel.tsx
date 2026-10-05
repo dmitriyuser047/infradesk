@@ -1,7 +1,8 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
 import { useConfigurationAssignmentPages } from '../../api/configurationAssignments'
 import { createRequestId } from '../../app/requestId'
+import { ApiError } from '../../api/httpClient'
 import {
   useCancelRollout,
   useCreateRollout,
@@ -21,6 +22,8 @@ import {
   type RolloutItem,
   type RolloutStrategy,
   type RolloutTarget,
+  type ApprovedRolloutTarget,
+  type RolloutPreflight,
 } from '../../types/configurationRollout'
 import { InlineAlert, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { EmptyExecution, ExecutionFields, executionOf } from './ConfigurationDeploymentPanel'
@@ -125,6 +128,30 @@ export function RolloutStatusView({ organizationId, rolloutId, onRetryFailed }: 
 }
 
 type Step = 1 | 2 | 3 | 4 | 5
+type RolloutSubmission = { profileId: string; revisionNumber: number; requestId: string
+  strategy: RolloutStrategy; targets: ApprovedRolloutTarget[] }
+
+function savedRolloutRequest(key: string, profileId: string): RolloutSubmission | null {
+  try {
+    const raw = sessionStorage.getItem(key)
+    if (!raw) return null
+    const request = JSON.parse(raw) as RolloutSubmission
+    if (request.profileId === profileId && typeof request.requestId === 'string' && Number.isInteger(request.revisionNumber) &&
+      request.strategy && Array.isArray(request.targets) && request.targets.length > 0 && request.targets.every(target =>
+        typeof target.assignmentId === 'string' && Number.isInteger(target.expectedVersion) && typeof target.connectionId === 'string' &&
+        typeof target.desiredSha256 === 'string' && typeof target.connectionUpdatedAt === 'string' &&
+        typeof target.expectedRemoteMissing === 'boolean' &&
+        (target.expectedRemoteSha256 === null || typeof target.expectedRemoteSha256 === 'string') && validExecution(target.execution))) return request
+  } catch { /* Session storage can be unavailable; retain the mounted panel's identity. */ }
+  return null
+}
+
+function storeRolloutRequest(key: string, request: RolloutSubmission | null) {
+  try {
+    if (request) sessionStorage.setItem(key, JSON.stringify(request))
+    else sessionStorage.removeItem(key)
+  } catch { /* A mounted wizard still keeps the approved request in memory. */ }
+}
 
 /**
  * Explicit nodes, a compatibility check, one all-or-nothing promotion of the desired state, a
@@ -158,6 +185,13 @@ function RolloutWizard({ organizationId, profileId, latestRevisionNumber, initia
   const promote = usePromoteAssignments(organizationId, profileId)
   const preflight = useRolloutPreflight(organizationId)
   const create = useCreateRollout(organizationId)
+  const storageKey = `configuration-rollout-request:${organizationId}:${profileId}`
+  const [unresolved, setUnresolved] = useState<RolloutSubmission | null>(() => savedRolloutRequest(storageKey, profileId))
+  const [blocked, setBlocked] = useState(false)
+  const submitting = useRef(false)
+  const identity = useRef<{ key: string; request: RolloutSubmission } | null>(null)
+  const preflightEpoch = useRef(0)
+  const [approval, setApproval] = useState<{ key: string; data: RolloutPreflight; epoch: number } | null>(null)
 
   const chosen = selectedIds.flatMap(id => rows.find(row => row.id === id) ?? [])
   const nameOf = (assignmentId: string) => rows.find(row => row.id === assignmentId)?.resource.name ?? assignmentId
@@ -166,18 +200,36 @@ function RolloutWizard({ organizationId, profileId, latestRevisionNumber, initia
   const request = executionOf(execution)
   const targets: RolloutTarget[] = chosen.map(row => ({ assignmentId: row.id, expectedVersion: versionOf(row),
     connectionId: sources[row.id] ?? '', execution: request }))
+  const inputsKey = JSON.stringify([organizationId, profileId, revisionNumber, targets,
+    chosen.map(row => [row.id, row.version, row.profileRevisionNumber, row.targetPath])])
+  const currentInputs = useRef(inputsKey); currentInputs.current = inputsKey
+  const currentScope = useRef(storageKey); currentScope.current = storageKey
+  useEffect(() => { setApproval(null); identity.current = null; preflightEpoch.current += 1 }, [inputsKey])
+  useEffect(() => {
+    setUnresolved(savedRolloutRequest(storageKey, profileId)); setApproval(null); identity.current = null
+  }, [storageKey, profileId])
   const compatible = toPromote.length === 0 || (promotionPreview.data?.compatible === true &&
     promotionPreview.data.revisionNumber === revisionNumber &&
     toPromote.every(row => promotionPreview.data!.items.some(item => item.assignmentId === row.id)))
-  const preflightReady = preflight.data?.ready === true && preflight.data.items.length === chosen.length
-  const strategyValid = strategy.canaryCount >= 0 && strategy.canaryCount <= Math.min(20, chosen.length) &&
+  const approved = approval?.key === inputsKey && !preflight.isPending ? approval.data : null
+  const preflightReady = Boolean(approved?.ready && chosen.length > 0 && approved.items.length === chosen.length &&
+    targets.every(target => approved.items.some(item => item.assignmentId === target.assignmentId &&
+      item.expectedVersion === target.expectedVersion && item.connectionId === target.connectionId && item.ready &&
+      typeof item.desiredSha256 === 'string' && typeof item.connectionUpdatedAt === 'string' && item.remote !== null &&
+      (!item.remote.exists || typeof item.remote.sha256 === 'string'))))
+  const strategyValid = Number.isInteger(strategy.canaryCount) && Number.isInteger(strategy.batchSize) &&
+    Number.isInteger(strategy.pauseSeconds) && strategy.canaryCount >= 0 && strategy.canaryCount <= Math.min(20, chosen.length) &&
     strategy.batchSize >= 1 && strategy.batchSize <= 20 && strategy.pauseSeconds >= 0 && strategy.pauseSeconds <= 3600
+  const canStart = Boolean(approved && preflightReady && validExecution(request) && strategyValid &&
+    toPromote.length === 0 && !create.isPending && !unresolved)
+  const canCheckPreflight = !unresolved && !create.isPending && !preflight.isPending && validExecution(request) &&
+    chosen.length > 0 && targets.every(target => target.connectionId !== '') && toPromote.length === 0
   const stepValid: Record<Step, boolean> = {
     1: chosen.length > 0 && targets.every(target => target.connectionId !== ''),
     2: compatible,
     3: toPromote.length === 0,
     4: preflightReady && validExecution(request),
-    5: strategyValid,
+    5: canStart,
   }
 
   const toggle = (id: string) => {
@@ -191,18 +243,55 @@ function RolloutWizard({ organizationId, profileId, latestRevisionNumber, initia
     onSuccess: result => setPromotedVersions(old => ({ ...old,
       ...Object.fromEntries(result.assignments.map(item => [item.assignmentId, item.version])) })),
   })
+  const submitRequest = (submitted: RolloutSubmission) => {
+    if (submitting.current || create.isPending) { setBlocked(true); return }
+    const retained = savedRolloutRequest(storageKey, profileId)
+    if (retained && retained.requestId !== submitted.requestId) { setUnresolved(retained); setBlocked(true); return }
+    submitting.current = true; setBlocked(false); storeRolloutRequest(storageKey, submitted)
+    create.mutate(submitted, {
+      onSuccess: value => {
+        storeRolloutRequest(storageKey, null)
+        if (currentScope.current !== storageKey) return
+        setUnresolved(null); identity.current = null; onStarted(value.rolloutId)
+      },
+      onError: error => {
+        if (currentScope.current !== storageKey) return
+        if (!(error instanceof ApiError) || error.status >= 500 || error.status === 408) setUnresolved(submitted)
+        else { storeRolloutRequest(storageKey, null); setUnresolved(null); identity.current = null; setApproval(null) }
+      },
+      onSettled: () => { submitting.current = false },
+    })
+  }
   const start = () => {
-    if (!preflightReady || !strategyValid) return
-    create.mutate({ profileId, revisionNumber, requestId: createRequestId(), strategy,
+    if (!approved || !canStart || submitting.current) { setBlocked(true); return }
+    const key = JSON.stringify([inputsKey, approval?.epoch, approved.items, strategy])
+    if (identity.current?.key !== key) identity.current = { key, request: {
+      profileId, revisionNumber, requestId: createRequestId(), strategy,
       targets: targets.map(target => {
-        const item = preflight.data!.items.find(value => value.assignmentId === target.assignmentId)!
+        const item = approved.items.find(value => value.assignmentId === target.assignmentId)!
         return { ...target, desiredSha256: item.desiredSha256!, connectionUpdatedAt: item.connectionUpdatedAt!,
           expectedRemoteSha256: item.remote?.sha256 ?? null, expectedRemoteMissing: !item.remote?.exists }
-      }) }, { onSuccess: value => onStarted(value.rolloutId) })
+      }) } }
+    submitRequest(identity.current.request)
+  }
+  const checkPreflight = () => {
+    if (!canCheckPreflight || submitting.current) { setBlocked(true); return }
+    const key = inputsKey; const epoch = ++preflightEpoch.current
+    setApproval(null); identity.current = null; setBlocked(false)
+    preflight.mutate({ profileId, revisionNumber, targets }, {
+      onSuccess: data => {
+        if (currentInputs.current === key && preflightEpoch.current === epoch) setApproval({ key, data, epoch })
+      },
+    })
   }
   const stepNames = [t.steps.revision, t.steps.compatibility, t.steps.promote, t.steps.preflight, t.steps.strategy]
 
   return <div className="rollout-wizard">
+    {unresolved ? <InlineAlert tone="warning" title={i18n.t.common.unresolvedSubmission}
+      action={<button type="button" className="secondary-button" disabled={create.isPending}
+        onClick={() => submitRequest(unresolved)}>{i18n.t.common.recoverSubmission}</button>} /> : null}
+    {blocked ? <InlineAlert tone="danger" title={i18n.t.common.operationBlocked} /> : null}
+    {create.isError && step!==5 ? <InlineAlert tone="danger" title={describeError(create.error,i18n)} /> : null}
     <ol className="rollout-steps">{stepNames.map((name, index) =>
       <li key={name} aria-current={step === index + 1 ? 'step' : undefined}
         className={step === index + 1 ? 'rollout-step-current' : undefined}>{name}</li>)}</ol>
@@ -273,8 +362,8 @@ function RolloutWizard({ organizationId, profileId, latestRevisionNumber, initia
 
     {step === 4 ? <>
       <ExecutionFields idPrefix="rollout" value={execution} onChange={value => { setExecution(value); preflight.reset() }} />
-      <button type="button" className="secondary-button" disabled={preflight.isPending || !validExecution(request)}
-        onClick={() => preflight.mutate({ profileId, revisionNumber, targets })}>
+      <button type="button" className="secondary-button" disabled={!canCheckPreflight}
+        onClick={checkPreflight}>
         {preflight.isPending ? t.preflighting : t.preflight}</button>
       {preflight.data ? <div className="table-scroll"><table className="data-grid">
         <caption className="visually-hidden">{t.steps.preflight}</caption>
@@ -312,7 +401,7 @@ function RolloutWizard({ organizationId, profileId, latestRevisionNumber, initia
           onChange={event => setStrategy({ ...strategy, stopOnFailure: event.target.checked })} />{t.stopOnFailure}</label>
       </div>
       {!strategyValid ? <InlineAlert tone="warning" title={t.strategyInvalid} /> : null}
-      <button type="button" className="primary-button" disabled={!preflightReady || !strategyValid || create.isPending}
+      <button type="button" className="primary-button" disabled={!canStart}
         onClick={start}>{create.isPending ? t.starting : t.start}</button>
       {create.isError ? <InlineAlert tone="danger" title={describeError(create.error, i18n)} /> : null}
     </> : null}

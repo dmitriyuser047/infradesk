@@ -339,7 +339,7 @@ function FleetDetailView({ copy, organizationId, integrationId, detail, canManag
           <td>{copy.stateNames[revision.desiredConfiguration.desiredNodeState]}</td>
           <td>{revision.desired ? null : <>
             <button className="secondary-button" type="button" disabled={preview.isPending}
-              onClick={() => preview.mutateAsync(revision.id).then(setImpact).catch(() => setImpact(null))}>
+              onClick={() => {setImpact(null);preview.mutate(revision.id,{onSuccess:setImpact})}}>
               {copy.impact}</button>
             {canManage ? <button className="secondary-button" type="button" disabled={promote.isPending}
               onClick={() => promote.mutate({ revisionId: revision.id, expectedVersion: fleet.version })}>
@@ -348,6 +348,7 @@ function FleetDetailView({ copy, organizationId, integrationId, detail, canManag
         </tr>)}</tbody></table></div>
     </WorkspaceSection>
 
+    {preview.isError ? <InlineAlert tone="danger" title={copy.requestError} /> : null}
     {impact ? <ImpactDialog copy={copy} impact={impact} onClose={() => setImpact(null)} /> : null}
     {revising && desired ? <RevisionDialog copy={copy} organizationId={organizationId}
       integrationId={integrationId} fleet={fleet} current={desired} onClose={() => setRevising(false)} /> : null}

@@ -112,6 +112,12 @@ function mount(entry = '/', locale: 'en' | 'ru' = 'en', role = 'OWNER',
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('FleetSection', () => {
+  it('shows revision impact preview failures instead of silently clearing the dialog',async()=>{
+    mount('/?fleet=fleet-1','en','OWNER',url=>url.includes('/revisions/revision-2/preview') ? json({code:'HTTP_ERROR',message:'raw secret' },503) : undefined)
+    fireEvent.click((await screen.findAllByText('Impact of this revision'))[0])
+    expect((await screen.findAllByText('The request could not be completed.')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('raw secret')).toBeNull()
+  })
   it('lists fleets with their compliance and health counts', async () => {
     mount()
     expect(await screen.findByText('Production VPN')).toBeTruthy()

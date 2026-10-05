@@ -1,4 +1,7 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createRequestId } from '../../app/requestId'
+import { readPendingSubmission, storePendingSubmission, type PendingSubmission } from '../../app/pendingSubmission'
+import { ApiError } from '../../api/httpClient'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useNodeOnboardingHistory, useNodeOnboardingOptions, useNodeOnboardingRun, usePreviewNodeOnboarding, useStartNodeOnboarding } from '../../api/nodeOnboarding'
 import { useResource } from '../../api/resources'
@@ -47,13 +50,6 @@ function validCidr(value: string) {
   const max = ipv4 ? 32 : 128
   return /^\d+$/.test(mask) && Number(mask) > 0 && Number(mask) <= max
 }
-function newRequestId() {
-  return globalThis.crypto?.randomUUID?.() ?? 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, letter => {
-    const value = Math.floor(Math.random() * 16)
-    return (letter === 'x' ? value : (value & 3) | 8).toString(16)
-  })
-}
-
 export function NodeOnboarding({ organizationId, integrationId }: { organizationId: string; integrationId: string }) {
   const i18n = useI18n(); const copy = texts[i18n.locale]
   const permissions = useOrganizationPermissions(organizationId)
@@ -65,38 +61,51 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const start = useStartNodeOnboarding(organizationId, integrationId)
   const [params, setParams] = useSearchParams()
   const runId = params.get('onboardingRun')
-  const runQuery = useNodeOnboardingRun(organizationId, integrationId, runId)
+  const submissionKey = `node-onboarding:${organizationId}:${integrationId}`
+  const [unresolved,setUnresolved] = useState<PendingSubmission|null>(()=>readPendingSubmission(submissionKey))
+  const runQuery = useNodeOnboardingRun(organizationId, integrationId, runId ?? unresolved?.planId ?? null)
   const [open, setOpen] = useState(false); const [step, setStep] = useState<Step>(0)
   const [resourceId, setResourceId] = useState(''); const [nodeName, setNodeName] = useState('')
   const [address, setAddress] = useState(''); const [port, setPort] = useState('2222')
   const [configProfileId, setConfigProfileId] = useState(''); const [activeInboundIds, setActiveInboundIds] = useState<string[]>([])
-  const [cidrs, setCidrs] = useState(''); const [preview, setPreview] = useState<NodeOnboardingPreview | null>(null)
+  const [cidrs, setCidrs] = useState(''); const [reviewed, setReviewed] = useState<{plan:NodeOnboardingPreview;requestId:string}|null>(null)
+  const preview = reviewed?.plan
+  const [workflowError,setWorkflowError] = useState(false)
+  const submitting=useRef(false)
   const selectedResource = useResource(organizationId, resourceId || undefined)
-  const requestId = useRef<string | null>(null)
   const server = options.data?.servers.find(value => value.id === resourceId)
   const profile = options.data?.profiles.find(value => value.id === configProfileId)
   const cidrValues = useMemo(() => cidrs.split(/[\s,]+/).filter(Boolean), [cidrs])
   const run = runQuery.data?.run
   const hasRun = Boolean(runId)
   const setRunInUrl = (id: string | null) => setParams(previous => { const next = new URLSearchParams(previous); if (id) next.set('onboardingRun', id); else next.delete('onboardingRun'); return next }, { replace: true })
-  const closeWizard = () => { setOpen(false); setStep(0); setPreview(null); setRunInUrl(null); requestId.current = null }
+  const closeWizard = () => { setOpen(false); setStep(0); setReviewed(null); setRunInUrl(null) }
   const selectServer = (id: string) => { setResourceId(id); const value = options.data?.servers.find(item => item.id === id); if (value) { setAddress(value.address); if (!nodeName) setNodeName(value.name) } }
   const exactBody = (): NodeOnboardingPreviewRequest => ({ resourceId, nodeName: nodeName.trim(), address: address.trim(), nodePort: Number(port), configProfileId, activeInboundIds, panelCidrs: cidrValues, desiredState: 'ENABLED' })
   const formValid = Boolean(server && nodeName.trim().length >= 3 && nodeName.trim().length <= 30 && !/[\x00-\x1f\x7f]/.test(nodeName) && address.trim() && Number.isInteger(Number(port)) && Number(port) >= 1 && Number(port) <= 65535 && profile && activeInboundIds.length > 0 && cidrValues.length > 0 && cidrValues.length <= 32 && new Set(cidrValues).size === cidrValues.length && cidrValues.every(validCidr))
-  const makePreview = async () => { if (!formValid || !canConfigure) return; const value = await previewRequest.mutateAsync(exactBody()); requestId.current = null; setPreview(value); setStep(3) }
-  const apply = async () => {
-    if (!preview || preview.blockingProblems.length || !canConfigure) return
-    if (!requestId.current) requestId.current = newRequestId()
-    try { const value = await start.mutateAsync({ planId: preview.run.id, requestId: requestId.current }); setRunInUrl(value.id); setStep(4) }
-    catch { /* Keep the request ID so resubmission can recover the same operation. */ }
+  const makePreview = async () => { setWorkflowError(false); const value = await previewRequest.mutateAsync(exactBody()); start.reset(); setReviewed({plan:value,requestId:createRequestId()}); setStep(3) }
+  const apply = async (identity:PendingSubmission) => {
+    if (submitting.current || start.isPending || !canConfigure || (preview?.blockingProblems.length ?? 0)>0) {setWorkflowError(true);return}
+    submitting.current=true;setWorkflowError(false)
+    storePendingSubmission(submissionKey,identity)
+    try { const value = await start.mutateAsync(identity); storePendingSubmission(submissionKey,null);setUnresolved(null);setRunInUrl(value.id);setStep(4) }
+    catch(error) { if (!(error instanceof ApiError) || error.status>=500 || error.status===408) setUnresolved(identity)
+      else {storePendingSubmission(submissionKey,null);setUnresolved(null)} }
+    finally {submitting.current=false}
   }
+  useEffect(()=>{
+    const found = unresolved && (history.data?.items.find(item=>item.requestId===unresolved.requestId && item.state!=='PLANNED') ??
+      (runQuery.data?.run.state!=='PLANNED' && runQuery.data?.run.id===unresolved.planId ? runQuery.data.run : null))
+    if (!found) return
+    storePendingSubmission(submissionKey,null);setUnresolved(null);setRunInUrl(found.id);setOpen(true);setStep(4)
+  },[unresolved,history.data,runQuery.data,submissionKey])
   const openExisting = (id: string) => { setRunInUrl(id); setOpen(true); setStep(4) }
   const unsupported = options.data !== undefined && !options.data.nodeApi?.provisioningReady
   const current = hasRun ? run : null
 
   return <WorkspaceSection title={copy.add}>
     <div className="integration-row-actions">
-      <button className="primary-button" type="button" disabled={!canConfigure || unsupported || options.isPending || options.isError} onClick={() => { setOpen(true); if (runId) setStep(4) }}>{copy.add}</button>
+      <button className="primary-button" type="button" disabled={!!unresolved || !canConfigure || unsupported || options.isPending || options.isError} onClick={() => { setOpen(true); if (runId) setStep(4) }}>{copy.add}</button>
       {history.data?.items.length ? <span className="muted-copy">{copy.history}: {history.data.items.length}</span> : null}
     </div>
     {!canConfigure ? <p className="muted-copy">{i18n.locale === 'ru' ? 'Для добавления узла требуются права управления интеграциями, конфигурациями и операциями.' : 'Adding a node requires manage integrations, manage configurations, and execute operations permissions.'}</p> : null}
@@ -108,13 +117,17 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
       {item.nodeName} · {item.address} · {item.state}</button>)}
     {hasRun && runQuery.isPending ? <p role="status">{copy.loading}</p> : null}
     {hasRun && runQuery.isError ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Не удалось загрузить запуск' : 'Could not load onboarding run'} /> : null}
+    {unresolved && !open ? <InlineAlert tone="warning" title={i18n.t.common.unresolvedSubmission} action={<PendingButton pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || !runQuery.isSuccess} onClick={()=>void apply(unresolved)}>{i18n.t.common.recoverSubmission}</PendingButton>} /> : null}
+    {workflowError && !previewRequest.isError ? <InlineAlert tone="danger" title={i18n.t.common.operationBlocked} /> : null}
+    {!open && start.isError ? <InlineAlert tone="danger" title={copy.requestError} /> : null}
     {open || hasRun ? <IntegrationDialog title={copy.title} size="large" onClose={closeWizard} busy={start.isPending || previewRequest.isPending}
       actionNote={step === 3 && preview?.blockingProblems.length ? i18n.t.common.blockedAction(preview.blockingProblems.length) : undefined}
+      actionFeedback={previewRequest.isError || start.isError || workflowError ? <InlineAlert tone="danger" title={start.isError ? copy.requestError : i18n.t.common.operationBlocked} /> : undefined}
       actions={<>
-        {step > 0 && step < 4 ? <button className="secondary-button" type="button" onClick={() => { setPreview(null); requestId.current = null; setStep((step - 1) as Step) }}>{copy.back}</button> : null}
+        {step > 0 && step < 4 ? <button className="secondary-button" type="button" disabled={!!unresolved || start.isPending || previewRequest.isPending} onClick={() => { setReviewed(null); setStep((step - 1) as Step) }}>{copy.back}</button> : null}
         {step < 3 ? <button className="primary-button" type="button" disabled={!canConfigure || unsupported || options.isPending || (step === 0 && (!resourceId || !server?.serverProfileName || server.blockingProblems.length > 0)) || (step === 1 && (!nodeName.trim() || !address.trim() || !Number(port) || !profile || activeInboundIds.length === 0)) || (step === 2 && !formValid)} onClick={() => setStep((step + 1) as Step)}>{copy.next}</button> : null}
-        {step === 3 ? <PendingButton className={preview ? 'secondary-button' : 'primary-button'} type="button" pending={previewRequest.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || !formValid} onClick={() => void makePreview().catch(() => undefined)}>{copy.preview}</PendingButton> : null}
-        {step === 3 && preview ? <PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || preview.blockingProblems.length > 0} onClick={() => void apply()}>{copy.apply}</PendingButton> : null}
+        {step === 3 ? <PendingButton className={preview ? 'secondary-button' : 'primary-button'} type="button" pending={previewRequest.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!!unresolved || !canConfigure || !formValid} onClick={() => void makePreview().catch(() => setWorkflowError(true))}>{copy.preview}</PendingButton> : null}
+        {step === 3 && reviewed ? <PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || reviewed.plan.blockingProblems.length > 0} onClick={() => void apply({planId:reviewed.plan.run.id,requestId:reviewed.requestId})}>{copy.apply}</PendingButton> : null}
         {step === 4 || hasRun ? <button className="secondary-button" type="button" onClick={closeWizard}>{copy.close}</button> : null}
       </>}>
       {!canConfigure ? <InlineAlert tone="info" title={i18n.locale === 'ru' ? 'Недостаточно прав для подготовки узла' : 'Missing permissions to provision nodes'}>{i18n.locale === 'ru' ? 'Для подготовки требуются права управления интеграциями, конфигурациями и операциями.' : 'Provisioning requires manage integrations, manage configurations, and execute operations.'}</InlineAlert> : null}
@@ -139,8 +152,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
           <p>{preview.nodeImage}</p><p>{copy.cidrs}: {preview.panelCidrs?.join(', ') ?? cidrValues.join(', ')}</p>
           {preview.nodeApi ? <p>Remnawave {preview.nodeApi.serverVersion} · {preview.nodeApi.apiGeneration} · {preview.nodeApi.sourceCommit}</p> : null}
           <ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings} /><ReviewList title={copy.blockers} values={preview.blockingProblems} danger />
-          {previewRequest.isError ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Ошибка проверки' : 'Preview failed'} /> : null}
-          {start.isError ? <InlineAlert tone="warning" title={copy.requestError} /> : null}</section> : null}
+          </section> : null}
       </> : null}
       {(step === 4 || hasRun) && current ? <RunStatus run={current} detail={runQuery.data} copy={copy} /> : null}
       {(step === 4 || hasRun) && !current && !runQuery.isPending ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Запуск не найден' : 'Run not found'} /> : null}

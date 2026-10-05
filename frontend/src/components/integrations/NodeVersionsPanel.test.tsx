@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient } from '../../app/queryClient'
 import { I18nProvider } from '../../i18n'
 import { NodeVersionsPanel } from './NodeVersionsPanel'
+
+const getRandomValues = crypto.getRandomValues.bind(crypto)
+ beforeEach(() => vi.stubGlobal('crypto', {getRandomValues}))
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 const release = { releaseId: 'node-3.4.1', nodeVersion: '3.4.1', imageRepository: 'ghcr.io/remnawave/node', manifestDigest: `sha256:${'a'.repeat(64)}`,
@@ -40,8 +43,20 @@ function mount(options: Options = {}, extra: (url: string, method: string) => Re
   </QueryClientProvider></I18nProvider>)
   return calls
 }
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
 describe('NodeVersionsPanel', () => {
+  it('recovers a saved uncertain upgrade with the original request ID on insecure HTTP', async () => {
+    const identity={planId:'pending-plan',requestId:'d1111111-1111-4111-8111-111111111111'}
+    sessionStorage.setItem('node-upgrade:org:i1:f1',JSON.stringify(identity))
+    const calls=mount({},(url,method)=>url.endsWith('/node-upgrades') && method==='POST' ? json(current()) : undefined)
+    const retry=await screen.findByRole('button',{name:'Retry unconfirmed submission'}) as HTMLButtonElement
+    await waitFor(()=>expect(retry.disabled).toBe(false))
+    expect(calls.filter(c=>c.method==='POST')).toHaveLength(0)
+    fireEvent.click(retry)
+    await waitFor(()=>expect(calls.filter(c=>c.method==='POST')).toHaveLength(1))
+    expect(calls.find(c=>c.method==='POST')?.body).toEqual(identity)
+    await waitFor(()=>expect(sessionStorage.length).toBe(0))
+  })
   it('shows version, availability and architecture without arbitrary image input', async () => {
     mount()
     expect(await screen.findByText('Update available')).toBeTruthy()

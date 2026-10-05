@@ -10,7 +10,7 @@ vi.mock('../../api/serverProfiles', () => ({
   useServerProfile: mocks.profile, useServerProfileAutomation: mocks.automation, useServerProfiles: mocks.list, useObserveServerProfile: mocks.observe,
   usePreviewServerProfile: mocks.preview, useAssignServerProfile: mocks.assign, useUnassignServerProfile: mocks.unassign,
 }))
-vi.mock('../../api/provisioning', () => ({ useStartProvisioning: mocks.start }))
+vi.mock('../../api/provisioning', () => ({ useStartProvisioning: mocks.start, useProvisioningRun: () => ({data:undefined}) }))
 import { ServerProfileAutomationPanel } from './ServerProfileAutomationPanel'
 
 const plan: ServerProfilePlan = {
@@ -33,11 +33,11 @@ function renderPanel(role: 'OWNER'|'MEMBER' = 'OWNER', onQueued = vi.fn(), optio
   mocks.preview.mockReturnValue({ mutateAsync:vi.fn().mockResolvedValue(options.previewPlan ?? plan), isPending:false, isError:false })
   mocks.assign.mockReturnValue({ mutateAsync:vi.fn().mockResolvedValue({}), isPending:false, isError:false })
   mocks.unassign.mockReturnValue({ mutateAsync:vi.fn().mockResolvedValue({}), isPending:false, isError:false })
-  mocks.start.mockReturnValue({ mutateAsync:mocks.startMutation, isPending:options.startPending ?? false, isError:false })
+  mocks.start.mockReturnValue({ mutateAsync:mocks.startMutation, reset:vi.fn(), isPending:options.startPending ?? false, isError:false })
   render(<I18nProvider initialLocale={options.locale ?? 'en'}><QueryClientProvider client={client}><ServerProfileAutomationPanel organizationId="org" resourceId="resource" resourceName="Finland VPS" onRunQueued={onQueued} /></QueryClientProvider></I18nProvider>)
   return { onQueued }
 }
-afterEach(() => { cleanup(); vi.clearAllMocks() })
+afterEach(() => { cleanup(); vi.clearAllMocks(); sessionStorage.clear() })
 
 describe('server profile resource automation', () => {
   it('keeps a pending application dialog open and disables both dismissal actions', async () => {

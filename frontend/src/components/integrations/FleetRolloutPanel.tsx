@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { createRequestId } from '../../app/requestId'
+import { readPendingSubmission, storePendingSubmission, type PendingSubmission } from '../../app/pendingSubmission'
 import { ApiError } from '../../api/httpClient'
 import { activeRolloutState, useFleetRollout, useFleetRolloutControl, useFleetRollouts, usePreviewFleetRollout, useRefreshFleet,
   useStartFleetRollout } from '../../api/remnawaveFleets'
@@ -271,18 +273,28 @@ export function FleetRolloutPanel({ organizationId, integrationId, fleetId, desi
   const i18n = useI18n(); const copy = texts[i18n.locale]
   const list = useFleetRollouts(organizationId, integrationId, fleetId, true)
   const control = useFleetRolloutControl(organizationId, integrationId, fleetId)
+  const recoveryStart = useStartFleetRollout(organizationId, integrationId, fleetId)
+  const submissionKey = `fleet-rollout:${organizationId}:${integrationId}:${fleetId}`
+  const [unresolved, setUnresolved] = useState<PendingSubmission | null>(() => readPendingSubmission(submissionKey))
   const [planning, setPlanning] = useState(false)
   const [openId, setOpenId] = useState<string | null>(null)
   const items = (list.data?.items ?? []).filter(item => !item.expired)
   const expired = (list.data?.items ?? []).filter(item => item.expired)
   const active = items.find(item => activeRolloutState(item.state)) ?? null
   const shown = active ?? items[0] ?? null
+  useEffect(() => {
+    const found = unresolved && list.data?.items.find(item => item.id === unresolved.planId && item.state !== 'PLANNED')
+    if (!found) return
+    storePendingSubmission(submissionKey,null); setUnresolved(null); setOpenId(found.id); setPlanning(false)
+  }, [unresolved,list.data,submissionKey])
 
   return <WorkspaceSection title={copy.title} description={copy.detail}
     actions={canControl && desiredRevisionId && !active
-      ? <button className="secondary-button" type="button" onClick={() => setPlanning(true)}>{copy.deploy}</button>
+      ? <button className="secondary-button" type="button" disabled={!!unresolved} onClick={() => setPlanning(true)}>{copy.deploy}</button>
       : undefined}>
     {control.isError ? <InlineAlert tone="danger" title={copy.requestError}>{errorLabel(copy, control.error)}</InlineAlert> : null}
+    {unresolved && !planning ? <InlineAlert tone="warning" title={i18n.t.common.unresolvedSubmission} action={<button type="button" className="secondary-button" disabled={!canControl || !list.isSuccess || recoveryStart.isPending} onClick={() => recoveryStart.mutate(unresolved,{onSuccess:run=>{storePendingSubmission(submissionKey,null);setUnresolved(null);setOpenId(run.id)}})}>{i18n.t.common.recoverSubmission}</button>} /> : null}
+    {recoveryStart.isError ? <InlineAlert tone="danger" title={copy.requestError}>{errorLabel(copy,recoveryStart.error)}</InlineAlert> : null}
     {active ? <InlineAlert tone="info" title={copy.inProgress}>{copy.states[active.state]}</InlineAlert> : null}
     {shown ? <RolloutCard copy={copy} organizationId={organizationId} integrationId={integrationId}
       fleetId={fleetId} rollout={shown} canControl={canControl} busy={control.isPending}
@@ -303,7 +315,7 @@ export function FleetRolloutPanel({ organizationId, integrationId, fleetId, desi
 
     {planning && desiredRevisionId && canControl && !active ? <PlanDialog copy={copy} organizationId={organizationId}
       integrationId={integrationId} fleetId={fleetId} revisionId={desiredRevisionId} members={members}
-      onClose={() => setPlanning(false)} /> : null}
+      unresolved={unresolved} onUnresolved={setUnresolved} onClose={() => setPlanning(false)} /> : null}
     {openId ? <RolloutDetailDialog copy={copy} organizationId={organizationId} integrationId={integrationId}
       fleetId={fleetId} id={openId} onClose={() => setOpenId(null)} /> : null}
   </WorkspaceSection>
@@ -372,9 +384,9 @@ function RolloutCard({ copy, organizationId, integrationId, fleetId, rollout, ca
   </div>
 }
 
-function PlanDialog({ copy, organizationId, integrationId, fleetId, revisionId, members, onClose }: {
+function PlanDialog({ copy, organizationId, integrationId, fleetId, revisionId, members, onClose, onUnresolved, unresolved }: {
   copy: Copy; organizationId: string; integrationId: string; fleetId: string; revisionId: string
-  members: FleetMember[]; onClose: () => void
+  members: FleetMember[]; onClose: () => void; onUnresolved: (value:PendingSubmission|null)=>void; unresolved:PendingSubmission|null
 }) {
   const preview = usePreviewFleetRollout(organizationId, integrationId, fleetId)
   const start = useStartFleetRollout(organizationId, integrationId, fleetId)
@@ -384,7 +396,8 @@ function PlanDialog({ copy, organizationId, integrationId, fleetId, revisionId, 
   const [waveSize, setWaveSize] = useState(2)
   const [automatic, setAutomatic] = useState(true)
   const [pauseAfter, setPauseAfter] = useState(true)
-  const [requestId] = useState(() => crypto.randomUUID())
+  const [requestId] = useState(() => createRequestId())
+  const submissionKey = `fleet-rollout:${organizationId}:${integrationId}:${fleetId}`
   const optionsKey = JSON.stringify([revisionId, [...canary].sort(), waveSize, automatic, pauseAfter])
   const [previewKey, setPreviewKey] = useState<string | null>(null)
   const result: RolloutPreview | undefined = previewKey === optionsKey && !preview.isPending ? preview.data : undefined
@@ -397,14 +410,17 @@ function PlanDialog({ copy, organizationId, integrationId, fleetId, revisionId, 
   return <IntegrationDialog title={copy.previewTitle} size="large" busy={start.isPending} onClose={onClose}
     actions={<>
       <button className="secondary-button" type="button" disabled={start.isPending} onClick={onClose}>{copy.cancel}</button>
-      <button className="secondary-button" type="button" disabled={preview.isPending || waveSize < 1}
+      <button className="secondary-button" type="button" disabled={!!unresolved || start.isPending || preview.isPending || waveSize < 1}
         onClick={() => { setPreviewKey(optionsKey); preview.mutate({ revisionId, canaryMemberIds: canary, waveSize,
           automaticRollback: automatic, pauseAfterCanary: pauseAfter }) }}>{copy.makePlan}</button>
       {result?.status === 'READY' ? <button className="primary-button" type="button" disabled={start.isPending}
-        onClick={() => start.mutate({ planId: result.planId, requestId }, { onSuccess: onClose,
-          onError: error => { if (error instanceof ApiError && (error.code === 'REMNAWAVE_FLEET_ROLLOUT_REFRESH_REQUIRED' ||
+        onClick={() => { const identity = { planId:result.planId,requestId }; storePendingSubmission(submissionKey,identity)
+          start.mutate(identity, { onSuccess: () => {storePendingSubmission(submissionKey,null);onUnresolved(null);onClose()},
+          onError: error => { if (!(error instanceof ApiError) || error.status >= 500 || error.status===408) onUnresolved(identity)
+            else {storePendingSubmission(submissionKey,null);onUnresolved(null)}
+            if (error instanceof ApiError && (error.code === 'REMNAWAVE_FLEET_ROLLOUT_REFRESH_REQUIRED' ||
             error.code === 'REMNAWAVE_FLEET_ROLLOUT_PLAN_CHANGED')) setPreviewKey(null) },
-        })}>{copy.start}</button> : null}
+        }) }}>{copy.start}</button> : null}
     </>}>
     <p className="muted">{copy.planDetail}</p>
     <fieldset><legend>{copy.canary}</legend>

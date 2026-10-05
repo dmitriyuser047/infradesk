@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useAvailableResourceOperations, useExecuteResourceOperation, useResourceOperationExecutions } from '../../api/resourceOperations'
 import { useI18n } from '../../i18n'
 import { secondsBetween } from '../../i18n/format'
-import { describeError, describeFailure } from '../../i18n/errors'
+import { codeText, describeFailure } from '../../i18n/errors'
+import { ApiError } from '../../api/httpClient'
 import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { useOrganizationPermissions } from '../auth/authorization'
 import type { ResourceOperationCode } from '../../types/resourceOperation'
@@ -33,6 +34,7 @@ export function ResourceOperationsPanel({ organizationId, resourceId, resourceNa
   if (operationsApplicability(available, history) === 'not-applicable') return null
   const running = history.data?.some(item => item.status === 'RUNNING') ?? false
   const selectedImpact = selected ? operationAppearance(selected).impact : 'normal'
+  const submissionError = mutation.error instanceof ApiError ? codeText(mutation.error.code,i18n) ?? i18n.t.common.operationBlocked : i18n.t.common.operationBlocked
 
   return <div className="resource-operations">
     <WorkspaceSection title={t.actions}>
@@ -50,7 +52,7 @@ export function ResourceOperationsPanel({ organizationId, resourceId, resourceNa
         })}
       </div> : null}
       {available.data && available.data.operations.length > 0 && !canExecute ? <p className="muted-copy">{t.notPermitted}</p> : null}
-      {mutation.isError ? <InlineAlert tone="danger" title={t.startFailed}>{describeError(mutation.error, i18n)}</InlineAlert> : null}
+      {mutation.isError && !selected ? <InlineAlert tone="danger" title={t.startFailed}>{submissionError}</InlineAlert> : null}
     </WorkspaceSection>
 
     <WorkspaceSection title={t.recent}>
@@ -82,6 +84,7 @@ export function ResourceOperationsPanel({ organizationId, resourceId, resourceNa
     }}><section className="monitor-rule-dialog" role="dialog" aria-modal="true" aria-labelledby="operation-confirm-title">
       <div className="dialog-heading"><h2 id="operation-confirm-title">{t.confirmTitle(label(selected))}</h2></div>
       <div className="dialog-body"><p>{t.confirmQuestion(label(selected), resourceName)}</p>
+        {mutation.isError ? <InlineAlert tone="danger" title={t.startFailed}>{submissionError}</InlineAlert> : null}
         <p className="muted-copy">{t.confirmDetail}</p></div>
       <div className="dialog-actions"><button className="secondary-button" type="button" disabled={mutation.isPending} onClick={() => setSelected(null)}>{i18n.t.common.cancel}</button>
         <button className={selectedImpact === 'disruptive' ? 'danger-button' : 'primary-button'} type="button" disabled={mutation.isPending}

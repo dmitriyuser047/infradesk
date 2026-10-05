@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient } from '../../app/queryClient'
 import { I18nProvider } from '../../i18n'
 import type { FleetMember, FleetRolloutDetail } from '../../types/remnawaveFleet'
 import { FleetRolloutPanel } from './FleetRolloutPanel'
+
+const getRandomValues = crypto.getRandomValues.bind(crypto)
+ beforeEach(() => vi.stubGlobal('crypto', {getRandomValues}))
 
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
@@ -45,9 +48,22 @@ function mount(current: FleetRolloutDetail | null, extra: (url: string, method: 
   return { calls }
 }
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
 
 describe('FleetRolloutPanel', () => {
+  it('recovers a saved uncertain request after reload without creating a new identity', async () => {
+    const identity={planId:'pending-plan',requestId:'d1111111-1111-4111-8111-111111111111'}
+    sessionStorage.setItem('fleet-rollout:org:i1:f1',JSON.stringify(identity))
+    const {calls}=mount(null,(url,method)=>url.endsWith('/rollouts') && method==='POST' ? json(rollout(),202) : undefined)
+    const retry=await screen.findByRole('button',{name:'Retry unconfirmed submission'}) as HTMLButtonElement
+    await waitFor(()=>expect(retry.disabled).toBe(false))
+    expect(calls.filter(c=>c.method==='POST')).toHaveLength(0)
+    expect((screen.getByText('Deploy') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(retry)
+    await waitFor(()=>expect(calls.filter(c=>c.method==='POST')).toHaveLength(1))
+    expect(calls.find(c=>c.method==='POST')?.body).toEqual(identity)
+    await waitFor(()=>expect(sessionStorage.length).toBe(0))
+  })
   it('shows UNKNOWN as its own state without a retry action', async () => {
     mount(rollout({ state: 'UNKNOWN', phase: 'APPLY_CANARY' }))
     expect(await screen.findByText('The outcome is unknown')).toBeTruthy()

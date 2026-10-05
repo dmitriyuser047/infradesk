@@ -46,6 +46,8 @@ export const ru: Messages = {
   units: { day: ' д', hour: ' ч', minute: ' мин', second: ' с', megabytes: 'МБ', gigabytes: 'ГБ' },
 
   common: {
+    unresolvedSubmission: 'Результат отправки не подтверждён. Проверьте операцию или повторите тот же запрос перед подготовкой новой операции.',
+    recoverSubmission: 'Повторить неподтверждённую отправку',
     operationBlocked: 'InfraDesk обнаружил проблему, из-за которой операцию нельзя безопасно продолжить.',
     operationWarning: 'Проверьте предупреждение перед продолжением операции.',
     blockedAction: (n: number) => `Применение недоступно: обнаружено блокирующих проблем — ${n}.`,
