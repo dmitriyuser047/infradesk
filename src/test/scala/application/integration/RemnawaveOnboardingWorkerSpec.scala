@@ -54,7 +54,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     val token = uid
     var record = RemnawaveNodeOnboardingRun(runId, org, integrationId, resource, None, uid,
       ProvisioningRunState.Running, initialPhase, snap, now, now, externalNodeId =
-        if (initialPhase == OnboardingPhase.CreateNode) None else Some(nodeId),
+        if (OnboardingPhase.all.indexOf(initialPhase) <= OnboardingPhase.all.indexOf(OnboardingPhase.CreateNode)) None else Some(nodeId),
       startedAt = Some(now), claimToken = Some(token), claimDeadline = Some(now.plusSeconds(900)))
     var inFlight = true // seed phase as already RUNNING, which also exercises crash recovery
     var phases = List(OnboardingPhaseRecord(initialPhase, "RUNNING", Some(oldStartedAt), None, None))
@@ -68,6 +68,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     override def start(o: UUID, i: UUID, p: UUID, q: UUID, a: UUID, at: Instant) = IO.pure(record)
     override def find(o: UUID, i: UUID, id: UUID) = IO.pure(Some(record -> phases))
     override def history(o: UUID, i: UUID, limit: Int) = IO.pure(List(record))
+    override def createdNodes(o: UUID, r: UUID) = IO.pure(List(record).filter(_.externalNodeId.nonEmpty))
     override def claim(owner: UUID, claimToken: UUID, at: Instant, until: Instant, limit: Int) = IO {
       if (record.state.terminal) Nil else { record = record.copy(claimToken = Some(claimToken), claimDeadline = Some(until)); List(record) }
     }
@@ -119,6 +120,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     var recon = reconciliation
     var create = createOutcome
     var local = localGood
+    var firewallResult = ProvisioningStepResult(Map.empty, None, Some(true))
     var syncStatus: IntegrationSyncStatus = IntegrationSyncStatus.Completed
     var bindingVerified = true
     var bindConflict = false
@@ -146,7 +148,8 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     val remote = new RemnawaveNodeRemote[IO] {
       override def installationPrerequisites(c: Connection) = IO.pure(ProvisioningStepResult(Map.empty, None, Some(true)))
       override def preflight(c: Connection, r: UUID, p: Int) = IO { events += "preflight"; ProvisioningStepResult(Map.empty, None, Some(true)) }
-      override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "firewall"; ProvisioningStepResult(Map.empty, None, Some(true)) }
+      override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "firewall"; firewallResult }
+      override def configureOnboardingFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = configureFirewall(c,s)
       override def install(c: Connection, s: RemnawaveNodeRemoteSpec, d: NodeInstallationData) = IO {
         events += "install"; assertEquals(d.secretKey, secretText); ProvisioningStepResult(Map.empty, None, Some(true))
       }
@@ -467,6 +470,43 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     assertEquals(h.repo.record.state, ProvisioningRunState.Unknown)
     assertEquals(h.repo.record.failureCode, Some("REMNAWAVE_ONBOARDING_SYNC_UNKNOWN"))
     assertEquals(h.ownedSyncs, 0)
+  }
+
+  test("a new reviewed run after a known firewall failure reconciles the existing node without another create") {
+    val failed = new Harness(OnboardingPhase.Validate)
+    failed.repo.inFlight = false
+    failed.firewallResult = ProvisioningStepResult(Map.empty,Some("FIREWALL_RULE_UNSUPPORTED"),None)
+    failed.worker.tick.unsafeRunSync()
+    val terminal = failed.repo.record
+    assertEquals(terminal.state,ProvisioningRunState.Failed)
+    assertEquals(terminal.phase,OnboardingPhase.ConfigureFirewall)
+    assertEquals(terminal.externalNodeId,Some(nodeId))
+    assert(failed.repo.completed.contains(OnboardingPhase.CreateNode))
+    assert(failed.repo.completed.contains(OnboardingPhase.GetInstallationData))
+    assertEquals(failed.repo.storedSecret,None)
+    val candidate = RemnawaveNodeOnboardingRun.firewallRecovery(List(terminal),integrationId,input,snap.imageReference,snap.connectionId).toOption.flatten.get
+    val recovery = new Harness(OnboardingPhase.Validate)
+    recovery.repo.inFlight = false
+    recovery.repo.record = recovery.repo.record.copy(externalNodeId=candidate.externalNodeId,
+      snapshot=recovery.repo.record.snapshot.copy(correlationId=candidate.snapshot.correlationId))
+    recovery.worker.tick.unsafeRunSync()
+    assertEquals(recovery.repo.record.state,ProvisioningRunState.Succeeded)
+    assertEquals(recovery.repo.record.externalNodeId,terminal.externalNodeId)
+    assertEquals(recovery.events.count(_ == "create"),0)
+    assertEquals(recovery.events.count(_ == "reconcile"),1)
+    failed.worker.tick.unsafeRunSync()
+    assertEquals(failed.repo.record,terminal)
+    assertEquals(failed.events.count(_ == "create"),1)
+  }
+
+  test("a reviewed existing-node recovery never creates when reconciliation is missing or mismatched") {
+    val h = new Harness(OnboardingPhase.CreateNode,reconciliation=NodeCreateReconciliation.Confirmed(node(wrongName=true)))
+    h.repo.inFlight = false
+    h.repo.record = h.repo.record.copy(externalNodeId=Some(nodeId))
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Unknown)
+    assertEquals(h.events.count(_ == "create"),0)
+    assertEquals(h.events.count(_ == "firewall"),0)
   }
 
   test("recovers an in-flight create by reconciliation without posting create again") {

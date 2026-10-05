@@ -171,7 +171,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           case Validate => operations.validate(r,false) *> remote.preflight(connection,r.resourceId,r.snapshot.input.nodePort).flatMap(x =>
             if(x.failureCode.nonEmpty || x.uncertain) IO.pure(Stop(x.failureCode.getOrElse("REMNAWAVE_ONBOARDING_PREFLIGHT_UNKNOWN"),x.uncertain)) else advance)
           case PrepareServer => operations.validate(r,true) *> advance
-          case CreateNode if !fresh => reconciliation
+          case CreateNode if !fresh || r.externalNodeId.nonEmpty => operations.validate(r,true) *> reconciliation
           case CreateNode => operations.validate(r,true) *> remote.installationPrerequisites(connection).flatMap { prerequisites =>
             IO.raiseUnless(prerequisites.failureCode.isEmpty && !prerequisites.uncertain && !prerequisites.outputTruncated)(
               IntegrationError(prerequisites.failureCode.getOrElse("REMNAWAVE_ONBOARDING_PREREQUISITES_UNKNOWN"),"Installation prerequisites are unavailable"))
@@ -194,7 +194,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           }
           case ConfigureFirewall if !fresh => remote.firewallPresent(connection,spec(r)).map(ok =>
             if(ok) Advance(r) else Stop("REMNAWAVE_ONBOARDING_FIREWALL_UNKNOWN",true))
-          case ConfigureFirewall => result(remote.configureFirewall(connection,spec(r)))
+          case ConfigureFirewall => result(remote.configureOnboardingFirewall(connection,spec(r)))
           case InstallNode if !fresh => remote.installationPresent(connection,spec(r)).map(ok =>
             if(ok) Advance(r) else Stop("REMNAWAVE_ONBOARDING_INSTALL_UNKNOWN",true))
           case InstallNode => runner.run(repo.secret(r)).flatMap(_.liftTo[IO](IntegrationError("REMNAWAVE_ONBOARDING_SECRET_MISSING","Installation data is unavailable")))

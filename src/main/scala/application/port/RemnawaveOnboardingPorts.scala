@@ -14,6 +14,8 @@ trait RemnawaveOnboardingRepository[F[_]] {
   def start(org: UUID, integrationId: UUID, planId: UUID, requestId: UUID, actor: UUID, now: Instant): F[RemnawaveNodeOnboardingRun]
   def find(org: UUID, integrationId: UUID, id: UUID): F[Option[(RemnawaveNodeOnboardingRun,List[OnboardingPhaseRecord])]]
   def history(org: UUID, integrationId: UUID, limit: Int): F[List[RemnawaveNodeOnboardingRun]]
+  /** Latest run for each previously created node on this server; at most two prove ambiguity. */
+  def createdNodes(org: UUID, resourceId: UUID): F[List[RemnawaveNodeOnboardingRun]]
   def claim(owner: UUID, token: UUID, now: Instant, until: Instant, limit: Int): F[List[RemnawaveNodeOnboardingRun]]
   def renew(run: RemnawaveNodeOnboardingRun, token: UUID, now: Instant, until: Instant): F[Boolean]
   /** true means a fresh boundary; false means it was already in flight and needs reconciliation. */

@@ -80,6 +80,9 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     liveProfile = live.toOption.toList.flatMap(_.objects).find(o => o.objectType==IntegrationObjectType.ConfigProfile && o.externalId==input.configProfileId.toString)
     liveInboundIds = liveProfile.toList.flatMap(_.summary match { case p: RemnawaveConfigProfileSummary => p.inbounds.map(_.uuid); case _ => Nil }).toSet
     image = RemnawaveNodeImagePolicy.select(api)
+    previous <- runner.run(repo.createdNodes(actor.organizationId,input.resourceId))
+    recovery = RemnawaveNodeOnboardingRun.firewallRecovery(previous,integration,input,image.getOrElse(""),
+      target.toOption.fold(new UUID(0,0))(_.connectionId))
     blocks = (target.left.toOption.toList ++ api.blocker.toList ++ Option.when(!api.provisioningReady)("INTEGRATION_API_CONTRACT_UNCONFIRMED") ++
       Option.when(image.isEmpty)("REMNAWAVE_ONBOARDING_IMAGE_UNCONFIRMED") ++ Option.when(!c._1.enabled)("INTEGRATION_MANAGEMENT_REQUIRES_SYNC") ++
       Option.when(c._1.managementMode!=IntegrationManagementMode.ManagedSelected)("INTEGRATION_MANAGEMENT_MODE_REQUIRED") ++
@@ -88,7 +91,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       Option.when(busy)("REMNAWAVE_ONBOARDING_RESOURCE_BUSY") ++ Option.when(conflict)("REMNAWAVE_ONBOARDING_BINDING_CONFLICT") ++
       baseline.left.toOption.map(safeCode).toList ++ baseline.toOption.toList.flatMap(_.blockingProblems) ++
       local.toList.flatMap(_.fold(e => List(safeCode(e)),r => r.failureCode.toList ++ Option.when(r.uncertain)("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN"))) ++
-      live.left.toOption.map(safeCode)).distinct
+      live.left.toOption.map(safeCode) ++ recovery.left.toOption).distinct
     pinned = baseline.toOption.flatMap(_.run.input.profileApply)
     zero = new UUID(0,0)
     now <- IO.realTimeInstant
@@ -96,18 +99,20 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       target.toOption.fold(now)(_.connectionUpdatedAt),pinned.fold(zero)(_.profileId),pinned.fold(zero)(_.revisionId),
       pinned.fold(0)(_.revisionNumber),pinned.fold(zero)(_.assignmentId),pinned.fold(0L)(_.assignmentVersion),
       pinned.fold("")(_.revisionHash),baseline.toOption.fold(zero)(_.run.id),baseline.toOption.exists(!_.assessment.compliant),api,
-      image.getOrElse(""),UUID.randomUUID(),candidates.find(_.id==input.resourceId).fold("")(_.name),
+      image.getOrElse(""),recovery.toOption.flatten.fold(UUID.randomUUID())(_.snapshot.correlationId),candidates.find(_.id==input.resourceId).fold("")(_.name),
       baseline.toOption.fold("")(_.profileName),profile.fold("")(_.obj.displayName),
       input.activeInboundIds.flatMap(id => inbounds.find(_.uuid==id.toString).map(_.tag)),
       baseline.toOption.toList.flatMap(_.assessment.modules.filterNot(_._2).map(_._1)) ++
         List("CREATE_NODE", "CONFIGURE_NODE_FIREWALL", "INSTALL_NODE", "START_NODE", "SYNC_INVENTORY", "BIND_RESOURCE", "SET_DESIRED_STATE", "FINAL_VERIFY"),
-      baseline.toOption.toList.flatMap(_.warnings),blocks)
+      baseline.toOption.toList.flatMap(_.warnings) ++ Option.when(recovery.toOption.flatten.nonEmpty)("REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE"),blocks)
     run = RemnawaveNodeOnboardingRun(UUID.randomUUID(),actor.organizationId,integration,input.resourceId,None,actor.userId,
-      ProvisioningRunState.Planned,OnboardingPhase.Validate,snapshot,now,now)
+      ProvisioningRunState.Planned,OnboardingPhase.Validate,snapshot,now,now,externalNodeId=recovery.toOption.flatten.flatMap(_.externalNodeId))
     _ <- if (blocks.nonEmpty) IO.unit else runner.run(for {
       _ <- repo.lockResource(actor.organizationId,input.resourceId)
       active <- repo.active(actor.organizationId,input.resourceId)
       _ <- MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_ONBOARDING_RESOURCE_BUSY"))
+      currentNodes <- repo.createdNodes(actor.organizationId,input.resourceId)
+      _ <- MonadThrow[Tx].raiseUnless(currentNodes==previous)(error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
       valid <- profiles.valid(actor.organizationId,input.resourceId,pinned.get)
       current <- integrations.findById(actor.organizationId,integration)
       unchanged <- targets.unchanged(baseline.toOption.get.run.input)

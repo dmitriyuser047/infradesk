@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient } from '../../app/queryClient'
@@ -182,6 +182,45 @@ describe('NodeOnboarding', () => {
     expect(screen.getByText('external-1')).toBeTruthy()
     expect(screen.getByText('baseline-1')).toBeTruthy()
     expect(screen.getByText('sync-1')).toBeTruthy()
-    expect(screen.getByText('Validate request')).toBeTruthy()
+    expect(screen.getByText(/Validate request/)).toBeTruthy()
+  })
+  it.each(['FIREWALL_RULE_UNSUPPORTED', 'PROVISIONING_FIREWALL_RULE_UNSUPPORTED'])('localizes %s beside the failed firewall phase without rendering backend prose', async code => {
+    const failed = { ...run('FAILED'), phase: 'CONFIGURE_NODE_FIREWALL', failureCode: code, safeMessage: 'RAW_EXCEPTION_SECRET English fallback' }
+    mount('/?onboardingRun=run-1', 'ru', url => url.endsWith('/runs/run-1') ? json({ run: failed, phases: [
+      { phase: 'CREATE_NODE', state: 'SUCCEEDED', startedAt: null, finishedAt: null, failureCode: null },
+      { phase: 'CONFIGURE_NODE_FIREWALL', state: 'FAILED', startedAt: null, finishedAt: null, failureCode: code },
+    ] }) : undefined)
+    const phase = await screen.findByText('Настройка межсетевого экрана — FAILED')
+    const alert = phase.closest('[role="alert"]')!
+    expect(within(alert as HTMLElement).getByText('Не удалось безопасно обработать текущую конфигурацию UFW.')).toBeTruthy()
+    expect(within(alert as HTMLElement).getByText(`Код: ${code}`)).toBeTruthy()
+    expect(screen.getByText('external-1')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('RAW_EXCEPTION_SECRET')
+    expect(document.body.textContent).not.toContain('English fallback')
+  })
+  it('uses a safe localized fallback for unknown failure codes and hides raw safeMessage', async () => {
+    mount('/?onboardingRun=run-1', 'en', url => url.endsWith('/runs/run-1') ? json({ run: { ...run('FAILED'), safeMessage: 'RAW_EXCEPTION_SECRET' }, phases: [] }) : undefined)
+    await screen.findByText('Run: FAILED')
+    expect(screen.getAllByText('Code: SAFE_FAILURE').length).toBeGreaterThan(0)
+    expect(document.body.textContent).not.toContain('RAW_EXCEPTION_SECRET')
+  })
+  it('shows the previously created node identity in a newly reviewed recovery plan', async () => {
+    mount('/', 'ru', url => url.endsWith('/preview') ? json({ ...preview,
+      run: { ...preview.run, externalNodeId: '195bf2a3-1f0e-425e-81cd-6310e04a76a0' },
+      warnings: ['REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE'] }) : undefined)
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Добавить узел' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить узел' }))
+    fireEvent.change(await screen.findByLabelText('Сервер'), { target: { value: 'resource-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    fireEvent.change(screen.getByLabelText('Профиль конфигурации'), { target: { value: 'profile-uuid' } })
+    fireEvent.click(screen.getByLabelText('VLESS TLS'))
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    fireEvent.change(screen.getByLabelText('CIDR панели'), { target: { value: '2.27.26.18/32' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить изменения' }))
+    expect(await screen.findByText('Будет использован уже созданный узел')).toBeTruthy()
+    expect(screen.getByText('ID узла Remnawave: 195bf2a3-1f0e-425e-81cd-6310e04a76a0')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE')
+    expect((screen.getByRole('button', { name: 'Запустить добавление' }) as HTMLButtonElement).disabled).toBe(false)
   })
 })

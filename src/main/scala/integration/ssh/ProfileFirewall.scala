@@ -13,8 +13,11 @@ import scala.concurrent.duration._
 private[ssh] final case class ProfileFirewallRule(action: String, rule: FirewallRule, owned: Boolean)
 private[ssh] object ProfileFirewall {
   /** Parse only supported canonical UFW forms. Unknown rules block, never become deletions. */
-  def parse(raw: String, resourceId: UUID): Either[String,List[ProfileFirewallRule]] = {
-    val prefix=s"infradesk:$resourceId:"
+  def parse(raw: String, resourceId: UUID): Either[String,List[ProfileFirewallRule]] =
+    parseOwned(raw,s"infradesk:$resourceId:")
+
+  /** Callers supply their exact namespace; supported rules belonging to other engines stay foreign. */
+  def parseOwned(raw: String, prefix: String): Either[String,List[ProfileFirewallRule]] = {
     val nonempty=raw.linesIterator.map(_.trim).filter(_.nonEmpty).toList
     val header="Added user rules (see 'ufw status' for running firewall)"
     if(nonempty==List(header,"(None)") || nonempty==List(s"$header:","(None)"))

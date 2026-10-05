@@ -20,6 +20,8 @@ trait RemnawaveNodeRemote[F[_]] {
   /** Fresh post-baseline readiness check, before creating anything in the Panel. */
   def installationPrerequisites(connection: Connection): F[ProvisioningStepResult]
   def configureFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[ProvisioningStepResult]
+  /** Onboarding adds missing reviewed sources but never replaces conflicting existing own rules. */
+  def configureOnboardingFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[ProvisioningStepResult]
   def install(connection: Connection, spec: RemnawaveNodeRemoteSpec,
     credential: NodeInstallationData): F[ProvisioningStepResult]
   def start(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[ProvisioningStepResult]

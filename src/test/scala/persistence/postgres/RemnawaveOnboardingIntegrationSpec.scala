@@ -157,6 +157,56 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
     }
   }
 
+  test("a failed firewall run retains its node and a separately approved recovery persists the same identity without changing terminal history") {
+    inWorld { w =>
+      for {
+        pair <- integration(w,w.org,"firewall-recovery")
+        (integrationId,secretId) = pair
+        target <- w.node("firewall-recovery")
+        sourceAt <- connectionUpdated(w,target.connectionId)
+        now <- IO.realTimeInstant
+        approved <- plan(w,integrationId,secretId,target.resourceId,target.connectionId,sourceAt,now)
+        stalePlan = approved.copy(id=uid,createdAt=now.plusSeconds(1))
+        _ <- w.run(repo.insertPlan(stalePlan))
+        _ <- w.run(repo.start(w.org,integrationId,approved.id,uid,AuthorizationFixtures.ActorUserId,now))
+        token = uid
+        claimed <- w.run(repo.claim(uid,token,now,now.plusSeconds(300),1))
+        external = uid
+        atFirewall <- w.run(OnboardingPhase.all.take(4).foldLeftM(claimed.head) { (r,phase) =>
+          val next = r.copy(phase=OnboardingPhase.next(phase).get,
+            externalNodeId=if (phase==OnboardingPhase.CreateNode) Some(external) else r.externalNodeId)
+          repo.beginPhase(r,token,now) *> repo.persist(r,token,next,now,complete=true).as(next)
+        })
+        _ <- w.run(repo.beginPhase(atFirewall,token,now))
+        _ <- w.run(repo.saveSecret(atFirewall,token,cipher.encrypt(atFirewall.id,w.org,NodeInstallationData.fromSecretKey(installationKey)),now))
+        _ <- w.run(repo.deleteSecret(atFirewall,token,now))
+        failed = atFirewall.copy(state=ProvisioningRunState.Failed,failureCode=Some("FIREWALL_RULE_UNSUPPORTED"),finishedAt=Some(now))
+        _ <- w.run(repo.persist(atFirewall,token,failed,now,complete=false))
+        original <- w.run(repo.find(w.org,integrationId,approved.id))
+        existing <- w.run(repo.createdNodes(w.org,target.resourceId))
+        foreign <- w.run(repo.createdNodes(w.foreignOrg,target.resourceId))
+        staleStart <- w.run(repo.start(w.org,integrationId,stalePlan.id,uid,AuthorizationFixtures.ActorUserId,now)).attempt
+        candidate <- IO.fromEither(RemnawaveNodeOnboardingRun.firewallRecovery(existing,integrationId,
+          approved.snapshot.input,approved.snapshot.imageReference,approved.snapshot.connectionId).leftMap(new RuntimeException(_)))
+        recovery = approved.copy(id=uid,createdAt=now.plusSeconds(2),externalNodeId=candidate.flatMap(_.externalNodeId))
+        _ <- w.run(repo.insertPlan(recovery))
+        readPlan <- w.run(repo.find(w.org,integrationId,recovery.id))
+        queued <- w.run(repo.start(w.org,integrationId,recovery.id,uid,AuthorizationFixtures.ActorUserId,now))
+        unchanged <- w.run(repo.find(w.org,integrationId,approved.id))
+      } yield {
+        assertEquals(existing.map(_.externalNodeId),List(Some(external)))
+        assertEquals(foreign,Nil)
+        assertEquals(errorCode(staleStart),Some("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
+        assertEquals(readPlan.map(_._1.externalNodeId),Some(Some(external)))
+        assertEquals(queued.externalNodeId,Some(external))
+        assertEquals(queued.snapshot.correlationId,original.get._1.snapshot.correlationId)
+        assertEquals(unchanged,original)
+        assertEquals(original.get._1.state,ProvisioningRunState.Failed)
+        assertEquals(original.get._2.filter(p => Set[OnboardingPhase](OnboardingPhase.CreateNode,OnboardingPhase.GetInstallationData)(p.phase)).map(_.state),List("SUCCEEDED","SUCCEEDED"))
+      }
+    }
+  }
+
   test("claim recovers an in-flight phase, fences the stale worker, stores only encrypted credentials, and never resumes terminal state") {
     inWorld { w =>
       for {

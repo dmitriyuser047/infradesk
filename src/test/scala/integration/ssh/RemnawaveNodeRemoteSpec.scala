@@ -216,11 +216,15 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
   test("configuring node access adds only its namespace rule and preserves Stage25B and foreign rules") {
     val s = new Session
     val stage25b = s"ufw allow 443/tcp comment 'infradesk:$resource:web'"
+    var added = List(stage25b)
     s.respond = (ex, args) => IO.pure {
       if (ex == "id") ok.copy(stdout = "0")
       else if (ex == "sh" && args.exists(_.contains("SSH_CONNECTION"))) ok.copy(stdout = "192.0.2.5 45000 198.51.100.1 22")
       else if (ex == "ufw" && args == List("status")) ok.copy(stdout = "Status: active")
-      else if (ex == "ufw" && args == List("show", "added")) ok.copy(stdout = s"$stage25b\nAdded user rules (see 'ufw status' for running firewall)")
+      else if (ex == "ufw" && args == List("show", "added")) ok.copy(stdout = ("Added user rules (see 'ufw status' for running firewall):" :: added).mkString("\n"))
+      else if (ex == "ufw" && args.headOption.contains("allow")) {
+        added :+= s"ufw allow from ${args(2)} to any port ${args(6)} proto ${args(8)} comment '${args(10)}'"; ok
+      }
       else ok
     }
     remote(s).configureFirewall(connection, spec).unsafeRunSync()
@@ -243,5 +247,96 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     val result = remote(s).configureFirewall(connection, spec).unsafeRunSync()
     assertEquals(result.failureCode, Some("PROVISIONING_FIREWALL_BROAD_RULE_PRESENT"))
     assert(!s.calls.exists { case ("ufw", args) => args.headOption.contains("allow"); case _ => false })
+  }
+
+  private val header = "Added user rules (see 'ufw status' for running firewall):"
+  private val liveSpec = spec.copy(nodePort = 2222, panelCidrs = List("2.27.26.18/32"))
+  private val liveRules = List(
+    s"ufw allow from 172.28.0.0/24 to any port 22 proto tcp comment 'infradesk:$resource:infradesk-ssh'",
+    s"ufw allow from 77.40.38.175 to any port 22 proto tcp comment 'infradesk:$resource:admin-ssh'",
+    s"ufw allow from 77.40.38.175 to any port 8080 proto tcp comment 'infradesk:$resource:infradesk-web-admin'")
+  private val liveNodeRule = s"ufw allow from 2.27.26.18 to any port 2222 proto tcp comment 'infradesk:remnawave:$resource:$node:node'"
+  private def firewallSession(initial: List[String], persist: Boolean = true): Session = {
+    val s = new Session
+    var rules = initial
+    s.respond = (ex,args) => IO.pure {
+      if (ex == "id") ok.copy(stdout = "0")
+      else if (ex == "sh" && args.exists(_.contains("SSH_CONNECTION"))) ok.copy(stdout = "172.28.0.5 45000 198.51.100.1 22")
+      else if (ex == "ufw" && args == List("status")) ok.copy(stdout = "Status: active\nDefault: deny incoming")
+      else if (ex == "ufw" && args == List("show", "added")) ok.copy(stdout = (header :: rules).mkString("\n"))
+      else if (ex == "ufw" && args.headOption.contains("allow")) { if (persist) rules :+= liveNodeRule; ok }
+      else if (ex == "ufw" && args.take(3) == List("--force","delete","allow")) {
+        rules = rules.filterNot(line => line.contains(s"from ${args(4)} ") && line.endsWith(s"'${args(12)}'")); ok
+      }
+      else ok
+    }
+    s
+  }
+  private def mutations(s: Session) = s.calls.collect {
+    case ("ufw",args) if args != List("status") && args != List("show","added") => args
+  }.toList
+
+  test("live UFW 0.36.2 preserves all three Server Profile rules, verifies node access, and converges without duplicates") {
+    val s = firewallSession(liveRules)
+    val first = remote(s).configureOnboardingFirewall(connection,liveSpec).unsafeRunSync()
+    assertEquals(first.failureCode,None)
+    assert(!first.uncertain)
+    assertEquals(mutations(s),List(List("allow","from","2.27.26.18/32","to","any","port","2222","proto","tcp",
+      "comment",s"infradesk:remnawave:$resource:$node:node")))
+    assertEquals(remote(s).configureOnboardingFirewall(connection,liveSpec).unsafeRunSync().failureCode,None)
+    assertEquals(mutations(s).size,1)
+    assert(remote(s).firewallPresent(connection,liveSpec).unsafeRunSync())
+    val parsed = SshRemnawaveNodeRemote.parseNodeRules((header :: (liveRules :+ liveNodeRule)).mkString("\n"),resource,node).toOption.get
+    assertEquals(parsed.count(_.owned),1)
+    assertEquals(ProfileFirewall.parse((header :: (liveRules :+ liveNodeRule)).mkString("\n"),resource).toOption.get.count(_.owned),3)
+  }
+
+  test("existing exact node rule is idempotent and canonical bare IPv4 equals /32") {
+    val s = firewallSession(liveRules :+ liveNodeRule)
+    assertEquals(remote(s).configureOnboardingFirewall(connection,liveSpec).unsafeRunSync().failureCode,None)
+    assertEquals(mutations(s),Nil)
+    val bare = SshRemnawaveNodeRemote.parseNodeRules(s"$header\n$liveNodeRule",resource,node)
+    val cidr = SshRemnawaveNodeRemote.parseNodeRules(s"$header\n${liveNodeRule.replace("2.27.26.18", "2.27.26.18/32")}",resource,node)
+    assertEquals(bare,cidr)
+  }
+
+  test("conflicting own port, source, protocol, action or suffix fails before any mutation") {
+    List(liveNodeRule.replace("2222","2223"),liveNodeRule.replace("2.27.26.18","2.27.26.19"),
+      liveNodeRule.replace("proto tcp","proto udp"),liveNodeRule.replace("ufw allow","ufw deny"),
+      liveNodeRule.replace(":node'",":other'")).foreach { rule =>
+      val s = firewallSession(liveRules :+ rule)
+      val result = remote(s).configureOnboardingFirewall(connection,liveSpec).unsafeRunSync()
+      assertEquals(result.failureCode,Some("PROVISIONING_FIREWALL_OWNERSHIP_CONFLICT"))
+      assert(!result.uncertain)
+      assertEquals(mutations(s),Nil)
+    }
+  }
+
+  test("unknown UFW syntax and mixed None output remain fail closed") {
+    List("ufw limit 22/tcp","unexpected data","(None)\n" + liveNodeRule).foreach { line =>
+      val s = firewallSession(liveRules :+ line)
+      assertEquals(remote(s).configureOnboardingFirewall(connection,liveSpec).unsafeRunSync().failureCode,Some("FIREWALL_RULE_UNSUPPORTED"))
+      assertEquals(mutations(s),Nil)
+    }
+    assertEquals(SshRemnawaveNodeRemote.parseNodeRules(s"$header\n(None)",resource,node),Right(Nil))
+    assertEquals(SshRemnawaveNodeRemote.parseNodeRules(header.stripSuffix(":"),resource,node),Right(Nil))
+  }
+
+  test("successful UFW reply without the exact re-observed rule cannot report success") {
+    val s = firewallSession(liveRules,persist=false)
+    val result = remote(s).configureOnboardingFirewall(connection,liveSpec).unsafeRunSync()
+    assertEquals(result.failureCode,Some("PROVISIONING_FIREWALL_VERIFICATION_FAILED"))
+    assert(result.uncertain)
+    assertEquals(mutations(s).size,1)
+  }
+
+  test("the existing fleet reconciliation still replaces approved node sources and preserves Server Profile rules") {
+    val s = firewallSession(liveRules :+ liveNodeRule.replace("2.27.26.18","2.27.26.19/32"))
+    val result = remote(s).configureFirewall(connection,liveSpec).unsafeRunSync()
+    assertEquals(result.failureCode,None)
+    assert(remote(s).firewallPresent(connection,liveSpec).unsafeRunSync())
+    assertEquals(mutations(s).size,2)
+    assertEquals(mutations(s).last,List("--force","delete","allow","from","2.27.26.19/32","to","any","port","2222","proto","tcp",
+      "comment",s"infradesk:remnawave:$resource:$node:node"))
   }
 }

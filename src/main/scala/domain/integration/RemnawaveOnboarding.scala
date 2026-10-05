@@ -73,6 +73,17 @@ final case class RemnawaveNodeOnboardingRun(id: UUID, organizationId: UUID, inte
   failureCode: Option[String] = None, startedAt: Option[Instant] = None, finishedAt: Option[Instant] = None,
   claimToken: Option[UUID] = None, claimDeadline: Option[Instant] = None)
 object RemnawaveNodeOnboardingRun {
+  /** Recovery is a new approval, limited to the known pre-install firewall failure boundary. */
+  def firewallRecovery(previous: List[RemnawaveNodeOnboardingRun], integration: UUID,
+    input: OnboardingInput, image: String, connection: UUID): Either[String,Option[RemnawaveNodeOnboardingRun]] =
+    previous match {
+      case Nil => Right(None)
+      case r :: Nil if r.integrationId==integration && r.state==ProvisioningRunState.Failed &&
+        r.phase==OnboardingPhase.ConfigureFirewall && r.externalNodeId.nonEmpty && r.snapshot.input==input &&
+        r.snapshot.imageReference==image && r.snapshot.connectionId==connection => Right(Some(r))
+      case _ => Left("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW")
+    }
+
   /** One request ID per onboarding baseline. Starting the approved child again - after a crash
     * between the attach and the start - is therefore the same Stage25A request, not a second one.
     */

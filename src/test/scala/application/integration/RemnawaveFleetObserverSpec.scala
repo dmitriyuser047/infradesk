@@ -152,6 +152,7 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
         ProvisioningStepResult(Map.empty, None, Some(true)) }
       override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = IO {
         mutations.incrementAndGet(); ProvisioningStepResult(Map.empty, None, Some(true)) }
+      override def configureOnboardingFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = configureFirewall(c,s)
       override def install(c: Connection, s: RemnawaveNodeRemoteSpec, d: NodeInstallationData) = IO {
         mutations.incrementAndGet(); ProvisioningStepResult(Map.empty, None, Some(true)) }
       override def start(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { mutations.incrementAndGet()

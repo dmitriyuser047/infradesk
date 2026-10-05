@@ -149,9 +149,15 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
         {step === 2 ? <section><h3>{copy.steps[2]}</h3><label className="field">{copy.cidrs}<textarea value={cidrs} onChange={event => setCidrs(event.target.value)} /></label><p className="muted-copy">{copy.cidrHint}</p>{!formValid ? <p role="alert">{copy.formError}</p> : null}</section> : null}
         {step === 3 && preview ? <section><h3>{copy.steps[3]}</h3><p>{preview.serverName} · {preview.serverProfileName} · r{preview.revisionNumber}</p><p>{preview.configProfileName}: {preview.inboundNames.join(', ')}</p>
           <p>{preview.run.nodeName} · {preview.run.address}:{preview.run.nodePort}</p>
+          {preview.run.externalNodeId ? <InlineAlert tone="warning" title={i18n.locale === 'ru' ? 'Будет использован уже созданный узел' : 'The previously created node will be reused'}>
+            {i18n.locale === 'ru' ? 'InfraDesk подтвердит исходную идентичность узла перед продолжением. Новый узел создаваться не будет.' : 'InfraDesk will verify the original node identity before continuing. A new node will not be created.'}
+            <br /><span>{copy.externalId}: {preview.run.externalNodeId}</span>
+          </InlineAlert> : null}
           <p>{preview.nodeImage}</p><p>{copy.cidrs}: {preview.panelCidrs?.join(', ') ?? cidrValues.join(', ')}</p>
           {preview.nodeApi ? <p>Remnawave {preview.nodeApi.serverVersion} · {preview.nodeApi.apiGeneration} · {preview.nodeApi.sourceCommit}</p> : null}
-          <ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings} /><ReviewList title={copy.blockers} values={preview.blockingProblems} danger />
+          <ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings.filter(code => code !== 'REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE')} /><ReviewList title={copy.blockers} values={preview.blockingProblems.map(code => code === 'REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW'
+            ? i18n.locale === 'ru' ? 'На сервере уже создан узел. Его состояние или новые параметры не допускают безопасное продолжение onboarding. Проверьте предыдущий запуск и узел; не создавайте дубликат.' : 'A node was already created on this server. Its state or the new inputs prevent safe onboarding recovery. Review the previous run and node; do not create a duplicate.'
+            : code)} danger />
           </section> : null}
       </> : null}
       {(step === 4 || hasRun) && current ? <RunStatus run={current} detail={runQuery.data} copy={copy} /> : null}
@@ -164,11 +170,23 @@ function ReviewList({ title, values, danger = false }: { title: string; values: 
   return <section><h4>{title}</h4>{values.length ? <ul>{values.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ul> : <p>—</p>}{danger && values.length ? <p role="alert">{title}</p> : null}</section>
 }
 function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: ReturnType<typeof useNodeOnboardingRun>['data']; copy: typeof texts[keyof typeof texts] }) {
+  const i18n = useI18n()
+  const failureReason = (code: string) => ['FIREWALL_RULE_UNSUPPORTED', 'PROVISIONING_FIREWALL_RULE_UNSUPPORTED'].includes(code)
+    ? i18n.locale === 'ru' ? 'Не удалось безопасно обработать текущую конфигурацию UFW.' : 'The current UFW configuration could not be safely processed.'
+    : code === 'PROVISIONING_FIREWALL_OWNERSHIP_CONFLICT'
+      ? i18n.locale === 'ru' ? 'Правило UFW этого узла отличается от проверенного плана. Проверьте правило перед повторной подготовкой.' : 'This node’s UFW rule differs from the reviewed plan. Review the rule before preparing another plan.'
+      : i18n.t.provisioning.errors[code] ?? i18n.t.common.operationBlocked
+  const failure = (code: string) => <><span>{failureReason(code)}</span>{/^[A-Z0-9_]{1,96}$/.test(code) ? <><br /><span className="technical-value">{i18n.locale === 'ru' ? 'Код' : 'Code'}: {code}</span></> : null}</>
   const tone = run.state === 'SUCCEEDED' ? 'success' : run.state === 'FAILED' ? 'danger' : run.state === 'UNKNOWN' ? 'warning' : 'info'
   const message = run.state === 'SUCCEEDED' ? copy.success : run.state === 'FAILED' ? copy.failed : run.state === 'UNKNOWN' ? copy.unknown : copy.active
-  const byPhase = new Map(detail?.phases.map(phase => [phase.phase, phase.state]))
-  return <section><InlineAlert tone={tone} title={`${copy.run}: ${run.state}`}>{run.safeMessage ? `${message} ${run.safeMessage}` : message}</InlineAlert>
-    <p>{run.nodeName} · {run.address}:{run.nodePort}</p><h3>{copy.phases}</h3><ol>{phases.map(phase => <li key={phase}><span>{copy.phaseNames[phase]}</span> — {byPhase.get(phase) ?? 'PENDING'}</li>)}</ol>
+  const byPhase = new Map(detail?.phases.map(phase => [phase.phase, phase]))
+  return <section><InlineAlert tone={tone} title={`${copy.run}: ${run.state}`}>{message}{run.failureCode ? <><br />{failure(run.failureCode)}</> : null}</InlineAlert>
+    <p>{run.nodeName} · {run.address}:{run.nodePort}</p><h3>{copy.phases}</h3><ol>{phases.map(phase => {
+      const record = byPhase.get(phase)
+      const code = record?.failureCode ?? (run.phase === phase ? run.failureCode : null)
+      return <li key={phase}>{code ? <InlineAlert tone={record?.state === 'UNKNOWN' || run.state === 'UNKNOWN' ? 'warning' : 'danger'} title={`${copy.phaseNames[phase]} — ${record?.state ?? run.state}`}>{failure(code)}</InlineAlert>
+        : <><span>{copy.phaseNames[phase]}</span> — {record?.state ?? 'PENDING'}</>}</li>
+    })}</ol>
     {(run.externalNodeId || run.baselineRunId || run.syncSessionId) ? <><h3>{copy.partial}</h3><dl>
       {run.externalNodeId ? <><dt>{copy.externalId}</dt><dd>{run.externalNodeId}</dd></> : null}
       {run.baselineRunId ? <><dt>{copy.baseline}</dt><dd>{run.baselineRunId}</dd></> : null}

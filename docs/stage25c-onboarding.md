@@ -109,3 +109,47 @@ Reproduce backend checks with JDK21 and the existing PostgreSQL integration-test
 Reproduce frontend checks with `npm test -- --run` and `npm run build` in `frontend`.
 Linux extraction/verification is the existing CI `server-profile-safety` step, extended for Node files and start/recovery guards.
 No production Panel or VPS was mutated during these checks.
+
+## Live UFW 0.36.2 blocker and reviewed firewall recovery
+
+Stage25C maintained a separate `ufw show added` parser that accepted the header only without a
+trailing colon. Ubuntu/Debian UFW 0.36.2 prints that colon, so supported Server Profile rules were
+rejected before any node rule could be added. The empty `(None)` fix in Stage25B did not reach this
+second parser. Stage25C now uses the same canonical parser and empty-output handling as Stage25B.
+
+Ownership remains scoped: Server Profile owns `infradesk:<resource>:<rule>`; onboarding owns only
+`infradesk:remnawave:<resource>:<external-node>:<rule>`. Supported rules from the other engine and
+supported foreign rules are preserved as foreign by the current engine. Unknown syntax remains
+unsupported. Bare IPv4 and its /32 representation use the existing canonical source conversion.
+
+The onboarding-specific call on the existing typed remote engine adds missing reviewed sources,
+accepts exact existing node rules without duplicates, and rejects unexpected own action, port,
+protocol, rule suffix or source with `PROVISIONING_FIREWALL_OWNERSHIP_CONFLICT` before mutation.
+It does not reset UFW or delete rules. Each addition rechecks current rules and SSH safety; final
+re-observation proves the complete exact rule set and active UFW. Loss of that proof after mutation
+remains UNKNOWN. Fleet rollout/rollback retain the engine's original approved source replacement
+path; a regression test exercises that path with Server Profile rules present.
+
+A terminal FAILED run is never resumed. A new preview may recover only a single previously created
+node whose latest run FAILED at CONFIGURE_NODE_FIREWALL, before install, with identical onboarding
+input, integration, connection and selected image. A bounded tenant/resource query returns the
+latest record per external UUID (at most two, sufficient to reject ambiguity), independently of
+paginated history. The new plan carries the same external UUID and original correlation ID and
+shows them for operator review. Admission checks that identity again under the resource lock.
+CREATE_NODE reconciles the existing node using the original correlation tag and full pinned Node
+identity; it never invokes create for this recovery. Missing/mismatched evidence yields UNKNOWN,
+without firewall/install mutations. Later-phase failures, UNKNOWN, changed input or multiple nodes
+produce `REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW`. Original terminal history and its
+phase journal remain immutable. Installation data is obtained afresh for the new run; the previous
+run's encrypted envelope stays deleted.
+
+The localized UI shows the stable failure code and safe explanation directly beside the failed
+phase, including FIREWALL_RULE_UNSUPPORTED. It does not render backend exception prose or append
+an English safeMessage to a Russian dialog. An approved recovery preview explicitly states that
+an existing node will be reused rather than created.
+
+Regression coverage includes the three live Server Profile UFW rules and reviewed TCP/2222 from
+2.27.26.18/32, exact repeat/no duplicate, canonical /32, unsupported output, ownership conflicts,
+post-mutation proof, fleet source replacement, failed-create/firewall recovery, mismatched identity,
+real PostgreSQL admission/tenant scoping/terminal immutability, and localized phase errors/recovery
+preview. No migration or external HTTP API change is needed. No production Panel/VPS was mutated.

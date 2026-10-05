@@ -53,6 +53,13 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
     })
 
   override def configureFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec): IO[ProvisioningStepResult] =
+    configureFirewall(connection,spec,replaceSources=true)
+
+  override def configureOnboardingFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec): IO[ProvisioningStepResult] =
+    configureFirewall(connection,spec,replaceSources=false)
+
+  private def configureFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    replaceSources: Boolean): IO[ProvisioningStepResult] =
     Ref.of[IO, Boolean](false).flatMap { changed => stepTracked(changed)(withSession(connection) { (_, c, _) =>
       validate(spec) *> firewallRules(spec).flatMap { desired =>
         for {
@@ -67,22 +74,24 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
           old <- nodeRules(c, spec)
           _ <- IO.raiseWhen(broadManagementAllow(old, spec))(
             ProfileRemoteFailure("PROVISIONING_FIREWALL_BROAD_RULE_PRESENT"))
-          _ <- IO.raiseWhen(old.exists(r => r.owned && (r.action != "allow" || r.rule.id != "node" ||
-            r.rule.protocol != "tcp" || r.rule.port != spec.nodePort)))(
-            ProfileRemoteFailure("PROVISIONING_FIREWALL_RULE_UNSUPPORTED"))
+          _ <- validateOwnedFirewall(old, spec, replaceSources)
           _ <- IO.raiseWhen(old.exists(r => !r.owned && r.action != "allow" && r.rule.protocol == "tcp" && r.rule.port == spec.nodePort))(
             ProfileRemoteFailure("PROVISIONING_FIREWALL_RULE_UNSUPPORTED"))
           _ <- IO.raiseWhen(ProfileFirewall.sshBlocked(old, endpoint._1, endpoint._2))(
             ProfileRemoteFailure("PROVISIONING_FIREWALL_SSH_ACCESS_UNPROVEN"))
           _ <- desired.traverse_ { case (source, comment) =>
             nodeRules(c, spec).flatMap { fresh =>
-              if (fresh.exists(r => r.owned && r.action == "allow" && r.rule.port == spec.nodePort && r.rule.protocol == "tcp" && r.rule.sources.contains(source))) IO.unit
+              validateOwnedFirewall(fresh, spec, replaceSources) *>
+              IO.raiseWhen(broadManagementAllow(fresh, spec))(ProfileRemoteFailure("PROVISIONING_FIREWALL_BROAD_RULE_PRESENT")) *>
+              IO.raiseWhen(ProfileFirewall.sshBlocked(fresh, endpoint._1, endpoint._2))(ProfileRemoteFailure("PROVISIONING_FIREWALL_SSH_ACCESS_UNPROVEN")) *>
+              (if (fresh.exists(r => r.owned && r.action == "allow" && r.rule.port == spec.nodePort && r.rule.protocol == "tcp" && r.rule.sources.contains(source))) IO.unit
               else changed.set(true) *> checked(c, "ufw", List("allow", "from", source,
-                "to", "any", "port", spec.nodePort.toString, "proto", "tcp", "comment", comment))
+                "to", "any", "port", spec.nodePort.toString, "proto", "tcp", "comment", comment)))
             }
           }
           _ <- canary(connection)
-          _ <- old.filter(r => r.owned && r.action == "allow" && r.rule.protocol == "tcp" && r.rule.port == spec.nodePort)
+          // Fleet reconciliation retains its approved source replacement; onboarding never deletes.
+          _ <- if (!replaceSources) IO.unit else old.filter(r => r.owned && r.action == "allow" && r.rule.protocol == "tcp" && r.rule.port == spec.nodePort)
             .flatMap(_.rule.sources).distinct.filterNot(s => desired.exists(_._1 == s)).traverse_ { source =>
               nodeRules(c, spec).flatMap { fresh =>
                 if (fresh.exists(r => r.owned && r.action == "allow" && r.rule.port == spec.nodePort && r.rule.sources.contains(source)))
@@ -91,6 +100,8 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
                 else IO.unit
               }
             }
+          verified <- firewallProof(c, spec)
+          _ <- IO.raiseUnless(verified)(ProfileRemoteFailure("PROVISIONING_FIREWALL_VERIFICATION_FAILED"))
           _ <- canary(connection)
         } yield success("firewallRulesApplied" -> desired.size.toString)
       }
@@ -295,6 +306,11 @@ private[ssh] object SshRemnawaveNodeRemote {
       r.rule.sources.exists(source => source == "ANY" || source.endsWith("/0") || !spec.panelCidrs.contains(source))) ||
       rules.exists(r => !r.owned && r.action != "allow" && r.rule.protocol == "tcp" && r.rule.port == spec.nodePort)
 
+  private def validateOwnedFirewall(rules: List[ProfileFirewallRule], spec: RemnawaveNodeRemoteSpec, replaceSources: Boolean): IO[Unit] =
+    IO.raiseWhen(rules.exists(r => r.owned && (r.action != "allow" || r.rule.id != "node" ||
+      r.rule.protocol != "tcp" || r.rule.port != spec.nodePort || (!replaceSources && !r.rule.sources.forall(spec.panelCidrs.contains)))))(
+      ProfileRemoteFailure("PROVISIONING_FIREWALL_OWNERSHIP_CONFLICT"))
+
   private def firewallExact(rules: List[ProfileFirewallRule], spec: RemnawaveNodeRemoteSpec): Boolean = {
     val expected = spec.panelCidrs.distinct.toSet
     val ownedNamespace = rules.filter(_.owned)
@@ -387,26 +403,6 @@ private[ssh] object SshRemnawaveNodeRemote {
     |""".stripMargin
 
   private[ssh] def parseNodeRules(raw: String, resource: UUID, node: UUID): Either[String, List[ProfileFirewallRule]] = {
-    val prefix = s"infradesk:remnawave:$resource:$node:"
-    val nonempty = raw.linesIterator.map(_.trim).filter(_.nonEmpty).toList
-    val header = "Added user rules (see 'ufw status' for running firewall)"
-    if (nonempty.isEmpty || nonempty.exists(l => l != header && !l.startsWith("ufw "))) return Left("FIREWALL_RULE_UNSUPPORTED")
-    nonempty.filter(_.startsWith("ufw ")).traverse { line =>
-      val ix = line.indexOf(" comment "); val body = if (ix < 0) line else line.substring(0, ix)
-      val comment = if (ix < 0) "" else line.substring(ix + 9).stripPrefix("'").stripSuffix("'")
-      val own = comment.startsWith(prefix) && comment.stripPrefix(prefix).matches("[a-z0-9][a-z0-9_-]{0,39}")
-      val pattern = "^ufw (allow|deny|reject) from ([0-9a-fA-F.:/]+|any) to any port ([0-9]{1,5}) proto (tcp|udp)$".r
-      val short = "^ufw (allow|deny|reject) ([0-9]{1,5})/(tcp|udp)$".r
-      body match {
-        case pattern(action, source, port, protocol) => for {
-          p <- port.toIntOption.filter(x => x >= 1 && x <= 65535).toRight("FIREWALL_RULE_UNSUPPORTED")
-          canonical <- ServerProfileContent.canonicalFirewallSource(if (source == "any") "ANY" else source)
-        } yield ProfileFirewallRule(action, domain.provisioning.FirewallRule(comment.stripPrefix(prefix), protocol, p, List(canonical)), own)
-        case short(action, port, protocol) => for {
-          p <- port.toIntOption.filter(x => x >= 1 && x <= 65535).toRight("FIREWALL_RULE_UNSUPPORTED")
-        } yield ProfileFirewallRule(action, domain.provisioning.FirewallRule("foreign", protocol, p, List("ANY")), owned = false)
-        case _ => Left("FIREWALL_RULE_UNSUPPORTED")
-      }
-    }
+    ProfileFirewall.parseOwned(raw, s"infradesk:remnawave:$resource:$node:")
   }
 }

@@ -32,9 +32,9 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
     exists(select 1 from configuration_deployment where organization_id=$org and resource_id=$resourceId and state in ('QUEUED','RUNNING')) or
     exists(select 1 from operation_execution where organization_id=$org and resource_id=$resourceId and status='RUNNING')""".query[Boolean].unique
   def insertPlan(r: RemnawaveNodeOnboardingRun): ConnectionIO[Unit] = for {
-    _ <- sql"""insert into remnawave_node_onboarding(id,organization_id,integration_id,resource_id,created_by,state,phase,input_snapshot,created_at,updated_at)
+    _ <- sql"""insert into remnawave_node_onboarding(id,organization_id,integration_id,resource_id,created_by,state,phase,input_snapshot,created_at,updated_at,external_node_id)
       values(${r.id},${r.organizationId},${r.integrationId},${r.resourceId},${r.createdBy},'PLANNED','VALIDATE',
-      cast(${OnboardingSnapshotCodec.encode(r.snapshot).noSpaces} as jsonb),${r.createdAt},${r.updatedAt})""".update.run
+      cast(${OnboardingSnapshotCodec.encode(r.snapshot).noSpaces} as jsonb),${r.createdAt},${r.updatedAt},${r.externalNodeId})""".update.run
     _ <- OnboardingPhase.all.zipWithIndex.traverse_ { case (p,i) => sql"""insert into remnawave_node_onboarding_phase(run_id,phase,position,state)
       values(${r.id},${p.code},$i,'PENDING')""".update.run }
   } yield ()
@@ -54,6 +54,11 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
         _ <- if (expired) fail("PROVISIONING_PLAN_EXPIRED") else ().pure[ConnectionIO]
         busy <- active(org,locked.resourceId)
         _ <- if (busy) fail("REMNAWAVE_ONBOARDING_RESOURCE_BUSY") else ().pure[ConnectionIO]
+        previous <- createdNodes(org,locked.resourceId)
+        recovery <- RemnawaveNodeOnboardingRun.firewallRecovery(previous,integration,locked.snapshot.input,
+          locked.snapshot.imageReference,locked.snapshot.connectionId).leftMap(code => IntegrationError(code,"Existing node requires review")).liftTo[ConnectionIO]
+        _ <- if (recovery.flatMap(_.externalNodeId)!=locked.externalNodeId ||
+          recovery.exists(_.snapshot.correlationId!=locked.snapshot.correlationId)) fail("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED") else ().pure[ConnectionIO]
         _ <- if (locked.snapshot.blockers.nonEmpty) fail("REMNAWAVE_ONBOARDING_BLOCKED") else ().pure[ConnectionIO]
         _ <- sql"update remnawave_node_onboarding set state='QUEUED',request_id=$request,updated_at=$now where id=$plan".update.run
       } yield locked.copy(state=ProvisioningRunState.Queued,requestId=Some(request),updatedAt=now)
@@ -66,6 +71,10 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
           case(p,s,a,b,c) => OnboardingPhaseRecord(OnboardingPhase.fromCode(p),s,a,b,c) })))
   def history(org: UUID, integration: UUID, limit: Int): ConnectionIO[List[RemnawaveNodeOnboardingRun]] =
     selected(fr"organization_id=$org and integration_id=$integration and state<>'PLANNED' order by created_at desc,id desc limit $limit").to[List]
+  def createdNodes(org: UUID, resource: UUID): ConnectionIO[List[RemnawaveNodeOnboardingRun]] =
+    (fr"select distinct on (external_node_id)" ++ columns ++ fr"""from remnawave_node_onboarding
+      where organization_id=$org and resource_id=$resource and external_node_id is not null and state<>'PLANNED'
+      order by external_node_id,created_at desc,id desc limit 2""").query[Row].to[List].map(_.map(_.domain))
   def claim(owner: UUID, token: UUID, now: Instant, until: Instant, limit: Int): ConnectionIO[List[RemnawaveNodeOnboardingRun]] =
     (fr"""with picked as(select id from remnawave_node_onboarding
       where state='QUEUED' or (state='RUNNING' and claim_deadline<=greatest($now,clock_timestamp()))
