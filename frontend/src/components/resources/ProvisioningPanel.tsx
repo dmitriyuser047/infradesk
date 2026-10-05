@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useProvisioningHistory, useProvisioningRun, usePlanProvisioning, useStartProvisioning } from '../../api/provisioning'
 import { useI18n } from '../../i18n'
 import { IntegrationDialog } from '../integrations/IntegrationDialog'
-import { InlineAlert, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
+import { InlineAlert, OperationProblem, PendingButton, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import type { ProvisioningPlan, ProvisioningRun } from '../../types/provisioning'
 import { ApiError } from '../../api/httpClient'
 
@@ -56,58 +56,56 @@ export function ProvisioningPanel({ organizationId, resourceId, resourceName, ca
   }
 
   return <WorkspaceSection title={text.title} className="provisioning-panel"
-    actions={canRun ? <button type="button" className="secondary-button" disabled={planner.isPending}
-      onClick={() => { void createPlan().catch(() => undefined) }}>{planner.isPending ? text.pending : text.plan}</button> : undefined}>
+    actions={canRun ? <PendingButton type="button" pending={planner.isPending} pendingLabel={text.pending}
+      onClick={() => { void createPlan().catch(() => undefined) }}>{text.plan}</PendingButton> : undefined}>
     {planner.isError ? <InlineAlert tone="danger" title={text.actionError}>{localizedFailure(planner.error, text.errors, text.actionError)}</InlineAlert> : null}
     {history.isError ? <InlineAlert tone="warning" title={text.loadError} /> : null}
     {history.isPending ? <p>{text.pending}</p> : null}
     {!history.isPending && history.data?.items?.length === 0 ? <p>{text.empty}</p> : null}
-    {history.data?.items?.map(run => <div className="provisioning-run" key={run.id}>
-      <span>{t.serverProfiles.runKind[run.inputSnapshot.runKind]}</span>
-      <span>{i18n.format.dateTime(run.createdAt)}</span>
-      <StatusIndicator label={stateText(run.state)} tone={tone(run)} />
-      <button type="button" className="text-button" onClick={() => setFocusedRunId(run.id)}>{t.common.open}</button>
-    </div>)}
     {focusedRunId && detail.isPending ? <p>{text.pending}</p> : null}
     {detail.isError ? <InlineAlert tone="warning" title={text.loadError}
       action={<button type="button" className="text-button" onClick={() => void detail.refetch()}>{text.retry}</button>} /> : null}
-    {detail.data ? <div className="provisioning-detail">
-      <h3>{stateText(detail.data.run.state)}</h3>
+    {detail.data ? <section className="provisioning-detail workflow-group" aria-label={t.common.selectedRun}>
+      <div className="operation-heading"><h3>{t.common.selectedRun}</h3><StatusIndicator label={stateText(detail.data.run.state)} tone={tone(detail.data.run)} /></div>
+      <p className="muted-copy">{i18n.format.dateTime(detail.data.run.createdAt)}</p>
       {detail.data.run.safeMessage || detail.data.run.state === 'UNKNOWN' || detail.data.run.failureCode ? <InlineAlert
-        tone={detail.data.run.state === 'UNKNOWN' ? 'warning' : 'danger'}
-        title={detail.data.run.state === 'UNKNOWN' ? stateText('UNKNOWN') : text.actionError}>
+        tone={detail.data.run.state === 'UNKNOWN' ? 'warning' : detail.data.run.state === 'FAILED' ? 'danger' : 'info'}
+        title={stateText(detail.data.run.state)}>
         {detail.data.run.state === 'UNKNOWN' ? text.unknown
-          : detail.data.run.failureCode ? (text.errors[detail.data.run.failureCode] ?? text.actionError)
-            : text.actionError}
+          : detail.data.run.failureCode ? (knownErrors[detail.data.run.failureCode] ?? t.common.operationBlocked)
+            : stateText(detail.data.run.state)}
       </InlineAlert> : null}
-      {detail.data.steps.map(step => <div className="provisioning-step" key={step.id}>
+      <ol className="operation-timeline">{detail.data.steps.map(step => <li className="provisioning-step" data-state={step.state} key={step.id}>
         <div><strong>{stepName(step.kind, step.displayName)}</strong>
           <StatusIndicator label={text.stepStates[step.state] ?? step.state} tone={step.state === 'SUCCEEDED' ? 'success'
-            : step.state === 'FAILED' ? 'danger' : step.state === 'UNKNOWN' ? 'warning' : 'neutral'} /></div>
+            : step.state === 'FAILED' ? 'danger' : step.state === 'UNKNOWN' ? 'warning' : step.state === 'RUNNING' ? 'info' : 'neutral'} /></div>
         {factLines(step.facts).map(({ key, name, value }) => <p key={key}>{name}: {value}</p>)}
-      {step.failureCode ? <p>{errorText(knownErrors, step.failureCode, text.actionError)}</p> : null}
+      {step.failureCode ? <OperationProblem code={step.failureCode} messages={knownErrors} title={text.stepStates[step.state] ?? text.actionError} tone={step.state === 'UNKNOWN' ? 'warning' : 'danger'} /> : null}
         {step.outputTruncated ? <p>{text.truncated}</p> : null}
-      </div>)}
-    </div> : null}
-    {plan ? <IntegrationDialog title={text.plan} busy={starter.isPending} onClose={() => setPlan(null)}
+      </li>)}</ol>
+    </section> : null}
+    {history.data?.items?.length ? <details className="operation-disclosure provisioning-history"><summary>{t.common.operationHistory} ({history.data.items.length})</summary>{history.data.items.map(run => <div className="provisioning-run" key={run.id}>
+      <span>{t.serverProfiles.runKind[run.inputSnapshot.runKind]}</span>
+      <time dateTime={run.createdAt}>{i18n.format.dateTime(run.createdAt)}</time>
+      <StatusIndicator label={stateText(run.state)} tone={tone(run)} />
+      <button type="button" className="text-button" aria-current={focusedRunId === run.id ? 'true' : undefined} onClick={() => setFocusedRunId(run.id)}>{t.common.open}</button>
+    </div>)}</details> : null}
+    {plan ? <IntegrationDialog title={text.plan} size="large" description={resourceName} busy={starter.isPending} onClose={() => setPlan(null)}
+      actionNote={plan.blockingProblems.length ? t.common.blockedAction(plan.blockingProblems.length) : undefined}
       actions={<><button type="button" className="secondary-button" disabled={starter.isPending} onClick={() => setPlan(null)}>{text.cancel}</button>
-        <button type="button" className="primary-button" disabled={starter.isPending || plan.blockingProblems.length > 0}
-          onClick={() => { void start().catch(() => undefined) }}>{starter.isPending ? text.starting : text.queue}</button></>}>
-      <h3>{text.details}</h3>
+        <PendingButton type="button" className="primary-button" pending={starter.isPending} pendingLabel={text.starting} disabled={plan.blockingProblems.length > 0}
+          onClick={() => { void start().catch(() => undefined) }}>{text.queue}</PendingButton></>}>
+      {plan.blockingProblems.map((problem,i) => <OperationProblem code={problem} messages={knownErrors} title={text.blocked} key={i} />)}
+      {plan.warnings.map((warning,i) => <OperationProblem code={warning} messages={knownErrors} title={text.warnings} tone="warning" key={i} />)}
+      <details className="operation-disclosure" open><summary>{t.common.executionSteps(plan.steps.length)}</summary><ol>{plan.steps.map(step => <li key={step.id}>{stepName(step.kind, step.displayName)}</li>)}</ol></details>
+      <details className="operation-disclosure"><summary>{t.common.technicalDetails}</summary>
       <p>{text.target}: {resourceName}</p>
       <p>{text.connection}: {plan.connectionName}</p>
       <p>{text.resourceKind}: {plan.approvalInput.resourceKind || '—'}</p>
-      <ul>{plan.steps.map(step => <li key={step.id}>{stepName(step.kind, step.displayName)}</li>)}</ul>
-      {plan.warnings.map(warning => <InlineAlert tone="warning" title={text.warnings} key={warning}>{warning}</InlineAlert>)}
-      {plan.blockingProblems.map(problem => <InlineAlert tone="danger" title={text.blocked} key={problem}>{problem}</InlineAlert>)}
+      </details>
       {starter.isError ? <InlineAlert tone="danger" title={text.actionError}>{localizedFailure(starter.error, text.errors, text.actionError)}</InlineAlert> : null}
     </IntegrationDialog> : null}
   </WorkspaceSection>
-}
-
-function errorText(errors: Record<string, string>, code: string | null, fallback: string) {
-  if (!code) return ''
-  return errors[code] ?? fallback
 }
 
 function localizedFailure(error: unknown, errors: Record<string, string>, fallback: string) {

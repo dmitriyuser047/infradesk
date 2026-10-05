@@ -29,9 +29,8 @@ function NodeOverview({ resource }: ResourcePresentationProps) {
   const i18n = useI18n()
   const t = i18n.t.resources.node
   const spec = nodeData(resource)?.spec
-  return <div className="resource-overview">
-    <WorkspaceSection title={t.currentState}><NodeMetricSummary resource={resource} /></WorkspaceSection>
-    <WorkspaceSection title={t.properties}><PropertyGrid columns={2} items={[
+  return <WorkspaceSection title={t.currentState}><NodeMetricSummary resource={resource} />
+    <details className="operation-disclosure"><summary>{t.properties}</summary><PropertyGrid columns={2} items={[
       { label: t.hostname, value: spec?.hostname ?? '—', technical: spec?.hostname != null },
       { label: t.operatingSystem, value: spec?.operatingSystem ?? '—' },
       { label: t.distribution, value: spec?.distribution ?? '—' },
@@ -41,8 +40,8 @@ function NodeOverview({ resource }: ResourcePresentationProps) {
       { label: t.cpuCores, value: spec?.cpuCores ?? '—' },
       { label: t.memory, value: formatMemoryMb(spec?.memoryMb ?? null, i18n) },
       { label: i18n.t.common.code, value: resource.code, technical: true },
-    ]} /></WorkspaceSection>
-  </div>
+    ]} /></details>
+  </WorkspaceSection>
 }
 
 /**

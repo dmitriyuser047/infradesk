@@ -254,8 +254,8 @@ const texts = {
 type Copy = typeof texts['en']
 
 const stateTone = (state: string): StatusTone => state === 'SUCCEEDED' ? 'success'
-  : state === 'FAILED' || state === 'UNKNOWN' ? 'danger'
-    : state === 'PAUSED' || state === 'ROLLING_BACK' || state === 'ROLLED_BACK' ? 'warning'
+  : state === 'FAILED' ? 'danger'
+    : state === 'UNKNOWN' || state === 'PAUSED' || state === 'ROLLING_BACK' || state === 'ROLLED_BACK' ? 'warning'
       : state === 'RUNNING' || state === 'QUEUED' ? 'info' : 'neutral'
 
 const issueLabel = (copy: Copy, issue: RolloutIssue) =>
@@ -394,9 +394,9 @@ function PlanDialog({ copy, organizationId, integrationId, fleetId, revisionId, 
     setCanary(current => current.includes(id) ? current.filter(x => x !== id) : [...current, id])
   }
 
-  return <IntegrationDialog title={copy.previewTitle} onClose={onClose}
+  return <IntegrationDialog title={copy.previewTitle} size="large" busy={start.isPending} onClose={onClose}
     actions={<>
-      <button className="secondary-button" type="button" onClick={onClose}>{copy.cancel}</button>
+      <button className="secondary-button" type="button" disabled={start.isPending} onClick={onClose}>{copy.cancel}</button>
       <button className="secondary-button" type="button" disabled={preview.isPending || waveSize < 1}
         onClick={() => { setPreviewKey(optionsKey); preview.mutate({ revisionId, canaryMemberIds: canary, waveSize,
           automaticRollback: automatic, pauseAfterCanary: pauseAfter }) }}>{copy.makePlan}</button>

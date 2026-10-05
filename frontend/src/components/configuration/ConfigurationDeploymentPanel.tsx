@@ -17,7 +17,7 @@ import {
   type DeploymentDetail,
   type DeploymentExecution,
 } from '../../types/configurationDeployment'
-import { InlineAlert, PropertyGrid, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
+import { InlineAlert, PendingButton, PropertyGrid, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import {
   DeploymentDiffView,
   deploymentTone,
@@ -107,7 +107,7 @@ export function DeploymentStatusView({ deployment, onCancel, cancelling }: {
       <small className="cell-secondary">{t.requestedBy(deployment.actor.name)}</small>
     </div>
     {deployment.state === 'SUCCEEDED' ? <p>{t.succeededDetail}</p> : null}
-    {deployment.state === 'FAILED' ? <InlineAlert tone="warning" title={failure ?? t.states.FAILED}>{t.failedDetail}</InlineAlert> : null}
+    {deployment.state === 'FAILED' ? <InlineAlert tone="danger" title={failure ?? t.states.FAILED}>{t.failedDetail}</InlineAlert> : null}
     {deployment.state === 'ROLLED_BACK' ? <InlineAlert tone="warning" title={failure ?? t.states.ROLLED_BACK}>{t.rolledBackDetail}</InlineAlert> : null}
     {deployment.state === 'ROLLBACK_FAILED' ? <InlineAlert tone="danger" title={t.states.ROLLBACK_FAILED}>
       {t.rollbackFailedDetail}{failure ? <> {failure}</> : null}</InlineAlert> : null}
@@ -179,10 +179,10 @@ export function ConfigurationDeploymentPanel({ organizationId, assignment }: {
       {context.isSuccess && connections.length === 0 ? <InlineAlert tone="warning" title={t.noConnection} /> : null}
       {retryOf ? <InlineAlert tone="info" title={t.retryHelp} /> : null}
       <div className="configuration-editor-actions">
-        <button type="button" className="secondary-button" disabled={!selected || preview.isPending}
+        <PendingButton type="button" pending={preview.isPending} pendingLabel={t.previewing} disabled={!selected}
           onClick={() => preview.mutate({ expectedAssignmentVersion: assignment.version, connectionId: selected })}>
-          {preview.isPending ? t.previewing : t.preview}
-        </button>
+          {t.preview}
+        </PendingButton>
       </div>
       {preview.isError ? <InlineAlert tone="danger" title={describeError(preview.error, i18n)} /> : null}
       {preview.data && !approved ? <InlineAlert tone="warning" title={t.stale} /> : null}
@@ -200,9 +200,10 @@ export function ConfigurationDeploymentPanel({ organizationId, assignment }: {
       </div> : null}
       <ExecutionFields idPrefix={`deploy-${assignment.id}`} value={execution} onChange={setExecution} />
       <div className="configuration-editor-actions">
-        <button type="button" className="primary-button" disabled={!canDeploy} onClick={start}>
-          {create.isPending ? t.deploying : t.deploy}</button>
+        <PendingButton type="button" className="primary-button" pending={create.isPending} pendingLabel={t.deploying} disabled={!canDeploy} onClick={start}>
+          {t.deploy}</PendingButton>
       </div>
+      {!create.isPending && (!approved || !validExecution(request)) ? <p className="field-hint">{!selected ? t.chooseConnection : !approved ? i18n.t.common.previewRequired : i18n.t.common.validationRequired}</p> : null}
       {create.isError ? <InlineAlert tone="danger" title={describeError(create.error, i18n)} /> : null}
     </> : null}
     {deployment.data ? <>

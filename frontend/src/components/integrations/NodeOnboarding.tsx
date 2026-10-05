@@ -4,7 +4,7 @@ import { useNodeOnboardingHistory, useNodeOnboardingOptions, useNodeOnboardingRu
 import { useResource } from '../../api/resources'
 import { useOrganizationPermissions } from '../auth/authorization'
 import { useI18n } from '../../i18n'
-import { InlineAlert, WorkspaceSection } from '../layout/WorkspacePrimitives'
+import { InlineAlert, PendingButton, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { IntegrationDialog } from './IntegrationDialog'
 import type { NodeOnboardingPreview, NodeOnboardingPreviewRequest, NodeOnboardingRun } from '../../types/nodeOnboarding'
 
@@ -108,12 +108,13 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
       {item.nodeName} · {item.address} · {item.state}</button>)}
     {hasRun && runQuery.isPending ? <p role="status">{copy.loading}</p> : null}
     {hasRun && runQuery.isError ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Не удалось загрузить запуск' : 'Could not load onboarding run'} /> : null}
-    {open || hasRun ? <IntegrationDialog title={copy.title} onClose={closeWizard} busy={start.isPending || previewRequest.isPending}
+    {open || hasRun ? <IntegrationDialog title={copy.title} size="large" onClose={closeWizard} busy={start.isPending || previewRequest.isPending}
+      actionNote={step === 3 && preview?.blockingProblems.length ? i18n.t.common.blockedAction(preview.blockingProblems.length) : undefined}
       actions={<>
         {step > 0 && step < 4 ? <button className="secondary-button" type="button" onClick={() => { setPreview(null); requestId.current = null; setStep((step - 1) as Step) }}>{copy.back}</button> : null}
         {step < 3 ? <button className="primary-button" type="button" disabled={!canConfigure || unsupported || options.isPending || (step === 0 && (!resourceId || !server?.serverProfileName || server.blockingProblems.length > 0)) || (step === 1 && (!nodeName.trim() || !address.trim() || !Number(port) || !profile || activeInboundIds.length === 0)) || (step === 2 && !formValid)} onClick={() => setStep((step + 1) as Step)}>{copy.next}</button> : null}
-        {step === 3 ? <button className="primary-button" type="button" disabled={!canConfigure || !formValid || previewRequest.isPending} onClick={() => void makePreview().catch(() => undefined)}>{copy.preview}</button> : null}
-        {step === 3 && preview ? <button className="primary-button" type="button" disabled={!canConfigure || start.isPending || preview.blockingProblems.length > 0} onClick={() => void apply()}>{start.isPending ? i18n.t.common.inProgress : copy.apply}</button> : null}
+        {step === 3 ? <PendingButton className={preview ? 'secondary-button' : 'primary-button'} type="button" pending={previewRequest.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || !formValid} onClick={() => void makePreview().catch(() => undefined)}>{copy.preview}</PendingButton> : null}
+        {step === 3 && preview ? <PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || preview.blockingProblems.length > 0} onClick={() => void apply()}>{copy.apply}</PendingButton> : null}
         {step === 4 || hasRun ? <button className="secondary-button" type="button" onClick={closeWizard}>{copy.close}</button> : null}
       </>}>
       {!canConfigure ? <InlineAlert tone="info" title={i18n.locale === 'ru' ? 'Недостаточно прав для подготовки узла' : 'Missing permissions to provision nodes'}>{i18n.locale === 'ru' ? 'Для подготовки требуются права управления интеграциями, конфигурациями и операциями.' : 'Provisioning requires manage integrations, manage configurations, and execute operations.'}</InlineAlert> : null}

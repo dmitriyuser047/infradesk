@@ -1,6 +1,6 @@
 ﻿// @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../../i18n'
 import type { ServerProfilePlan } from '../../types/serverProfile'
@@ -20,7 +20,7 @@ const plan: ServerProfilePlan = {
   assessment: { compliant: false, modules: [], changes: [{ module: 'caddy', code: 'CADDY_LISTENER_DRIFT', detail: 'local HTTPS port', before: '4096', after: '65535' }] },
   warnings: [], blockingProblems: [],
 }
-function renderPanel(role: 'OWNER'|'MEMBER' = 'OWNER', onQueued = vi.fn(), options: { operationsBlocked?: boolean; previewPlan?: ServerProfilePlan; automationData?: any; locale?: 'en'|'ru' } = {}) {
+function renderPanel(role: 'OWNER'|'MEMBER' = 'OWNER', onQueued = vi.fn(), options: { operationsBlocked?: boolean; previewPlan?: ServerProfilePlan; automationData?: any; locale?: 'en'|'ru'; startPending?: boolean } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   client.setQueryData(['me'], { id:'user', email:'user@example.test', displayName:'User' })
   client.setQueryData(['my-organizations'], [{ id:'org', code:'ORG', name:'Org', role }])
@@ -33,13 +33,50 @@ function renderPanel(role: 'OWNER'|'MEMBER' = 'OWNER', onQueued = vi.fn(), optio
   mocks.preview.mockReturnValue({ mutateAsync:vi.fn().mockResolvedValue(options.previewPlan ?? plan), isPending:false, isError:false })
   mocks.assign.mockReturnValue({ mutateAsync:vi.fn().mockResolvedValue({}), isPending:false, isError:false })
   mocks.unassign.mockReturnValue({ mutateAsync:vi.fn().mockResolvedValue({}), isPending:false, isError:false })
-  mocks.start.mockReturnValue({ mutateAsync:mocks.startMutation, isPending:false, isError:false })
+  mocks.start.mockReturnValue({ mutateAsync:mocks.startMutation, isPending:options.startPending ?? false, isError:false })
   render(<I18nProvider initialLocale={options.locale ?? 'en'}><QueryClientProvider client={client}><ServerProfileAutomationPanel organizationId="org" resourceId="resource" resourceName="Finland VPS" onRunQueued={onQueued} /></QueryClientProvider></I18nProvider>)
   return { onQueued }
 }
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 
 describe('server profile resource automation', () => {
+  it('keeps a pending application dialog open and disables both dismissal actions', async () => {
+    renderPanel('OWNER', vi.fn(), {startPending:true})
+    fireEvent.click(screen.getByRole('button', {name:'Preview changes'}))
+    const dialog = await screen.findByRole('dialog')
+    expect((within(dialog).getByRole('button', {name:'Cancel'}) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(dialog).getByRole('button', {name:'Close'}) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.keyDown(dialog, {key:'Escape'})
+    fireEvent.mouseDown(dialog.parentElement!)
+    expect(screen.getByRole('dialog')).toBe(dialog)
+  })
+  it('shows an unknown blocker before changes and steps with a truthful disabled explanation', async () => {
+    renderPanel('OWNER', vi.fn(), { previewPlan:{ ...plan, blockingProblems:['NEW_BACKEND_BLOCKER'] } })
+    fireEvent.click(screen.getByRole('button', { name:'Preview changes' }))
+    const dialog = await screen.findByRole('dialog')
+    const blocker = within(dialog).getByRole('alert')
+    expect(blocker.textContent).toContain('InfraDesk detected a problem that prevents this operation from being performed safely.')
+    expect(dialog.textContent).not.toContain('The profile or server state changed.')
+    const changes = within(dialog).getByRole('heading', { name:'Planned changes' })
+    const steps = within(dialog).getByText('Execution steps (3)')
+    expect(blocker.compareDocumentPosition(changes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(changes.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(dialog).getByRole('status').textContent).toContain('Cannot apply: 1 blocking problem detected.')
+    expect((within(dialog).getByRole('button', { name:'Apply reviewed plan' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+  it('separates workflow from assignment management while preserving Observe and Preview requests', async () => {
+    renderPanel('OWNER')
+    const observe = mocks.observe.mock.results.at(-1)?.value.mutateAsync
+    const preview = mocks.preview.mock.results.at(-1)?.value.mutateAsync
+    const workflow = screen.getByRole('region', { name:'Check and preview' })
+    fireEvent.click(within(workflow).getByRole('button', { name:'Observe server' }))
+    expect(observe).toHaveBeenCalledWith()
+    fireEvent.click(within(workflow).getByRole('button', { name:'Preview changes' }))
+    await screen.findByRole('dialog')
+    expect(preview).toHaveBeenCalledWith()
+    expect(within(workflow).queryByRole('combobox')).toBeNull()
+    expect(within(screen.getByRole('region', { name:'Manage assignment' })).getByRole('combobox', { name:'Revision' })).toBeTruthy()
+  })
   it.each([
     ['en', 'Preview changes', 'Apply reviewed plan', 'InfraDesk detected a UFW rule or output format that it cannot safely manage. Review the current firewall rules.', 'The profile or server state changed.'],
     ['ru', 'Предпросмотр изменений', 'Применить проверенный план', 'InfraDesk обнаружил правило или формат UFW, который не может безопасно обработать. Проверьте текущие правила сетевого экрана.', 'Профиль или состояние сервера изменились.'],
@@ -65,7 +102,8 @@ describe('server profile resource automation', () => {
     expect(dialog.textContent).toContain('new_vps_test')
     expect(dialog.textContent).toContain('Production SSH')
     expect(dialog.textContent).toContain('Caddy is not listening on the requested HTTPS port.')
-    expect(dialog.textContent).toContain('4096 → 65535')
+    expect(within(dialog).getByText('4096')).toBeTruthy()
+    expect(within(dialog).getByText('65535')).toBeTruthy()
     expect(dialog.textContent).toContain('https://node.example.test:8080')
     expect(dialog.textContent).not.toContain('revision-secret')
     const apply = screen.getByRole('button', { name:'Apply reviewed plan' })

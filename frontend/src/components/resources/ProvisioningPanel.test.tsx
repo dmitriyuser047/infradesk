@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../../i18n'
 import type { ProvisioningDetail, ProvisioningPlan, ProvisioningRun } from '../../types/provisioning'
@@ -51,6 +51,30 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 
 describe('ProvisioningPanel', () => {
+  it('puts the selected operation before history and identifies the selected history entry', () => {
+    const run = baseRun('UNKNOWN')
+    setup([run], {run,steps:[]})
+    const selected = screen.getByRole('region', {name:'Selected operation'})
+    const history = screen.getByText('Operation history (1)')
+    expect(selected.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(history)
+    expect(screen.getByRole('button', {name:'Open'}).getAttribute('aria-current')).toBe('true')
+    expect(within(selected).getByRole('alert').textContent).toContain('The remote result is uncertain.')
+  })
+  it('localizes blockers before steps and never renders arbitrary warning text', async () => {
+    setup()
+    cleanup()
+    mocks.plan.mockReturnValue({mutateAsync:vi.fn().mockResolvedValue({...planData,
+      blockingProblems:['PROVISIONING_DISK_INSUFFICIENT'],warnings:['secret backend exception']}),isPending:false,isError:false})
+    render(<I18nProvider initialLocale="en"><ProvisioningPanel organizationId="org-1" resourceId="resource-1" resourceName="Finland VPS" canRun /></I18nProvider>)
+    fireEvent.click(screen.getByRole('button', {name:'Review readiness check'}))
+    const dialog = await screen.findByRole('dialog')
+    const blocker = within(dialog).getByText('At least 1 GiB of free disk space is required.')
+    expect(blocker.compareDocumentPosition(within(dialog).getByText('Execution steps (2)')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(dialog.textContent).not.toContain('secret backend exception')
+    expect(dialog.textContent).toContain('Review this warning before continuing the operation.')
+    expect((within(dialog).getByRole('button', {name:'Approve and run checks'}) as HTMLButtonElement).disabled).toBe(true)
+  })
   it('shows member-visible run history for every lifecycle state without privileged actions', () => {
     setup(['PLANNED', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'UNKNOWN'].map((state, index) =>
       baseRun(state as ProvisioningRun['state'], `run-${index}`)))

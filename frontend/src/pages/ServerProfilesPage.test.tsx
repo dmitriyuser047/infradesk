@@ -98,14 +98,16 @@ describe('server profile screens', () => {
     page('/organizations/org/configurations/server-profiles/profile-1')
     expect(await screen.findByText('Read-only profile settings. You need Manage configurations to create a revision.')).toBeTruthy()
     expect(screen.queryByRole('button', { name:'Save as new revision' })).toBeNull()
-    expect((screen.getByLabelText('Packages to install') as HTMLTextAreaElement).disabled).toBe(true)
+    expect(screen.queryByLabelText('Packages to install')).toBeNull()
+    expect(within(screen.getByRole('group', { name: 'Packages' })).getByRole('checkbox').matches(':disabled')).toBe(true)
   })
 
   it('lets read-only members inspect typed settings without edit controls', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => response(detail)))
     page('/organizations/org/configurations/server-profiles/profile-1', { role:'MEMBER' })
     expect(await screen.findByText('Read-only profile settings. You need Manage configurations to create a revision.')).toBeTruthy()
-    expect((screen.getByLabelText('Packages to install') as HTMLTextAreaElement).disabled).toBe(true)
+    expect(screen.queryByLabelText('Packages to install')).toBeNull()
+    expect(within(screen.getByRole('group', { name: 'Packages' })).getByRole('checkbox').matches(':disabled')).toBe(true)
     expect(screen.queryByRole('button', { name:'Save as new revision' })).toBeNull()
   })
 
@@ -136,6 +138,94 @@ describe('server profile screens', () => {
     expect((screen.getByRole('tab', { name: 'Файловые конфигурации' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByRole('tab', { name: 'Профили серверов' })).toBeTruthy()
     expect(screen.queryByRole('link', { name: 'Новый профиль сервера' })).toBeNull()
+  })
+
+  it('hides disabled module fields and restores their values after reenabling', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response(detail)))
+    page('/organizations/org/configurations/server-profiles/profile-1')
+    const packages = await screen.findByRole('group', { name: 'Packages' })
+    expect(within(packages).queryByLabelText('Packages to install')).toBeNull()
+    expect(within(screen.getByRole('group', { name: 'Network tuning' })).queryByRole('textbox')).toBeNull()
+    expect(within(screen.getByRole('group', { name: 'Process limits' })).queryByRole('spinbutton')).toBeNull()
+    expect(within(screen.getByRole('group', { name: 'Firewall' })).queryByRole('button', { name: 'Add rule' })).toBeNull()
+    expect(within(screen.getByRole('group', { name: 'Caddy HTTPS' })).queryByLabelText('Domain')).toBeNull()
+    expect(within(screen.getByRole('group', { name: 'Placeholder site' })).queryByLabelText('Domain')).toBeNull()
+    fireEvent.click(within(packages).getByRole('checkbox'))
+    fireEvent.change(within(packages).getByLabelText('Packages to install'), { target: { value: 'curl\nhtop' } })
+    fireEvent.click(within(packages).getByRole('checkbox'))
+    expect(within(packages).queryByLabelText('Packages to install')).toBeNull()
+    fireEvent.click(within(packages).getByRole('checkbox'))
+    expect((within(packages).getByLabelText('Packages to install') as HTMLTextAreaElement).value).toBe('curl\nhtop')
+  })
+
+  it('identifies firewall rules and removes only the named rule', async () => {
+    const rules = [
+      { id: 'ssh', protocol: 'tcp' as const, port: 2222, sources: ['ANY'] },
+      { id: 'https', protocol: 'tcp' as const, port: 443, sources: ['192.0.2.0/24'] },
+    ]
+    const current = { ...detail, revisions: [{ ...detail.revisions[0], content: { ...content, firewall: { enabled: true, rules } } }] }
+    const calls: unknown[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: string, init?: RequestInit) => {
+      if (init?.method === 'POST') { calls.push(JSON.parse(String(init.body))); return response(current.revisions[0], 201) }
+      return response(current)
+    }))
+    page('/organizations/org/configurations/server-profiles/profile-1')
+    const ssh = await screen.findByRole('group', { name: 'ssh' })
+    expect((within(ssh).getByLabelText('Port') as HTMLInputElement).value).toBe('2222')
+    const https = screen.getByRole('group', { name: 'https' })
+    expect((within(https).getByLabelText('Port') as HTMLInputElement).value).toBe('443')
+    const id = within(https).getByLabelText('Rule name') as HTMLInputElement
+    fireEvent.change(id, { target: { value: 'INVALID RULE' } })
+    expect(id.validity.patternMismatch).toBe(true)
+    fireEvent.change(id, { target: { value: 'https' } })
+    const port = within(https).getByLabelText('Port') as HTMLInputElement
+    fireEvent.change(port, { target: { value: '65536' } })
+    expect(port.validity.rangeOverflow).toBe(true)
+    expect(port.getAttribute('aria-invalid')).toBe('true')
+    expect(document.getElementById(port.getAttribute('aria-describedby')!)?.textContent).toBe('Enter a whole number from 1 to 65535.')
+    fireEvent.change(port, { target: { value: '443' } })
+    fireEvent.change(id, { target: { value: '' } })
+    expect(screen.getByRole('group', { name: 'Rule 2' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Remove rule: Rule 2' })).toBeTruthy()
+    fireEvent.change(id, { target: { value: 'https' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove rule: ssh' }))
+    expect(screen.queryByRole('group', { name: 'ssh' })).toBeNull()
+    expect(screen.getByRole('group', { name: 'https' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Save as new revision' }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect((calls[0] as { content: ServerProfileContent }).content.firewall.rules).toEqual([rules[1]])
+  })
+
+  it('uses native code validity and an associated inline hint without submitting invalid input', async () => {
+    const fetchMock = vi.fn(async () => response(detail))
+    vi.stubGlobal('fetch', fetchMock)
+    page('/organizations/org/configurations/server-profiles/new')
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Baseline' } })
+    const codeInput = screen.getByLabelText(/Code/) as HTMLInputElement
+    fireEvent.change(codeInput, { target: { value: 'Bad Code' } })
+    expect(codeInput.validity.patternMismatch).toBe(true)
+    expect(codeInput.getAttribute('aria-invalid')).toBe('true')
+    const hint = document.getElementById(codeInput.getAttribute('aria-describedby')!)
+    expect(hint?.className).toBe('field-error')
+    expect(hint?.textContent).toContain('lowercase')
+    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }))
+    expect(fetchMock.mock.calls.some((call: unknown[]) => (call[1] as RequestInit | undefined)?.method === 'POST')).toBe(false)
+    fireEvent.change(codeInput, { target: { value: 'baseline-01' } })
+    expect(codeInput.validity.valid).toBe(true)
+    expect(codeInput.getAttribute('aria-invalid')).toBeNull()
+    expect(hint?.className).toBe('field-hint')
+  })
+
+  it('explains why an assigned profile cannot be archived', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ ...detail, assignments: [
+      { id: 'a1', resourceId: 'n1', profileId: profile.id, revisionId: 'rev-1', revisionNumber: 1,
+        version: 1, resourceName: 'Finland VPS', resourceActive: true },
+    ] })))
+    page('/organizations/org/configurations/server-profiles/profile-1')
+    const archive = await screen.findByRole('button', { name: 'Archive profile' }) as HTMLButtonElement
+    expect(archive.disabled).toBe(true)
+    expect(archive.title).toBe('Remove the server assignments before archiving this profile.')
+    expect(document.getElementById(archive.getAttribute('aria-describedby')!)?.textContent).toBe(archive.title)
   })
 })
 

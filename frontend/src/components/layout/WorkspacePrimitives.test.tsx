@@ -5,13 +5,32 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../../api/httpClient'
 import { I18nProvider } from '../../i18n'
-import { CopyButton, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator } from './WorkspacePrimitives'
+import { CopyButton, OperationProblem, PageLoading, PageUnavailable, PendingButton, PropertyGrid, StatusIndicator } from './WorkspacePrimitives'
 
 function renderInApp(node: React.ReactNode) {
   return render(<I18nProvider initialLocale="ru"><MemoryRouter>{node}</MemoryRouter></I18nProvider>)
 }
 
 describe('shared page primitives', () => {
+  it('announces only the current pending label and prevents repeat requests', () => {
+    const submit = vi.fn()
+    const { rerender } = renderInApp(<PendingButton pending={false} pendingLabel="Проверка…" onClick={submit}>Предпросмотр изменений</PendingButton>)
+    fireEvent.click(screen.getByRole('button', { name: 'Предпросмотр изменений' }))
+    expect(submit).toHaveBeenCalledOnce()
+    rerender(<PendingButton pending pendingLabel="Проверка…" onClick={submit}>Предпросмотр изменений</PendingButton>)
+    const button = screen.getByRole('button', { name: 'Проверка…' }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('aria-busy')).toBe('true')
+    fireEvent.click(button)
+    expect(submit).toHaveBeenCalledOnce()
+  })
+  it.each(['en', 'ru'] as const)('uses a safe fallback for unknown operation codes in %s', locale => {
+    render(<I18nProvider initialLocale={locale}><OperationProblem code="NEW_BACKEND_BLOCKER" messages={{}} title="Blocked" /></I18nProvider>)
+    expect(screen.getByRole('alert').textContent).toContain(locale === 'ru'
+      ? 'InfraDesk обнаружил проблему, из-за которой операцию нельзя безопасно продолжить.'
+      : 'InfraDesk detected a problem that prevents this operation from being performed safely.')
+    expect(screen.getByRole('alert').textContent).not.toContain('NEW_BACKEND_BLOCKER')
+  })
   afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
   it('forgets "copied" as soon as the value to copy changes', async () => {

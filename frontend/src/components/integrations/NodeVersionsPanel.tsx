@@ -134,7 +134,7 @@ export function NodeVersionsPanel({ organizationId, integrationId, fleetId, canM
     {canControl ? <button type="button" className="secondary-button" disabled={refresh.isPending} onClick={() => refresh.mutate()}>{copy.refresh}</button> : null}
     {detail.data ? <WorkspaceSection title={`${copy.details}: ${detail.data.targetVersion}`}>
       <p>{label(detail.data.state)} · {copy.phase}: {copy.phases[detail.data.phase] ?? detail.data.phase} · {copy.progress} {detail.data.currentWave + 1}/{detail.data.waveCount}</p>
-      {detail.data.state === 'UNKNOWN' ? <InlineAlert tone="danger" title={label('UNKNOWN')}>{copy.unknown}</InlineAlert> : null}
+      {detail.data.state === 'UNKNOWN' ? <InlineAlert tone="warning" title={label('UNKNOWN')}>{copy.unknown}</InlineAlert> : null}
       {detail.data.pauseRequested ? <p>{copy.pauseRequested}</p> : null}
       {detail.data.state === 'PAUSED' ? <p>{detail.data.pauseReason === 'PAUSED_REFRESH_REQUIRED' ? copy.stale
         : detail.data.pauseReason === 'CANARY' ? copy.canaryPaused : detail.data.pauseReason === 'OPERATOR' ? copy.operatorPaused : copy.health}</p> : null}

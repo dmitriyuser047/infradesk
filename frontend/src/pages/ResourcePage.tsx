@@ -132,7 +132,7 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
       status={<>{status ? <StatusIndicator label={status.label} tone={status.tone} /> : null}
         {!resource.active ? <StatusIndicator label={t.inactive} tone="neutral" /> : null}</>}
       actions={<>
-        {terminalConnection ? <Link className="primary-button"
+        {terminalConnection ? <Link className="secondary-button"
           to={connectionPath(organizationId, terminalConnection.id, withTab(`?${terminalQuery.toString()}`, 'terminal'))}>{i18n.t.workScreens.openTerminal}</Link> : null}
         {context && context.sourceConnections.length > 0
         // Sources are related entities, independent of the breadcrumb hierarchy.
@@ -142,20 +142,24 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
         </details> : null}</>} />
     {resourceQuery.isError ? <RefreshWarning updatedAt={resourceQuery.dataUpdatedAt} retry={() => resourceQuery.refetch()} /> : null}
     <WorkspaceTabs tabs={tabs} active={active} onChange={selectTab} />
+    {active === 'overview' && monitored && context && context.openIncidentCount > 0 ? <InlineAlert tone="warning" title={i18n.t.infrastructure.openIncidents}
+      action={<button className="secondary-button" type="button" onClick={() => selectTab('incidents')}>{i18n.t.infrastructure.viewAllIncidents}</button>}>
+      {i18n.t.infrastructure.openIncidentCount(context.openIncidentCount)}
+    </InlineAlert> : null}
     <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
-      {active === 'overview' ? <>
+      {active === 'overview' ? <div className="resource-overview">
         <Overview resource={resource} />
+        {supportsProvisioning(resource.resourceTypeCode) ? <ServerProfileAutomationPanel key={`profile:${organizationId}:${resourceId}`}
+          organizationId={organizationId} resourceId={resourceId} resourceName={resourceName} resourceActive={resource.active} onRunQueued={setFocusedRunId} /> : null}
         {supportsProvisioning(resource.resourceTypeCode) ? <ProvisioningPanel key={`${organizationId}:${resourceId}`}
           organizationId={organizationId} resourceId={resourceId} resourceName={resourceName}
           canRun={permissions.can('manageConfigurations') && permissions.can('executeOperations')}
           focusRunId={focusedRunId} onRunQueued={setFocusedRunId} /> : null}
-        {supportsProvisioning(resource.resourceTypeCode) ? <ServerProfileAutomationPanel key={`profile:${organizationId}:${resourceId}`}
-          organizationId={organizationId} resourceId={resourceId} resourceName={resourceName} resourceActive={resource.active} onRunQueued={setFocusedRunId} /> : null}
         {/* A manual Remnawave binding, for those who manage integrations; others never request it. */}
         {supportsIntegrationBinding(resource.resourceTypeCode) && permissions.can('manageIntegrations')
           ? <ResourceIntegrationSection organizationId={organizationId} resourceId={resourceId} /> : null}
         <ResourceChildren organizationId={organizationId} query={contextQuery} linkQuery={linkQuery} />
-      </> : null}
+      </div> : null}
       {active === 'monitoring' ? <>
         <MetricsSection resource={resource} Summary={presentation.MetricSummary}
           isPending={metricsQuery.isPending} isError={metricsQuery.isError} error={metricsQuery.error}

@@ -22,13 +22,22 @@
 .server-profile-editor legend { padding-inline: var(--space-2); font-weight: 650; }
 .server-profile-editor-fields { display: grid; gap: var(--space-4); min-width: 0; margin: 0; padding: 0; border: 0; }
 .server-profile-editor .checkbox-row { display: flex; align-items: center; gap: var(--space-2); }
-.server-profile-automation .toolbar-actions { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2); }
-.server-profile-automation .toolbar-actions label { min-width: 10rem; }
-.server-profile-automation .provisioning-step { overflow-wrap: anywhere; }
-.server-profile-module-statuses { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: var(--space-2); }
-.server-profile-module-status { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow-wrap: anywhere; }
+.server-profile-current { display: grid; gap: var(--space-1); }
+.server-profile-current > p:last-child { max-width: 75ch; }
+.assignment-management { border-top: 1px solid var(--border); padding-top: var(--space-4); }
+.server-profile-module-statuses { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: var(--space-3); }
+.server-profile-module-status { display: grid; min-width: 0; justify-items: start; align-content: start; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow-wrap: normal; word-break: normal; }
+.server-profile-module-status > span:first-child { font-weight: 500; }
+.server-profile-editor .server-profile-module { padding: var(--space-4); }
+.server-profile-module-header { display: flex; justify-content: space-between; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.server-profile-module-fields { display: grid; gap: var(--space-3); min-width: 0; }
+.server-profile-module-fields > label { display: grid; gap: var(--space-2); font-weight: 500; }
+.server-profile-editor .server-profile-rule { display: grid; gap: var(--space-3); padding: var(--space-4); background: var(--surface-muted); }
+.server-profile-rule-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.server-profile-editor .server-profile-rule legend { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.server-profile-rule-heading .text-button { color: var(--danger); }
+.server-profile-editor .field-error { color: var(--danger); font-size: var(--font-size-small); font-weight: 400; }
 @media (max-width: 44rem) {
   .server-profile-editor .form-grid,
   .server-profile-automation .form-grid { grid-template-columns: minmax(0, 1fr); }
-  .server-profile-automation .toolbar-actions > * { flex: 1 1 100%; }
 }

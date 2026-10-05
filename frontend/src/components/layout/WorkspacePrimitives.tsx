@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormHTMLAttributes, type ReactNode } from 'react'
+import { useEffect, useState, type ButtonHTMLAttributes, type FormHTMLAttributes, type ReactNode } from 'react'
 import { AlertTriangle, ArrowLeft, Check, CheckCircle2, CircleAlert, Copy, Info, SearchX, type LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -125,6 +125,24 @@ export function WorkspaceTabs<T extends string>({ tabs, active, onChange }: {
 }
 
 export type StatusTone = 'success' | 'danger' | 'info' | 'warning' | 'neutral'
+
+/** Both labels occupy the same grid cell, reserving their width before a request starts. */
+export function PendingButton({ pending, pendingLabel, children, disabled, className = 'secondary-button', ...button }: {
+  pending: boolean; pendingLabel: string; children: ReactNode
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
+  return <button {...button} className={`${className} pending-button`} disabled={disabled || pending} aria-busy={pending}>
+    <span className="pending-button-label" data-visible={!pending} aria-hidden={pending}>{children}</span>
+    <span className="pending-button-label" data-visible={pending} aria-hidden={!pending}>{pendingLabel}</span>
+  </button>
+}
+
+/** Unknown operation codes never borrow the meaning of another backend error. */
+export function OperationProblem({ code, messages, title, tone = 'danger' }: {
+  code: string; messages: Record<string, string>; title: string; tone?: 'danger' | 'warning'
+}) {
+  const { t } = useI18n()
+  return <InlineAlert tone={tone} title={title}>{messages[code] ?? (tone === 'danger' ? t.common.operationBlocked : t.common.operationWarning)}</InlineAlert>
+}
 
 /** A status as a badge: text and a mark, colored by tone — the color is never the only signal. */
 export function StatusIndicator({ label, tone = 'neutral', size = 'default', icon: Icon }: {
