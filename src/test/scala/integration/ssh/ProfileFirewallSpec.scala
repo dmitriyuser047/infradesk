@@ -7,6 +7,50 @@ import java.util.UUID
 
 final class ProfileFirewallSpec extends FunSuite {
   private val resource=UUID.randomUUID()
+  private val header="Added user rules (see 'ufw status' for running firewall)"
+  test("UFW 0.36.2 empty output with colon header and None parses as no rules") {
+    assertEquals(ProfileFirewall.parse(s"$header:\n(None)\n",resource),Right(Nil))
+  }
+  test("both supported headers with an empty body parse as no rules") {
+    List(header,s"$header:").foreach { h =>
+      assertEquals(ProfileFirewall.parse(s"$h\n",resource),Right(Nil))
+    }
+    assertEquals(ProfileFirewall.parse(s"$header\n(None)\n",resource),Right(Nil))
+  }
+  test("colon header preserves parsing of valid foreign allow rules") {
+    assertEquals(ProfileFirewall.parse(s"$header:\nufw allow 22/tcp",resource),
+      Right(List(ProfileFirewallRule("allow",FirewallRule("foreign","tcp",22,List("ANY")),false))))
+  }
+  test("unknown output after either supported header remains unsupported") {
+    List(header,s"$header:").foreach { h =>
+      assertEquals(ProfileFirewall.parse(s"$h\nsome unexpected data",resource),Left("FIREWALL_RULE_UNSUPPORTED"))
+    }
+  }
+  test("None cannot hide rules or unknown data and requires a known header") {
+    List(header,s"$header:").foreach { h =>
+      List("(None)\nufw allow 22/tcp","ufw allow 22/tcp\n(None)","(None)\nsome unexpected data","(None)\n(None)").foreach { body =>
+        assertEquals(ProfileFirewall.parse(s"$h\n$body",resource),Left("FIREWALL_RULE_UNSUPPORTED"))
+      }
+    }
+    List("(None)",s"$header::\n(None)","").foreach { raw =>
+      assertEquals(ProfileFirewall.parse(raw,resource),Left("FIREWALL_RULE_UNSUPPORTED"))
+    }
+  }
+  test("unsupported UFW syntax remains blocked with either supported header") {
+    List(header,s"$header:").foreach { h =>
+      List("ufw allow out 22/tcp","ufw route allow 443/tcp").foreach { rule =>
+        assertEquals(ProfileFirewall.parse(s"$h\n$rule",resource),Left("FIREWALL_RULE_UNSUPPORTED"))
+      }
+    }
+  }
+  test("both supported headers preserve exact InfraDesk resource ownership comments") {
+    List(header,s"$header:").foreach { h =>
+      val raw=s"$h\nufw allow 22/tcp comment 'infradesk:$resource:ssh'\nufw allow 443/tcp comment 'infradesk:${UUID.randomUUID()}:https'"
+      assertEquals(ProfileFirewall.parse(raw,resource),Right(List(
+        ProfileFirewallRule("allow",FirewallRule("ssh","tcp",22,List("ANY")),true),
+        ProfileFirewallRule("allow",FirewallRule("foreign","tcp",443,List("ANY")),false))))
+    }
+  }
   test("own comment, foreign equivalent allow and multisource rules remain separate") {
     val raw=s"""Added user rules (see 'ufw status' for running firewall)
       ufw allow from 192.0.2.4/24 to any port 22 proto tcp comment 'infradesk:$resource:ssh'

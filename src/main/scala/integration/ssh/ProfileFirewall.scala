@@ -17,7 +17,9 @@ private[ssh] object ProfileFirewall {
     val prefix=s"infradesk:$resourceId:"
     val nonempty=raw.linesIterator.map(_.trim).filter(_.nonEmpty).toList
     val header="Added user rules (see 'ufw status' for running firewall)"
-    if(nonempty.isEmpty || nonempty.exists(l => l!=header && !l.startsWith("ufw ")))
+    if(nonempty==List(header,"(None)") || nonempty==List(s"$header:","(None)"))
+      return Right(Nil)
+    if(nonempty.isEmpty || nonempty.exists(l => l!=header && l!=s"$header:" && !l.startsWith("ufw ")))
       return Left("FIREWALL_RULE_UNSUPPORTED")
     val lines=nonempty.filter(_.startsWith("ufw "))
     lines.traverse { line =>

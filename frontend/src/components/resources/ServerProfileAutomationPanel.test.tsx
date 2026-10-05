@@ -40,6 +40,20 @@ function renderPanel(role: 'OWNER'|'MEMBER' = 'OWNER', onQueued = vi.fn(), optio
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 
 describe('server profile resource automation', () => {
+  it.each([
+    ['en', 'Preview changes', 'Apply reviewed plan', 'InfraDesk detected a UFW rule or output format that it cannot safely manage. Review the current firewall rules.', 'The profile or server state changed.'],
+    ['ru', 'Предпросмотр изменений', 'Применить проверенный план', 'InfraDesk обнаружил правило или формат UFW, который не может безопасно обработать. Проверьте текущие правила сетевого экрана.', 'Профиль или состояние сервера изменились.'],
+  ] as const)('explains unsupported UFW output in %s and keeps Apply blocked', async (locale, preview, apply, message, fallback) => {
+    renderPanel('OWNER', vi.fn(), { locale, previewPlan:{ ...plan, blockingProblems:['FIREWALL_RULE_UNSUPPORTED'] } })
+    fireEvent.click(screen.getByRole('button', { name:preview }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain(message)
+    expect(dialog.textContent).not.toContain(fallback)
+    expect(dialog.textContent).not.toContain('FIREWALL_RULE_UNSUPPORTED')
+    expect((screen.getByRole('button', { name:apply }) as HTMLButtonElement).disabled).toBe(true)
+    expect(mocks.startMutation).not.toHaveBeenCalled()
+  })
+
   it('reviews the human-readable target and diff, then retries Apply with the same request ID', async () => {
     const onQueued = vi.fn()
     const start = vi.fn().mockRejectedValueOnce(new Error('connection lost')).mockResolvedValue({ id:'run-queued', state:'QUEUED' })
