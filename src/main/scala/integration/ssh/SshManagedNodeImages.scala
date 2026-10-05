@@ -151,8 +151,7 @@ private[ssh] object SshManagedNodeImages {
     "[ \"$(sha256sum \"$d/compose.yml\" | cut -d' ' -f1)\" = \"$composeHash\" ] || return 1",
     """[ "$(grep -c '^    image: ' "$d/compose.yml")" = 1 ] || return 1
       |  controlledImage=$(sed -n 's/^    image: //p' "$d/compose.yml")
-      |  case "$controlledImage" in """.stripMargin + RemnawaveNodeReleaseCatalog.managedReferences.mkString("|") + """
-      |    ) ;; *) return 1 ;; esac
+      |  case "$controlledImage" in """.stripMargin + RemnawaveNodeReleaseCatalog.managedReferences.mkString("|") + """ ) ;; *) return 1 ;; esac
       |  originalImage=${marker##* image=}
       |  normalizedHash=$(awk -v image="$originalImage" '{if ($0 ~ /^    image: /) print "    image: " image; else print}' "$d/compose.yml" | sha256sum | cut -d' ' -f1)
       |  [ "$normalizedHash" = "$composeHash" ] || return 1""".stripMargin)
