@@ -118,6 +118,12 @@ final class PostgresConnectionRepository extends ConnectionRepository[Connection
       .option
       .map(_.map(_.toDomain))
 
+  def findByIds(org: UUID, ids: List[UUID]): ConnectionIO[Map[UUID, Connection]] =
+    sql"""select id, organization_id, scope_type, project_id, environment_id, connector_type,
+      code, name, config::text, secret_ref, is_active, created_at, updated_at
+      from connection where organization_id=$org and id=any(${ids.toArray[UUID]})"""
+      .query[ConnectionRow].to[List].map(_.map(r => r.id -> r.toDomain).toMap)
+
   override def findByOrganization(
     organizationId: UUID
   ): ConnectionIO[List[Connection]] =

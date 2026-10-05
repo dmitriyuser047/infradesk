@@ -51,7 +51,7 @@ final case class RemnawaveFleetConfig(enabled: Boolean = true, pollInterval: Fin
   staleAfter: FiniteDuration = 900.seconds) {
   require(pollInterval > Duration.Zero && batchSize > 0 && maxConcurrency > 0,
     "Fleet observer concurrency and batch size must be positive")
-  require(claimLease > observationTimeout, "Fleet claim lease must exceed the observation timeout")
+  require(claimLease > observationTimeout * 2 + 5.seconds, "Fleet claim lease must exceed both observation timeouts plus a five-second save margin")
   require(recheckInterval > Duration.Zero && staleAfter > Duration.Zero,
     "Fleet recheck and staleness windows must be positive")
 }
@@ -185,9 +185,9 @@ object AppConfig {
       lease <- bounded(values, "INFRADESK_INTEGRATIONS_FLEETS_CLAIM_LEASE_SECONDS", 120, 10, 3600)
       recheck <- bounded(values, "INFRADESK_INTEGRATIONS_FLEETS_RECHECK_SECONDS", 300, 30, 86400)
       stale <- bounded(values, "INFRADESK_INTEGRATIONS_FLEETS_STALE_AFTER_SECONDS", 900, 60, 604800)
-      _ <- Either.cond(lease > observation, (), new IllegalArgumentException(
-        "INFRADESK_INTEGRATIONS_FLEETS_CLAIM_LEASE_SECONDS must exceed " +
-          "INFRADESK_INTEGRATIONS_FLEETS_OBSERVATION_TIMEOUT_SECONDS"))
+      _ <- Either.cond(lease > observation * 2 + 5, (), new IllegalArgumentException(
+        "INFRADESK_INTEGRATIONS_FLEETS_CLAIM_LEASE_SECONDS must exceed twice " +
+          "INFRADESK_INTEGRATIONS_FLEETS_OBSERVATION_TIMEOUT_SECONDS plus five seconds"))
     } yield RemnawaveFleetConfig(enabled, poll.seconds, batch, concurrency, lease.seconds,
       observation.seconds, recheck.seconds, stale.seconds)
 

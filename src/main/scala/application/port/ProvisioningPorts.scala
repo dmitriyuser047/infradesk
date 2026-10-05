@@ -34,6 +34,7 @@ trait ProvisioningRunRepository[F[_]] {
 final case class ProvisioningTarget(resourceType: String, resourceKind: String, connectionId: UUID,
   connectionUpdatedAt: Instant, connection: domain.connection.Connection)
 trait ProvisioningTargetQuery[F[_]] {
+  def eligibleBatch(organizationId: UUID, resourceIds: List[UUID]): F[Map[UUID, Either[String, ProvisioningTarget]]]
   def eligible(organizationId: UUID, resourceId: UUID): F[Either[String, ProvisioningTarget]]
   def unchanged(snapshot: ProvisioningInputSnapshot): F[Boolean]
 }

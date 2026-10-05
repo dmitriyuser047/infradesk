@@ -83,10 +83,14 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
     String, String, Boolean, Instant, String, Boolean, Option[String], Option[Int], Option[String],
     Option[String], Option[String], Boolean)
 
-  def memberRows(org: UUID, fleetId: UUID): ConnectionIO[List[FleetMemberRow]] = for {
+  def memberRows(org: UUID, fleetId: UUID): ConnectionIO[List[FleetMemberRow]] = memberRowsSelected(org, fleetId, None)
+  def memberRowsBatch(org: UUID, fleetId: UUID, ids: List[UUID]): ConnectionIO[List[FleetMemberRow]] =
+    memberRowsSelected(org, fleetId, Some(ids))
+  private def memberRowsSelected(org: UUID, fleetId: UUID, ids: Option[List[UUID]]): ConnectionIO[List[FleetMemberRow]] = for {
     rows <- (memberSelect ++ fr"where m.organization_id=$org and m.fleet_id=$fleetId and m.removed_at is null" ++
+      ids.fold(fr"")(v => fr"and m.id=any(${v.toArray[UUID]})") ++
       fr"order by o.display_name,m.id").query[MemberTuple].to[List]
-    stored <- repository.assessments(org, fleetId)
+    stored <- ids.fold(repository.assessments(org, fleetId))(repository.assessmentsBatch(org, fleetId, _))
   } yield {
     val byMembership = stored.map(value => value.membershipId -> value).toMap
     rows.map { case (id, organizationId, fleet, integration, node, resource, version, createdBy, createdAt,
@@ -132,6 +136,11 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
 
   def storedEvidence(org: UUID, membershipId: UUID,
     revision: RemnawaveFleetRevision): ConnectionIO[Option[FleetStoredEvidence]] = {
+    storedEvidenceBatch(org, List(membershipId), revision).map(_.get(membershipId))
+  }
+
+  def storedEvidenceBatch(org: UUID, membershipIds: List[UUID],
+    revision: RemnawaveFleetRevision): ConnectionIO[Map[UUID, FleetStoredEvidence]] = {
     val content = revision.content
     sql"""
       select m.id,m.organization_id,m.fleet_id,m.integration_id,m.inventory_node_id,m.resource_id,m.version,
@@ -174,9 +183,10 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
       left join server_profile_observation so on so.organization_id=m.organization_id and so.resource_id=m.resource_id
       left join integration_desired_state ds on ds.organization_id=m.organization_id
         and ds.integration_id=m.integration_id and ds.inventory_object_id=m.inventory_node_id
-      where m.organization_id=$org and m.id=$membershipId and m.removed_at is null"""
-      .query[StoredEvidenceRow].option.flatMap(_.traverse(row => provenance(org, row.integration, row.resource,
-        row.node).map(row.toDomain)))
+      where m.organization_id=$org and m.id=any(${membershipIds.toArray[UUID]}) and m.fleet_id=${revision.fleetId} and m.removed_at is null"""
+      .query[StoredEvidenceRow].to[List].flatMap { rows =>
+        provenanceBatch(org, membershipIds).map(proofs => rows.iterator.map(row => row.id -> row.toDomain(proofs.get(row.id))).toMap)
+      }
   }
 
   private case class StoredEvidenceRow(id: UUID, org: UUID, fleet: UUID, integration: UUID, node: UUID,
@@ -260,6 +270,23 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
         Some(FleetLocalProvenance(id, externalId, image, ready, at))
       case _ => None
     })
+
+  private def provenanceBatch(org: UUID, ids: List[UUID]): ConnectionIO[Map[UUID, FleetLocalProvenance]] =
+    sql"""select distinct on (m.id) m.id,ob.id,ob.external_node_id,ob.input_snapshot->>'imageReference',
+      coalesce(ob.input_snapshot->>'apiGeneration','') <> '' and ob.input_snapshot->>'compatibilityBlocker' is null,
+      ob.finished_at
+      from remnawave_fleet_membership m
+      join integration_inventory_object o on o.organization_id=m.organization_id and o.id=m.inventory_node_id
+      join remnawave_node_onboarding ob on ob.organization_id=m.organization_id and ob.integration_id=m.integration_id
+        and ob.resource_id=m.resource_id and o.integration_id=ob.integration_id and o.external_id=ob.external_node_id::text
+      where m.organization_id=$org and m.id=any(${ids.toArray[UUID]}) and m.removed_at is null
+        and ob.state='SUCCEEDED' and ob.external_node_id is not null
+      order by m.id,ob.finished_at desc nulls last,ob.id desc"""
+      .query[(UUID,UUID,UUID,Option[String],Boolean,Option[Instant])].to[List].map(_.flatMap {
+        case (member,id,external,Some(image),ready,Some(at)) if image.nonEmpty =>
+          Some(member -> FleetLocalProvenance(id,external,image,ready,at))
+        case _ => None
+      }.toMap)
 
   def serverProfileName(org: UUID, profileId: UUID): ConnectionIO[Option[String]] =
     sql"select name from server_profile where organization_id=$org and id=$profileId".query[String].option

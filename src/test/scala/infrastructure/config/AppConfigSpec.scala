@@ -353,4 +353,15 @@ final class AppConfigSpec extends FunSuite {
       assert(AppConfig.fromEnvironment(minimal + (key -> value)).isLeft, s"accepted $key=$value")
     }
   }
+  test("Fleet observer environment rejects a lease shorter than two reads plus save margin") {
+    val key = "INFRADESK_INTEGRATIONS_FLEETS_CLAIM_LEASE_SECONDS"
+    List("60", "95").foreach { value =>
+      val result = AppConfig.fromEnvironment(minimal + (key -> value))
+      assert(result.isLeft)
+      assert(result.swap.toOption.get.getMessage.contains(key))
+    }
+    assert(AppConfig.fromEnvironment(minimal + (key -> "96")).isRight)
+    assert(AppConfig.fromEnvironment(minimal).isRight)
+  }
+
 }

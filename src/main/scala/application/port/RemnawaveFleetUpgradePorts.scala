@@ -18,6 +18,7 @@ trait RemnawaveFleetUpgradeRepository[F[_]] {
   def releaseRevision(org: UUID, fleetId: UUID, id: UUID): F[Option[FleetNodeReleaseRevision]]
   def promote(revision: FleetNodeReleaseRevision): F[Unit]
   def nextRevisionNumber(org: UUID, fleetId: UUID): F[Int]
+  def observationsBatch(org: UUID, fleetId: UUID, ids: List[UUID]): F[List[FleetNodeImageObservation]]
   def observations(org: UUID, fleetId: UUID): F[List[FleetNodeImageObservation]]
   def saveObservation(value: FleetNodeImageObservation): F[Unit]
   def insertPlan(run: RemnawaveFleetUpgradeRun, members: List[RemnawaveFleetUpgradeMember]): F[Unit]

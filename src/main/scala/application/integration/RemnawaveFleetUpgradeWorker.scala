@@ -225,11 +225,15 @@ final class RemnawaveFleetUpgradeWorker[Tx[_]: MonadThrow](repo: RemnawaveFleetU
   private def verify(r: RemnawaveFleetUpgradeRun, all: List[RemnawaveFleetUpgradeMember], now: Instant, token: UUID): IO[Unit] = for {
     actions <- runner.run(repo.actions(r.id))
     relevant = if (r.phase == NodeUpgradePhase.FinalVerify) all else all.filter(_.wave <= r.currentWave)
-    codes <- relevant.traverse { m =>
-      val p = plan(r, m)
-      val after = if (m.state == FleetRolloutMemberState.Skipped) r.createdAt else actions.find(a => a.memberId == m.id && a.kind == "SWITCH" && !a.rollback).flatMap(_.finishedAt).getOrElse(r.createdAt)
-      service.verification(r, p, r.snapshot.target, after)
+    switchIndex = actions.filter(a => a.kind == "SWITCH" && !a.rollback).iterator.map(a => a.memberId -> a).toMap
+    planIndex = r.snapshot.members.iterator.map(m => m.membershipId -> m).toMap
+    checks = relevant.map { m =>
+      val p = planIndex(m.membershipId)
+      val after = if (m.state == FleetRolloutMemberState.Skipped) r.createdAt else switchIndex.get(m.id).flatMap(_.finishedAt).getOrElse(r.createdAt)
+      NodeUpgradeVerification(p, r.snapshot.target, after)
     }
+    verdicts <- service.verificationBatch(r, checks)
+    codes = checks.map(c => verdicts.getOrElse(c.member.membershipId, Some(RefreshRequired)))
     _ <- codes.flatten.headOption match {
       case Some(c) if c == RefreshRequired && !now.isAfter(r.phaseStartedAt.plusMillis(settings.verificationTimeout.toMillis)) =>
         refresh(r.organizationId, r.integrationId, r.fleetId, now) *> later(r, now, token)

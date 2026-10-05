@@ -246,10 +246,14 @@ private[postgres] object ConfigurationDeploymentWorld {
   def enabled: Boolean = sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true")
 
   /** A fresh world per test: its own tenant, its own SSH server, always cleaned up. */
-  def run(body: ConfigurationDeploymentWorld => IO[Unit]): Unit = {
+  def run(body: ConfigurationDeploymentWorld => IO[Unit]): Unit = runWithDatabase(body, isolated = false)
+  def runIsolated(body: ConfigurationDeploymentWorld => IO[Unit]): Unit = runWithDatabase(body, isolated = true)
+  private def runWithDatabase(body: ConfigurationDeploymentWorld => IO[Unit], isolated: Boolean): Unit = {
     assume(enabled, "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
     val remote = RemoteConfigurationServer.start()
-    try PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    val database = if (isolated) PostgresTestDatabase.isolatedTransactor(PostgresTestDatabase.config)
+      else PostgresTestDatabase.transactor(PostgresTestDatabase.config)
+    try database.use { xa =>
       val world = new ConfigurationDeploymentWorld(new DoobieTransactionRunner(xa), remote)
       (world.setUp *> body(world)).guarantee(world.cleanUp)
     }.unsafeRunSync()

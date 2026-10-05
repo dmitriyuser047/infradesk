@@ -126,9 +126,11 @@ final class FleetRolloutWorkerSpec extends FunSuite {
     var consumers: List[FleetRolloutConfigConsumer] = Nil) extends RemnawaveFleetQuery[IO] {
     def configConsumers(o: UUID, i: UUID, p: String) = IO(consumers)
     private def no[A]: IO[A] = IO.raiseError(new AssertionError("Unexpected query"))
+    def memberRowsBatch(o: UUID, f: UUID, ids: List[UUID]) = memberRows(o, f).map(_.filter(r => ids.contains(r.membership.id)))
     def memberRows(o: UUID, f: UUID): IO[List[FleetMemberRow]] = IO.pure(rows)
     def summaries(o: UUID, i: UUID, ids: List[UUID]): IO[Map[UUID, RemnawaveFleetSummary]] = no
     def candidates(o: UUID, i: UUID, limit: Int): IO[List[FleetCandidate]] = no
+    def storedEvidenceBatch(o: UUID, ids: List[UUID], revision: RemnawaveFleetRevision): IO[Map[UUID, FleetStoredEvidence]] = no
     def storedEvidence(o: UUID, m: UUID, revision: RemnawaveFleetRevision): IO[Option[FleetStoredEvidence]] = no
     def provenance(o: UUID, i: UUID, r: UUID, n: UUID): IO[Option[FleetLocalProvenance]] = no
     def serverProfileName(o: UUID, id: UUID): IO[Option[String]] = no

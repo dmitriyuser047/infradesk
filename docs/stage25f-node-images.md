@@ -175,3 +175,43 @@ or advancing any further node. Record run/action IDs, redacted actual image proo
 Before final Stage25 acceptance also execute the separate 25E disposable desired-configuration
 canary, including stale start/resume/next-wave admission and shared external-consumer health gates.
 Do not begin a new major Stage automatically.
+
+
+## Admission read-path review fix
+
+Admission, preview and version status use batch evidence and source projections. Each admission
+boundary loads a fixed number of SQL statements and builds membership/source/image/action indexes;
+validation performs no per-member database reads. Checks remain fresh at START, RESUME, VALIDATE,
+prefetch, wave transitions and the immediate mutation-authority callbacks. No evidence cache crosses
+those safety boundaries. Consequently total statement count grows with mutation boundaries, rather
+than boundaries multiplied by member count. Reading all current members at each boundary still
+processes Fleet-sized data; this is intentionally retained for the safety gates.
+
+Wave/final verification submits one batch, inspects Panel once, loads only the requested membership,
+assessment, image and evidence rows, then validates every member with its own mutation timestamp.
+Single-node forward/rollback verification uses the same batch path with one member.
+
+Real PostgreSQL regression exercises 1, 10, 100 and 500 actual members: evidence/provenance uses two
+statements, source/connections two, member/assessment two and image observations one. Tenant,
+missing-source, ambiguous-source and selection boundaries are checked. Worker regressions verify
+one final-verification batch at each size with no remote mutations.
+
+Observer startup now requires claimLease > 2 * observationTimeout + 5 seconds, accounting for both
+sequential SSH observations and the fenced-save margin. Defaults remain 120/45 seconds. Environment
+parsing and direct settings construction reject unsafe shorter leases.
+
+The global Stage25D claim/fencing regression runs in a disposable isolated database, which is migrated
+and dropped by a managed resource. Suite parallelism and the production global claim query remain
+unchanged. The previous documentation HEAD 9e11f82 failed CI due to that fixture isolation defect;
+only a complete green CI run of the replacement exact HEAD satisfies delivery acceptance.
+
+Real disposable upgrade, controlled rollback and crash-recovery canaries above remain PENDING until
+the dedicated compatible Panel and Stage25C test-node access are supplied. These automated database
+and worker regressions do not constitute operational acceptance.
+
+Local review-fix validation: `testFull` reports 1203 total, 1184 passed, 19 Windows platform skips,
+zero failures; targeted review regressions report 60 passed. Windows local validation uses a temporary
+JVM-only hosts file because canonical hostname resolution on this workstation takes 12.4 seconds
+and exceeds the unrelated SMTP fixture's five-second deadline. SMTP's 17 cases then pass without
+changing test deadlines or production SMTP code. The replacement CI uses its normal Linux environment.
+Scala Universal staging also passes on the review-fix sources.

@@ -21,6 +21,24 @@ private[postgres] object PostgresTestDatabase {
       Slf4jLogger.getLoggerFromName[IO]("test.database.migration"))) *>
       Database.transactor(config).evalTap(ensureBaseFixtures)
 
+  /** Global queue tests need a database, rather than tenant, boundary. */
+  def isolatedTransactor(config: DatabaseConfig): Resource[IO, HikariTransactor[IO]] = {
+    val name = "infradesk_isolated_" + UUID.randomUUID().toString.replace("-", "")
+    def execute(statement: String): IO[Unit] = IO.blocking {
+      val connection = java.sql.DriverManager.getConnection(config.url, config.user, config.password)
+      try {
+        val command = connection.createStatement()
+        try { command.execute(statement); () } finally command.close()
+      } finally connection.close()
+    }
+    val suffixAt = config.url.indexOf('?')
+    val baseUrl = if (suffixAt < 0) config.url else config.url.take(suffixAt)
+    val suffix = if (suffixAt < 0) "" else config.url.drop(suffixAt)
+    val isolated = config.copy(url = baseUrl.take(baseUrl.lastIndexOf('/') + 1) + name + suffix)
+    Resource.make(execute(s"CREATE DATABASE $name"))(_ => execute(s"DROP DATABASE $name WITH (FORCE)"))
+      .flatMap(_ => transactor(isolated))
+  }
+
   private def ensureBaseFixtures(xa: HikariTransactor[IO]): IO[Unit] = {
     val org = UUID.fromString("20000000-0000-0000-0000-000000000001")
     val project = UUID.fromString("30000000-0000-0000-0000-000000000001")

@@ -66,10 +66,14 @@ object NodeUpgradeAdmission {
       a.configuredImage == b.configuredImage && a.composeHash == b.composeHash && a.markerHash == b.markerHash
 }
 
+private[integration] final case class NodeUpgradeVerification(member: NodeUpgradeMemberPlan, release: NodeRelease, after: Instant)
+
 private[integration] trait NodeUpgradeExecution[Tx[_]] {
   def settings: NodeUpgradeSettings
   private[integration] def admission(run: RemnawaveFleetUpgradeRun, atomicMember: Option[UUID] = None): IO[Option[String]]
-  private[integration] def verification(run: RemnawaveFleetUpgradeRun, member: NodeUpgradeMemberPlan, release: NodeRelease, after: Instant): IO[Option[String]]
+  private[integration] def verificationBatch(run: RemnawaveFleetUpgradeRun, checks: List[NodeUpgradeVerification]): IO[Map[UUID, Option[String]]]
+  private[integration] final def verification(run: RemnawaveFleetUpgradeRun, member: NodeUpgradeMemberPlan, release: NodeRelease, after: Instant): IO[Option[String]] =
+    verificationBatch(run, List(NodeUpgradeVerification(member, release, after))).map(_(member.membershipId))
   private[integration] def connection(org: UUID, member: NodeUpgradeMemberPlan): IO[domain.connection.Connection]
   private[integration] def panel(org: UUID, integration: UUID): IO[NodeApiCompatibility]
   private[integration] def spec(snapshot: NodeUpgradeSnapshot, member: NodeUpgradeMemberPlan): RemnawaveNodeRemoteSpec
@@ -107,31 +111,40 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
     audit.record(actor, action, AuditTargetType.Integration, Some(integration))
   private[integration] def recordOutcome(run: RemnawaveFleetUpgradeRun): Tx[Unit] =
     record(ActorContext(run.createdBy, run.organizationId), run.integrationId, AuditAction.RemnawaveFleetUpgradeCompleted)
-  private[integration] def verification(run: RemnawaveFleetUpgradeRun, member: NodeUpgradeMemberPlan,
-    release: NodeRelease, after: Instant): IO[Option[String]] = for {
+  private[integration] def verificationBatch(run: RemnawaveFleetUpgradeRun,
+    checks: List[NodeUpgradeVerification]): IO[Map[UUID, Option[String]]] = for {
     api <- panel(run.organizationId, run.integrationId)
     now <- IO.realTimeInstant
     facts <- runner.run(for {
-      rows <- query.memberRows(run.organizationId, run.fleetId)
-      images <- repo.observations(run.organizationId, run.fleetId)
+      rows <- query.memberRowsBatch(run.organizationId, run.fleetId, checks.map(_.member.membershipId))
+      images <- repo.observationsBatch(run.organizationId, run.fleetId, checks.map(_.member.membershipId))
       revision <- fleets.revision(run.organizationId, run.fleetId, run.snapshot.fleetRevisionId)
-      evidence <- revision.flatTraverse(r => query.storedEvidence(run.organizationId, member.membershipId, r))
+      evidence <- revision.fold(Map.empty[UUID, FleetStoredEvidence].pure[Tx])(r =>
+        query.storedEvidenceBatch(run.organizationId, checks.map(_.member.membershipId), r))
       sync <- query.lastSuccessfulSyncAt(run.organizationId, run.integrationId)
-    } yield (rows.find(_.membership.id == member.membershipId), images.find(o => o.membershipId == member.membershipId &&
-      o.membershipVersion == member.membershipVersion && o.inventoryNodeId == member.inventoryNodeId && o.resourceId == member.resourceId &&
-      o.sourceConnectionId == member.sourceConnectionId && o.sourceUpdatedAt == member.sourceUpdatedAt), evidence, sync))
-    (row, image, evidence, sync) = facts
+    } yield (rows.iterator.map(r => r.membership.id -> r).toMap,
+      images.iterator.map(o => o.membershipId -> o).toMap, evidence, sync))
   } yield {
-    val newEvidence = sync.exists(_.isAfter(after)) && row.flatMap(_.assessment).exists(a =>
-      a.computedAt.isAfter(after) && a.inventoryObservedAt.exists(_.isAfter(after)) && a.localObservedAt.exists(_.isAfter(after))) &&
-      image.exists(o => o.observedAt.isAfter(after) && fresh(Some(o.observedAt), now, settings.staleAfter))
-    if (api != run.snapshot.panel || !RemnawaveNodeReleaseCatalog.compatibility(release, api, member.baseline.platform).compatible) Some(PlanChanged)
-    else if (!newEvidence) Some(RefreshRequired)
-    else row.flatMap(r => assessment(r, run.snapshot.fleetRevisionId, now, settings.staleAfter))
-      .orElse(Option.unless(image.exists(o => o.observation.healthy && o.observation.matches(release) &&
-        o.observation.markerHash == member.baseline.markerHash) &&
-        evidence.exists(e => configurationMatches(e, run.snapshot.configuration) &&
-          e.node.exists(n => n.isConnected && !n.isDisabled && versionConsistent(release, n.nodeVersion))))(HealthGate))
+    val (rows, images, proofs, sync) = facts
+    checks.iterator.map { check =>
+      val NodeUpgradeVerification(member, release, after) = check
+      val row = rows.get(member.membershipId)
+      val image = images.get(member.membershipId).filter(o => o.membershipVersion == member.membershipVersion &&
+        o.inventoryNodeId == member.inventoryNodeId && o.resourceId == member.resourceId &&
+        o.sourceConnectionId == member.sourceConnectionId && o.sourceUpdatedAt == member.sourceUpdatedAt)
+      val evidence = proofs.get(member.membershipId)
+      val newEvidence = sync.exists(_.isAfter(after)) && row.flatMap(_.assessment).exists(a =>
+        a.computedAt.isAfter(after) && a.inventoryObservedAt.exists(_.isAfter(after)) && a.localObservedAt.exists(_.isAfter(after))) &&
+        image.exists(o => o.observedAt.isAfter(after) && fresh(Some(o.observedAt), now, settings.staleAfter))
+      val code = if (api != run.snapshot.panel || !RemnawaveNodeReleaseCatalog.compatibility(release, api, member.baseline.platform).compatible) Some(PlanChanged)
+      else if (!newEvidence) Some(RefreshRequired)
+      else row.flatMap(r => assessment(r, run.snapshot.fleetRevisionId, now, settings.staleAfter))
+        .orElse(Option.unless(image.exists(o => o.observation.healthy && o.observation.matches(release) &&
+          o.observation.markerHash == member.baseline.markerHash) &&
+          evidence.exists(e => configurationMatches(e, run.snapshot.configuration) &&
+            e.node.exists(n => n.isConnected && !n.isDisabled && versionConsistent(release, n.nodeVersion))))(HealthGate))
+      member.membershipId -> code
+    }.toMap
   }
 
   def select(actor: ActorContext, integration: UUID, fleetId: UUID, releaseId: String): IO[FleetNodeReleaseRevision] = for {
@@ -162,10 +175,11 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
       observations <- repo.observations(org, fleetId)
       active <- repo.active(org, fleetId)
       desired <- fleets.fleet(org, integration, fleetId).flatMap(_.flatMap(_.desiredRevisionId).flatTraverse(id => fleets.revision(org, fleetId, id)))
-      reported <- desired.toList.flatMap(_ => rows).traverse(row => query.storedEvidence(org, row.membership.id, desired.get)
-        .map(e => row.membership.id -> e.flatMap(_.node).flatMap(_.nodeVersion)))
+      evidence <- desired.fold(Map.empty[UUID, FleetStoredEvidence].pure[Tx])(r => query.storedEvidenceBatch(org, rows.map(_.membership.id), r))
+      reported = evidence.view.mapValues(_.node.flatMap(_.nodeVersion)).toMap
     } yield (target, rows, observations, active, reported.toMap))
     (target, rows, observations, active, reported) = data
+    imageIndex = observations.iterator.map(o => (o.membershipId, o.membershipVersion) -> o).toMap
   } yield Json.obj("panel" -> NodeReleaseJson.panelEncoder(api.copy(
     serverVersion = api.serverVersion.filter(v => NodeRelease.version(v).nonEmpty),
     sourceCommit = api.sourceCommit.filter(_.matches("[0-9a-f]{40}")))),
@@ -175,7 +189,7 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
     "target" -> target.fold(Json.Null)(NodeReleaseJson.releaseRevisionEncoder.apply),
     "active" -> active.fold(Json.Null)(NodeUpgradeJson.run),
     "members" -> Json.arr(rows.map { row =>
-      val obs = observations.find(o => o.membershipId == row.membership.id && o.membershipVersion == row.membership.version &&
+      val obs = imageIndex.get((row.membership.id, row.membership.version)).filter(o =>
         fresh(Some(o.observedAt), now, settings.staleAfter)).map(_.observation)
       val installed = obs.flatMap(o => o.actualImageId.flatMap(id => o.platform.flatMap(p => RemnawaveNodeReleaseCatalog.identify(id, p))))
       val known = installed.filter(r => obs.exists(o => o.managedFiles && o.matches(r)) && versionConsistent(r, reported.getOrElse(row.membership.id, None)))
@@ -206,24 +220,25 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
       rows <- query.memberRows(actor.organizationId, fleetId)
       images <- repo.observations(actor.organizationId, fleetId)
       sync <- query.lastSuccessfulSyncAt(actor.organizationId, integration)
-      evidence <- rows.traverse(row => query.storedEvidence(actor.organizationId, row.membership.id, r))
-      sources <- rows.traverse(row => targets.eligible(actor.organizationId, row.membership.resourceId))
+      evidence <- query.storedEvidenceBatch(actor.organizationId, rows.map(_.membership.id), r)
+      sources <- targets.eligibleBatch(actor.organizationId, rows.map(_.membership.resourceId))
       busy <- fleets.rolloutActive(actor.organizationId, fleetId)
     } yield (i, r, release, rows, images, sync, evidence, sources, busy))
     (i, revision, release, rows, images, sync, evidence, sources, busy) = loaded
+    imageIndex = images.iterator.map(o => (o.membershipId, o.membershipVersion) -> o).toMap
     issues = (Option.when(!i.enabled || i.managementMode != IntegrationManagementMode.ManagedSelected)("INTEGRATION_MANAGEMENT_MODE_REQUIRED") ++
       Option.when(busy)("REMNAWAVE_FLEET_UPGRADE_ACTIVE") ++
       Option.when(input.waveSize < 1 || input.waveSize > 25 || input.canaryMemberIds.distinct != input.canaryMemberIds ||
         rows.isEmpty || rows.size > RemnawaveFleet.MaxMembers)("NODE_UPGRADE_POLICY_INVALID") ++
       Option.when(!fresh(sync, now, settings.staleAfter))(RefreshRequired) ++
       Option.when(!RemnawaveNodeReleaseCatalog.compatibility(release.release, api).compatible || release.release.status != "AVAILABLE")("NODE_RELEASE_INCOMPATIBLE") ++
-      rows.zipWithIndex.flatMap { case (row, index) =>
-        val image = images.find(o => o.membershipId == row.membership.id && o.membershipVersion == row.membership.version)
-        val proof = evidence(index).flatMap(_.provenance)
-        val source = sources(index).toOption
+      rows.flatMap { row =>
+        val image = imageIndex.get((row.membership.id, row.membership.version))
+        val proof = evidence.get(row.membership.id).flatMap(_.provenance)
+        val source = sources.get(row.membership.resourceId).flatMap(_.toOption)
         assessment(row, revision.id, now, settings.staleAfter).toList ++
           Option.when(proof.isEmpty || !proof.exists(_.provisioningReady) || source.isEmpty ||
-            !evidence(index).exists(e => e.bindingPresent && e.bindingResourceId.contains(row.membership.resourceId) && !e.busy))("NODE_UPGRADE_UNMANAGED") ++
+            !evidence.get(row.membership.id).exists(e => e.bindingPresent && e.bindingResourceId.contains(row.membership.resourceId) && !e.busy))("NODE_UPGRADE_UNMANAGED") ++
           Option.when(!image.exists(o => fresh(Some(o.observedAt), now, settings.staleAfter) && o.inventoryNodeId == row.membership.inventoryNodeId &&
             o.resourceId == row.membership.resourceId && proof.exists(_.onboardingId == o.onboardingId) &&
             source.exists(t => t.connectionId == o.sourceConnectionId && t.connectionUpdatedAt == o.sourceUpdatedAt)))(RefreshRequired) ++
@@ -231,25 +246,26 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
             o.observation.platform.exists(p => RemnawaveNodeReleaseCatalog.compatibility(release.release, api, Some(p)).compatible)))(HealthGate) ++
           Option.when(!image.exists(o => o.observation.actualImageId.flatMap(id => o.observation.platform.flatMap(p =>
             RemnawaveNodeReleaseCatalog.identify(id, p))).exists(r => o.observation.matches(r) &&
-            versionConsistent(r, evidence(index).flatMap(_.node).flatMap(_.nodeVersion)))))("NODE_UPGRADE_BASELINE_UNKNOWN")
+            versionConsistent(r, evidence.get(row.membership.id).flatMap(_.node).flatMap(_.nodeVersion)))))("NODE_UPGRADE_BASELINE_UNKNOWN")
       }).toList.distinct
     result <- if (issues.nonEmpty) IO.pure(NodeUpgradePreview(if (issues.contains(RefreshRequired)) "REFRESH_REQUIRED" else "BLOCKED", issues, None))
       else {
-        val facts = rows.zipWithIndex.map { case (row, index) =>
-          val image = images.find(_.membershipId == row.membership.id).get.observation
+        val facts = rows.map { row =>
+          val image = imageIndex((row.membership.id, row.membership.version)).observation
           val previous = RemnawaveNodeReleaseCatalog.identify(image.actualImageId.get, image.platform.get).get
           val rollback = Option.when(RemnawaveNodeReleaseCatalog.compatibility(previous, api, image.platform).compatible && previous.status != "BLOCKED")(previous)
-          val source = sources(index).toOption.get
-          val proof = evidence(index).flatMap(_.provenance).get
+          val source = sources.get(row.membership.resourceId).flatMap(_.toOption).get
+          val proof = evidence.get(row.membership.id).flatMap(_.provenance).get
           NodeUpgradeMemberPlan(row.membership.id, row.membership.version, row.membership.inventoryNodeId, proof.externalNodeId,
             row.membership.resourceId, row.nodeName, proof.onboardingId, proof.imageReference, source.connectionId, source.connectionUpdatedAt,
             0, 0, image.matches(release.release), image, rollback.map(_.releaseId),
             rollback.map(r => s"${r.imageRepository}@${r.forPlatform(image.platform.get).get.manifestDigest}"),
-            evidence(index).flatMap(_.node).flatMap(_.nodeVersion))
+            evidence.get(row.membership.id).flatMap(_.node).flatMap(_.nodeVersion))
         }
         val pending = facts.filterNot(_.skipped)
         val canary = input.canaryMemberIds.toSet
-        val invalid = (input.canaryMemberIds.exists(id => !pending.exists(_.membershipId == id)) ||
+        val pendingIds = pending.iterator.map(_.membershipId).toSet
+        val invalid = (input.canaryMemberIds.exists(id => !pendingIds(id)) ||
           (pending.size > 1 && canary.isEmpty) || (pending.nonEmpty && canary.size == pending.size && pending.size > 1))
         val noRollback = input.automaticRollback && pending.exists(!_.rollbackAvailable)
         if (invalid || noRollback) IO.pure(NodeUpgradePreview("BLOCKED", List(if (noRollback) "NODE_UPGRADE_NO_PREVIOUS_IMAGE" else "NODE_UPGRADE_CANARY_REQUIRED"), None))
@@ -293,22 +309,28 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
       members <- repo.members(run.id)
       actions <- repo.actions(run.id)
       sync <- query.lastSuccessfulSyncAt(run.organizationId, run.integrationId)
-      pins <- s.members.traverse { m => for {
-        source <- targets.eligible(run.organizationId, m.resourceId)
-        evidence <- revision.flatTraverse(r => query.storedEvidence(run.organizationId, m.membershipId, r))
-      } yield source.exists(t => t.connectionId == m.sourceConnectionId && t.connectionUpdatedAt == m.sourceUpdatedAt) &&
+      sources <- targets.eligibleBatch(run.organizationId, s.members.map(_.resourceId))
+      evidenceIndex <- revision.fold(Map.empty[UUID, FleetStoredEvidence].pure[Tx])(r =>
+        query.storedEvidenceBatch(run.organizationId, s.members.map(_.membershipId), r))
+      memberIndex = members.iterator.map(m => m.membershipId -> m).toMap
+      imageIndex = images.iterator.map(o => (o.membershipId, o.membershipVersion) -> o).toMap
+      switchIndex = actions.filter(a => !a.rollback && a.kind == "SWITCH").iterator.map(a => a.memberId -> a).toMap
+      pins = s.members.map { m =>
+        val source = sources.get(m.resourceId).flatMap(_.toOption)
+        val evidence = evidenceIndex.get(m.membershipId)
+        source.exists(t => t.connectionId == m.sourceConnectionId && t.connectionUpdatedAt == m.sourceUpdatedAt) &&
         evidence.exists(e => e.membership.version == m.membershipVersion && e.membership.inventoryNodeId == m.inventoryNodeId &&
           e.membership.resourceId == m.resourceId && e.bindingResourceId.contains(m.resourceId) && e.bindingPresent &&
           configurationMatches(e, s.configuration) &&
           e.node.exists(n => {
-            val state = members.find(_.membershipId == m.membershipId).map(_.state)
+            val state = memberIndex.get(m.membershipId).map(_.state)
             if (state.contains(FleetRolloutMemberState.Pending)) (for { id <- m.baseline.actualImageId; platform <- m.baseline.platform;
               release <- RemnawaveNodeReleaseCatalog.identify(id, platform) } yield release).exists(versionConsistent(_, n.nodeVersion))
             else if (state.contains(FleetRolloutMemberState.Succeeded) || state.contains(FleetRolloutMemberState.Skipped)) versionConsistent(s.target, n.nodeVersion)
             else true
           }) &&
           e.provenance.exists(p => p.onboardingId == m.onboardingId && p.externalNodeId == m.externalNodeId && p.imageReference == m.originalImageReference) &&
-          (members.exists(v => v.membershipId == m.membershipId && v.state != FleetRolloutMemberState.Pending) || !e.busy)) }
+          (memberIndex.get(m.membershipId).exists(_.state != FleetRolloutMemberState.Pending) || !e.busy)) }
     } yield {
       val intact = s.hash == run.snapshotHash && api == s.panel && RemnawaveNodeReleaseCatalog.find(s.target.releaseId).contains(s.target) &&
         s.target.status == "AVAILABLE" && RemnawaveNodeReleaseCatalog.compatibility(s.target, api).compatible &&
@@ -323,13 +345,13 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
           code != HealthGate || !atomicMember.contains(row.membership.id))
       }.toList.headOption.orElse {
         s.members.iterator.flatMap { m =>
-          val image = images.find(o => o.membershipId == m.membershipId && o.membershipVersion == m.membershipVersion)
-          val member = members.find(_.membershipId == m.membershipId)
+          val image = imageIndex.get((m.membershipId, m.membershipVersion))
+          val member = memberIndex.get(m.membershipId)
           if (!image.exists(o => fresh(Some(o.observedAt), now, settings.staleAfter))) Some(RefreshRequired)
           else if (member.exists(_.state == FleetRolloutMemberState.Pending) && !image.exists(o => o.observation.healthy && sameBaseline(o.observation, m.baseline))) Some(PlanChanged)
           else if (member.exists(v => v.state == FleetRolloutMemberState.Succeeded && v.wave < run.currentWave) &&
             !image.exists(o => o.observation.healthy && o.observation.matches(s.target) &&
-              actions.find(a => a.memberId == member.get.id && !a.rollback && a.kind == "SWITCH").flatMap(_.finishedAt).exists(o.observedAt.isAfter))) Some(HealthGate)
+              switchIndex.get(member.get.id).flatMap(_.finishedAt).exists(o.observedAt.isAfter))) Some(HealthGate)
           else None
         }.toList.headOption
       }

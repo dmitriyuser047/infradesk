@@ -1,7 +1,8 @@
 package ru.bitec.app.ops
 package persistence.postgres
 
-import cats.effect.IO
+import application.port.FleetStoredEvidence
+import cats.effect.{IO, Ref}
 import cats.syntax.all._
 import domain.integration._
 import domain.provisioning.ServerProfileDiff
@@ -9,6 +10,9 @@ import java.time.Instant
 import java.util.UUID
 import munit.FunSuite
 import scala.concurrent.duration._
+import org.typelevel.doobie.{ConnectionIO, Transactor}
+import org.typelevel.doobie.util.log.{LogEvent, LogHandler}
+import infrastructure.database.DoobieTransactionRunner
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 import support.{AuthorizationFixtures, ServerProfileFixtures}
@@ -49,7 +53,16 @@ final class RemnawaveFleetIntegrationSpec extends FunSuite {
       _ <- sql"set local session_replication_role='origin'".update.run
     } yield ()))
 
+  private def inIsolatedWorld(body: ConfigurationDeploymentWorld => IO[Unit]): Unit = ConfigurationDeploymentWorld.runIsolated(w => finishWorld(w)(body(w)))
+
   private def inWorld(body: ConfigurationDeploymentWorld => IO[Unit]): Unit = run(w => finishWorld(w)(body(w)))
+
+  private def counted[A](program: ConnectionIO[A]): IO[(A, Int)] = Ref.of[IO, Int](0).flatMap { counter =>
+    val handler = new LogHandler[IO] { def run(event: LogEvent): IO[Unit] = counter.update(_ + 1) }
+    val config = PostgresTestDatabase.config
+    val xa = Transactor.fromDriverManager[IO]("org.postgresql.Driver", config.url, config.user, config.password, Some(handler))
+    new DoobieTransactionRunner(xa).run(program).flatMap(value => counter.get.map(value -> _))
+  }
 
   /** Everything a pinned revision has to reference, in one tenant. */
   private final case class Sources(integrationId: UUID, nodeObjectId: UUID, configObjectId: UUID,
@@ -246,7 +259,7 @@ final class RemnawaveFleetIntegrationSpec extends FunSuite {
   }
 
   test("a due member is claimed once, and a verdict lands only while its sources still hold") {
-    inWorld { w =>
+    inIsolatedWorld { w =>
       for {
         node <- w.node("fleet-claim")
         f <- fixture(w, node, w.org, "claims")
@@ -356,6 +369,73 @@ final class RemnawaveFleetIntegrationSpec extends FunSuite {
         assert(lastSync.nonEmpty)
         assertEquals(ServerProfileDiff.assess(ServerProfileFixtures.content,
           ServerProfileFixtures.observed()).compliant, true)
+      }
+    }
+  }
+
+  test("upgrade facts use fixed SQL counts for 1, 10, 100 and 500 real members and respect tenant and selection") {
+    inWorld { w =>
+      val targets = new PostgresProvisioningTargetQuery
+      val images = new PostgresRemnawaveFleetUpgradeRepository
+      for {
+        node <- w.node("batch-first")
+        f <- fixture(w, node, w.org, "batch")
+        now <- IO.realTimeInstant
+        fleet = fleetOf(w.org, f.integrationId, "batch", now)
+        _ <- w.run(repo.insertFleet(fleet))
+        revision = RemnawaveFleetRevision(uid, w.org, fleet.id, 1, 1, f.content.hash, f.content, actor, now)
+        _ <- w.run(repo.insertRevision(revision))
+        members <- (1 to 500).toList.traverse { n =>
+          for {
+            target <- if (n == 1) IO.pure(node) else w.node(s"batch-$n")
+            inventory = if (n == 1) f.nodeObjectId else uid
+            _ <- if (n == 1) IO.unit else w.run(for {
+              _ <- sql"""insert into integration_inventory_object(id,organization_id,integration_id,object_type,
+                external_id,display_name,summary_version,summary,is_active,first_seen_at,last_seen_at,
+                last_seen_sync_session_id,created_at,updated_at)
+                select $inventory,organization_id,integration_id,object_type,${uid.toString},${s"batch-$n"},
+                  summary_version,summary,is_active,first_seen_at,last_seen_at,last_seen_sync_session_id,created_at,updated_at
+                from integration_inventory_object where id=${f.nodeObjectId} and organization_id=${w.org}""".update.run
+              _ <- sql"""insert into integration_resource_binding(id,organization_id,integration_id,inventory_object_id,
+                resource_id,created_by_user_id,created_at,updated_at)
+                values(${uid},${w.org},${f.integrationId},$inventory,${target.resourceId},$actor,$now,$now)""".update.run
+            } yield ())
+            member = RemnawaveFleetMembership(uid,w.org,fleet.id,f.integrationId,inventory,target.resourceId,1L,actor,now)
+            _ <- w.run(repo.insertMembership(member, now))
+          } yield member
+        }
+        _ <- List(1,10,100,500).traverse_ { count =>
+          val selection = members.take(count)
+          for {
+            evidence <- counted(query.storedEvidenceBatch(w.org,selection.map(_.id),revision))
+            sources <- counted(targets.eligibleBatch(w.org,selection.map(_.resourceId)))
+            rows <- counted(query.memberRowsBatch(w.org,fleet.id,selection.map(_.id)))
+            observations <- counted(images.observationsBatch(w.org,fleet.id,selection.map(_.id)))
+          } yield {
+            assertEquals(evidence._2,2,s"evidence statements for $count")
+            assertEquals(sources._2,2,s"source statements for $count")
+            assertEquals(rows._2,2,s"member statements for $count")
+            assertEquals(observations._2,1,s"image statements for $count")
+            assertEquals(evidence._1.keySet,selection.map(_.id).toSet)
+            assertEquals(sources._1.keySet,selection.map(_.resourceId).toSet)
+            assertEquals(rows._1.map(_.membership.id).toSet,selection.map(_.id).toSet)
+            assert(evidence._1.values.forall(e => e.bindingPresent && e.configProfileAvailable && e.serverProfileAvailable))
+          }
+        }
+        foreignEvidence <- w.run(query.storedEvidenceBatch(w.foreignOrg,members.map(_.id),revision))
+        foreignRows <- w.run(query.memberRowsBatch(w.foreignOrg,fleet.id,members.map(_.id)))
+        missing = uid
+        missingSources <- w.run(targets.eligibleBatch(w.foreignOrg,List(node.resourceId,missing)))
+        _ <- w.run(sql"""insert into external_ref(id,organization_id,connection_id,external_type,external_id,resource_id)
+          select ${uid},organization_id,connection_id,'NODE','ambiguous-batch',${node.resourceId}
+          from external_ref where organization_id=${w.org} and resource_id=${members(1).resourceId}""".update.run)
+        ambiguous <- w.run(targets.eligibleBatch(w.org,List(node.resourceId,members(1).resourceId)))
+      } yield {
+        assertEquals(foreignEvidence,Map.empty[UUID,FleetStoredEvidence])
+        assertEquals(foreignRows,Nil)
+        assert(missingSources.values.forall(_ == Left("PROVISIONING_TARGET_NOT_FOUND")))
+        assertEquals(ambiguous(node.resourceId),Left("PROVISIONING_TARGET_AMBIGUOUS"))
+        assert(ambiguous(members(1).resourceId).isRight)
       }
     }
   }

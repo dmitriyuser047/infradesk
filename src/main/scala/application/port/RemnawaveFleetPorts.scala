@@ -76,8 +76,10 @@ trait RemnawaveFleetRepository[F[_]] {
 trait RemnawaveFleetQuery[F[_]] {
   def configConsumers(org: UUID, integrationId: UUID, externalConfigProfileId: String): F[List[FleetRolloutConfigConsumer]]
   def summaries(org: UUID, integrationId: UUID, fleetIds: List[UUID]): F[Map[UUID, RemnawaveFleetSummary]]
+  def memberRowsBatch(org: UUID, fleetId: UUID, ids: List[UUID]): F[List[FleetMemberRow]]
   def memberRows(org: UUID, fleetId: UUID): F[List[FleetMemberRow]]
   def candidates(org: UUID, integrationId: UUID, limit: Int): F[List[FleetCandidate]]
+  def storedEvidenceBatch(org: UUID, membershipIds: List[UUID], revision: RemnawaveFleetRevision): F[Map[UUID, FleetStoredEvidence]]
   def storedEvidence(org: UUID, membershipId: UUID, revision: RemnawaveFleetRevision): F[Option[FleetStoredEvidence]]
   def provenance(org: UUID, integrationId: UUID, resourceId: UUID,
     inventoryNodeId: UUID): F[Option[FleetLocalProvenance]]

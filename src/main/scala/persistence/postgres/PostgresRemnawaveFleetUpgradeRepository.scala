@@ -58,6 +58,11 @@ final class PostgresRemnawaveFleetUpgradeRepository extends RemnawaveFleetUpgrad
     select organization_id,fleet_id,membership_id,membership_version,inventory_node_id,resource_id,onboarding_id,
       source_connection_id,source_updated_at,observation::text,observed_at from remnawave_node_image_observation
     where organization_id=$org and fleet_id=$fleet""".query[ObservationRow].to[List].map(_.map(_.domain))
+  def observationsBatch(org: UUID, fleetId: UUID, ids: List[UUID]): ConnectionIO[List[FleetNodeImageObservation]] = sql"""
+    select organization_id,fleet_id,membership_id,membership_version,inventory_node_id,resource_id,onboarding_id,
+      source_connection_id,source_updated_at,observation::text,observed_at from remnawave_node_image_observation
+    where organization_id=$org and fleet_id=$fleetId and membership_id=any(${ids.toArray[UUID]})"""
+    .query[ObservationRow].to[List].map(_.map(_.domain))
   def saveObservation(v: FleetNodeImageObservation): ConnectionIO[Unit] = sql"""
     insert into remnawave_node_image_observation(membership_id,organization_id,integration_id,fleet_id,membership_version,inventory_node_id,
       resource_id,onboarding_id,source_connection_id,source_updated_at,observation,observed_at)

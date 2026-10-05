@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package application.integration
 
 import application.port._
+import cats.syntax.all._
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
@@ -111,8 +112,10 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
     val query = new RemnawaveFleetQuery[IO] {
       override def configConsumers(o: UUID, i: UUID, p: String) = IO.pure(Nil)
       override def summaries(o: UUID, i: UUID, ids: List[UUID]) = IO.pure(Map.empty)
+      override def memberRowsBatch(o: UUID, f: UUID, ids: List[UUID]): IO[List[FleetMemberRow]] = IO.pure(Nil)
       override def memberRows(o: UUID, f: UUID) = IO.pure(Nil)
       override def candidates(o: UUID, i: UUID, limit: Int) = IO.pure(Nil)
+      override def storedEvidenceBatch(o: UUID, ids: List[UUID], value: RemnawaveFleetRevision) = ids.traverse(id => storedEvidence(o, id, value).map(_.map(id -> _))).map(_.flatten.toMap)
       override def storedEvidence(o: UUID, id: UUID, value: RemnawaveFleetRevision) = IO.pure(Some(
         FleetStoredEvidence(membershipRecord, bindingResource.nonEmpty, bindingResource, resourceActive = true,
           Some(summary), inventoryActive = true, Some(now), Some("b" * 64), configProfileAvailable = true,
@@ -132,6 +135,7 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
     }
 
     val targets = new ProvisioningTargetQuery[IO] {
+      def eligibleBatch(o: UUID, ids: List[UUID]) = ids.traverse(id => eligible(o, id).map(id -> _)).map(_.toMap)
       override def eligible(o: UUID, r: UUID) = IO.pure(sourceConnection match {
         case Some((id, at)) => Right(ProvisioningTarget("NODE", "VPS", id, at, connection.copy(id = id,
           updatedAt = at)))
@@ -278,6 +282,17 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
     // A worker that lost its lease must not push the next check out from under the new owner.
     assertEquals(h.rescheduled, 0)
     assertEquals(h.mutations.get(), 0)
+  }
+
+  test("observer lease covers both sequential reads and the fenced-save margin") {
+    intercept[IllegalArgumentException] {
+      RemnawaveFleetObserverSettings(claimLease = 60.seconds, observationTimeout = 45.seconds)
+    }
+    intercept[IllegalArgumentException] {
+      RemnawaveFleetObserverSettings(claimLease = 95.seconds, observationTimeout = 45.seconds)
+    }
+    assertEquals(RemnawaveFleetObserverSettings().claimLease, 120.seconds)
+    assertEquals(RemnawaveFleetObserverSettings(claimLease = 96.seconds).claimLease, 96.seconds)
   }
 
   test("a disabled observer does nothing at all") {

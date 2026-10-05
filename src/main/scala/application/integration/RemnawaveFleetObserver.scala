@@ -17,7 +17,7 @@ final case class RemnawaveFleetObserverSettings(enabled: Boolean = true, pollInt
   observationTimeout: FiniteDuration = 45.seconds, recheckInterval: FiniteDuration = 300.seconds,
   staleAfter: FiniteDuration = 900.seconds) {
   require(pollInterval > Duration.Zero && batchSize > 0 && maxConcurrency > 0 &&
-    claimLease > observationTimeout && recheckInterval > Duration.Zero && staleAfter > Duration.Zero)
+    claimLease > observationTimeout * 2 + 5.seconds && recheckInterval > Duration.Zero && staleAfter > Duration.Zero)
 }
 
 /** Computes drift for fleet members and writes nothing else.

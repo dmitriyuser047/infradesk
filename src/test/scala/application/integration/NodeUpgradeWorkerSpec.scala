@@ -21,6 +21,7 @@ final class NodeUpgradeWorkerSpec extends FunSuite {
     var journal = List.empty[RemnawaveFleetUpgradeAction]
     var ownsLease = true
     var gate: Option[String] = None
+    var verificationBatches = List.empty[List[NodeUpgradeVerification]]
     var panelBad = false
     var localBad = false
     var sshLost = false
@@ -37,6 +38,7 @@ final class NodeUpgradeWorkerSpec extends FunSuite {
       def releaseRevision(o: UUID, f: UUID, id: UUID) = IO.pure(None)
       def promote(r: FleetNodeReleaseRevision) = IO.unit
       def nextRevisionNumber(o: UUID, f: UUID) = IO.pure(1)
+      def observationsBatch(o: UUID, f: UUID, ids: List[UUID]): IO[List[FleetNodeImageObservation]] = IO.pure(Nil)
       def observations(o: UUID, f: UUID) = IO.pure(Nil)
       def saveObservation(o: FleetNodeImageObservation) = IO.unit
       def insertPlan(r: RemnawaveFleetUpgradeRun, m: List[RemnawaveFleetUpgradeMember]) = IO.unit
@@ -76,8 +78,11 @@ final class NodeUpgradeWorkerSpec extends FunSuite {
     val execution = new NodeUpgradeExecution[IO] {
       val settings = NodeUpgradeSettings(pollInterval = 1.millisecond, verificationTimeout = 1.second)
       def admission(r: RemnawaveFleetUpgradeRun, atomicMember: Option[UUID] = None) = IO.pure(gate)
-      def verification(r: RemnawaveFleetUpgradeRun, m: NodeUpgradeMemberPlan, release: NodeRelease, after: Instant) =
-        IO.pure(Option.when(panelBad && release == NodeUpgradeFixtures.target)(NodeUpgradeAdmission.HealthGate))
+      def verificationBatch(r: RemnawaveFleetUpgradeRun, checks: List[NodeUpgradeVerification]) =
+        IO {
+          verificationBatches = verificationBatches :+ checks
+          checks.map(c => c.member.membershipId -> Option.when(panelBad && c.release == NodeUpgradeFixtures.target)(NodeUpgradeAdmission.HealthGate)).toMap
+        }
       def connection(org: UUID, member: NodeUpgradeMemberPlan) = IO.pure(Connection(member.sourceConnectionId, org,
         ConnectionScope.Organization, "SSH", "node", "Node", ConnectionConfig(Map.empty), None, true,
         member.sourceUpdatedAt, member.sourceUpdatedAt))
@@ -117,6 +122,23 @@ final class NodeUpgradeWorkerSpec extends FunSuite {
         FleetActionState.Running, ref, None, Instant.now().minusSeconds(1), None))
       actual += p.resourceId -> (if (target) NodeUpgradeFixtures.image(NodeUpgradeFixtures.target) else if (committedOnly)
         p.baseline.copy(configuredImage = Some(ref), composeHash = Some("d" * 64)) else p.baseline)
+    }
+  }
+  List(1, 10, 100, 500).foreach { count =>
+    test(s"final verification submits $count members in one batch without mutations") {
+      val w = new World(count)
+      w.parent = w.parent.copy(phase = NodeUpgradePhase.FinalVerify, state = FleetRolloutState.Running)
+      w.nodes = w.nodes.map(_.copy(state = FleetRolloutMemberState.Succeeded))
+      val at = Instant.now().minusSeconds(1)
+      w.journal = w.nodes.map(m => RemnawaveFleetUpgradeAction(NodeUpgradeFixtures.uid,
+        w.parent.organizationId, w.parent.id, m.id, "SWITCH", false, FleetActionState.Succeeded,
+        "approved", None, at.minusSeconds(1), Some(at)))
+      w.tick()
+      assertEquals(w.verificationBatches.size, 1)
+      assertEquals(w.verificationBatches.head.map(_.member.membershipId).toSet, w.nodes.map(_.membershipId).toSet)
+      assert(w.verificationBatches.head.forall(_.after == at))
+      assertEquals(w.parent.state, FleetRolloutState.Succeeded)
+      assert(w.switches.isEmpty && w.pulls.isEmpty)
     }
   }
   test("three nodes run canary first, each exact digest is prefetched, verified, and journaled once") {

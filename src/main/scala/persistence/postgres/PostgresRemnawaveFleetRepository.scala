@@ -238,6 +238,10 @@ final class PostgresRemnawaveFleetRepository extends RemnawaveFleetRepository[Co
     (fr"select" ++ PostgresRemnawaveFleetRepository.assessmentColumns ++
       fr"from remnawave_fleet_node_assessment where organization_id=$org and fleet_id=$fleetId")
       .query[PostgresRemnawaveFleetRepository.AssessmentRow].map(_.domain).to[List]
+  def assessmentsBatch(org: UUID, fleetId: UUID, ids: List[UUID]): ConnectionIO[List[RemnawaveFleetNodeAssessment]] =
+    (fr"select" ++ PostgresRemnawaveFleetRepository.assessmentColumns ++
+      fr"from remnawave_fleet_node_assessment where organization_id=$org and fleet_id=$fleetId and membership_id=any(${ids.toArray[UUID]})")
+      .query[PostgresRemnawaveFleetRepository.AssessmentRow].map(_.domain).to[List]
 }
 
 object PostgresRemnawaveFleetRepository {
