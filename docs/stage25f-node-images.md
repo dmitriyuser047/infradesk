@@ -215,3 +215,28 @@ JVM-only hosts file because canonical hostname resolution on this workstation ta
 and exceeds the unrelated SMTP fixture's five-second deadline. SMTP's 17 cases then pass without
 changing test deadlines or production SMTP code. The replacement CI uses its normal Linux environment.
 Scala Universal staging also passes on the review-fix sources.
+
+## Onboarding replacement and local provenance hardening
+
+V53–V55 extend the existing lifecycle without changing V48–V52 or terminal snapshots. New
+recreation plans retire the previous node's exact firewall namespace in a separate durable phase.
+At binding, the same transaction transfers the fleet membership to the exact new node, increments
+its version, invalidates assessment/image cache and makes it due for fresh observation. An immutable
+replacement trail retains both inventory identities. Image upgrades and configuration rollouts
+serialize admission with onboarding on integration, fleet and resource locks, in both directions;
+paused workflows remain active for this purpose. No replacement is allowed beneath active work.
+
+Fleet local evidence uses the shared LocalInstallationState classifier. FOREIGN/PORT_CONFLICT
+block repair, UNKNOWN supplies no usable ownership proof, and owned partial/damaged installations
+report drift. Only OWNED_COMPLETE supplies verified local evidence. Initial installation uses owned
+staging and atomic whole-directory publication; repair retains exact ownership and file CAS checks.
+Docker image pull occurs after publication, so a crash cannot leave an unprovable secret-only final
+directory. See Stage25C for staging recovery and secret cleanup details.
+
+Integration deletion retains a tombstone and historical foreign keys, removes the credential in
+the same transaction and prevents new observer, sync, action, rollout or upgrade work. Dashboard
+history remains stored; active candidate/evidence projections exclude tombstones. These changes
+do not replace fresh provider and SSH checks before external mutations or rollback.
+
+The earlier validation counts above describe their earlier delivery only. Hardening acceptance
+requires a new full regression run, exact-SHA CI and the disposable VPS failure/recovery scenarios.

@@ -27,13 +27,13 @@ final class PostgresIntegrationRepository extends IntegrationRepository[Connecti
   }
 
   override def listByOrganization(org: UUID): ConnectionIO[List[Integration]] =
-    query(fr"where organization_id = $org order by name, id").to[List].flatMap(_.traverse(typed))
+    query(fr"where organization_id = $org and deleted_at is null order by name, id").to[List].flatMap(_.traverse(typed))
 
   override def findById(org: UUID, id: UUID): ConnectionIO[Option[Integration]] =
-    query(fr"where organization_id = $org and id = $id").option.flatMap(_.traverse(typed))
+    query(fr"where organization_id = $org and id = $id and deleted_at is null").option.flatMap(_.traverse(typed))
 
   override def findByIdForUpdate(org: UUID, id: UUID): ConnectionIO[Option[Integration]] =
-    query(fr"where organization_id = $org and id = $id for update").option.flatMap(_.traverse(typed))
+    query(fr"where organization_id = $org and id = $id and deleted_at is null for update").option.flatMap(_.traverse(typed))
 
   override def save(value: Integration): ConnectionIO[Unit] =
     sql"""insert into integration (id, organization_id, name, provider_type, base_url, enabled,
@@ -45,13 +45,15 @@ final class PostgresIntegrationRepository extends IntegrationRepository[Connecti
            base_url = excluded.base_url, enabled = excluded.enabled, secret_id = excluded.secret_id,
            caddy_api_key_configured = excluded.caddy_api_key_configured, updated_at = excluded.updated_at,
            management_mode = excluded.management_mode
-           where integration.organization_id = ${value.organizationId}""".update.run.flatMap {
+           where integration.organization_id = ${value.organizationId} and integration.deleted_at is null""".update.run.flatMap {
       case 1 => ().pure[ConnectionIO]
       case _ => new IllegalStateException("Integration was not written").raiseError[ConnectionIO, Unit]
     }
 
   override def delete(org: UUID, id: UUID): ConnectionIO[Unit] =
-    sql"delete from integration where organization_id = $org and id = $id".update.run.void
+    sql"update integration set deleted_at = current_timestamp, secret_id = null, enabled = false, caddy_api_key_configured = false, updated_at = current_timestamp where organization_id = $org and id = $id and deleted_at is null".update.run.flatMap {
+      case _ => ().pure[ConnectionIO]
+    }
 }
 
 final class PostgresIntegrationSecretRepository extends IntegrationSecretRepository[ConnectionIO] {

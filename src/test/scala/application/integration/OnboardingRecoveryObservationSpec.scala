@@ -33,7 +33,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     ConnectionConfig(Map.empty), None, true, now, now)
   private val context = IntegrationRuntimeContext(integrationId, org,
     IntegrationBaseUrl.parse("https://panel.example.test").toOption.get, RemnawaveCredential("token", None))
-  private val localGood = RemnawaveNodeLocalEvidence(true, true, true, true, true, true)
+  private val localGood = RemnawaveNodeLocalEvidence(true, true, true, true, true, true, LocalInstallationState.OwnedComplete)
 
   private def tag(correlation: UUID): String =
     "ID:" + correlation.toString.replace("-", "").toUpperCase(java.util.Locale.ROOT)
@@ -90,6 +90,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     }
 
     val remote: RemnawaveNodeRemote[IO] = new RemnawaveNodeRemote[IO] {
+      override def localInstallationState(c: Connection,s: RemnawaveNodeRemoteSpec) = IO.pure(local.installationState)
       override def preflight(c: Connection, r: UUID, p: Int) = forbidden[ProvisioningStepResult]("preflight")
       override def installationPrerequisites(c: Connection) = forbidden[ProvisioningStepResult]("installationPrerequisites")
       override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[ProvisioningStepResult]("configureFirewall")
@@ -97,6 +98,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
       override def install(c: Connection, s: RemnawaveNodeRemoteSpec, d: NodeInstallationData) = forbidden[ProvisioningStepResult]("install")
       override def recoveryPreflight(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[ProvisioningStepResult]("recoveryPreflight")
       override def repair(c: Connection, s: RemnawaveNodeRemoteSpec, d: NodeInstallationData) = forbidden[ProvisioningStepResult]("repair")
+      override def retireFirewall(c: Connection,s: RemnawaveNodeRemoteSpec) = forbidden[ProvisioningStepResult]("retireFirewall")
       override def retireInstallation(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[ProvisioningStepResult]("retireInstallation")
       override def start(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[ProvisioningStepResult]("start")
       override def observe(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { observeCalls += 1; local }
@@ -151,6 +153,17 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
       assertEquals(recovery(result).action, "RECOVER")
       assertEquals(result.node, Some(externalId))
       assertEquals(result.correlation, originalCorrelation)
+      h.assertReadOnly()
+    }
+  }
+
+  test("fresh local classifier is carried to preview and unsafe states never become exact") {
+    List(LocalInstallationState.Absent,LocalInstallationState.OwnedPartial,LocalInstallationState.OwnedDamaged,
+      LocalInstallationState.Foreign,LocalInstallationState.PortConflict,LocalInstallationState.Unknown).foreach { state =>
+      val h=new Harness(local0=localGood.copy(installationState=state))
+      val result=h.inspect()
+      assertEquals(result.localState,Some(state))
+      assertEquals(recovery(result).state,if(state==LocalInstallationState.Unknown) "UNKNOWN" else "PRESENT_UNHEALTHY")
       h.assertReadOnly()
     }
   }

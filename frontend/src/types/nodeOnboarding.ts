@@ -30,6 +30,7 @@ export interface NodeOnboardingPreview {
   changes: string[]; warnings: string[]; blockingProblems: string[]
   nodeApi?: NodeApiCompatibility; panelCidrs?: string[]
   recovery?: NodeOnboardingRecoverySummary
+  localInstallationState?: 'ABSENT' | 'OWNED_COMPLETE' | 'OWNED_PARTIAL' | 'OWNED_DAMAGED' | 'FOREIGN' | 'PORT_CONFLICT' | 'UNKNOWN'
 }
 export interface NodeOnboardingRunDetail {
   run: NodeOnboardingRun

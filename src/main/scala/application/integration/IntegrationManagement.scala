@@ -98,13 +98,16 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
       } yield next
     }
 
-  def delete(actor: ActorContext, id: UUID): Tx[Unit] = for {
-    stored <- load(actor.organizationId, id)
-    _ <- requireNoActive(actor.organizationId, id)
-    _ <- integrations.delete(actor.organizationId, id)
-    _ <- secrets.delete(actor.organizationId, stored.secretId)
-    _ <- audit.record(actor, AuditAction.IntegrationDeleted, AuditTargetType.Integration, Some(id))
-  } yield ()
+  def delete(actor: ActorContext, id: UUID): Tx[Unit] =
+    integrations.findByIdForUpdate(actor.organizationId, id).flatMap {
+      case None => ().pure[Tx]
+      case Some(stored) => for {
+        _ <- requireNoActive(actor.organizationId, id)
+        _ <- integrations.delete(actor.organizationId, id)
+        _ <- secrets.delete(actor.organizationId, stored.secretId)
+        _ <- audit.record(actor, AuditAction.IntegrationDeleted, AuditTargetType.Integration, Some(id))
+      } yield ()
+    }
 
   /** Test intent commits before decrypting or contacting the provider. */
   def prepareTest(actor: ActorContext, id: UUID): Tx[(Integration, IntegrationSecret)] = for {

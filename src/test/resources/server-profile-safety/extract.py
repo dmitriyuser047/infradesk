@@ -22,9 +22,12 @@ body=re.search(r'private val Preflight = """(.*?)"""\.stripMargin',s,re.S).group
 (out/'NodePreflight.sh').write_text(margin(body),encoding='utf-8',newline='\n')
 body=re.search(r'private val RecoveryProbe = """(.*?)"""\.stripMargin',s,re.S).group(1)
 (out/'NodeRecoveryProbe.sh').write_text(margin(body),encoding='utf-8',newline='\n')
-retire=re.search(r'private val RetireInstallation = .*? \+ """(.*?)"""\.stripMargin',s,re.S).group(1)
-probe=re.search(r'private val RecoveryProbe = """(.*?)"""\.stripMargin',s,re.S).group(1)
-(out/'NodeRetireInstallation.sh').write_text('recovery_probe() {\n'+margin(probe)+'\n}\n'+margin(retire),encoding='utf-8',newline='\n')
+probe=margin(body)
+for name in ['PrepareInstallation','CleanupInstallationStaging','PublishInstallation','RetireInstallation']:
+ body=re.search(r'private val '+name+r' = .*? \+ """(.*?)"""\.stripMargin',s,re.S)
+ assert body, f'Could not extract {name}; review shell construction'
+ script='recovery_probe() {\n'+probe+'\n}\n'+margin(body.group(1))
+ (out/('Node'+name+'.sh')).write_text(script,encoding='utf-8',newline='\n')
 
 # Exercise the actual controlled-image normalization on Linux, including the catalog allowlist.
 images=(repo/'src/main/scala/integration/ssh/SshManagedNodeImages.scala').read_text(encoding='utf-8')

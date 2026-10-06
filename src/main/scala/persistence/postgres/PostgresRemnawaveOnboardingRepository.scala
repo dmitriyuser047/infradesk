@@ -26,11 +26,9 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
   private def selected(where: Fragment) = (fr"select" ++ columns ++ fr"from remnawave_node_onboarding where" ++ where).query[Row].map(_.domain)
   private def fail(code: String): ConnectionIO[Nothing] = IntegrationError(code,"Remnawave onboarding could not proceed").raiseError[ConnectionIO,Nothing]
   def lockResource(org: UUID, resourceId: UUID): ConnectionIO[Unit] = PostgresProvisioningLocks.lockResource(org,resourceId)
-  def active(org: UUID, resourceId: UUID): ConnectionIO[Boolean] = sql"""select
-    exists(select 1 from remnawave_node_onboarding where organization_id=$org and resource_id=$resourceId and state in ('QUEUED','RUNNING')) or
-    exists(select 1 from provisioning_run where organization_id=$org and resource_id=$resourceId and status in ('QUEUED','RUNNING')) or
-    exists(select 1 from configuration_deployment where organization_id=$org and resource_id=$resourceId and state in ('QUEUED','RUNNING')) or
-    exists(select 1 from operation_execution where organization_id=$org and resource_id=$resourceId and status='RUNNING')""".query[Boolean].unique
+  def active(org: UUID, resourceId: UUID): ConnectionIO[Boolean] =
+    (fr"select" ++ RemnawaveOnboardingActivitySql.resource(org,fr"$resourceId")).query[Boolean].unique
+
   def insertPlan(r: RemnawaveNodeOnboardingRun): ConnectionIO[Unit] = for {
     _ <- sql"""insert into remnawave_node_onboarding(id,organization_id,integration_id,resource_id,created_by,state,phase,input_snapshot,created_at,updated_at,external_node_id)
       values(${r.id},${r.organizationId},${r.integrationId},${r.resourceId},${r.createdBy},'PLANNED','VALIDATE',
@@ -38,18 +36,22 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
     _ <- OnboardingPhase.forSnapshot(r.snapshot).zipWithIndex.traverse_ { case (p,i) => sql"""insert into remnawave_node_onboarding_phase(run_id,phase,position,state)
       values(${r.id},${p.code},$i,'PENDING')""".update.run }
   } yield ()
-  def start(org: UUID, integration: UUID, plan: UUID, request: UUID, actor: UUID, now: Instant): ConnectionIO[RemnawaveNodeOnboardingRun] = for {
+  def start(org: UUID, integration: UUID, plan: UUID, request: UUID, actor: UUID, now: Instant, confirmRecreate: Boolean = false): ConnectionIO[RemnawaveNodeOnboardingRun] = for {
     _ <- PostgresProvisioningLocks.lockRequest(org,request)
     existing <- selected(fr"organization_id=$org and request_id=$request").option
     result <- existing match {
       case Some(r) if r.id == plan && r.integrationId == integration => r.pure[ConnectionIO]
       case Some(_) => fail("REMNAWAVE_ONBOARDING_REQUEST_REUSED")
       case None => for {
+        _ <- sql"select id from integration where organization_id=$org and id=$integration and deleted_at is null for update".query[UUID].option
+          .flatMap(_.liftTo[ConnectionIO](IntegrationError("REMNAWAVE_ONBOARDING_NOT_FOUND","Integration was not found")))
         draft <- selected(fr"organization_id=$org and integration_id=$integration and id=$plan").option
           .flatMap(_.liftTo[ConnectionIO](IntegrationError("REMNAWAVE_ONBOARDING_NOT_FOUND","Onboarding plan was not found")))
         _ <- lockResource(org,draft.resourceId)
         locked <- (fr"select" ++ columns ++ fr"from remnawave_node_onboarding where organization_id=$org and id=$plan for update").query[Row].unique.map(_.domain)
         _ <- if (locked.state != ProvisioningRunState.Planned) fail("REMNAWAVE_ONBOARDING_ALREADY_STARTED") else ().pure[ConnectionIO]
+        _ <- if (locked.snapshot.recovery.exists(!_.reusesNode) && !confirmRecreate)
+          fail("REMNAWAVE_ONBOARDING_RECREATE_CONFIRMATION_REQUIRED") else ().pure[ConnectionIO]
         expired <- sql"select ${locked.createdAt} <= greatest($now,clock_timestamp())-interval '24 hours'".query[Boolean].unique
         _ <- if (expired) fail("PROVISIONING_PLAN_EXPIRED") else ().pure[ConnectionIO]
         busy <- active(org,locked.resourceId)
@@ -157,6 +159,8 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
     _ <- if(!valid) fail("REMNAWAVE_ONBOARDING_LEASE_LOST") else ().pure[ConnectionIO]
     _ <- sql"delete from remnawave_node_installation_secret where run_id=${r.id} and organization_id=${r.organizationId}".update.run
   } yield ()
+  def replaceFleetMembership(r: RemnawaveNodeOnboardingRun, token: UUID, node: UUID, now: Instant): ConnectionIO[Unit] =
+    sql"select 1 from infradesk_onboarding_replace_membership(${r.organizationId},${r.id},$token,$node,$now)".query[Int].unique.void
   def cleanupPlans(before: Instant, limit: Int): ConnectionIO[Int] = sql"""delete from remnawave_node_onboarding where id in(
     select id from remnawave_node_onboarding where state='PLANNED' and created_at<=$before
     for update skip locked limit $limit) and state='PLANNED'""".update.run

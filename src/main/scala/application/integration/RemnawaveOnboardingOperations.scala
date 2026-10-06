@@ -102,13 +102,14 @@ final class ExistingRemnawaveOnboardingOperations[Tx[_]: MonadThrow](
   def inventoryHasNode(r: RemnawaveNodeOnboardingRun): IO[Boolean] = r.externalNodeId.fold(IO.pure(false))(id =>
     runner.run(query.externalNode(r.organizationId,r.integrationId,id)).map(_.exists(_.isActive)))
   private def fenced[A](r: RemnawaveNodeOnboardingRun,token: UUID)(op: Instant => Tx[A]): IO[A] = IO.realTimeInstant.flatMap(now => runner.run(for {
+    _ <- integrations.findByIdForUpdate(r.organizationId,r.integrationId).flatMap(_.liftTo[Tx](error("INTEGRATION_NOT_FOUND")))
     _ <- runs.lockResource(r.organizationId,r.resourceId)
     valid <- runs.renew(r,token,now,now.plusSeconds(900))
     _ <- MonadThrow[Tx].raiseUnless(valid)(error("REMNAWAVE_ONBOARDING_LEASE_LOST"))
     _ <- checked(r)
     result <- op(now)
   } yield result))
-  def bind(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Unit] = fenced(r,token)(_ => for {
+  def bind(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Unit] = fenced(r,token)(now => for {
     node <- query.externalNode(r.organizationId,r.integrationId,r.externalNodeId.get).flatMap(_.filter(_.isActive).liftTo[Tx](error("REMNAWAVE_ONBOARDING_INVENTORY_MISSING")))
     _ <- r.snapshot.recovery.filter(!_.reusesNode).traverse_ { proof => for {
       old <- proof.previousExternalNodeId.traverse(query.externalNode(r.organizationId,r.integrationId,_)).map(_.flatten)
@@ -124,6 +125,7 @@ final class ExistingRemnawaveOnboardingOperations[Tx[_]: MonadThrow](
     existing <- bindings.find(r.organizationId,node.id)
     _ <- MonadThrow[Tx].raiseUnless(existing.forall(_.resourceId==r.resourceId))(error("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
     _ <- bindingService.bindCreated(ActorContext(r.createdBy,r.organizationId),r.integrationId,node.id,r.resourceId)
+    _ <- runs.replaceFleetMembership(r,token,node.id,now)
   } yield ())
   def setDesiredState(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Unit] = fenced(r,token)(_ => for {
     node <- query.externalNode(r.organizationId,r.integrationId,r.externalNodeId.get).flatMap(_.filter(_.isActive).liftTo[Tx](error("REMNAWAVE_ONBOARDING_INVENTORY_MISSING")))

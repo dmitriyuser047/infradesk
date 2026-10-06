@@ -85,7 +85,17 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
         and integration_id = $integration and status in
           ('PREPARING','APPLYING','VERIFYING','ROLLBACK_APPLYING','ROLLBACK_VERIFYING'))
       or exists(select 1 from remnawave_fleet_rollout where organization_id=$org and integration_id=$integration
-        and state in ('QUEUED','RUNNING','PAUSED','ROLLING_BACK'))""".query[Boolean].unique
+        and state in ('QUEUED','RUNNING','PAUSED','ROLLING_BACK'))
+      or exists(select 1 from remnawave_fleet_upgrade_run where organization_id=$org and integration_id=$integration
+        and state in ('QUEUED','RUNNING','PAUSED','ROLLING_BACK'))
+      or exists(select 1 from remnawave_node_onboarding where organization_id=$org and integration_id=$integration
+        and state in ('QUEUED','RUNNING'))
+      or exists(select 1 from integration_sync_session where organization_id=$org and integration_id=$integration
+        and status='RUNNING')
+      or exists(select 1 from integration_sync_state where organization_id=$org and integration_id=$integration
+        and claim_until > clock_timestamp())
+      or exists(select 1 from integration_desired_state where organization_id=$org and integration_id=$integration
+        and claim_until > clock_timestamp())""".query[Boolean].unique
 
   override def recoverAndClaim(owner: UUID, token: UUID, at: Instant, recoverAfter: Instant,
     limit: Int): ConnectionIO[(Int, List[IntegrationActionExecution])] = for {
@@ -107,7 +117,7 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
         update integration_sync_state s set next_run_at = least(s.next_run_at, $at),
           action_nudge_at = least(coalesce(s.action_nudge_at, $at), $at), updated_at = $at
         from integration i where s.integration_id = i.id and s.organization_id = i.organization_id
-          and i.enabled = true and exists (select 1 from recovered r where r.organization_id = s.organization_id
+          and i.enabled = true and i.deleted_at is null and exists (select 1 from recovered r where r.organization_id = s.organization_id
             and r.integration_id = s.integration_id)
         returning s.integration_id
       ) select count(*) from recovered""".query[Long].unique.map(_.toInt)
@@ -134,6 +144,6 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
         action_nudge_at = least(coalesce(s.action_nudge_at, $at), $at), updated_at = $at
         from integration i where s.integration_id = i.id and s.organization_id = i.organization_id
         and i.organization_id = ${value.organizationId} and i.id = ${value.integrationId}
-        and i.enabled = true""".update.run.void else ().pure[ConnectionIO]
+        and i.enabled = true and i.deleted_at is null""".update.run.void else ().pure[ConnectionIO]
   } yield count == 1
 }

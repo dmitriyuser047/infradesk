@@ -122,13 +122,16 @@ object FleetAssessor {
         val localAnswers: List[Answer] =
           if (!localDimensions) Nil
           else if (!evidence.localManaged) List(Unproven(FleetDriftReason.LocalManagementUnavailable))
-          else evidence.localEvidence.filter(_ => localFresh && !evidence.localObservationFailed) match {
+          else evidence.localEvidence.filter(_ => localFresh && !evidence.localObservationFailed &&
+            evidence.localEvidence.exists(_.installationState != LocalInstallationState.Unknown)) match {
             case None => List(Unproven(FleetDriftReason.LocalObservationUnavailable))
+            case Some(local) if Set[LocalInstallationState](LocalInstallationState.Foreign,LocalInstallationState.PortConflict)(local.installationState) =>
+              List(Structural(FleetDriftReason.LocalInstallationDrift))
             case Some(local) => List(
               Option.when(!local.portListening)(Differs(FleetDriftReason.NodePortDrift)),
               Option.when(!local.firewallMatches)(Differs(FleetDriftReason.PanelCidrDrift)),
               // Managed files and the running image are one managed installation, so one reason.
-              Option.when(!local.managedFiles || !local.imageMatches)(Differs(FleetDriftReason.LocalInstallationDrift))
+              Option.when(local.installationState != LocalInstallationState.OwnedComplete || !local.managedFiles || !local.imageMatches)(Differs(FleetDriftReason.LocalInstallationDrift))
             ).flatten
           }
         List(assignmentAnswer, contentAnswer, profileAnswer, configAnswer, inboundAnswer, intentAnswer,
@@ -150,7 +153,8 @@ object FleetAssessor {
     val (health, healthReasons) = judgeHealth(evidence, inventoryFresh, localFresh)
     val blockers = List(
       Option.when(!evidence.trustedSsh)(FleetRolloutBlocker.NoTrustedSsh),
-      Option.when(!evidence.localManaged)(FleetRolloutBlocker.NoManagedLocalInstallation),
+      Option.when(!evidence.localManaged || (localDimensions && localFresh &&
+        evidence.localEvidence.exists(_.installationState != LocalInstallationState.OwnedComplete)))(FleetRolloutBlocker.NoManagedLocalInstallation),
       Option.when(!evidence.apiContractConfirmed)(FleetRolloutBlocker.ApiContractUnconfirmed),
       Option.when(structural.contains(FleetDriftReason.BindingMissing))(FleetRolloutBlocker.BindingInvalid),
       Option.when(evidence.busy)(FleetRolloutBlocker.ActiveConflictingOperation),
@@ -179,7 +183,8 @@ object FleetAssessor {
         ).flatten
         val local =
           if (!evidence.localManaged) Nil
-          else evidence.localEvidence.filter(_ => localFresh && !evidence.localObservationFailed) match {
+          else evidence.localEvidence.filter(_ => localFresh && !evidence.localObservationFailed &&
+            evidence.localEvidence.exists(_.installationState != LocalInstallationState.Unknown)) match {
             case None => List(FleetHealthReason.LocalObservationFailed)
             case Some(_) if !wantsEnabled => Nil
             case Some(value) => List(

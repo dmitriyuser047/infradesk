@@ -169,9 +169,10 @@ final class PostgresIntegrationSyncStateRepository extends IntegrationSyncStateR
             select s.organization_id, s.integration_id
             from integration_sync_state s
             join integration i on i.id = s.integration_id and i.organization_id = s.organization_id
-            where i.enabled and s.next_run_at <= $now and (s.claim_until is null or s.claim_until <= $now)
+            where i.enabled and i.deleted_at is null and s.next_run_at <= $now
+              and (s.claim_until is null or s.claim_until <= $now)
             order by s.next_run_at, s.organization_id, s.integration_id
-            for update of s skip locked
+            for update of i, s skip locked
             limit $limit)
           update integration_sync_state s
           set claim_token = gen_random_uuid(), claimed_by = $owner,
@@ -324,7 +325,7 @@ final class PostgresIntegrationInventoryQuery extends IntegrationInventoryQuery[
                  left join integration_action_execution la on la.id = d.last_action_execution_id
                    and la.organization_id = d.organization_id
                  where d.organization_id = i.organization_id and d.integration_id = i.id) x) m on true
-         where i.organization_id = $organizationId""")
+         where i.organization_id = $organizationId and i.deleted_at is null""")
       .query[OverviewRow].to[List]
       .flatMap(_.traverse(row => row.session.toSession.traverse(_.toDomain).liftTo[ConnectionIO].map { last =>
         row.integrationId -> IntegrationOverview(row.integrationId, last, row.lastSuccessfulSyncAt, row.nextRunAt,
@@ -353,7 +354,7 @@ final class PostgresIntegrationInventoryQuery extends IntegrationInventoryQuery[
        join integration_inventory_object o on o.id = b.inventory_object_id and o.organization_id = b.organization_id
        join integration i on i.id = b.integration_id and i.organization_id = b.organization_id""" ++
       IntegrationDesiredStateSql.viewJoins ++ fr"""
-       where b.organization_id = $organizationId and b.resource_id = $resourceId
+       where b.organization_id = $organizationId and b.resource_id = $resourceId and i.deleted_at is null
        order by i.name, i.id, o.display_name, o.id""")
       .query[(UUID, String, String, String, ObjectRow, IntegrationDesiredStateSql.ViewRow)].to[List]
       .flatMap(_.traverse { case (id, name, provider, mode, row, desired) =>

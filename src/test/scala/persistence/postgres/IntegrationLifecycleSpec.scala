@@ -48,6 +48,7 @@ final class IntegrationLifecycleSpec extends FunSuite {
           values ($user, $org, 'OWNER', now(), now())""".update.run
       } yield ()
       val cleanup: ConnectionIO[Unit] = for {
+        _ <- sql"set local session_replication_role='replica'".update.run
         _ <- sql"delete from audit_event where organization_id = $org".update.run
         _ <- sql"delete from integration where organization_id = $org".update.run
         _ <- sql"delete from integration_secret where organization_id = $org".update.run
@@ -75,13 +76,30 @@ final class IntegrationLifecycleSpec extends FunSuite {
         repeatedEnable <- run.run(management.setEnabled(actor, first.id, enabled = true))
         disabled <- run.run(management.setEnabled(actor, first.id, enabled = false))
         repeatedDisable <- run.run(management.setEnabled(actor, first.id, enabled = false))
+        runningSessionId = UUID.randomUUID()
+        runningAt <- run.run(sql"select current_timestamp".query[java.time.Instant].unique)
+        _ <- run.run(sql"""insert into integration_sync_session(id,organization_id,integration_id,trigger,
+          started_at,recover_after_at,status) values($runningSessionId,$org,${first.id},'SCHEDULED',$runningAt,
+          $runningAt + interval '1 minute','RUNNING')""".update.run)
+        runningDelete <- run.run(management.delete(actor, first.id).attempt)
+        _ <- run.run(sql"update integration_sync_session set status='FAILED',finished_at=$runningAt,error_code='TEST' where id=$runningSessionId".update.run)
+        _ <- run.run(sql"update integration_sync_state set claim_token=gen_random_uuid(),claimed_by=$user,claim_until=current_timestamp + interval '1 minute' where integration_id=${first.id}".update.run)
+        claimDelete <- run.run(management.delete(actor, first.id).attempt)
+        _ <- run.run(sql"update integration_sync_state set claim_token=null,claimed_by=null,claim_until=null where integration_id=${first.id}".update.run)
         eventsBeforeDelete <- run.run(sql"select action from audit_event where organization_id = $org order by occurred_at, id".query[String].to[List])
         _ <- run.run(management.delete(actor, first.id))
+        _ <- run.run(management.delete(actor, first.id))
+        _ <- run.run(management.delete(ActorContext(user, foreign), first.id))
         gone <- run.run(management.get(org, first.id))
+        tombstone <- run.run(sql"select deleted_at,secret_id,enabled,caddy_api_key_configured from integration where organization_id=$org and id=${first.id}".query[(Option[java.time.Instant],Option[UUID],Boolean,Boolean)].unique)
+        physicalDelete <- run.run(sql"delete from integration where organization_id=$org and id=${first.id}".update.run.attempt)
+        reopenedSession <- run.run(sql"""insert into integration_sync_session(id,organization_id,integration_id,trigger,
+          started_at,recover_after_at,status) values(${UUID.randomUUID()},$org,${first.id},'SCHEDULED',$runningAt,
+          $runningAt + interval '1 minute','RUNNING')""".update.run.attempt)
         noSecret <- run.run(secrets.find(org, replaced.secretId))
         events <- run.run(sql"select action from audit_event where organization_id = $org".query[String].to[List])
       } yield {
-        assertEquals(schema, "52")
+        assertEquals(schema, "55")
         assert(!first.enabled)
         assertEquals(first.name, "Main")
         assertEquals(list.map(_.id), List(first.id))
@@ -98,6 +116,14 @@ final class IntegrationLifecycleSpec extends FunSuite {
         assertEquals(eventsBeforeDelete.count(_ == "INTEGRATION_DISABLED"), 1)
         assertEquals(eventsBeforeDelete.count(_ == "INTEGRATION_UPDATED"), 2)
         assertEquals(gone, None)
+        assertEquals(runningDelete.left.toOption.collect { case e: application.integration.IntegrationError => e.code },
+          Some("INTEGRATION_ACTION_ALREADY_RUNNING"))
+        assertEquals(claimDelete.left.toOption.collect { case e: application.integration.IntegrationError => e.code },
+          Some("INTEGRATION_ACTION_ALREADY_RUNNING"))
+        assert(tombstone._1.nonEmpty)
+        assertEquals((tombstone._2, tombstone._3, tombstone._4), (None, false, false))
+        assert(physicalDelete.isLeft)
+        assert(reopenedSession.isLeft)
         assertEquals(noSecret, None)
         assertEquals(events.count(_ == "INTEGRATION_DELETED"), 1)
       }

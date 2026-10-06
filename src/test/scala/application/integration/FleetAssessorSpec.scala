@@ -48,7 +48,7 @@ final class FleetAssessorSpec extends FunSuite {
     IntegrationDesiredState(uid, org, integration, node, state, 1L, uid, now, now, None, None)
 
   private val healthyLocal = RemnawaveNodeLocalEvidence(managedFiles = true, imageMatches = true,
-    containerRunning = true, portListening = true, stable = true, firewallMatches = true)
+    containerRunning = true, portListening = true, stable = true, firewallMatches = true, installationState = LocalInstallationState.OwnedComplete)
 
   /** The compliant baseline every case below changes exactly one thing in. */
   private def evidence(
@@ -259,4 +259,18 @@ final class FleetAssessorSpec extends FunSuite {
     assert(!result.driftReasons.contains(FleetDriftReason.LocalManagementUnavailable))
     assert(!result.driftReasons.contains(FleetDriftReason.ApiContractUnconfirmed))
   }
+  test("typed local installation states govern fleet compliance and admission even when legacy booleans are true") {
+    LocalInstallationState.all.foreach { state =>
+      val verdict=FleetAssessor.assess(evidence(local=Some(healthyLocal.copy(installationState=state))),now,stale)
+      val expected=state match {
+        case LocalInstallationState.OwnedComplete => FleetCompliance.Compliant
+        case LocalInstallationState.Unknown => FleetCompliance.Unknown
+        case LocalInstallationState.Foreign | LocalInstallationState.PortConflict => FleetCompliance.Blocked
+        case _ => FleetCompliance.Drifted
+      }
+      assertEquals(verdict.compliance,expected,state.code)
+      if(state != LocalInstallationState.OwnedComplete) assert(verdict.rolloutBlockers.contains(FleetRolloutBlocker.NoManagedLocalInstallation))
+    }
+  }
+
 }

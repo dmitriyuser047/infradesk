@@ -5,7 +5,7 @@ import application.port._
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
-import domain.integration.NodeInstallationData
+import domain.integration.{LocalInstallationState, NodeInstallationData}
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.UUID
@@ -30,8 +30,16 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     val remoteFiles = scala.collection.mutable.Map.empty[String, RemoteConfigurationFile]
     var respond: (String, List[String]) => IO[RemoteCommandOutput] = (_, _) => IO.pure(ok)
     var createFailure = false
+    var claimed = false
+    var failAfterPreparation = false
+    var failAfterCommit = 0
+    var commits = 0
     def supportsAtomicReplace = IO.pure(true)
-    def read(path: String, maxBytes: Int) = IO.pure(remoteFiles.getOrElse(path, RemoteConfigurationFile.Missing))
+    def read(path: String, maxBytes: Int) = IO {
+      val file = remoteFiles.getOrElse(path, RemoteConfigurationFile.Missing)
+      if (file.bytes.length > maxBytes) throw RemoteConfigurationFailure.FileTooLarge
+      file
+    }
     def create(path: String, bytes: Array[Byte], creation: RemoteFileCreation) = IO {
       uploads += ((path, bytes.clone(), creation)); if (createFailure) throw RemoteConfigurationFailure.Unavailable
     }
@@ -39,13 +47,47 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     def remove(path: String) = IO.unit
     def execute(executable: String, args: List[String], timeout: FiniteDuration) = executeCaptured(executable, args, timeout, 65536).map(_.exitCode)
     override def executeCaptured(executable: String, args: List[String], timeout: FiniteDuration, maxOutputBytes: Int) =
-      IO { calls += executable -> args } *> IO.defer(respond(executable, args))
+      IO { calls += executable -> args } *> IO.defer(respond(executable, args)).flatMap { result => IO {
+        if (executable == "sh" && args.exists(_.contains("atomic ownership publication")) && result.stdout == "PREPARED") {
+          claimed = true
+          if (failAfterPreparation) { failAfterPreparation = false; throw RemoteConfigurationFailure.Unavailable }
+        }
+        if (executable == "sh" && args.exists(_.contains("stageInode=$(stat -c '%i'")) && result.stdout == "PUBLISHED") {
+          val finalDir = SshRemnawaveNodeRemote.directory(spec)
+          val stageDir = SshRemnawaveNodeRemote.stagingDirectory(spec)
+          List(".env", "compose.yml", "managed.json").foreach { name =>
+            remoteFiles.get(s"$stageDir/$name").foreach(file => remoteFiles.update(s"$finalDir/$name", file))
+            remoteFiles.remove(s"$stageDir/$name")
+          }
+        }
+        if (executable == "sh" && args.contains(ProfileManagedFiles.Commit) && result.exitCode == 0) {
+          val bytes = uploads.reverseIterator.find(u => ProfileManagedFiles.sha256(u._2) == args.last).get._2
+          val path = args(3)
+          remoteFiles.update(path, RemoteConfigurationFile(true, bytes.clone(),
+            Some(RemoteFileMetadata(if (path.endsWith("/.env")) 384 else 420, 0, 0))))
+          commits += 1
+          if (commits == failAfterCommit) throw RemoteConfigurationFailure.Unavailable
+        }
+        result
+      }}
   }
   private def remote(s: Session) = new SshRemnawaveNodeRemote(new RemoteConfigurationTransport[IO] {
     def withSession[A](c: Connection)(use: RemoteConfigurationSession[IO] => IO[A]) = use(s)
   })
   private def idResponse(s: Session): Unit = s.respond = (ex, args) => IO.pure {
     if (ex == "id") ok.copy(stdout = "0")
+    else if (ex == "sh" && args.exists(_.contains("stageInode=$(stat -c '%i'"))) ok.copy(stdout = "PUBLISHED")
+    else if (ex == "sh" && args.exists(_.contains("atomic ownership publication"))) ok.copy(stdout = "PREPARED")
+    else if (ex == "sh" && args.exists(_.contains("result CLEAN"))) ok.copy(stdout = "CLEAN")
+    else if (ex == "sh" && args.exists(_.contains("d=$1\nif [ -L"))) {
+      val dir = SshRemnawaveNodeRemote.directory(spec)
+      ok.copy(stdout = if (s.remoteFiles.keys.exists(_.startsWith(dir + "/"))) "PRESENT" else "ABSENT")
+    }
+    else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) {
+      val dir = SshRemnawaveNodeRemote.directory(spec)
+      val complete = List(".env", "compose.yml", "managed.json").forall(n => s.remoteFiles.contains(s"$dir/$n"))
+      ok.copy(stdout = if (complete) "OWNED_COMPLETE" else if (s.claimed) "OWNED_PARTIAL" else "ABSENT")
+    }
     else if (ex == "sh" && args.exists(_.contains("sport = :"))) ok.copy(stdout = "CLEAR")
     else if (ex == "sh" && args.exists(_.contains("SSH_CONNECTION"))) ok.copy(stdout = "192.0.2.5 45000 198.51.100.1 22")
     else if (ex == "ufw" && args == List("status")) ok.copy(stdout = "Status: active")
@@ -60,6 +102,26 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     val broad = remote(s).configureFirewall(connection, spec.copy(panelCidrs = List("0.0.0.0/0"))).attempt.unsafeRunSync()
     assertEquals(broad.toOption.flatMap(_.failureCode), Some("PROVISIONING_NODE_INVALID_CIDR"))
     assertEquals(s.calls.map(_._1).toList, List("id", "id"))
+  }
+
+  test("local installation classifier returns typed state from its exact recovery probe") {
+    val absent = new Session; idResponse(absent)
+    assertEquals(remote(absent).localInstallationState(connection, spec).unsafeRunSync(), LocalInstallationState.Absent)
+    assertEquals(absent.calls.count(_._1 == "id"), 1)
+    assert(absent.calls.exists { case ("sh", args) => args.exists(_.contains("OWNED_DAMAGED")); case _ => false })
+
+    val unknown = new Session
+    unknown.respond = (ex, args) => IO.pure(if (ex == "id") ok.copy(stdout = "0") else ok.copy(stdout = "unexpected"))
+    assertEquals(remote(unknown).localInstallationState(connection, spec).unsafeRunSync(), LocalInstallationState.Unknown)
+  }
+
+  test("staging paths are narrowly allowlisted and final node paths remain canonical") {
+    val stage = SshRemnawaveNodeRemote.stagingDirectory(spec)
+    assert(ProfileManagedFiles.allowedPath(s"$stage/.env"))
+    assert(ProfileManagedFiles.allowedPath(s"$stage/compose.yml"))
+    assert(ProfileManagedFiles.allowedPath(s"$stage/managed.json"))
+    assert(!ProfileManagedFiles.allowedPath(s"$stage/secret.txt"))
+    assert(!ProfileManagedFiles.allowedPath(stage + "-other/.env"))
   }
 
   test("post-baseline prerequisites require Docker, Compose and active firewall before create") {
@@ -139,18 +201,78 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
   test("installation recovery proves exact managed files and local image, rejects env drift, and needs no container") {
     val s = new Session; idResponse(s)
     s.respond = (ex, args) => if (ex == "id") IO.pure(ok.copy(stdout = "0"))
+      else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) IO.pure(ok.copy(stdout = "OWNED_COMPLETE"))
       else if (ex == "sh" && args.exists(_.contains("docker image inspect"))) IO.pure(ok.copy(stdout = "1:1"))
       else IO.pure(ok)
     assert(remote(s).installationPresent(connection, spec).unsafeRunSync())
-    val script = s.calls.find(_._1 == "sh").get._2(1)
+    val script = s.calls.find(_._2.exists(_.contains("docker image inspect"))).get._2(1)
     assert(script.contains("sha256sum \"$d/.env\""))
     assert(s.calls.exists(_._2.exists(_.contains("envSha256"))))
     assert(script.contains("'0:600:1'"))
     assert(!script.contains("docker inspect -f '{{.State.Running}}'"))
     s.respond = (ex, args) => if (ex == "id") IO.pure(ok.copy(stdout = "0"))
+      else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) IO.pure(ok.copy(stdout = "OWNED_COMPLETE"))
       else if (ex == "sh" && args.exists(_.contains("docker image inspect"))) IO.pure(ok.copy(stdout = "0:1"))
       else IO.pure(ok)
     assert(!remote(s).installationPresent(connection, spec).unsafeRunSync())
+  }
+
+  test("partial installation at each durable file boundary repairs once without starting a duplicate container or exposing secrets") {
+    val secrets = List("cGFydGlhbC1yZWNvdmVyeS1zZWNyZXQ=",
+      Base64.getEncoder.encodeToString(Array.fill[Byte](49152)(1)))
+    val dir = SshRemnawaveNodeRemote.directory(spec)
+    for (boundary <- List(0, 1, 2); secret <- secrets) {
+      val s = new Session
+      var imagePresent = false
+      s.respond = (ex, args) => IO {
+        if (ex == "id") ok.copy(stdout = "0")
+        else if (ex == "sh" && args.exists(_.contains("atomic ownership publication"))) ok.copy(stdout = "PREPARED")
+        else if (ex == "sh" && args.exists(_.contains("result CLEAN"))) ok.copy(stdout = "CLEAN")
+        else if (ex == "sh" && args.exists(_.contains("d=$1\nif [ -L"))) ok.copy(stdout = if (s.remoteFiles.keys.exists(_.startsWith(dir + "/"))) "PRESENT" else "ABSENT")
+        else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) {
+          val complete = List(".env", "compose.yml", "managed.json").forall(n => s.remoteFiles.contains(s"$dir/$n"))
+          ok.copy(stdout = if (complete) "OWNED_COMPLETE" else if (s.claimed) "OWNED_PARTIAL" else "ABSENT")
+        }
+        else if (ex == "sh" && args.exists(_.contains("listeners=$(ss"))) ok.copy(stdout = "CLEAR")
+        else if (ex == "sh" && args.exists(_.contains("docker image inspect"))) ok.copy(stdout = "1:1")
+        else if (ex == "docker" && args.headOption.contains("image"))
+          ok.copy(exitCode = if (imagePresent) 0 else 1, stdout = if (imagePresent) "image-id" else "")
+        else if (ex == "docker" && args.headOption.contains("pull")) { imagePresent = true; ok }
+        else ok
+      }
+      s.failAfterPreparation = boundary == 0
+      s.failAfterCommit = boundary
+      val failed = remote(s).install(connection, spec, NodeInstallationData.fromSecretKey(secret)).unsafeRunSync()
+      assert(failed.failureCode.nonEmpty && failed.uncertain, s"boundary $boundary")
+      assertEquals(remote(s).recoveryPreflight(connection, spec).unsafeRunSync().facts,
+        Map("installation" -> "owned_partial"))
+      val repaired = remote(s).repair(connection, spec, NodeInstallationData.fromSecretKey(secret)).unsafeRunSync()
+      assertEquals(repaired.failureCode, None)
+      val uploadCount = s.uploads.size
+      val commitCount = s.commits
+      val pullCount = s.calls.count(_._2.headOption.contains("pull"))
+      assertEquals(remote(s).repair(connection, spec, NodeInstallationData.fromSecretKey(secret)).unsafeRunSync().failureCode, None)
+      assertEquals(s.uploads.size, uploadCount)
+      assertEquals(s.commits, commitCount)
+      assertEquals(s.calls.count(_._2.headOption.contains("pull")), pullCount)
+      assertEquals(remote(s).recoveryPreflight(connection, spec).unsafeRunSync().facts,
+        Map("installation" -> "owned_complete"))
+      assert(remote(s).installationPresent(connection, spec).unsafeRunSync())
+      assert(!s.calls.exists(_._2.exists(_.contains("up -d"))))
+      assert(s.calls.forall { case (_, args) => !args.exists(_.contains(secret)) })
+      assert(!failed.toString.contains(secret) && !repaired.toString.contains(secret))
+      val firstPrepare = s.calls.indexWhere(_._2.exists(_.contains("atomic ownership publication")))
+      val firstFilePrepare = s.calls.indexWhere(_._2.contains(ProfileManagedFiles.Prepare))
+      assert(firstPrepare >= 0 && firstPrepare < firstFilePrepare)
+      assert(s.calls(firstPrepare)._2.contains(SshRemnawaveNodeRemote.ownershipDirectory(spec)))
+    }
+  }
+
+  test("owned partial state is not installationPresent even when the file/image proof would pass") {
+    val s = new Session
+    recoveryOwned(s)
+    assert(!remote(s).installationPresent(connection, spec).unsafeRunSync())
+    assert(!s.calls.exists(_._2.exists(_.contains("docker image inspect"))))
   }
 
   private def ownFiles(s: Session, env: String, compose: String = SshRemnawaveNodeRemote.renderCompose(spec)): Unit = {
@@ -167,7 +289,13 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
 
   private def recoveryOwned(s: Session): Unit = s.respond = (ex, args) => IO.pure {
     if (ex == "id") ok.copy(stdout = "0")
-    else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) ok.copy(stdout = "OWNED")
+    else if (ex == "sh" && args.exists(_.contains("atomic ownership publication"))) ok.copy(stdout = "PREPARED")
+    else if (ex == "sh" && args.exists(_.contains("result CLEAN"))) ok.copy(stdout = "CLEAN")
+    else if (ex == "sh" && args.exists(_.contains("d=$1\nif [ -L"))) {
+      val dir = SshRemnawaveNodeRemote.directory(spec)
+      ok.copy(stdout = if (s.remoteFiles.keys.exists(_.startsWith(dir + "/"))) "PRESENT" else "ABSENT")
+    }
+    else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) ok.copy(stdout = "OWNED_PARTIAL")
     else if (ex == "sh" && args.exists(_.contains("listeners=$(ss"))) ok.copy(stdout = "CLEAR")
     else if (ex == "docker" && args.headOption.contains("image")) ok.copy(stdout = "node-image-id")
     else ok
@@ -191,7 +319,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     val owned = new Session
     recoveryOwned(owned)
     assertEquals(remote(owned).recoveryPreflight(connection, spec).unsafeRunSync().facts,
-      Map("installation" -> "owned"))
+      Map("installation" -> "owned_partial"))
     val foreign = new Session
     foreign.respond = (ex, args) => IO.pure {
       if (ex == "id") ok.copy(stdout = "0")
@@ -207,7 +335,9 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     val absent = new Session
     absent.respond = (ex, args) => IO.pure {
       if (ex == "id") ok.copy(stdout = "0")
-      else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) ok.copy(stdout = "ABSENT")
+      else if (ex == "sh" && args.exists(_.contains("atomic ownership publication"))) ok.copy(stdout = "PREPARED")
+      else if (ex == "sh" && args.exists(_.contains("result CLEAN"))) ok.copy(stdout = "CLEAN")
+      else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) ok.copy(stdout = if (absent.claimed) "OWNED_PARTIAL" else "ABSENT")
       else if (ex == "sh" && args.exists(_.contains("listeners=$(ss"))) ok.copy(stdout = "CLEAR")
       else ok
     }
@@ -228,7 +358,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     val oldEnv = s"SECRET_KEY=$secret\nNODE_PORT=30223\n"
     ownFiles(damaged, oldEnv, SshRemnawaveNodeRemote.renderCompose(spec).replace("30222", "30223"))
     assertEquals(remote(damaged).repair(connection, spec, NodeInstallationData.fromSecretKey(secret)).unsafeRunSync().failureCode, None)
-    assertEquals(damaged.uploads.size, 3)
+    assertEquals(damaged.uploads.size, 2)
     val envHash = ProfileManagedFiles.sha256(oldEnv.getBytes(StandardCharsets.UTF_8))
     val commits = damaged.calls.filter { case (ex, args) => ex == "sh" && args.exists(_ == ProfileManagedFiles.Commit) }
     assert(commits.exists(_._2.contains(envHash)), "repair must pass the observed file hash as the CAS expectation")
@@ -266,7 +396,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
       else ok
     }
     assertEquals(remote(absent).retireInstallation(connection, spec).unsafeRunSync().failureCode, None)
-    assertEquals(absent.calls.find(_._1 == "sh").get._2.last,spec.nodePort.toString)
+    assertEquals(absent.calls.find(_._1 == "sh").get._2.takeRight(4).head,spec.nodePort.toString)
 
     val owned = new Session
     owned.respond = (ex, args) => IO.pure {
@@ -399,7 +529,8 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
       else if (ex == "ufw" && args == List("show", "added")) ok.copy(stdout = (header :: rules).mkString("\n"))
       else if (ex == "ufw" && args.headOption.contains("allow")) { if (persist) rules :+= liveNodeRule; ok }
       else if (ex == "ufw" && args.take(3) == List("--force","delete","allow")) {
-        rules = rules.filterNot(line => line.contains(s"from ${args(4)} ") && line.endsWith(s"'${args(12)}'")); ok
+        val source = args(4).stripSuffix("/32")
+        rules = rules.filterNot(line => line.contains(s"from $source ") && line.endsWith(s"'${args(12)}'")); ok
       }
       else ok
     }
@@ -471,5 +602,62 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     assertEquals(mutations(s).size,2)
     assertEquals(mutations(s).last,List("--force","delete","allow","from","2.27.26.19/32","to","any","port","2222","proto","tcp",
       "comment",s"infradesk:remnawave:$resource:$node:node"))
+  }
+
+  test("retire firewall removes only the exact approved own node rule and preserves foreign rules") {
+    val foreign = "ufw allow 8080/tcp comment 'foreign-service'"
+    val s = firewallSession(liveRules ++ List(foreign, liveNodeRule))
+    val result = remote(s).retireFirewall(connection, liveSpec).unsafeRunSync()
+    assertEquals(result.failureCode, None)
+    assert(!result.uncertain)
+    assertEquals(mutations(s), List(List("--force", "delete", "allow", "from", "2.27.26.18/32", "to", "any",
+      "port", "2222", "proto", "tcp", "comment", s"infradesk:remnawave:$resource:$node:node")))
+    assert(!s.calls.exists { case (ex, args) => ex == "ufw" && args.take(3) == List("--force", "delete", "allow") && args(4) == "77.40.38.175" })
+  }
+
+  test("retire firewall is idempotent and refuses mismatched own rules before mutation") {
+    val absent = firewallSession(liveRules)
+    assertEquals(remote(absent).retireFirewall(connection, liveSpec).unsafeRunSync().failureCode, None)
+    assertEquals(mutations(absent), Nil)
+
+    val conflict = firewallSession(liveRules :+ liveNodeRule.replace("2222", "2223"))
+    val rejected = remote(conflict).retireFirewall(connection, liveSpec).unsafeRunSync()
+    assertEquals(rejected.failureCode, Some("PROVISIONING_FIREWALL_OWNERSHIP_CONFLICT"))
+    assert(!rejected.uncertain)
+    assertEquals(mutations(conflict), Nil)
+
+    val equivalentForeign = liveNodeRule.replace("infradesk:remnawave:", "foreign:")
+    val collision = firewallSession(liveRules ++ List(liveNodeRule, equivalentForeign))
+    assertEquals(remote(collision).retireFirewall(connection, liveSpec).unsafeRunSync().failureCode,
+      Some("PROVISIONING_FIREWALL_OWNERSHIP_CONFLICT"))
+    assertEquals(mutations(collision), Nil)
+  }
+
+  test("retire firewall reports uncertainty when the pre-mutation SSH canary fails") {
+    val s = firewallSession(liveRules :+ liveNodeRule)
+    var ids = 0
+    val base = s.respond
+    s.respond = (ex, args) => if (ex == "id") IO {
+      ids += 1
+      if (ids >= 2) ok.copy(exitCode = 1) else ok.copy(stdout = "0")
+    } else base(ex, args)
+    val result = remote(s).retireFirewall(connection, liveSpec).unsafeRunSync()
+    assertEquals(result.failureCode, Some("PROVISIONING_FIREWALL_CANARY_FAILED"))
+    assert(result.uncertain)
+    assertEquals(mutations(s), Nil)
+  }
+
+  test("retire firewall protects the live SSH path and requires an independent remaining allow") {
+    val sshPortSpec = liveSpec.copy(nodePort = 22, panelCidrs = List("172.28.0.0/24"))
+    val onlyNodeAllow = s"ufw allow from 172.28.0.0/24 to any port 22 proto tcp comment 'infradesk:remnawave:$resource:$node:node'"
+    val blocked = firewallSession(List(onlyNodeAllow))
+    val unsafe = remote(blocked).retireFirewall(connection, sshPortSpec).unsafeRunSync()
+    assertEquals(unsafe.failureCode, Some("PROVISIONING_FIREWALL_SSH_ACCESS_UNPROVEN"))
+    assertEquals(mutations(blocked), Nil)
+
+    val alternate = "ufw allow from 172.28.0.5 to any port 22 proto tcp comment 'foreign-admin-ssh'"
+    val safe = firewallSession(List(alternate, onlyNodeAllow))
+    assertEquals(remote(safe).retireFirewall(connection, sshPortSpec).unsafeRunSync().failureCode, None)
+    assertEquals(mutations(safe).size, 1)
   }
 }

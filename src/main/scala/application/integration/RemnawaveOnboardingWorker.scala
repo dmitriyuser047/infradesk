@@ -187,7 +187,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
             case Left(stop) => IO.pure(stop)
           }
         def oldSpec(proof: OnboardingRecovery) = RemnawaveNodeRemoteSpec(proof.installationOwnerId,r.resourceId,
-          proof.previousExternalNodeId.get,r.snapshot.input.nodePort,r.snapshot.imageReference,r.snapshot.input.panelCidrs)
+          proof.previousExternalNodeId.get,r.snapshot.input.nodePort,r.snapshot.imageReference,proof.previousPanelCidrs.getOrElse(r.snapshot.input.panelCidrs))
         def oldAbsent: IO[Unit] = r.snapshot.recovery.filter(!_.reusesNode).traverse_ { proof =>
           nodes.lookupNode(context,proof.previousExternalNodeId.get).flatMap {
             case NodeLookupOutcome.ConfirmedNotFound => nodes.findNodes(context).flatMap(candidates => IO.raiseWhen(
@@ -233,6 +233,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
               case Left(stop) => IO.pure(stop)
             }
           case ConfirmNodeDeleted => oldAbsent *> advance
+          case RetireNodeFirewall => oldAbsent *> result(remote.retireFirewall(connection,oldSpec(r.snapshot.recovery.get)))
           case RetireLocalNode => oldAbsent *> result(remote.retireInstallation(connection,oldSpec(r.snapshot.recovery.get)))
           case CreateNode if r.snapshot.recovery.exists(_.reusesNode) => operations.validate(r,true) *> existing
           case CreateNode if !fresh || r.externalNodeId.nonEmpty => operations.validate(r,true) *> reconciliation
@@ -259,18 +260,20 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           case ConfigureFirewall if !fresh => remote.firewallPresent(connection,spec(r)).map(ok =>
             if(ok) Advance(r) else Stop("REMNAWAVE_ONBOARDING_FIREWALL_UNKNOWN",true))
           case ConfigureFirewall => result(remote.configureOnboardingFirewall(connection,spec(r)))
-          case InstallNode if !fresh => remote.installationPresent(connection,spec(r)).map(ok =>
-            if(ok) Advance(r) else Stop("REMNAWAVE_ONBOARDING_INSTALL_UNKNOWN",true))
-          case InstallNode if r.snapshot.recovery.exists(_.reusesNode) => remote.installationPresent(connection,spec(r)).flatMap {
-            case true => advance
-            case false => existing.flatMap {
-              case _: Advance => runner.run(repo.secret(r)).flatMap(_.liftTo[IO](IntegrationError("REMNAWAVE_ONBOARDING_SECRET_MISSING","Installation data is unavailable")))
-                .flatMap(s => result(remote.repair(connection,spec(r),cipher.decrypt(s))))
-              case other => IO.pure(other)
-            }
+          case InstallNode => remote.localInstallationState(connection,spec(r)).flatMap {
+            case LocalInstallationState.Foreign => IO.pure(Stop("PROVISIONING_NODE_INSTALLATION_UNMANAGED",false))
+            case LocalInstallationState.PortConflict => IO.pure(Stop("PROVISIONING_NODE_PORT_OCCUPIED",false))
+            case LocalInstallationState.Unknown => IO.pure(Stop("REMNAWAVE_ONBOARDING_INSTALL_UNKNOWN",true))
+            case state =>
+              def installOrRepair: IO[Decision] = runner.run(repo.secret(r))
+                .flatMap(_.liftTo[IO](IntegrationError("REMNAWAVE_ONBOARDING_SECRET_MISSING","Installation data is unavailable")))
+                .flatMap(s => result(if(state==LocalInstallationState.Absent)
+                  remote.install(connection,spec(r),cipher.decrypt(s)) else remote.repair(connection,spec(r),cipher.decrypt(s))))
+              if(state==LocalInstallationState.OwnedComplete) remote.installationPresent(connection,spec(r)).flatMap {
+                case true => advance
+                case false => installOrRepair
+              } else installOrRepair
           }
-          case InstallNode => runner.run(repo.secret(r)).flatMap(_.liftTo[IO](IntegrationError("REMNAWAVE_ONBOARDING_SECRET_MISSING","Installation data is unavailable")))
-            .flatMap(s => result(remote.install(connection,spec(r),cipher.decrypt(s))))
           case StartNode if !fresh => remote.observe(connection,spec(r)).map(e =>
             if(e.verified) Advance(r) else Stop("REMNAWAVE_ONBOARDING_START_UNKNOWN",true))
           case StartNode => enableExisting.flatMap {

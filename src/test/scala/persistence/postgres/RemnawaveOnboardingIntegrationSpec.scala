@@ -3,7 +3,7 @@ package persistence.postgres
 
 import application.integration.IntegrationError
 import application.port.RemnawaveOnboardingRepository
-import cats.effect.IO
+import cats.effect.{IO,Ref}
 import cats.syntax.all._
 import domain.integration._
 import domain.provisioning._
@@ -12,6 +12,9 @@ import integration.ssh.SecretEncryptionConfig
 import java.time.Instant
 import java.util.{Base64, UUID}
 import munit.FunSuite
+import org.typelevel.doobie.{ConnectionIO,Transactor}
+import org.typelevel.doobie.util.log.{LogEvent,LogHandler}
+import infrastructure.database.DoobieTransactionRunner
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 import support.AuthorizationFixtures
@@ -36,11 +39,16 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
       _ <- sql"delete from remnawave_node_installation_secret where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"update provisioning_run set onboarding_parent_id=null where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"delete from remnawave_node_onboarding where organization_id in (${w.org},${w.foreignOrg})".update.run
+      _ <- sql"delete from integration_action_execution where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"delete from integration_resource_binding where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"delete from integration_inventory_object where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"delete from integration_sync_session where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"delete from integration where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"delete from integration_secret where organization_id in (${w.org},${w.foreignOrg})".update.run
+      _ <- sql"delete from server_profile_observation where organization_id in (${w.org},${w.foreignOrg})".update.run
+      _ <- sql"delete from server_profile_assignment where organization_id in (${w.org},${w.foreignOrg})".update.run
+      _ <- sql"delete from server_profile_revision where organization_id in (${w.org},${w.foreignOrg})".update.run
+      _ <- sql"delete from server_profile where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"set local session_replication_role='origin'".update.run
     } yield ()))
 
@@ -89,6 +97,27 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
 
   private def errorCode[A](result: Either[Throwable, A]): Option[String] =
     result.left.toOption.collect { case error: IntegrationError => error.code }
+
+  private def httpStart(w: ConfigurationDeploymentWorld, integrationId: UUID, planId: UUID,
+    requestId: UUID, confirmed: Boolean): IO[(org.http4s.Status,String)] = {
+    val api = new application.integration.RemnawaveOnboardingApi {
+      def options(o: UUID,i: UUID) = IO.raiseError[io.circe.Json](new UnsupportedOperationException)
+      def preview(a: application.auth.ActorContext,i: UUID,input: OnboardingInput) = IO.raiseError[io.circe.Json](new UnsupportedOperationException)
+      def reconcile(a: application.auth.ActorContext,i: UUID,r: UUID,action: String) = IO.raiseError[io.circe.Json](new UnsupportedOperationException)
+      def start(a: application.auth.ActorContext,i: UUID,p: UUID,r: UUID,confirmRecreate: Boolean) =
+        w.run(repo.start(a.organizationId,i,p,r,a.userId,Instant.now(),confirmRecreate))
+      def detail(o: UUID,i: UUID,r: UUID) = IO.raiseError[io.circe.Json](new UnsupportedOperationException)
+      def history(o: UUID,i: UUID) = IO.raiseError[io.circe.Json](new UnsupportedOperationException)
+    }
+    val route = new infrastructure.http.RemnawaveOnboardingRoutes[IO](api,AuthorizationFixtures.authorization,
+      org.typelevel.log4cats.noop.NoOpLogger[IO]).routes.orNotFound
+    val body = io.circe.Json.obj("planId" -> io.circe.Json.fromString(planId.toString),
+      "requestId" -> io.circe.Json.fromString(requestId.toString),"confirmRecreate" -> io.circe.Json.fromBoolean(confirmed))
+    val path=s"/api/v1/organizations/${w.org}/integrations/$integrationId/remnawave-node-onboarding/runs"
+    val request=AuthorizationFixtures.as(org.http4s.Request[IO](org.http4s.Method.POST,org.http4s.Uri.unsafeFromString(path)).withEntity(body.noSpaces),
+      w.org,domain.auth.OrganizationRole.Owner)
+    route.run(request).flatMap(response => response.as[String].map(response.status -> _))
+  }
 
   private def provisioningPlan(w: ConfigurationDeploymentWorld, node: ConfigurationDeploymentWorld.Node,
     id: UUID, now: Instant): ProvisioningRun = ProvisioningRun(id, w.org, node.resourceId, None, None,
@@ -448,7 +477,7 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
     }
   }
   test("approved recreate has its own durable phases and identity; deletion plans require every extra phase") {
-    List("RECREATE","DELETE_RECREATE").foreach { action => inWorld { w => for {
+    List("RECREATE","DELETE_RECREATE").flatMap(a => List(a -> 1,a -> 2)).foreach { case(action,lifecycleVersion) => inWorld { w => for {
       pair <- integration(w,w.org,"recreate-"+action)
       (integrationId,secretId)=pair
       target <- w.node("recreate-"+action)
@@ -465,11 +494,20 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
       oldHistory <- w.run(repo.find(w.org,integrationId,original.id))
       recovery=OnboardingRecovery(original.id,Some(oldExternal),original.snapshot.correlationId,original.id,
         if(action=="RECREATE") "CONFIRMED_NOT_FOUND" else "PRESENT_EXACT",action)
-      draft=original.copy(id=uid,createdAt=now.plusSeconds(1),snapshot=original.snapshot.copy(correlationId=uid,recovery=Some(recovery)))
+      draft=original.copy(id=uid,createdAt=now.plusSeconds(1),snapshot=original.snapshot.copy(correlationId=uid,recovery=Some(recovery),lifecycleVersion=lifecycleVersion))
       _ <- w.run(repo.insertPlan(draft))
       phases <- w.run(repo.find(w.org,integrationId,draft.id))
       foreignStart <- w.run(repo.start(w.foreignOrg,integrationId,draft.id,uid,AuthorizationFixtures.ActorUserId,now)).attempt
-      _ <- w.run(repo.start(w.org,integrationId,draft.id,uid,AuthorizationFixtures.ActorUserId,now))
+      requestId=uid
+      unconfirmed <- w.run(repo.start(w.org,integrationId,draft.id,requestId,AuthorizationFixtures.ActorUserId,now)).attempt
+      _ <- IO(assertEquals(errorCode(unconfirmed),Some("REMNAWAVE_ONBOARDING_RECREATE_CONFIRMATION_REQUIRED")))
+      firstHttp <- httpStart(w,integrationId,draft.id,requestId,confirmed=true)
+      _ <- IO(assertEquals(firstHttp._1,org.http4s.Status.Ok))
+      first <- w.run(repo.find(w.org,integrationId,draft.id)).map(_.get._1)
+      retryHttp <- httpStart(w,integrationId,draft.id,requestId,confirmed=false)
+      _ <- IO(assertEquals(retryHttp,firstHttp))
+      retry <- w.run(repo.start(w.org,integrationId,draft.id,requestId,AuthorizationFixtures.ActorUserId,now.plusSeconds(1)))
+      _ <- IO(assertEquals(retry,first))
       newToken=uid
       active <- w.run(repo.claim(uid,newToken,now,now.plusSeconds(300),1))
       premature <- w.run(sql"update remnawave_node_onboarding set state='SUCCEEDED',phase='FINAL_VERIFY',finished_at=$now,claim_owner=null,claim_token=null,claim_deadline=null where id=${draft.id}".update.run).attempt
@@ -495,7 +533,7 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
       provenance <- w.run(new PostgresRemnawaveFleetQuery().provenance(w.org,integrationId,target.resourceId,inventoryId))
     } yield {
       assertEquals(phases.get._2.map(_.phase),OnboardingPhase.forSnapshot(draft.snapshot))
-      assertEquals(phases.get._2.length,if(action=="RECREATE") 14 else 16)
+      assertEquals(phases.get._2.length,(if(action=="RECREATE") 14 else 16)+(if(lifecycleVersion==2) 1 else 0))
       assertEquals(errorCode(foreignStart),Some("REMNAWAVE_ONBOARDING_NOT_FOUND"))
       assert(premature.isLeft)
       assert(invalidPhase.isLeft)
@@ -508,6 +546,109 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
       assertEquals(provenance.map(_.onboardingId),Some(draft.id))
       assertNotEquals(completed.snapshot.correlationId,original.snapshot.correlationId)
     } } }
+  }
+
+  test("onboarding server options use four SQL statements for 1, 100 and 500 resources with identical compliant semantics") {
+    inWorld { w =>
+      val targets = new PostgresProvisioningTargetQuery
+      val profiles = new PostgresServerProfileRepository
+      val ids = List.fill(500)(uid)
+      val profileId = uid; val revisionId = uid; val now = Instant.now()
+      val content = support.ServerProfileFixtures.content
+      val observed = support.ServerProfileFixtures.observed()
+      for {
+        source <- w.node("options-shared-ssh")
+        sourceAt <- connectionUpdated(w,source.connectionId)
+        _ <- w.run(for {
+          _ <- sql"""insert into resource(id,organization_id,environment_id,resource_type_id,code,name,is_active,spec)
+            select n.id,r.organization_id,r.environment_id,r.resource_type_id,n.id::text,n.id::text,true,r.spec
+            from unnest(${ids.toArray[UUID]}) as n(id) cross join resource r where r.id=${source.resourceId}""".update.run
+          _ <- sql"""insert into external_ref(id,organization_id,connection_id,external_type,external_id,resource_id)
+            select gen_random_uuid(),${w.org},${source.connectionId},'NODE',n.id::text,n.id from unnest(${ids.toArray[UUID]}) as n(id)""".update.run
+          _ <- profiles.insertProfile(ServerProfile(profileId,w.org,"Options baseline","options-baseline",None,false,1,
+            AuthorizationFixtures.ActorUserId,now,now))
+          _ <- profiles.insertRevision(ServerProfileRevision(revisionId,w.org,profileId,1,content,content.hash,AuthorizationFixtures.ActorUserId,now))
+          _ <- sql"""insert into server_profile_assignment(id,organization_id,resource_id,profile_id,revision_id,revision_number,version,assigned_by_user_id,assigned_at)
+            select gen_random_uuid(),${w.org},n.id,$profileId,$revisionId,1,1,${AuthorizationFixtures.ActorUserId},$now
+            from unnest(${ids.toArray[UUID]}) as n(id)""".update.run
+          _ <- sql"""insert into server_profile_observation(id,organization_id,resource_id,source_connection_id,source_updated_at,
+            assignment_id,assignment_version,revision_id,schema_version,content,content_hash,observed_at)
+            select gen_random_uuid(),${w.org},a.resource_id,${source.connectionId},$sourceAt,a.id,a.version,a.revision_id,1,
+              cast(${observed.noSpaces} as jsonb),${ServerProfileDiff.hashObservation(observed)},$now
+            from server_profile_assignment a where a.organization_id=${w.org} and a.profile_id=$profileId""".update.run
+        } yield ())
+        _ <- List(1,100,500).traverse_ { size => Ref.of[IO,Int](0).flatMap { counter =>
+          val handler = new LogHandler[IO] { def run(event: LogEvent): IO[Unit] = counter.update(_+1) }
+          val config = PostgresTestDatabase.config
+          val xa = Transactor.fromDriverManager[IO]("org.postgresql.Driver",config.url,config.user,config.password,Some(handler))
+          val runner = new DoobieTransactionRunner(xa)
+          for {
+            result <- runner.run(for {
+              candidates <- query.candidates(w.org,size)
+              eligible <- targets.eligibleBatch(w.org,candidates.map(_.id))
+              statuses <- query.serverStatuses(w.org,eligible)
+            } yield candidates -> statuses)
+            count <- counter.get
+            _ = assertEquals(count,4,s"size=$size")
+            _ = assertEquals(result._1.size,size)
+            _ = assertEquals(result._2.size,size)
+            _ = assert(result._2.values.forall(s => s.profileAssigned && s.profileState=="COMPLIANT" && !s.busy && !s.bindingConflict))
+            foreign <- runner.run(query.serverStatuses(w.foreignOrg,result._1.map(_.id -> Left("PROVISIONING_TARGET_NOT_FOUND")).toMap))
+            _ = assert(foreign.values.forall(s => !s.profileAssigned && s.profileState=="UNOBSERVED" && !s.busy && !s.bindingConflict))
+          } yield ()
+        }}
+      } yield ()
+    }
+  }
+
+  test("onboarding and node actions serialize one winner for bound and historical unbound identities") {
+    List("NODE_ENABLE","NODE_DISABLE","NODE_RESTART").foreach { action => List(true,false).foreach { bound => inWorld { w =>
+      for {
+        pair <- integration(w,w.org,"action-race")
+        (integrationId,secretId)=pair
+        target <- w.node("action-race")
+        sourceAt <- connectionUpdated(w,target.connectionId)
+        now <- IO.realTimeInstant
+        original <- plan(w,integrationId,secretId,target.resourceId,target.connectionId,sourceAt,now)
+        _ <- w.run(repo.start(w.org,integrationId,original.id,uid,AuthorizationFixtures.ActorUserId,now))
+        token=uid
+        claimed <- w.run(repo.claim(uid,token,now,now.plusSeconds(300),1))
+        oldExternal=uid
+        _ <- w.run(repo.beginPhase(claimed.head,token,now))
+        _ <- w.run(repo.persist(claimed.head,token,claimed.head.copy(state=ProvisioningRunState.Failed,
+          externalNodeId=Some(oldExternal),failureCode=Some("TEST_FAILURE")),now,complete=false))
+        originalBefore <- w.run(repo.find(w.org,integrationId,original.id))
+        recovery=original.copy(id=uid,externalNodeId=Some(oldExternal),snapshot=original.snapshot.copy(lifecycleVersion=2,
+          recovery=Some(OnboardingRecovery(original.id,Some(oldExternal),original.snapshot.correlationId,original.id,"PRESENT_UNHEALTHY","RECOVER"))))
+        _ <- w.run(repo.insertPlan(recovery))
+        sessionId=uid; inventoryId=uid
+        _ <- w.run(for {
+          _ <- sql"""insert into integration_sync_session(id,organization_id,integration_id,trigger,started_at,recover_after_at,finished_at,status)
+            values($sessionId,${w.org},$integrationId,'MANUAL',$now,$now,$now,'COMPLETED')""".update.run
+          _ <- sql"""insert into integration_inventory_object(id,organization_id,integration_id,object_type,external_id,display_name,
+            summary_version,summary,is_active,first_seen_at,last_seen_at,last_seen_sync_session_id,created_at,updated_at)
+            values($inventoryId,${w.org},$integrationId,'NODE',${oldExternal.toString},'Existing node',1,'{}'::jsonb,true,$now,$now,$sessionId,$now,$now)""".update.run
+          _ <- if(bound) sql"""insert into integration_resource_binding(id,organization_id,integration_id,inventory_object_id,resource_id,
+            created_by_user_id,created_at,updated_at) values(${uid},${w.org},$integrationId,$inventoryId,${target.resourceId},
+            ${AuthorizationFixtures.ActorUserId},$now,$now)""".update.run.void else ().pure[ConnectionIO]
+        } yield ())
+        actionId=uid; actionRequest=uid
+        winners <- (w.run(repo.start(w.org,integrationId,recovery.id,uid,AuthorizationFixtures.ActorUserId,now)).attempt,
+          w.run(sql"""insert into integration_action_execution(id,organization_id,integration_id,inventory_object_id,request_id,
+            action_code,external_id_snapshot,display_name_snapshot,requested_by_user_id,status,created_at,updated_at)
+            values($actionId,${w.org},$integrationId,$inventoryId,$actionRequest,$action,${oldExternal.toString},'Existing node',
+              ${AuthorizationFixtures.ActorUserId},'QUEUED',$now,$now)""".update.run).attempt).parTupled
+        originalAfter <- w.run(repo.find(w.org,integrationId,original.id))
+        _ = assertEquals(List(winners._1.isRight,winners._2.isRight).count(identity),1,s"action=$action bound=$bound")
+        _ = assertEquals(originalAfter,originalBefore)
+        _ = assert(List(winners._1.left.toOption,winners._2.left.toOption).flatten.exists(_.getMessage.contains("REMNAWAVE_ONBOARDING_RESOURCE_BUSY")))
+        _ <- if(winners._1.isRight) w.run(sql"""insert into integration_action_execution(id,organization_id,integration_id,inventory_object_id,request_id,
+            action_code,external_id_snapshot,display_name_snapshot,requested_by_user_id,status,created_at,updated_at)
+            values(${uid},${w.org},$integrationId,$inventoryId,${uid},$action,${oldExternal.toString},'Existing node',
+              ${AuthorizationFixtures.ActorUserId},'QUEUED',$now,$now)""".update.run).attempt.map(r => assert(r.isLeft))
+          else w.run(repo.start(w.org,integrationId,recovery.id,uid,AuthorizationFixtures.ActorUserId,now)).attempt.map(r => assert(r.isLeft))
+      } yield ()
+    }}}
   }
 
 }

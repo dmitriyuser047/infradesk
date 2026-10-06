@@ -79,9 +79,6 @@ final class RemnawaveFleetRolloutWorker[Tx[_]: MonadThrow](rollouts: RemnawaveFl
     write(r, token, release = true, clearPause = true) *> service.recordOutcome(r).handleError(_ => ()) *>
       logger.info(s"remnawave.fleet.rollout.finished rolloutId=${r.id} fleetId=${r.fleetId} state=${r.state.code}")
 
-  private def planOf(r: RemnawaveFleetRollout, m: RemnawaveFleetRolloutMember) =
-    r.snapshot.members.find(_.membershipId == m.membershipId)
-
   private def step(claimed: RemnawaveFleetRollout, token: UUID): IO[Unit] = for {
     now <- IO.realTimeInstant
     fresh <- runner.run(rollouts.rolloutById(claimed.id))
@@ -210,13 +207,14 @@ final class RemnawaveFleetRolloutWorker[Tx[_]: MonadThrow](rollouts: RemnawaveFl
 
   private def applyWave(r: RemnawaveFleetRollout, all: List[RemnawaveFleetRolloutMember], now: Instant,
     token: UUID): IO[Unit] = {
+    val plans = r.snapshot.members.iterator.map(p => p.membershipId -> p).toMap
     val todo = waveMembers(r, all, r.currentWave).filter(m => m.state == FleetRolloutMemberState.Pending ||
       m.state == FleetRolloutMemberState.Running)
     val admission = IO.realTimeInstant.flatMap(at => runner.run(service.drift(r.organizationId, r, at)))
     for {
       _ <- write(r, token, release = false)
       results <- todo.parTraverseN(settings.maxMemberConcurrency) { m =>
-        planOf(r, m).fold(IO.pure[MemberResult](MemberResult.Failed("REMNAWAVE_FLEET_ROLLOUT_SNAPSHOT_INVALID"))) { plan =>
+        plans.get(m.membershipId).fold(IO.pure[MemberResult](MemberResult.Failed("REMNAWAVE_FLEET_ROLLOUT_SNAPSHOT_INVALID"))) { plan =>
           for {
             control <- runner.run(rollouts.rolloutById(r.id))
             result <- if (control.exists(value => value.pauseRequestedAt.nonEmpty || value.rollbackRequestedAt.nonEmpty))
@@ -349,12 +347,13 @@ final class RemnawaveFleetRolloutWorker[Tx[_]: MonadThrow](rollouts: RemnawaveFl
     val inScope = (if (r.rollbackScope == FleetRollbackScope.AllCompleted) all.filter(_.wave <= r.currentWave)
     else all.filter(_.wave == r.currentWave)).filter(m => m.state != FleetRolloutMemberState.Skipped &&
       m.state != FleetRolloutMemberState.Pending && m.state != FleetRolloutMemberState.RolledBack)
+    val plans = r.snapshot.members.iterator.map(p => p.membershipId -> p).toMap
     val byWave = inScope.groupBy(_.wave).toList.sortBy(-_._1).map(_._2.sortBy(-_.position))
     for {
       _ <- write(r, token, release = false)
       results <- byWave.flatTraverse { wave =>
         wave.parTraverseN(settings.maxMemberConcurrency) { m =>
-          planOf(r, m).fold(IO.pure[(RemnawaveFleetRolloutMember, MemberResult)](m -> MemberResult.Incomplete(
+          plans.get(m.membershipId).fold(IO.pure[(RemnawaveFleetRolloutMember, MemberResult)](m -> MemberResult.Incomplete(
             "REMNAWAVE_FLEET_ROLLOUT_SNAPSHOT_INVALID"))) { plan =>
             members.compensate(r, m, plan, token).map(m -> _)
           }

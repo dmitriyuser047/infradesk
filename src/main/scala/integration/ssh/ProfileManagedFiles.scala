@@ -91,6 +91,7 @@ private[ssh] object ProfileManagedFiles {
     "/etc/fail2ban/jail.d/99-infradesk.conf", "/etc/caddy/Caddyfile",
     "/etc/apt/keyrings/infradesk-caddy.asc", "/etc/apt/sources.list.d/infradesk-caddy.list")(path) ||
     path.matches("/opt/infradesk/remnawave/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(compose\\.yml|\\.env|managed\\.json)") ||
+    path.matches("/opt/infradesk/remnawave/\\.staging-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[0-9a-f]{64}/(compose\\.yml|\\.env|managed\\.json)") ||
     path.matches("/var/www/infradesk/[a-z0-9][a-z0-9-]{0,62}/index.html")
   private val SafeParents = """
     safe_parents() {
@@ -98,6 +99,9 @@ private[ssh] object ProfileManagedFiles {
       while [ "$p" != / ]; do chain="$p $chain"; p=$(dirname "$p"); done
       for p in $chain; do
         [ ! -L "$p" ] || return 1
+        # Stage25C establishes durable ownership before creating a final node directory.
+        # A file operation must never recreate that namespace after concurrent retirement.
+        case "$p" in /opt/infradesk/remnawave/*) [ -d "$p" ] || return 1 ;; esac
         if [ ! -e "$p" ]; then mkdir -m 0755 -- "$p" || return 1; fi
         [ -d "$p" ] && [ "$(stat -c '%u' "$p")" = 0 ] || return 1
         mode=$(stat -c '%a' "$p"); [ $((0$mode & 022)) -eq 0 ] || return 1

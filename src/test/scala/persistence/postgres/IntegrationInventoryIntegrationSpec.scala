@@ -178,6 +178,7 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
 
     def cleanUp: IO[Unit] = run.run(List(org, foreign).traverse_ { id =>
       for {
+        _ <- sql"set local session_replication_role='replica'".update.run
         _ <- sql"delete from audit_event where organization_id = $id".update.run
         _ <- sql"delete from integration where organization_id = $id".update.run
         _ <- sql"delete from configuration_revision_secure_payload where organization_id = $id".update.run
@@ -757,13 +758,21 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       assertEquals(w.actions.count(_ == "INTEGRATION_RESOURCE_UNBOUND"), 1)
       bind(nodeObject, w.nodeResource)
       w.run.run(w.management.delete(w.actor, integration.id)).unsafeRunSync()
-      val left = w.run.run(sql"""select
-          (select count(*) from integration_inventory_object where integration_id = ${integration.id}) +
-          (select count(*) from integration_resource_binding where integration_id = ${integration.id}) +
-          (select count(*) from integration_sync_session where integration_id = ${integration.id}) +
-          (select count(*) from integration_sync_state where integration_id = ${integration.id})""".query[Long].unique)
+      val retained = w.run.run(sql"""select
+          (select count(*) from integration_inventory_object where integration_id = ${integration.id}),
+          (select count(*) from integration_resource_binding where integration_id = ${integration.id}),
+          (select count(*) from integration_sync_session where integration_id = ${integration.id}),
+          (select count(*) from integration_sync_state where integration_id = ${integration.id}),
+          (select secret_id is null and deleted_at is not null from integration where id=${integration.id})"""
+        .query[(Long, Long, Long, Long, Boolean)].unique)
         .unsafeRunSync()
-      assertEquals(left, 0L)
+      assert(retained._1 > 0, "inventory history remains attached to the tombstone")
+      assert(retained._2 > 0, "bindings remain attached to the tombstone")
+      assert(retained._3 > 0, "sync history remains attached to the tombstone")
+      assert(retained._4 > 0, "sync schedule remains attached to the tombstone")
+      assert(retained._5, "the tombstone has no credential reference")
+      assertEquals(w.run.run(w.query.resourceContexts(w.org, w.nodeResource)).unsafeRunSync(), Nil,
+        "tombstoned integrations are omitted from active resource contexts")
     }
   }
 

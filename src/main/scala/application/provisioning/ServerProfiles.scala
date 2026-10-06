@@ -230,19 +230,8 @@ final class ServerProfiles[F[_]: MonadThrow, Tx[_]: MonadThrow](
     linkedToLatest = latestRun.exists(r => observation.exists(_.verifiedRunId.contains(r.id)))
     laterManualObservation = latestRun.exists(r => observation.exists(o => o.verifiedRunId.isEmpty &&
       r.finishedAt.exists(f => o.observedAt.isAfter(f))))
-    runOverride = latestRun.filter(_.state.terminal).filter { r =>
-      !laterManualObservation && (r.state != ProvisioningRunState.Succeeded || !linkedToLatest)
-    }
-    state = if (assignment.isEmpty || profile.isEmpty || revision.isEmpty) "UNOBSERVED"
-      else if (activeRun.nonEmpty) "APPLYING"
-      else if (observation.isEmpty) "UNOBSERVED"
-      else runOverride.map(_.state) match {
-        case Some(ProvisioningRunState.Failed) => "APPLY_FAILED"
-        case Some(ProvisioningRunState.Unknown) => "UNKNOWN"
-        case Some(ProvisioningRunState.Succeeded) => "WAITING_REFRESH"
-        case _ if latestRun.exists(_.state == ProvisioningRunState.Succeeded) && !linkedToLatest && !laterManualObservation => "WAITING_REFRESH"
-        case _ => if (assessment.exists(_.compliant)) "COMPLIANT" else "DRIFTED"
-      }
+    state = ServerProfileAutomationState.assess(assignment.nonEmpty && profile.nonEmpty && revision.nonEmpty,
+      observation.nonEmpty, assessment.exists(_.compliant), latestRun.map(_.state), linkedToLatest, laterManualObservation)
   } yield ServerProfileAutomation(assignment,profile,revision,observation,state,assessment,activeRun,blocked)
 
   override def valid(organizationId: UUID, resourceId: UUID, snapshot: ServerProfileApplySnapshot): Tx[Boolean] = for {

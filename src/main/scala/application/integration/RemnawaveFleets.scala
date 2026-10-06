@@ -39,8 +39,8 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
   private def error(code: String) = IntegrationError(code, messageFor(code))
 
   /** The integration must exist, be a Remnawave one and be the caller's own tenant. */
-  private def remnawave(org: UUID, integrationId: UUID): Tx[Integration] =
-    integrations.findById(org, integrationId).flatMap(_.liftTo[Tx](error("INTEGRATION_NOT_FOUND"))).flatTap(value =>
+  private def remnawave(org: UUID, integrationId: UUID, forUpdate: Boolean = false): Tx[Integration] =
+    (if(forUpdate) integrations.findByIdForUpdate(org, integrationId) else integrations.findById(org, integrationId)).flatMap(_.liftTo[Tx](error("INTEGRATION_NOT_FOUND"))).flatTap(value =>
       MonadThrow[Tx].raiseUnless(value.providerType == IntegrationProviderType.Remnawave)(
         error("REMNAWAVE_FLEET_PROVIDER_UNSUPPORTED")))
 
@@ -108,7 +108,7 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
       memberNodeIds.size <= RemnawaveFleet.MaxMembers)(error("REMNAWAVE_FLEET_INVALID_INPUT"))
     now <- IO.realTimeInstant
     created <- runner.run(for {
-      integration <- remnawave(actor.organizationId, integrationId)
+      integration <- remnawave(actor.organizationId, integrationId, forUpdate=true)
       content <- resolve(actor.organizationId, integration, input)
       fleetId <- UUID.randomUUID().pure[Tx]
       revisionId <- UUID.randomUUID().pure[Tx]
@@ -130,7 +130,7 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
 
   def createRevision(actor: ActorContext, integrationId: UUID, fleetId: UUID, input: FleetDesiredInput,
     expectedVersion: Long): IO[RemnawaveFleetRevision] = IO.realTimeInstant.flatMap(now => runner.run(for {
-    integration <- remnawave(actor.organizationId, integrationId)
+    integration <- remnawave(actor.organizationId, integrationId, forUpdate=true)
     fleet <- repo.fleetForUpdate(actor.organizationId, integrationId, fleetId).flatMap(
       _.liftTo[Tx](error("REMNAWAVE_FLEET_NOT_FOUND")))
     _ <- MonadThrow[Tx].raiseWhen(fleet.archived)(error("REMNAWAVE_FLEET_ARCHIVED"))
@@ -150,7 +150,7 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
     */
   def promote(actor: ActorContext, integrationId: UUID, fleetId: UUID, revisionId: UUID,
     expectedVersion: Long): IO[RemnawaveFleet] = IO.realTimeInstant.flatMap(now => runner.run(for {
-    _ <- remnawave(actor.organizationId, integrationId)
+    _ <- remnawave(actor.organizationId, integrationId, forUpdate=true)
     _ <- repo.lockFleet(actor.organizationId, fleetId)
     _ <- repo.rolloutActive(actor.organizationId, fleetId).flatMap(active =>
       MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_FLEET_ROLLOUT_ACTIVE")))
@@ -198,7 +198,7 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
     */
   def addMember(actor: ActorContext, integrationId: UUID, fleetId: UUID, inventoryNodeId: UUID,
     expectedVersion: Long): IO[RemnawaveFleetMembership] = IO.realTimeInstant.flatMap(now => runner.run(for {
-    _ <- remnawave(actor.organizationId, integrationId)
+    _ <- remnawave(actor.organizationId, integrationId, forUpdate=true)
     _ <- repo.lockFleet(actor.organizationId, fleetId)
     _ <- repo.rolloutActive(actor.organizationId, fleetId).flatMap(active =>
       MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_FLEET_ROLLOUT_ACTIVE")))
@@ -216,7 +216,7 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
     */
   def removeMember(actor: ActorContext, integrationId: UUID, fleetId: UUID, membershipId: UUID,
     expectedVersion: Long): IO[Unit] = IO.realTimeInstant.flatMap(now => runner.run(for {
-    _ <- remnawave(actor.organizationId, integrationId)
+    _ <- remnawave(actor.organizationId, integrationId, forUpdate=true)
     _ <- repo.lockFleet(actor.organizationId, fleetId)
     _ <- repo.rolloutActive(actor.organizationId, fleetId).flatMap(active =>
       MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_FLEET_ROLLOUT_ACTIVE")))
@@ -236,7 +236,7 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
       error("REMNAWAVE_FLEET_INVALID_INPUT"))
     now <- IO.realTimeInstant
     result <- runner.run(for {
-      _ <- remnawave(actor.organizationId, integrationId)
+      _ <- remnawave(actor.organizationId, integrationId, forUpdate=true)
       fleet <- repo.fleetForUpdate(actor.organizationId, integrationId, fleetId).flatMap(
         _.liftTo[Tx](error("REMNAWAVE_FLEET_NOT_FOUND")))
       _ <- MonadThrow[Tx].raiseUnless(fleet.version == expectedVersion)(error("REMNAWAVE_FLEET_VERSION_CONFLICT"))
@@ -254,7 +254,7 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
     */
   def archive(actor: ActorContext, integrationId: UUID, fleetId: UUID, expectedVersion: Long): IO[RemnawaveFleet] =
     IO.realTimeInstant.flatMap(now => runner.run(for {
-      _ <- remnawave(actor.organizationId, integrationId)
+      _ <- remnawave(actor.organizationId, integrationId, forUpdate=true)
       _ <- repo.lockFleet(actor.organizationId, fleetId)
       _ <- repo.rolloutActive(actor.organizationId, fleetId).flatMap(active =>
         MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_FLEET_ROLLOUT_ACTIVE")))
@@ -276,7 +276,7 @@ final class RemnawaveFleets[Tx[_]: MonadThrow](
     */
   def refresh(actor: ActorContext, integrationId: UUID, fleetId: UUID): IO[Int] =
     IO.realTimeInstant.flatMap(now => runner.run(for {
-      _ <- remnawave(actor.organizationId, integrationId)
+      _ <- remnawave(actor.organizationId, integrationId, forUpdate=true)
       _ <- loaded(actor.organizationId, integrationId, fleetId)
       _ <- syncState.scheduleAt(actor.organizationId, integrationId, now)
       marked <- repo.markDue(actor.organizationId, Some(fleetId), integrationId, now)

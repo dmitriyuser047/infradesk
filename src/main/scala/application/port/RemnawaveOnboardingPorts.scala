@@ -11,7 +11,7 @@ trait RemnawaveOnboardingRepository[F[_]] {
   def insertPlan(run: RemnawaveNodeOnboardingRun): F[Unit]
   def lockResource(org: UUID, resourceId: UUID): F[Unit]
   def active(org: UUID, resourceId: UUID): F[Boolean]
-  def start(org: UUID, integrationId: UUID, planId: UUID, requestId: UUID, actor: UUID, now: Instant): F[RemnawaveNodeOnboardingRun]
+  def start(org: UUID, integrationId: UUID, planId: UUID, requestId: UUID, actor: UUID, now: Instant, confirmRecreate: Boolean = false): F[RemnawaveNodeOnboardingRun]
   def find(org: UUID, integrationId: UUID, id: UUID): F[Option[(RemnawaveNodeOnboardingRun,List[OnboardingPhaseRecord])]]
   def history(org: UUID, integrationId: UUID, limit: Int): F[List[RemnawaveNodeOnboardingRun]]
   /** Latest run for each previously created node on this server; at most two prove ambiguity. */
@@ -31,11 +31,16 @@ trait RemnawaveOnboardingRepository[F[_]] {
   def saveSecret(run: RemnawaveNodeOnboardingRun, token: UUID, secret: IntegrationSecret, now: Instant): F[Unit]
   def secret(run: RemnawaveNodeOnboardingRun): F[Option[IntegrationSecret]]
   def deleteSecret(run: RemnawaveNodeOnboardingRun, token: UUID, now: Instant): F[Unit]
+  def replaceFleetMembership(run: RemnawaveNodeOnboardingRun, token: UUID, inventoryNodeId: UUID, now: Instant): F[Unit]
   def cleanupPlans(before: Instant, limit: Int): F[Int]
 }
 
 final case class OnboardingServerCandidate(id: UUID, name: String, address: String, environmentName: String)
+final case class OnboardingServerStatus(profileName: Option[String], revisionNumber: Option[Int],
+  profileAssigned: Boolean, profileState: String, busy: Boolean, bindingConflict: Boolean)
 trait RemnawaveOnboardingQuery[F[_]] {
+  /** Fixed-query projection; targets are the already batched, trusted SSH source identities. */
+  def serverStatuses(org: UUID, targets: Map[UUID, Either[String, ProvisioningTarget]]): F[Map[UUID, OnboardingServerStatus]]
   def candidates(org: UUID, limit: Int): F[List[OnboardingServerCandidate]]
   def bindingConflict(org: UUID, resource: UUID, expectedExternalId: Option[UUID]): F[Boolean]
   def externalNode(org: UUID, integration: UUID, externalId: UUID): F[Option[IntegrationInventoryObject]]

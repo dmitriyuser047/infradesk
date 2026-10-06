@@ -110,6 +110,47 @@ Reproduce frontend checks with `npm test -- --run` and `npm run build` in `front
 Linux extraction/verification is the existing CI `server-profile-safety` step, extended for Node files and start/recovery guards.
 No production Panel or VPS was mutated during these checks.
 
+## Partial local installation ownership
+
+Installation publishes an empty root:root 0700 ownership-marker directory at
+`/opt/infradesk/remnawave/.owner-<node UUID>-<installation owner UUID>-<resource UUID>-<image reference SHA256>`.
+Its backend-selected name contains only immutable non-secret identity; a single `mkdir` atomically
+establishes the complete marker, and `sync -f` makes it durable before the final node directory or
+any credential/file mutation. There is no intermediate partially written ownership document.
+Initial installation then prepares the three files in a separate root:root 0755 directory
+`.staging-<node>-<installation owner>-<resource>-<image SHA256>`. The final directory stays absent
+through file writes, hash/metadata/Compose validation and file synchronization. A same-filesystem
+no-clobber directory rename publishes the complete installation; the source inode, destination inode
+and disappearance of staging prove publication. Docker image pull happens after publication.
+File replacement never creates or recreates a missing final node directory itself.
+
+Fresh local reconciliation uses the shared domain LocalInstallationState: ABSENT, OWNED_COMPLETE,
+OWNED_PARTIAL, OWNED_DAMAGED, FOREIGN, PORT_CONFLICT and UNKNOWN. An exact durable claim with
+an incomplete staging directory is OWNED_PARTIAL. A proven legacy final directory missing files is
+also partial; a complete owned footprint with damaged expected contents is OWNED_DAMAGED.
+Only exact root-owned paths are repairable. Repairs retain file hash CAS and fresh ownership checks,
+validate Compose, skip matching bytes, and leave container startup to the existing durable START_NODE
+phase. Private staging leftovers must match the installation owner's UUID, root:root 0700 directory
+mode, and the closed candidate/previous file set with root:root 0600/0644 single-link regular files.
+Cleanup checks ownership and hashes again; unexpected paths are preserved and block recovery.
+Private SFTP upload leftovers are likewise bound to the original owner's run UUID and authenticated
+SSH UID: only 0700 upload directories with a single 0600 single-link regular `input` file may be
+cleaned. Their contents are never returned, and complete managed files with leftover staging still
+require repair rather than bypassing INSTALL_NODE.
+
+Legacy compose or managed metadata can still prove the original immutable owner and receive the
+new marker before repair or retirement. A legacy `.env`-only directory has no ownership evidence:
+it remains FOREIGN, including the orphan produced by versions before this fix, and needs manual
+review. Recovery never infers ownership from credential contents, an arbitrary directory name,
+stored inventory health, or the mere existence of `.env`.
+
+Retirement removes the owner marker last. A crash while removing managed files, or after removing
+the final directory, therefore leaves a recoverable OWNED_PARTIAL marker. Symlinks, wrong owners or
+modes, hardlinks, conflicting identities, unexpected files and foreign containers/listeners remain
+fail-closed. Probes emit only classifications and facts; credentials travel only through private SFTP
+file writes and never appear in command arguments, API facts or failure messages. Schema V52 and
+terminal history remain unchanged; the lifecycle changes below use additive migrations V53–V55.
+
 ## Live UFW 0.36.2 blocker and reviewed firewall recovery
 
 Stage25C maintained a separate `ufw show added` parser that accepted the header only without a
@@ -178,3 +219,40 @@ concurrent recovery approval, tenant isolation and immutable terminal phase jour
 Reconciliation is POST /runs/{runId}/reconcile with RECOVER or DELETE_RECREATE; this returns a
 preview. Start accepts confirmRecreate=true for reviewed recreation actions. No production
 Panel/VPS was mutated during implementation checks.
+
+## Lifecycle hardening (V53–V55)
+
+New snapshots pin lifecycleVersion=2. Their recreation sequence retires the old firewall in the
+explicit RETIRE_NODE_FIREWALL phase before RETIRE_LOCAL_NODE and CREATE_NODE; delete/recreate
+first performs DELETE_NODE and fresh CONFIRM_NODE_DELETED. Version 1 snapshots retain their
+original valid phase sequences. Retirement accepts only exact old namespace rules and the old
+reviewed CIDRs, requires a surviving allow rule covering the current SSH session and fresh SSH
+canaries, and preserves foreign rules. Ambiguous mutation ends UNKNOWN without progressing to POST.
+
+At BIND_RESOURCE, a reviewed recreation transfers an existing active fleet membership from the
+exact inactive predecessor to the exact new bound inventory node in the same organization,
+integration, resource and fleet. The atomic transaction increments membership version, removes
+stale assessment/image evidence, schedules observation immediately and appends immutable replacement
+history. Repeating that transaction is a no-op. Integration row, fleet and resource locks serialize
+onboarding admission with node actions, fleet rollout and image upgrade; reciprocal DB triggers
+reject competing workflows before destructive work, including paused fleet workflows.
+
+Start resolves the tenant-scoped request identity before asking for destructive confirmation.
+The same request and plan return the existing run even without a repeated confirmation; a reused
+request for another plan is rejected. Only a new PLANNED → QUEUED transition needs confirmation.
+The browser stores only plan/request IDs and reloads authoritative run state.
+
+Integration deletion is a tombstone: deleted_at is set, the integration is disabled, its credential
+reference is cleared and the encrypted credential is removed in the same transaction. Active
+workflows and sync/desired-state claims block deletion. New work and active queries exclude
+tombstones; immutable execution, inventory and fleet histories retain their foreign keys.
+
+Options assemble candidates, batch eligibility and stored server status without per-server SQL.
+The regression test counts those reads for 1, 100 and 500 servers. Shared automation-state logic
+keeps the single-server and batch projection equivalent. History/detail require organization read;
+preview/start/reconcile retain all three mutation permissions in both backend and UI.
+
+Database transactions only persist plans, claims, fenced progress and binding/membership outcomes.
+Provider and SSH I/O run between transactions; cleanup and publication uncertainty remain observable
+and recoverable. Stage acceptance still requires exact-SHA CI and disposable VPS failure/recovery
+acceptance; the Linux harness alone does not satisfy live acceptance.

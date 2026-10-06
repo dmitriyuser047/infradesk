@@ -44,18 +44,20 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     c <- context(org,integration)
     api <- c._3.nodeProvisioning.get.inspect(c._2)
     candidates <- runner.run(query.candidates(org,500))
-    servers <- candidates.traverse { candidate => for {
-      target <- runner.run(targets.eligible(org,candidate.id))
-      automation <- profiles.automation(org,candidate.id)
-      busy <- runner.run(repo.active(org,candidate.id))
-      conflict <- runner.run(query.bindingConflict(org,candidate.id,None))
-      blocks = target.left.toOption.toList ++ Option.when(busy)("REMNAWAVE_ONBOARDING_RESOURCE_BUSY") ++
-        Option.when(conflict)("REMNAWAVE_ONBOARDING_BINDING_CONFLICT") ++ Option.when(automation.assignment.isEmpty)("REMNAWAVE_ONBOARDING_PROFILE_REQUIRED")
-    } yield Json.obj("id" -> str(candidate.id.toString),"name" -> str(candidate.name),"address" -> str(candidate.address),
-      "environmentName" -> str(candidate.environmentName),"sshStatus" -> str(if(target.isRight) "TRUSTED" else "UNAVAILABLE"),
-      "serverProfileName" -> automation.profile.fold(Json.Null)(p => str(p.name)),
-      "revisionNumber" -> automation.revision.fold(Json.Null)(r => Json.fromInt(r.number)),"serverProfileStatus" -> str(automation.state),
-      "blockingProblems" -> strings(blocks)) }
+    eligible <- runner.run(targets.eligibleBatch(org,candidates.map(_.id)))
+    statuses <- runner.run(query.serverStatuses(org,eligible))
+    servers = candidates.map { candidate =>
+      val target = eligible.getOrElse(candidate.id,Left("PROVISIONING_TARGET_NOT_FOUND"))
+      val status = statuses.getOrElse(candidate.id,OnboardingServerStatus(None,None,false,"UNOBSERVED",false,false))
+      val blocks = target.left.toOption.toList ++ Option.when(status.busy)("REMNAWAVE_ONBOARDING_RESOURCE_BUSY") ++
+        Option.when(status.bindingConflict)("REMNAWAVE_ONBOARDING_BINDING_CONFLICT") ++
+        Option.when(!status.profileAssigned)("REMNAWAVE_ONBOARDING_PROFILE_REQUIRED")
+      Json.obj("id" -> str(candidate.id.toString),"name" -> str(candidate.name),"address" -> str(candidate.address),
+        "environmentName" -> str(candidate.environmentName),"sshStatus" -> str(if(target.isRight) "TRUSTED" else "UNAVAILABLE"),
+        "serverProfileName" -> status.profileName.fold(Json.Null)(str),
+        "revisionNumber" -> status.revisionNumber.fold(Json.Null)(Json.fromInt),"serverProfileStatus" -> str(status.profileState),
+        "blockingProblems" -> strings(blocks))
+    }
     items <- profileInventory(org,integration)
   } yield Json.obj("nodeApi" -> OnboardingJson.compatibility(api),"servers" -> Json.arr(servers: _*),
     "profiles" -> Json.arr(items.collect { case item if item.obj.summary.isInstanceOf[RemnawaveConfigProfileSummary] =>
@@ -106,7 +108,12 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       baseline.left.toOption.map(safeCode).toList ++ baseline.toOption.toList.flatMap(_.blockingProblems) ++
       local.toList.flatMap(_.fold(e => List(safeCode(e)),r => r.failureCode.toList ++ Option.when(r.uncertain)("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN"))) ++
       live.left.toOption.map(safeCode) ++ candidate.left.toOption ++
-      recovery.toList.flatMap(r => r.state match {
+      proof.localState.toList.flatMap {
+        case LocalInstallationState.Foreign => List("PROVISIONING_NODE_INSTALLATION_UNMANAGED")
+        case LocalInstallationState.PortConflict => List("PROVISIONING_NODE_PORT_OCCUPIED")
+        case LocalInstallationState.Unknown => List("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN")
+        case _ => Nil
+      } ++ recovery.toList.flatMap(r => r.state match {
         case "PRESENT_CONFLICT" => List("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW")
         case "UNKNOWN" => List("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN")
         case _ => Nil
@@ -123,20 +130,20 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       input.activeInboundIds.flatMap(id => inbounds.find(_.uuid==id.toString).map(_.tag)),
       baseline.toOption.toList.flatMap(_.assessment.modules.filterNot(_._2).map(_._1)) ++
         (if(recovery.exists(_.action=="DELETE_RECREATE")) List("DELETE_NODE","CONFIRM_NODE_DELETED") else Nil) ++
-        (if(recovery.exists(!_.reusesNode)) List("RETIRE_LOCAL_NODE") else Nil) ++
+        (if(recovery.exists(!_.reusesNode)) List("RETIRE_NODE_FIREWALL","RETIRE_LOCAL_NODE") else Nil) ++
         (if(recovery.exists(_.reusesNode)) Nil else List("CREATE_NODE")) ++
         List("CONFIGURE_NODE_FIREWALL", "INSTALL_NODE", "START_NODE", "SYNC_INVENTORY", "BIND_RESOURCE", "SET_DESIRED_STATE", "FINAL_VERIFY"),
-      baseline.toOption.toList.flatMap(_.warnings) ++ Option.when(recovery.exists(_.reusesNode))("REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE"),blocks,recovery)
+      baseline.toOption.toList.flatMap(_.warnings) ++ Option.when(recovery.exists(_.reusesNode))("REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE"),blocks,recovery,lifecycleVersion=2)
     run = RemnawaveNodeOnboardingRun(UUID.randomUUID(),actor.organizationId,integration,input.resourceId,None,actor.userId,
       ProvisioningRunState.Planned,OnboardingPhase.Validate,snapshot,now,now,externalNodeId=proof.node)
     _ <- if (blocks.nonEmpty) IO.unit else runner.run(for {
+      current <- integrations.findByIdForUpdate(actor.organizationId,integration)
       _ <- repo.lockResource(actor.organizationId,input.resourceId)
       active <- repo.active(actor.organizationId,input.resourceId)
       _ <- MonadThrow[Tx].raiseWhen(active)(error("REMNAWAVE_ONBOARDING_RESOURCE_BUSY"))
       currentNodes <- repo.createdNodes(actor.organizationId,input.resourceId)
       _ <- MonadThrow[Tx].raiseUnless(currentNodes==previous)(error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
       valid <- profiles.valid(actor.organizationId,input.resourceId,pinned.get)
-      current <- integrations.findById(actor.organizationId,integration)
       unchanged <- targets.unchanged(baseline.toOption.get.run.input)
       _ <- MonadThrow[Tx].raiseUnless(valid && unchanged && current.exists(i => i.updatedAt==c._1.updatedAt && i.secretId==c._1.secretId))(
         error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
@@ -147,16 +154,13 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     "configProfileName" -> str(snapshot.configProfileName),"inboundNames" -> strings(snapshot.inboundNames),
     "nodeImage" -> image.fold(Json.Null)(str),"nodeApi" -> OnboardingJson.compatibility(api),
     "panelCidrs" -> strings(input.panelCidrs),"changes" -> strings(snapshot.changes),"warnings" -> strings(snapshot.warnings),
-    "blockingProblems" -> strings(blocks),"recovery" -> recovery.fold(Json.Null)(OnboardingSnapshotCodec.encodeRecovery))
+    "blockingProblems" -> strings(blocks),"localInstallationState" -> proof.localState.fold(Json.Null)(s => str(s.code)),"recovery" -> recovery.fold(Json.Null)(OnboardingSnapshotCodec.encodeRecovery))
 
   def start(actor: ActorContext,integration: UUID,plan: UUID,request: UUID,confirmRecreate: Boolean): IO[RemnawaveNodeOnboardingRun] = for {
     _ <- IO.raiseUnless(settings.enabled)(error("PROVISIONING_DISABLED"))
     now <- IO.realTimeInstant
     result <- runner.run(for {
-      reviewed <- repo.find(actor.organizationId,integration,plan)
-      _ <- MonadThrow[Tx].raiseWhen(reviewed.exists(_._1.snapshot.recovery.exists(!_.reusesNode)) && !confirmRecreate)(
-        error("REMNAWAVE_ONBOARDING_RECREATE_CONFIRMATION_REQUIRED"))
-      started <- repo.start(actor.organizationId,integration,plan,request,actor.userId,now)
+      started <- repo.start(actor.organizationId,integration,plan,request,actor.userId,now,confirmRecreate)
       _ <- if(started.updatedAt!=now) MonadThrow[Tx].unit else for {
         target <- targets.eligible(actor.organizationId,started.resourceId)
         i <- integrations.findById(actor.organizationId,integration)

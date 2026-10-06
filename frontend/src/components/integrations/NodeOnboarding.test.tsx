@@ -59,12 +59,26 @@ describe('NodeOnboarding', () => {
     expect(calls.find(c=>c.method==='POST' && c.url.endsWith('/runs'))?.body).toEqual(identity)
     await waitFor(()=>expect(sessionStorage.length).toBe(0))
   })
-  it('blocks mutation entry for a member without the required permissions', async () => {
-    const { calls } = mount('/', 'en', url => url === '/api/v1/me/organizations'
-      ? json([{ id: 'org', code: 'ORG', name: 'Org', role: 'MEMBER' }]) : undefined)
-    await screen.findByText('Adding a node requires manage integrations, manage configurations, and execute operations permissions.')
-    expect((screen.getByRole('button', { name: 'Add node' }) as HTMLButtonElement).disabled).toBe(true)
-    expect(calls.some(call => call.url.endsWith('/options') || call.method === 'POST')).toBe(false)
+  it.each([
+    ['en', 'ReadOrganization members can view onboarding history and details without loading provisioning options', 'Frankfurt edge · 198.51.100.11 · FAILED', 'Run: FAILED'],
+    ['ru', 'Участники с правом чтения организации могут просматривать историю и запуски без параметров подготовки', 'Frankfurt edge · 198.51.100.11 · FAILED', 'Запуск: FAILED'],
+  ] as const)('%s: %s', async (locale, _description, historyLabel, detailLabel) => {
+    const secret = 'RAW_BACKEND_SAFE_MESSAGE'
+    const { calls } = mount('/', locale, (url, method) => {
+      if (url === '/api/v1/me/organizations') return json([{ id: 'org', code: 'ORG', name: 'Org', role: 'MEMBER' }])
+      if (url.endsWith('/remnawave-node-onboarding/runs') && method === 'GET') return json({ items: [run('FAILED')] })
+      if (url.endsWith('/runs/run-1')) return json({ run: { ...run('FAILED'), safeMessage: secret }, phases: [] })
+      return undefined
+    })
+    expect(await screen.findByRole('button', { name: historyLabel })).toBeTruthy()
+    expect(calls.some(call => call.url.endsWith('/options'))).toBe(false)
+    expect(calls.some(call => call.url.endsWith('/runs') && call.method === 'GET')).toBe(true)
+    expect((screen.getByRole('button', { name: locale === 'ru' ? 'Добавить узел' : 'Add node' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: historyLabel }))
+    expect(await screen.findByText(detailLabel)).toBeTruthy()
+    expect(calls.some(call => call.url.endsWith('/runs/run-1') && call.method === 'GET')).toBe(true)
+    expect(calls.some(call => call.method === 'POST')).toBe(false)
+    expect(document.body.textContent).not.toContain(secret)
   })
 
   it('requires inbounds and rejects empty, broad, hostname, and duplicate panel sources', async () => {
@@ -261,6 +275,65 @@ describe('NodeOnboarding', () => {
     await waitFor(() => expect(calls.some(call => call.method === 'POST' && call.url.endsWith('/runs'))).toBe(true))
     expect(calls.find(call => call.method === 'POST' && call.url.endsWith('/runs'))?.body).toEqual({ planId: 'plan-1', requestId: expect.any(String), confirmRecreate: true })
   })
+  it.each([
+    ['RECREATE', 'CONFIRMED_NOT_FOUND'],
+    ['DELETE_RECREATE', 'PRESENT_UNHEALTHY'],
+  ] as const)('retries an uncertain %s start after reload with the same identity and confirmation', async (action, state) => {
+    const storageKey = 'node-onboarding:org:integration'
+    const rawSafeMessage = 'RAW_BACKEND_SAFE_MESSAGE_SECRET'
+    const plannedRecovery = recoverySummary(state, action)
+    let submits = 0
+    let reconciles = 0
+    const configure = (url: string, method: string, body: unknown) => {
+      if (url.endsWith('/runs/run-1') && method === 'GET') return json({ run: { ...run('FAILED'), safeMessage: rawSafeMessage }, phases: [] })
+      if (url.endsWith('/runs/plan-1') && method === 'GET') return json({
+        run: { ...preview.run, recovery: plannedRecovery, safeMessage: rawSafeMessage }, phases: [],
+      })
+      if (url.endsWith('/runs/run-1/reconcile') && method === 'POST') {
+        reconciles++
+        if (action === 'DELETE_RECREATE') return json(reconciles === 1
+          ? recoveryPreview(recoverySummary('PRESENT_UNHEALTHY'))
+          : recoveryPreview(plannedRecovery))
+        return json(recoveryPreview(plannedRecovery))
+      }
+      if (url.endsWith('/runs') && method === 'POST') {
+        submits++
+        return submits === 1 ? json({ code: 'HTTP_ERROR', message: rawSafeMessage }, 503) : json(run('QUEUED'))
+      }
+      return undefined
+    }
+    const { calls: firstCalls } = mount('/?onboardingRun=run-1', 'en', configure)
+    fireEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    if (action === 'DELETE_RECREATE') fireEvent.click(await screen.findByRole('button', { name: 'Delete and recreate' }))
+    const approval = action === 'RECREATE'
+      ? 'I reviewed the previous node UUID and approve creating a new Remnawave node with a new correlation ID.'
+      : 'I approve deleting the existing Remnawave node and creating a replacement with a new correlation ID.'
+    fireEvent.click(await screen.findByLabelText(approval))
+    fireEvent.click(screen.getByRole('button', { name: action === 'RECREATE' ? 'Recreate node' : 'Delete and recreate' }))
+    await screen.findByText('The request could not be confirmed. Retry with the same request ID to safely recover the result.')
+    const saved = JSON.parse(sessionStorage.getItem(storageKey)!)
+    expect(Object.keys(saved).sort()).toEqual(['planId', 'requestId'])
+    expect(saved.planId).toBe('plan-1')
+    expect(saved.requestId).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(JSON.stringify(saved)).not.toContain(rawSafeMessage)
+    const firstStart = firstCalls.find(call => call.method === 'POST' && call.url.endsWith('/runs'))!
+    expect(firstStart.body).toEqual({ planId: 'plan-1', requestId: saved.requestId, confirmRecreate: true })
+
+    cleanup()
+    const { calls: retryCalls } = mount('/', 'en', configure)
+    const retry = await screen.findByRole('button', { name: 'Retry unconfirmed submission' })
+    await waitFor(() => expect(retryCalls.some(call => call.method === 'GET' && call.url.endsWith('/runs/plan-1'))).toBe(true))
+    await waitFor(() => expect((retry as HTMLButtonElement).disabled).toBe(false))
+    expect(screen.queryByLabelText(approval)).toBeNull()
+    expect(retry).toBeTruthy()
+    expect(document.body.textContent).not.toContain(rawSafeMessage)
+    fireEvent.click(retry)
+    await waitFor(() => expect(retryCalls.some(call => call.method === 'POST' && call.url.endsWith('/runs'))).toBe(true))
+    const retryStart = retryCalls.find(call => call.method === 'POST' && call.url.endsWith('/runs'))!
+    expect(retryStart.body).toEqual({ planId: 'plan-1', requestId: saved.requestId, confirmRecreate: true })
+    expect(sessionStorage.getItem(storageKey)).toBeNull()
+    expect(document.body.textContent).not.toContain(rawSafeMessage)
+  })
   it('blocks a conflicting identity and requires a second confirmation for delete and recreate', async () => {
     const exact = recoveryPreview(recoverySummary('PRESENT_UNHEALTHY'))
     const destructive = recoveryPreview(recoverySummary('PRESENT_UNHEALTHY', 'DELETE_RECREATE'))
@@ -299,6 +372,18 @@ describe('NodeOnboarding', () => {
     expect(await screen.findByText(/Delete existing Remnawave node/)).toBeTruthy()
     expect(screen.getByText(/Confirm node deletion/)).toBeTruthy()
     expect(screen.getByText('Retire previous local node installation')).toBeTruthy()
+  })
+  it.each([
+    ['en', 'Retire previous node firewall rule', 'Retire previous local node installation'],
+    ['ru', 'Удаление правила межсетевого экрана предыдущего узла', 'Удаление предыдущей локальной установки узла'],
+  ] as const)('%s: shows the durable firewall retirement phase before local retirement for new recovery history', async (locale, firewallLabel, localLabel) => {
+    mount('/?onboardingRun=run-1', locale, url => url.endsWith('/runs/run-1') ? json({
+      run: { ...run('FAILED'), phase: 'RETIRE_NODE_FIREWALL', failureCode: null, recovery: recoverySummary('PRESENT_UNHEALTHY', 'RECREATE') },
+      phases: [{ phase: 'RETIRE_NODE_FIREWALL', state: 'SUCCEEDED', startedAt: null, finishedAt: null, failureCode: null }],
+    }) : undefined)
+    const firewall = await screen.findByText(firewallLabel)
+    const local = screen.getByText(localLabel)
+    expect(firewall.compareDocumentPosition(local) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
   it('shows local retirement before create for a recreate run only', async () => {
     mount('/?onboardingRun=run-1', 'en', url => url.endsWith('/runs/run-1') ? json({ run: { ...run('FAILED'), recovery: recoverySummary('CONFIRMED_NOT_FOUND', 'RECREATE') }, phases: [] }) : undefined)

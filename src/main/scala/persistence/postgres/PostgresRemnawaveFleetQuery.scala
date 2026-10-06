@@ -23,6 +23,7 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
       coalesce((summary->>'isConnected')::boolean,false),last_seen_at
       from integration_inventory_object where organization_id=$org and integration_id=$integrationId
         and object_type='NODE' and is_active and summary->>'activeConfigProfileUuid'=$externalConfigProfileId
+        and exists(select 1 from integration i where i.id=$integrationId and i.organization_id=$org and i.deleted_at is null)
       order by id""".query[FleetRolloutConfigConsumer].to[List]
 
   def summaries(org: UUID, integrationId: UUID,
@@ -118,6 +119,7 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
         where m.organization_id=o.organization_id and m.integration_id=o.integration_id
           and m.inventory_node_id=o.id and m.removed_at is null limit 1)
     from integration_inventory_object o
+    join integration i on i.id=o.integration_id and i.organization_id=o.organization_id and i.deleted_at is null
     join integration_resource_binding b on b.inventory_object_id=o.id and b.organization_id=o.organization_id
     join resource r on r.id=b.resource_id and r.organization_id=o.organization_id
     join resource_type t on t.id=r.resource_type_id
@@ -177,6 +179,7 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
             and icd.integration_id=m.integration_id and icd.inventory_object_id=m.inventory_node_id
             and icd.status in ('QUEUED','RUNNING'))
       from remnawave_fleet_membership m
+      join integration i on i.id=m.integration_id and i.organization_id=m.organization_id and i.deleted_at is null
       join integration_inventory_object o on o.id=m.inventory_node_id and o.organization_id=m.organization_id
       join resource r on r.id=m.resource_id and r.organization_id=m.organization_id
       left join server_profile_assignment sa on sa.organization_id=m.organization_id and sa.resource_id=m.resource_id

@@ -28,7 +28,7 @@ const texts = {
     oldIdentity: 'Previous node UUID', oldCorrelation: 'Previous correlation ID', newCorrelation: 'New correlation ID',
     recreateApproval: 'I reviewed the previous node UUID and approve creating a new Remnawave node with a new correlation ID.',
     deleteApproval: 'I approve deleting the existing Remnawave node and creating a replacement with a new correlation ID.',
-    apiUnavailable: 'Provisioning support was not confirmed by the Remnawave API.', phaseNames: { VALIDATE: 'Validate request', PREPARE_SERVER: 'Prepare server', DELETE_NODE: 'Delete existing Remnawave node', CONFIRM_NODE_DELETED: 'Confirm node deletion', RETIRE_LOCAL_NODE: 'Retire previous local node installation', CREATE_NODE: 'Create Remnawave node', GET_INSTALLATION_DATA: 'Get installation data', CONFIGURE_NODE_FIREWALL: 'Configure node firewall', INSTALL_NODE: 'Install node', START_NODE: 'Start node', VERIFY_LOCAL_NODE: 'Verify local node', WAIT_FOR_PANEL: 'Wait for Remnawave panel', SYNC_INVENTORY: 'Sync inventory', BIND_RESOURCE: 'Bind server resource', SET_DESIRED_STATE: 'Set desired state', FINAL_VERIFY: 'Final verification' } },
+    apiUnavailable: 'Provisioning support was not confirmed by the Remnawave API.', phaseNames: { VALIDATE: 'Validate request', PREPARE_SERVER: 'Prepare server', DELETE_NODE: 'Delete existing Remnawave node', CONFIRM_NODE_DELETED: 'Confirm node deletion', RETIRE_NODE_FIREWALL: 'Retire previous node firewall rule', RETIRE_LOCAL_NODE: 'Retire previous local node installation', CREATE_NODE: 'Create Remnawave node', GET_INSTALLATION_DATA: 'Get installation data', CONFIGURE_NODE_FIREWALL: 'Configure node firewall', INSTALL_NODE: 'Install node', START_NODE: 'Start node', VERIFY_LOCAL_NODE: 'Verify local node', WAIT_FOR_PANEL: 'Wait for Remnawave panel', SYNC_INVENTORY: 'Sync inventory', BIND_RESOURCE: 'Bind server resource', SET_DESIRED_STATE: 'Set desired state', FINAL_VERIFY: 'Final verification' } },
   ru: { add: 'Добавить узел', title: 'Добавление узла Remnawave', steps: ['Сервер', 'Remnawave', 'Подготовка', 'Проверка', 'Выполнение'],
     unsupported: 'Подготовка узлов недоступна для этого подключения к API Remnawave. Синхронизация, инвентарь и настройка остаются доступны.',
     loading: 'Загрузка серверов и профилей…', server: 'Сервер', serverHint: 'Выберите сервер с назначенным серверным профилем.',
@@ -44,11 +44,11 @@ const texts = {
     oldIdentity: 'Предыдущий UUID узла', oldCorrelation: 'Предыдущий ID корреляции', newCorrelation: 'Новый ID корреляции',
     recreateApproval: 'Я проверил предыдущий UUID узла и подтверждаю создание нового узла Remnawave с новым ID корреляции.',
     deleteApproval: 'Я подтверждаю удаление существующего узла Remnawave и создание замены с новым ID корреляции.',
-    apiUnavailable: 'API Remnawave не подтвердил поддержку подготовки узлов.', phaseNames: { VALIDATE: 'Проверка запроса', PREPARE_SERVER: 'Подготовка сервера', DELETE_NODE: 'Удаление существующего узла Remnawave', CONFIRM_NODE_DELETED: 'Подтверждение удаления узла', RETIRE_LOCAL_NODE: 'Удаление предыдущей локальной установки узла', CREATE_NODE: 'Создание узла Remnawave', GET_INSTALLATION_DATA: 'Получение данных установки', CONFIGURE_NODE_FIREWALL: 'Настройка межсетевого экрана', INSTALL_NODE: 'Установка узла', START_NODE: 'Запуск узла', VERIFY_LOCAL_NODE: 'Проверка узла на сервере', WAIT_FOR_PANEL: 'Ожидание панели Remnawave', SYNC_INVENTORY: 'Синхронизация инвентаря', BIND_RESOURCE: 'Привязка сервера', SET_DESIRED_STATE: 'Установка желаемого состояния', FINAL_VERIFY: 'Итоговая проверка' } },
+    apiUnavailable: 'API Remnawave не подтвердил поддержку подготовки узлов.', phaseNames: { VALIDATE: 'Проверка запроса', PREPARE_SERVER: 'Подготовка сервера', DELETE_NODE: 'Удаление существующего узла Remnawave', CONFIRM_NODE_DELETED: 'Подтверждение удаления узла', RETIRE_NODE_FIREWALL: 'Удаление правила межсетевого экрана предыдущего узла', RETIRE_LOCAL_NODE: 'Удаление предыдущей локальной установки узла', CREATE_NODE: 'Создание узла Remnawave', GET_INSTALLATION_DATA: 'Получение данных установки', CONFIGURE_NODE_FIREWALL: 'Настройка межсетевого экрана', INSTALL_NODE: 'Установка узла', START_NODE: 'Запуск узла', VERIFY_LOCAL_NODE: 'Проверка узла на сервере', WAIT_FOR_PANEL: 'Ожидание панели Remnawave', SYNC_INVENTORY: 'Синхронизация инвентаря', BIND_RESOURCE: 'Привязка сервера', SET_DESIRED_STATE: 'Установка желаемого состояния', FINAL_VERIFY: 'Итоговая проверка' } },
 } as const
 
 type Step = 0 | 1 | 2 | 3 | 4
-type OnboardingRunPhase = typeof phases[number] | 'DELETE_NODE' | 'CONFIRM_NODE_DELETED' | 'RETIRE_LOCAL_NODE'
+type OnboardingRunPhase = typeof phases[number] | 'DELETE_NODE' | 'CONFIRM_NODE_DELETED' | 'RETIRE_NODE_FIREWALL' | 'RETIRE_LOCAL_NODE'
 const activeRun = (state: NodeOnboardingRun['state']) => state === 'QUEUED' || state === 'RUNNING'
 function validCidr(value: string) {
   const [ip, mask, ...rest] = value.split('/')
@@ -67,8 +67,9 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const i18n = useI18n(); const copy = texts[i18n.locale]
   const permissions = useOrganizationPermissions(organizationId)
   const canConfigure = permissions.can('manageIntegrations') && permissions.can('manageConfigurations') && permissions.can('executeOperations')
-  const canRead = permissions.can('manageIntegrations')
-  const options = useNodeOnboardingOptions(organizationId, integrationId, canRead)
+  const canRead = permissions.can('readOrganization')
+  const canManageIntegrations = permissions.can('manageIntegrations')
+  const options = useNodeOnboardingOptions(organizationId, integrationId, canManageIntegrations)
   const history = useNodeOnboardingHistory(organizationId, integrationId, canRead)
   const previewRequest = usePreviewNodeOnboarding(organizationId, integrationId)
   const start = useStartNodeOnboarding(organizationId, integrationId)
@@ -111,11 +112,13 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const needsRecreateApproval = recovery?.action === 'RECREATE' || recovery?.action === 'DELETE_RECREATE'
   const recoveryBlocked = recovery?.state === 'UNKNOWN' || recovery?.state === 'PRESENT_CONFLICT'
   const apply = async (identity:PendingSubmission, retryConfirmed = false) => {
+    const requestRecoveryAction = preview?.recovery?.action ?? (identity.planId === unresolved?.planId ? runQuery.data?.run.recovery?.action : undefined)
+    const requestNeedsRecreateApproval = requestRecoveryAction === 'RECREATE' || requestRecoveryAction === 'DELETE_RECREATE'
     const confirmed = recoveryConfirmed || retryConfirmed
-    if (submitting.current || start.isPending || !canConfigure || (preview?.blockingProblems.length ?? 0)>0 || recoveryBlocked || (needsRecreateApproval && !confirmed)) {setWorkflowError(true);return}
+    if (submitting.current || start.isPending || !canConfigure || (preview?.blockingProblems.length ?? 0)>0 || recoveryBlocked || (requestNeedsRecreateApproval && !confirmed)) {setWorkflowError(true);return}
     submitting.current=true;setWorkflowError(false)
     storePendingSubmission(submissionKey,identity)
-    try { const value = await start.mutateAsync({ ...identity, ...(needsRecreateApproval ? { confirmRecreate: true } : {}) }); storePendingSubmission(submissionKey,null);setUnresolved(null);setRunInUrl(value.id);setStep(4);setRecoveryConfirmed(false) }
+    try { const value = await start.mutateAsync({ ...identity, ...(requestNeedsRecreateApproval ? { confirmRecreate: true } : {}) }); storePendingSubmission(submissionKey,null);setUnresolved(null);setRunInUrl(value.id);setStep(4);setRecoveryConfirmed(false) }
     catch(error) { if (!(error instanceof ApiError) || error.status>=500 || error.status===408) setUnresolved(identity)
       else {storePendingSubmission(submissionKey,null);setUnresolved(null)} }
     finally {submitting.current=false}
@@ -224,9 +227,11 @@ function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: Retu
   const tone = run.state === 'SUCCEEDED' ? 'success' : run.state === 'FAILED' ? 'danger' : run.state === 'UNKNOWN' ? 'warning' : 'info'
   const message = run.state === 'SUCCEEDED' ? copy.success : run.state === 'FAILED' ? copy.failed : run.state === 'UNKNOWN' ? copy.unknown : copy.active
   const byPhase = new Map(detail?.phases.map(phase => [phase.phase, phase]))
+  const hasFirewallRetirement = detail?.phases.some(phase => phase.phase === 'RETIRE_NODE_FIREWALL') || run.phase === 'RETIRE_NODE_FIREWALL'
+  const retirementPhases: OnboardingRunPhase[] = [...(hasFirewallRetirement ? ['RETIRE_NODE_FIREWALL' as const] : []), 'RETIRE_LOCAL_NODE']
   const runPhases: OnboardingRunPhase[] = run.recovery?.action === 'DELETE_RECREATE'
-    ? [...phases.slice(0, 2), 'DELETE_NODE', 'CONFIRM_NODE_DELETED', 'RETIRE_LOCAL_NODE', ...phases.slice(2)]
-    : run.recovery?.action === 'RECREATE' ? [...phases.slice(0, 2), 'RETIRE_LOCAL_NODE', ...phases.slice(2)] : [...phases]
+    ? [...phases.slice(0, 2), 'DELETE_NODE', 'CONFIRM_NODE_DELETED', ...retirementPhases, ...phases.slice(2)]
+    : run.recovery?.action === 'RECREATE' ? [...phases.slice(0, 2), ...retirementPhases, ...phases.slice(2)] : [...phases]
   return <section><InlineAlert tone={tone} title={`${copy.run}: ${run.state}`}>{message}{run.failureCode ? <><br />{failure(run.failureCode)}</> : null}</InlineAlert>
     <p>{run.nodeName} · {run.address}:{run.nodePort}</p><h3>{copy.phases}</h3><ol>{runPhases.map(phase => {
       const record = byPhase.get(phase)

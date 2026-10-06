@@ -74,4 +74,19 @@ final class RemnawaveOnboardingSpec extends FunSuite {
     assertEquals(RemnawaveNodeImagePolicy.select(api), None)
     assertEquals(RemnawaveNodeImagePolicy.select(reviewed.copy(blocker = Some("unknown"))), None)
   }
+  test("versioned recreate phases retire firewall before local files and preserve legacy snapshot sequences") {
+    List("RECREATE","DELETE_RECREATE").foreach { action =>
+      val proof = OnboardingRecovery(id,Some(id),id,id,"CONFIRMED_NOT_FOUND",action)
+      val legacy = snapshot.copy(recovery=Some(proof))
+      val current = legacy.copy(lifecycleVersion=2)
+      val oldPhases = OnboardingPhase.forSnapshot(legacy)
+      val newPhases = OnboardingPhase.forSnapshot(current)
+      assert(!oldPhases.contains(OnboardingPhase.RetireNodeFirewall))
+      assertEquals(newPhases.filterNot(_ == OnboardingPhase.RetireNodeFirewall),oldPhases)
+      assertEquals(newPhases.indexOf(OnboardingPhase.RetireNodeFirewall)+1,newPhases.indexOf(OnboardingPhase.RetireLocalNode))
+      assert(!OnboardingSnapshotCodec.encode(legacy).hcursor.downField("lifecycleVersion").succeeded)
+      assertEquals(OnboardingSnapshotCodec.decode(OnboardingSnapshotCodec.encode(current)).lifecycleVersion,2)
+    }
+  }
+
 }

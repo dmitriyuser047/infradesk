@@ -16,13 +16,16 @@ import java.util.UUID
 private[postgres] object PostgresTestDatabase {
   def config: DatabaseConfig = DatabaseConfig.fromEnvironment(sys.env).fold(throw _, identity)
 
-  def transactor(config: DatabaseConfig): Resource[IO, HikariTransactor[IO]] =
-    Resource.eval(DatabaseMigrator.migrate(config,
-      Slf4jLogger.getLoggerFromName[IO]("test.database.migration"))) *>
+  def transactor(config: DatabaseConfig, target: Option[String] = None): Resource[IO, HikariTransactor[IO]] =
+    Resource.eval(target.fold(DatabaseMigrator.migrate(config,
+      Slf4jLogger.getLoggerFromName[IO]("test.database.migration")).void)(version => IO.blocking {
+      org.flywaydb.core.Flyway.configure().dataSource(config.url,config.user,config.password)
+        .locations("classpath:db/migration").target(version).load().migrate(); ()
+    })) *>
       Database.transactor(config).evalTap(ensureBaseFixtures)
 
   /** Global queue tests need a database, rather than tenant, boundary. */
-  def isolatedTransactor(config: DatabaseConfig): Resource[IO, HikariTransactor[IO]] = {
+  def isolatedTransactor(config: DatabaseConfig, target: Option[String] = None): Resource[IO, HikariTransactor[IO]] = {
     val name = "infradesk_isolated_" + UUID.randomUUID().toString.replace("-", "")
     def execute(statement: String): IO[Unit] = IO.blocking {
       val connection = java.sql.DriverManager.getConnection(config.url, config.user, config.password)
@@ -36,7 +39,7 @@ private[postgres] object PostgresTestDatabase {
     val suffix = if (suffixAt < 0) "" else config.url.drop(suffixAt)
     val isolated = config.copy(url = baseUrl.take(baseUrl.lastIndexOf('/') + 1) + name + suffix)
     Resource.make(execute(s"CREATE DATABASE $name"))(_ => execute(s"DROP DATABASE $name WITH (FORCE)"))
-      .flatMap(_ => transactor(isolated))
+      .flatMap(_ => transactor(isolated,target))
   }
 
   private def ensureBaseFixtures(xa: HikariTransactor[IO]): IO[Unit] = {

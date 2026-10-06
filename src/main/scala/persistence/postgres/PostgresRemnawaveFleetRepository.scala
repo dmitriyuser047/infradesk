@@ -150,6 +150,7 @@ final class PostgresRemnawaveFleetRepository extends RemnawaveFleetRepository[Co
     (fr"""with picked as(
       select m.id from remnawave_fleet_membership m
       join remnawave_fleet f on f.id=m.fleet_id and f.organization_id=m.organization_id
+      join integration i on i.id=m.integration_id and i.organization_id=m.organization_id and i.deleted_at is null
       where m.removed_at is null and not f.archived and f.desired_revision_id is not null
         and m.next_check_at<=greatest($now,clock_timestamp())
         and (m.claim_deadline is null or m.claim_deadline<=greatest($now,clock_timestamp()))

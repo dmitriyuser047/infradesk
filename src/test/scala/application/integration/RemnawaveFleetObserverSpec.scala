@@ -146,8 +146,10 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
 
     /** Only `observe` may ever be called. The rest exist to prove they are not. */
     val remote = new RemnawaveNodeRemote[IO] {
+      override def localInstallationState(c: Connection,s: RemnawaveNodeRemoteSpec) = IO.pure(LocalInstallationState.OwnedComplete)
       override def recoveryPreflight(c: Connection,s: RemnawaveNodeRemoteSpec) = preflight(c,s.resourceId,s.nodePort)
       override def repair(c: Connection,s: RemnawaveNodeRemoteSpec,d: NodeInstallationData) = install(c,s,d)
+      override def retireFirewall(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { mutations.incrementAndGet(); ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def retireInstallation(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { mutations.incrementAndGet(); ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def preflight(c: Connection, r: UUID, p: Int) = IO { mutations.incrementAndGet()
         ProvisioningStepResult(Map.empty, None, Some(true)) }
@@ -181,7 +183,7 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
         if (localFails) throw new java.io.IOException("ssh unavailable")
         RemnawaveNodeLocalEvidence(managedFiles = localVerified, imageMatches = localVerified,
           containerRunning = localVerified, portListening = localVerified, stable = localVerified,
-          firewallMatches = localVerified)
+          firewallMatches = localVerified, installationState = LocalInstallationState.OwnedComplete)
       }
       override def installationPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO.pure(true)
       override def firewallPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO.pure(true)

@@ -17,6 +17,7 @@ final class NodeUpgradeIntegrationSpec extends FunSuite {
   private val repo = new PostgresRemnawaveFleetUpgradeRepository
   private val fleets = new PostgresRemnawaveFleetRepository
   private val rollouts = new PostgresRemnawaveFleetRolloutRepository
+  private val onboardings = new PostgresRemnawaveOnboardingRepository
   private val actor = AuthorizationFixtures.ActorUserId
   private def uid = UUID.randomUUID()
   private case class Setup(run: RemnawaveFleetUpgradeRun, members: List[RemnawaveFleetUpgradeMember], revision: FleetNodeReleaseRevision)
@@ -32,6 +33,7 @@ final class NodeUpgradeIntegrationSpec extends FunSuite {
     _ <- sql"delete from remnawave_fleet_rollout_member where organization_id=${w.org}".update.run
     _ <- sql"delete from remnawave_fleet_rollout where organization_id=${w.org}".update.run
     _ <- sql"delete from operation_execution where organization_id=${w.org}".update.run
+    _ <- sql"delete from remnawave_fleet_membership_replacement where organization_id=${w.org}".update.run
     _ <- sql"delete from remnawave_node_onboarding where organization_id=${w.org}".update.run
     _ <- sql"delete from integration_action_execution where organization_id=${w.org}".update.run
     _ <- sql"delete from remnawave_fleet_node_assessment where organization_id=${w.org}".update.run
@@ -97,6 +99,79 @@ final class NodeUpgradeIntegrationSpec extends FunSuite {
         _ <- repo.insertPlan(prepared, members)
       } yield ())
     } yield Setup(prepared, members, revision)
+  }
+  private case class RecoveryPlan(run: RemnawaveNodeOnboardingRun, sourceId: UUID, oldExternalId: UUID,
+    snapshot: OnboardingSnapshot)
+  private def recoveryPlan(w: ConfigurationDeploymentWorld, s: Setup): IO[RecoveryPlan] = {
+    val p = s.run.snapshot.members.head
+    val now = Instant.now()
+    val sourceId = uid
+    val oldExternalId = p.externalNodeId
+    val input = OnboardingInput(p.resourceId, "replacement-node", "192.0.2.88", 30222, uid, List(uid),
+      List("198.51.100.0/24"))
+    val compatibility = NodeApiCompatibility(Some("2.8.0"), Some("PROFILE_PUBKEY"), Some("reviewed-commit"),
+      Set(NodeProvisioningCapability.Create, NodeProvisioningCapability.InstallationData,
+        NodeProvisioningCapability.Status, NodeProvisioningCapability.ConfigProfile), None)
+    val snapshot = OnboardingSnapshot(input, now, uid, p.sourceConnectionId, p.sourceConnectionAt,
+      uid, uid, 1, uid, 1L, "a" * 64, uid, false, compatibility, "remnawave/node:2.8.0", uid,
+      "Replacement node", "Baseline", "Profile", List("inbound"), Nil, Nil, Nil)
+    val source = RemnawaveNodeOnboardingRun(sourceId, w.org, s.run.integrationId, p.resourceId, None, actor,
+      domain.provisioning.ProvisioningRunState.Planned, OnboardingPhase.Validate, snapshot, now, now)
+    val proof = OnboardingRecovery(sourceId, Some(oldExternalId), snapshot.correlationId, sourceId,
+      "PRESENT_UNHEALTHY", "RECREATE")
+    val recoverySnapshot = snapshot.copy(correlationId = uid, recovery = Some(proof))
+    val recovery = RemnawaveNodeOnboardingRun(uid, w.org, s.run.integrationId, p.resourceId, None, actor,
+      domain.provisioning.ProvisioningRunState.Planned, OnboardingPhase.Validate, recoverySnapshot, now.plusMillis(1), now.plusMillis(1))
+    for {
+      _ <- w.run(onboardings.insertPlan(source))
+      _ <- w.run(onboardings.start(w.org, source.integrationId, source.id, uid, actor, now))
+      token = uid
+      claimed <- w.run(onboardings.claim(uid, token, now, now.plusSeconds(600), 10))
+      sourceClaim = claimed.find(_.id == source.id).get
+      _ <- w.run(onboardings.beginPhase(sourceClaim, token, now))
+      failed = sourceClaim.copy(state = domain.provisioning.ProvisioningRunState.Failed,
+        externalNodeId = Some(oldExternalId), failureCode = Some("TEST_FAILURE"), finishedAt = Some(now))
+      _ <- w.run(onboardings.persist(sourceClaim, token, failed, now, complete = true))
+      _ <- w.run(onboardings.insertPlan(recovery))
+    } yield RecoveryPlan(recovery, sourceId, oldExternalId, recoverySnapshot)
+  }
+  private def startRecovery(w: ConfigurationDeploymentWorld, plan: RecoveryPlan, now: Instant): IO[Unit] =
+    w.run(onboardings.start(w.org, plan.run.integrationId, plan.run.id, uid, actor, now, confirmRecreate = true)).void
+
+  private def runToBindResource(w: ConfigurationDeploymentWorld, plan: RecoveryPlan,
+    newExternalId: UUID): IO[(RemnawaveNodeOnboardingRun, UUID, Instant)] = for {
+    now <- IO.realTimeInstant
+    _ <- startRecovery(w, plan, now)
+    token = uid
+    claimed <- w.run(onboardings.claim(uid, token, now, now.plusSeconds(3600), 20))
+    initial = claimed.find(_.id == plan.run.id).get
+    bound <- OnboardingPhase.forSnapshot(initial.snapshot).takeWhile(_ != OnboardingPhase.BindResource)
+      .foldLeftM(initial) { (r, phase) =>
+        val at = now.plusMillis(1)
+        val next = OnboardingPhase.next(phase, r.snapshot).get
+        val updated = r.copy(phase = next,
+          externalNodeId = if (phase == OnboardingPhase.CreateNode) Some(newExternalId) else r.externalNodeId)
+        for {
+          begun <- w.run(onboardings.beginPhase(r, token, at))
+          _ = assert(begun)
+          saved <- w.run(onboardings.persist(r, token, updated, at, complete = true))
+          _ = assert(saved)
+        } yield updated
+      }
+    _ = assertEquals(bound.phase, OnboardingPhase.BindResource)
+    _ <- w.run(onboardings.beginPhase(bound, token, now.plusSeconds(1))).map(ok => assert(ok))
+  } yield (bound, token, now.plusSeconds(1))
+
+  private def replacementNode(w: ConfigurationDeploymentWorld, s: Setup): IO[(UUID, UUID)] = {
+    val p = s.run.snapshot.members.head
+    val nodeId = uid; val externalId = uid; val now = Instant.now()
+    for {
+      session <- w.run(sql"select id from integration_sync_session where integration_id=${s.run.integrationId} and status='COMPLETED' limit 1".query[UUID].unique)
+      _ <- w.run(sql"""insert into integration_inventory_object(id,organization_id,integration_id,object_type,external_id,
+        display_name,summary_version,summary,is_active,first_seen_at,last_seen_at,last_seen_sync_session_id,created_at,updated_at)
+        values($nodeId,${w.org},${s.run.integrationId},'NODE',${externalId.toString},'Replacement node',1,'{}'::jsonb,true,
+          $now,$now,$session,$now,$now)""".update.run)
+    } yield nodeId -> externalId
   }
   private def rejected[A](io: IO[A], code: String): IO[Unit] = io.attempt.map { result =>
     assert(result.isLeft)

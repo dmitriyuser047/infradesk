@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package application.port
 
 import domain.connection.Connection
-import domain.integration.NodeInstallationData
+import domain.integration.{LocalInstallationState, NodeInstallationData}
 import java.util.UUID
 
 /** Backend-controlled values only. Credentials never enter this record. */
@@ -10,12 +10,13 @@ final case class RemnawaveNodeRemoteSpec(onboardingId: UUID, resourceId: UUID, e
   nodePort: Int, imageReference: String, panelCidrs: List[String])
 
 final case class RemnawaveNodeLocalEvidence(managedFiles: Boolean, imageMatches: Boolean,
-  containerRunning: Boolean, portListening: Boolean, stable: Boolean, firewallMatches: Boolean) {
-  def verified: Boolean = managedFiles && imageMatches && containerRunning && portListening && stable && firewallMatches
+  containerRunning: Boolean, portListening: Boolean, stable: Boolean, firewallMatches: Boolean, installationState: LocalInstallationState = LocalInstallationState.Unknown) {
+  def verified: Boolean = installationState == LocalInstallationState.OwnedComplete && managedFiles && imageMatches && containerRunning && portListening && stable && firewallMatches
 }
 
 /** Each mutation is one separately journalled onboarding phase. No generic shell input. */
 trait RemnawaveNodeRemote[F[_]] {
+  def localInstallationState(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[LocalInstallationState]
   def preflight(connection: Connection, resourceId: UUID, nodePort: Int): F[ProvisioningStepResult]
   /** Fresh post-baseline readiness check, before creating anything in the Panel. */
   def installationPrerequisites(connection: Connection): F[ProvisioningStepResult]
@@ -30,6 +31,7 @@ trait RemnawaveNodeRemote[F[_]] {
   def repair(connection: Connection, spec: RemnawaveNodeRemoteSpec,
     credential: NodeInstallationData): F[ProvisioningStepResult]
   /** Removes only the exact installation owned by this spec. */
+  def retireFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[ProvisioningStepResult]
   def retireInstallation(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[ProvisioningStepResult]
   def start(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[ProvisioningStepResult]
   def observe(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[RemnawaveNodeLocalEvidence]

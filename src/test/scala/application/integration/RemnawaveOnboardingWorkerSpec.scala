@@ -38,7 +38,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
   private val baselineSnap = snap.copy(baselineNeeded = true)
   private val connection = Connection(uid, org, ConnectionScope.Organization, "SSH", "edge", "Edge",
     ConnectionConfig(Map.empty), None, true, now, now)
-  private val localGood = RemnawaveNodeLocalEvidence(true, true, true, true, true, true)
+  private val localGood = RemnawaveNodeLocalEvidence(true, true, true, true, true, true, LocalInstallationState.OwnedComplete)
   private val noMaster = SecretEncryptionConfig.fromEnvironment(Map(
     "INFRADESK_SECRET_MASTER_KEY_BASE64" -> Base64.getEncoder.encodeToString(Array.fill[Byte](32)(7)))).toOption.get
   private val cipher = NodeInstallationCipher.fromConfig(noMaster)
@@ -65,7 +65,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     override def insertPlan(r: RemnawaveNodeOnboardingRun) = IO.unit
     override def lockResource(o: UUID, r: UUID) = IO.unit
     override def active(o: UUID, r: UUID) = IO.pure(false)
-    override def start(o: UUID, i: UUID, p: UUID, q: UUID, a: UUID, at: Instant) = IO.pure(record)
+    override def start(o: UUID, i: UUID, p: UUID, q: UUID, a: UUID, at: Instant, confirmRecreate: Boolean) = IO.pure(record)
     override def find(o: UUID, i: UUID, id: UUID) = IO.pure(Some(record -> phases))
     override def history(o: UUID, i: UUID, limit: Int) = IO.pure(List(record))
     override def createdNodes(o: UUID, r: UUID) = IO.pure(List(record).filter(_.externalNodeId.nonEmpty))
@@ -108,6 +108,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     }
     override def secret(r: RemnawaveNodeOnboardingRun) = IO.pure(storedSecret)
     override def deleteSecret(r: RemnawaveNodeOnboardingRun, claimToken: UUID, at: Instant) = IO { storedSecret = None }
+    override def replaceFleetMembership(r: RemnawaveNodeOnboardingRun, token: UUID, node: UUID, now: Instant) = IO.unit
     override def cleanupPlans(before: Instant, limit: Int) = IO.pure(0)
   }
 
@@ -121,11 +122,14 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     var candidateNodes: Option[List[ProvisionedNode]] = None
     var deletion: NodeDeleteOutcome = NodeDeleteOutcome.Deleted
     var installationExists = true
+    var installationState: Option[LocalInstallationState] = None
     var repairResult = ProvisioningStepResult(Map.empty,None,Some(true))
     var observedOwner: Option[UUID] = None
     var recon = reconciliation
     var create = createOutcome
     var local = localGood
+    var retiredFirewallResult = ProvisioningStepResult(Map.empty,None,Some(true))
+    var retiredCidrs = List.empty[String]
     var firewallResult = ProvisioningStepResult(Map.empty, None, Some(true))
     var syncStatus: IntegrationSyncStatus = IntegrationSyncStatus.Completed
     var bindingVerified = true
@@ -153,8 +157,10 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
         Option.when(status != IntegrationSyncStatus.Running)(now), status,
         Option.when(status == IntegrationSyncStatus.Failed)("INTEGRATION_TIMEOUT"), None, None)
     val remote = new RemnawaveNodeRemote[IO] {
+      override def localInstallationState(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "installation-state"; installationState.getOrElse(if(repo.record.snapshot.recovery.exists(_.reusesNode) && installationExists) LocalInstallationState.OwnedComplete else LocalInstallationState.Absent) }
       override def recoveryPreflight(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "recovery-preflight"; observedOwner=Some(s.onboardingId); ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def repair(c: Connection,s: RemnawaveNodeRemoteSpec,d: NodeInstallationData) = IO { events += "repair"; observedOwner=Some(s.onboardingId); if(repairResult.failureCode.isEmpty) local=localGood; repairResult }
+      override def retireFirewall(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "retire-firewall"; retiredCidrs=s.panelCidrs; retiredFirewallResult }
       override def retireInstallation(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "retire"; ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def installationPrerequisites(c: Connection) = IO.pure(ProvisioningStepResult(Map.empty, None, Some(true)))
       override def preflight(c: Connection, r: UUID, p: Int) = IO { events += "preflight"; ProvisioningStepResult(Map.empty, None, Some(true)) }
@@ -636,6 +642,27 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     owner
   }
 
+  test("recovered INSTALL_NODE classifies before safe continuation and never creates a Panel node") {
+    List(LocalInstallationState.Absent,LocalInstallationState.OwnedPartial,LocalInstallationState.OwnedDamaged,
+      LocalInstallationState.OwnedComplete,LocalInstallationState.Foreign,LocalInstallationState.PortConflict,
+      LocalInstallationState.Unknown).foreach { state =>
+      val h=new Harness(OnboardingPhase.InstallNode)
+      h.repo.inFlight=true
+      h.installationState=Some(state)
+      h.repo.storedSecret=Some(cipher.encrypt(h.repo.record.id,org,NodeInstallationData.fromSecretKey(secretText)))
+      h.worker.tick.unsafeRunSync()
+      val expected=if(state==LocalInstallationState.Unknown) ProvisioningRunState.Unknown
+        else if(!state.repairable) ProvisioningRunState.Failed else ProvisioningRunState.Succeeded
+      assertEquals(h.repo.record.state,expected,state.code)
+      assertEquals(h.events.count(_=="create"),0)
+      assertEquals(h.events.count(_=="install"),if(state==LocalInstallationState.Absent) 1 else 0,state.code)
+      assertEquals(h.events.count(_=="repair"),if(Set[LocalInstallationState](LocalInstallationState.OwnedPartial,LocalInstallationState.OwnedDamaged)(state)) 1 else 0,state.code)
+      val terminal=h.repo.record
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record,terminal)
+    }
+  }
+
   test("an exact existing installation is reused and repeated recovery performs no create or install") {
     val h=new Harness(OnboardingPhase.Validate)
     reviewedRecovery(h,"PRESENT_EXACT")
@@ -653,6 +680,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     val h=new Harness(OnboardingPhase.Validate,initialPanelNode=node(disabled=true))
     val owner=reviewedRecovery(h)
     h.installationExists=false
+    h.installationState=Some(LocalInstallationState.OwnedDamaged)
     h.local=localGood.copy(managedFiles=false,containerRunning=false)
     h.worker.tick.unsafeRunSync()
     assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded)
@@ -692,6 +720,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
   test("confirmed deletion and fresh exact NOT_FOUND precede one recreate with a new durable identity") {
     val h=new Harness(OnboardingPhase.DeleteNode)
     reviewedRecovery(h,action="DELETE_RECREATE")
+    h.repo.record=h.repo.record.copy(snapshot=h.repo.record.snapshot.copy(lifecycleVersion=2))
     val next=node(id=uid).copy(correlationTags=List("ID:"+h.repo.record.snapshot.correlationId.toString.replace("-","").toUpperCase(java.util.Locale.ROOT)))
     h.create=NodeCreateOutcome.Created(next)
     // The exact old lookup must report the previous identity until DELETE succeeds.
@@ -702,7 +731,8 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     assertEquals(h.events.count(_=="delete"),1)
     assertEquals(h.events.count(_=="create"),1)
     assert(h.repo.completed.contains(OnboardingPhase.ConfirmNodeDeleted))
-    assert(h.events.indexOf("delete")<h.events.indexOf("retire"))
+    assert(h.events.indexOf("delete")<h.events.indexOf("retire-firewall"))
+    assert(h.events.indexOf("retire-firewall")<h.events.indexOf("retire"))
     assert(h.events.indexOf("retire")<h.events.indexOf("create"))
     assertNotEquals(h.repo.record.snapshot.correlationId,snap.correlationId)
     assertEquals(OnboardingJson.run(h.repo.record).hcursor.get[String]("correlationId"),Right(h.repo.record.snapshot.correlationId.toString))
@@ -744,6 +774,47 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       assertEquals(h.events.count(_=="create"),0)
       assertEquals(h.events.count(_=="firewall"),0)
       assertEquals(h.events.count(_=="repair"),0)
+    }
+  }
+
+  test("restarting each existing-node phase reuses its identity and preserves terminal history on repeated ticks") {
+    OnboardingPhase.all.foreach { phase =>
+      val h=new Harness(phase)
+      reviewedRecovery(h,"PRESENT_EXACT")
+      h.repo.inFlight=true
+      if(OnboardingPhase.all.indexOf(phase)<=OnboardingPhase.all.indexOf(OnboardingPhase.VerifyLocalNode))
+        h.repo.storedSecret=Some(cipher.encrypt(h.repo.record.id,org,NodeInstallationData.fromSecretKey(secretText)))
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded,phase.code)
+      assertEquals(h.repo.record.externalNodeId,Some(nodeId))
+      assertEquals(h.events.count(_=="create"),0,phase.code)
+      assertEquals(h.events.count(_=="install"),0,phase.code)
+      val terminal=h.repo.record
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record,terminal)
+    }
+  }
+
+  test("uncertain recovered firewall retirement stops before local retirement or CREATE and uses old pinned CIDRs") {
+    List(false,true).foreach { recovered =>
+      val h=new Harness(OnboardingPhase.RetireNodeFirewall)
+      reviewedRecovery(h,"CONFIRMED_NOT_FOUND","RECREATE")
+      val oldCidrs=List("203.0.113.0/24")
+      h.repo.record=h.repo.record.copy(snapshot=h.repo.record.snapshot.copy(lifecycleVersion=2,
+        recovery=h.repo.record.snapshot.recovery.map(_.copy(previousPanelCidrs=Some(oldCidrs)))))
+      h.repo.inFlight=recovered
+      h.lookup=Some(NodeLookupOutcome.ConfirmedNotFound)
+      h.candidateNodes=Some(Nil)
+      h.retiredFirewallResult=ProvisioningStepResult(Map.empty,Some("PROVISIONING_FIREWALL_MUTATION_UNCERTAIN"),None,uncertain=true)
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record.state,ProvisioningRunState.Unknown)
+      assertEquals(h.retiredCidrs,oldCidrs)
+      assertEquals(h.events.count(_=="retire-firewall"),1)
+      assertEquals(h.events.count(_=="retire"),0)
+      assertEquals(h.events.count(_=="create"),0)
+      val terminal=h.repo.record
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record,terminal)
     }
   }
 

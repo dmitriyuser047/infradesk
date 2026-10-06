@@ -117,10 +117,11 @@ final class PostgresIntegrationDesiredStateRepository extends IntegrationDesired
     sql"""with due as (
             select d.id from integration_desired_state d
             join integration i on i.id = d.integration_id and i.organization_id = d.organization_id
-            where i.enabled and i.management_mode = 'MANAGED_SELECTED' and d.next_reconcile_at <= $now
+            where i.enabled and i.deleted_at is null and i.management_mode = 'MANAGED_SELECTED'
+              and d.next_reconcile_at <= $now
               and (d.claim_until is null or d.claim_until <= $now)
             order by d.next_reconcile_at, d.id
-            for update of d skip locked
+            for update of i, d skip locked
             limit $limit),
           claimed as (
             update integration_desired_state d
@@ -165,7 +166,8 @@ final class PostgresIntegrationDesiredStateRepository extends IntegrationDesired
         // The same first lock as every intent change, action request, edit and snapshot, so none of
         // them can interleave with this batch; shared, so other batches are not held up.
         _ <- sql"""select i.id from integration i
-                   where i.id in (select d.integration_id from integration_desired_state d where d.id = any($ids))
+                   where i.deleted_at is null
+                     and i.id in (select d.integration_id from integration_desired_state d where d.id = any($ids))
                    order by i.id for share""".query[UUID].to[List]
         created <- sql"""with input as (
               select * from unnest($ids::uuid[], $versions::bigint[], $actions::text[], $observed::timestamptz[])
@@ -177,7 +179,7 @@ final class PostgresIntegrationDesiredStateRepository extends IntegrationDesired
               -- Fencing: this claim, this version of the intent.
               join integration_desired_state d on d.id = c.id and d.claim_token = $token and d.version = c.version
               join integration i on i.id = d.integration_id and i.organization_id = d.organization_id
-                and i.enabled and i.management_mode = 'MANAGED_SELECTED'
+                and i.enabled and i.deleted_at is null and i.management_mode = 'MANAGED_SELECTED'
               -- The observation the decision was made on, and not one it was already attempted on.
               join integration_inventory_object o on o.id = d.inventory_object_id
                 and o.integration_id = d.integration_id and o.organization_id = d.organization_id

@@ -154,6 +154,7 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
     _ <- IO.raiseUnless(RemnawaveNodeReleaseCatalog.compatibility(release, api).compatible)(error("NODE_RELEASE_INCOMPATIBLE"))
     now <- IO.realTimeInstant
     revision <- runner.run(for {
+      _ <- integrations.findByIdForUpdate(actor.organizationId,integration).flatMap(_.liftTo[Tx](error("INTEGRATION_NOT_FOUND")))
       _ <- fleets.lockFleet(actor.organizationId, fleetId)
       _ <- loadedFleet(actor.organizationId, integration, fleetId)
       busy <- repo.active(actor.organizationId, fleetId)
@@ -376,6 +377,7 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
         api <- panel(actor.organizationId, integration)
         now <- IO.realTimeInstant
         r <- runner.run(for {
+          _ <- integrations.findByIdForUpdate(actor.organizationId,integration).flatMap(_.liftTo[Tx](error("INTEGRATION_NOT_FOUND")))
           _ <- fleets.lockFleet(actor.organizationId, fleet)
           current <- repo.run(actor.organizationId, fleet, planId, true).flatMap(_.liftTo[Tx](error("NODE_UPGRADE_NOT_FOUND")))
           _ <- MonadThrow[Tx].raiseUnless(current.state == FleetRolloutState.Planned && current.expiresAt.isAfter(now))(error("NODE_UPGRADE_PLAN_EXPIRED"))
@@ -396,12 +398,14 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
     api <- if (command == "resume") panel(actor.organizationId, integration) else IO.pure(d.run.snapshot.panel)
     now <- IO.realTimeInstant
     r <- runner.run(for {
+      _ <- integrations.findByIdForUpdate(actor.organizationId,integration).flatMap(_.liftTo[Tx](error("INTEGRATION_NOT_FOUND")))
       _ <- fleets.lockFleet(actor.organizationId, fleet)
       current <- repo.run(actor.organizationId, fleet, id, true).flatMap(_.liftTo[Tx](error("NODE_UPGRADE_NOT_FOUND")))
       _ <- if (command != "resume") ().pure[Tx] else admissionStored(current, api, now).flatMap(_.traverse_(c => MonadThrow[Tx].raiseError[Unit](error(c))))
       members <- repo.members(id)
+      startedMemberships=members.iterator.filter(_.startedAt.nonEmpty).map(_.membershipId).toSet
       _ <- MonadThrow[Tx].raiseWhen(command == "rollback" && (members.exists(_.state == FleetRolloutMemberState.Unknown) ||
-        current.snapshot.members.filter(m => members.exists(v => v.membershipId == m.membershipId && v.startedAt.nonEmpty)).exists(!_.rollbackAvailable)))(error("NODE_UPGRADE_ROLLBACK_UNAVAILABLE"))
+        current.snapshot.members.filter(m => startedMemberships(m.membershipId)).exists(!_.rollbackAvailable)))(error("NODE_UPGRADE_ROLLBACK_UNAVAILABLE"))
       ok <- command match {
         case "pause" => repo.requestPause(actor.organizationId, id, now)
         case "resume" => repo.resume(actor.organizationId, id, now)

@@ -41,8 +41,8 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
 
   private def error(code: String) = IntegrationError(code, messageFor(code))
 
-  private def remnawave(org: UUID, integrationId: UUID): Tx[Integration] =
-    integrations.findById(org, integrationId).flatMap(_.liftTo[Tx](error("INTEGRATION_NOT_FOUND"))).flatTap(value =>
+  private def remnawave(org: UUID, integrationId: UUID, forUpdate: Boolean = false): Tx[Integration] =
+    (if(forUpdate) integrations.findByIdForUpdate(org,integrationId) else integrations.findById(org,integrationId)).flatMap(_.liftTo[Tx](error("INTEGRATION_NOT_FOUND"))).flatTap(value =>
       MonadThrow[Tx].raiseUnless(value.providerType == IntegrationProviderType.Remnawave)(
         error("REMNAWAVE_FLEET_PROVIDER_UNSUPPORTED")))
 
@@ -206,7 +206,7 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
 
   def start(actor: ActorContext, integrationId: UUID, fleetId: UUID, planId: UUID,
     requestId: UUID): IO[RemnawaveFleetRollout] = IO.realTimeInstant.flatMap(now => runner.run(for {
-    _ <- remnawave(actor.organizationId, integrationId)
+    _ <- remnawave(actor.organizationId, integrationId,forUpdate=true)
     _ <- fleets.lockFleet(actor.organizationId, fleetId)
     existing <- rollouts.byRequest(actor.organizationId, requestId)
     result <- existing match {
@@ -250,7 +250,7 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
 
   def pause(actor: ActorContext, integrationId: UUID, fleetId: UUID, id: UUID): IO[RemnawaveFleetRollout] =
     IO.realTimeInstant.flatMap(now => runner.run(for {
-      _ <- remnawave(actor.organizationId, integrationId)
+      _ <- remnawave(actor.organizationId, integrationId,forUpdate=true)
       current <- loadedRollout(actor.organizationId, integrationId, fleetId, id)
       result <- current.state match {
         case FleetRolloutState.Paused => current.pure[Tx]
@@ -269,7 +269,7 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
 
   def resume(actor: ActorContext, integrationId: UUID, fleetId: UUID, id: UUID): IO[RemnawaveFleetRollout] =
     IO.realTimeInstant.flatMap(now => runner.run(for {
-      _ <- remnawave(actor.organizationId, integrationId)
+      _ <- remnawave(actor.organizationId, integrationId,forUpdate=true)
       _ <- fleets.lockFleet(actor.organizationId, fleetId)
       current <- loadedRollout(actor.organizationId, integrationId, fleetId, id)
       result <- current.state match {
@@ -289,7 +289,7 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
 
   def rollback(actor: ActorContext, integrationId: UUID, fleetId: UUID, id: UUID,
     scope: FleetRollbackScope): IO[RemnawaveFleetRollout] = IO.realTimeInstant.flatMap(now => runner.run(for {
-    _ <- remnawave(actor.organizationId, integrationId)
+    _ <- remnawave(actor.organizationId, integrationId,forUpdate=true)
     _ <- fleets.lockFleet(actor.organizationId, fleetId)
     current <- loadedRollout(actor.organizationId, integrationId, fleetId, id)
     result <- current.state match {
