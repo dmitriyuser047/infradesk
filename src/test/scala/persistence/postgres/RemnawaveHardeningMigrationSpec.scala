@@ -16,6 +16,42 @@ import org.typelevel.log4cats.noop.NoOpLogger
 import support.{AuthorizationFixtures,RemoteConfigurationServer}
 
 final class RemnawaveHardeningMigrationSpec extends FunSuite {
+  test("production CI V29 and V41 backup fixtures upgrade cleanly through V56") {
+    assume(ConfigurationDeploymentWorld.enabled,"PostgreSQL integration tests are opt-in")
+    val config = PostgresTestDatabase.config
+    val workflow = java.nio.file.Files.readString(java.nio.file.Paths.get(".github/workflows/ci.yml"))
+    val marker = "-- Hardening V53-V56: remove additive ownership/admission objects in this disposable fixture."
+    val blocks = workflow.split(java.util.regex.Pattern.quote(marker)).toList.tail.map { section =>
+      (marker + section.take(section.indexOf("\n          SQL"))).linesIterator
+        .map(_.stripPrefix("          ")).mkString("\n")
+    }
+    assertEquals(blocks.size,2)
+    blocks.zip(List("29","41")).traverse_ { case(fixture,target) =>
+      PostgresTestDatabase.isolatedTransactor(config).use { xa =>
+        val isolated = config.copy(url=xa.kernel.getJdbcUrl)
+        val runner = new DoobieTransactionRunner(xa)
+        val org = UUID.randomUUID()
+        for {
+          _ <- runner.run(sql"insert into organization(id,code,name) values($org,${org.toString},'Backup marker')".update.run)
+          _ <- IO.blocking {
+            val connection = java.sql.DriverManager.getConnection(isolated.url,isolated.user,isolated.password)
+            try {
+              val statement = connection.createStatement()
+              try { statement.execute(fixture); () } finally statement.close()
+            } finally connection.close()
+          }
+          version <- runner.run(sql"select version from flyway_schema_history where success order by installed_rank desc limit 1".query[String].unique)
+          _ = assertEquals(version,target)
+          migrated <- DatabaseMigrator.migrate(isolated,NoOpLogger[IO])
+          _ = assertEquals(migrated.currentVersion,"56")
+          _ = assertEquals(migrated.migrationsApplied,56-target.toInt)
+          retained <- runner.run(sql"select count(*) from organization where id=$org and name='Backup marker'".query[Long].unique)
+          _ = assertEquals(retained,1L)
+        } yield ()
+      }
+    }.unsafeRunSync()
+  }
+
   test("V52 upgrades preserve terminal legacy snapshots, journal sequences and fleet identity") {
     assume(ConfigurationDeploymentWorld.enabled,"PostgreSQL integration tests are opt-in")
     val config=PostgresTestDatabase.config

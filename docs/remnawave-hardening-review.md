@@ -73,9 +73,9 @@ stale/foreign claims; paused admission; concurrent onboarding versus rollout/upg
 progress while integration is locked; forty intents with six desired workers; deletion versus claims;
 query counts; fresh schema and V43/V52 upgrades preserving onboarding/rollout/upgrade history.
 
-Local final validation: backend `testFull` **1278 total, 1259 passed, 19 platform skips, zero
-failures/errors** with real PostgreSQL 17 enabled. PostgreSQL/database suites account for **370
-total, 361 passed, 9 platform skips, zero failures/errors**. Frontend **85 files / 760 tests passed**;
+Local final validation: backend `testFull` **1279 total, 1260 passed, 19 platform skips, zero
+failures/errors** with real PostgreSQL 17 enabled. PostgreSQL/database suites account for **371
+total, 362 passed, 9 platform skips, zero failures/errors**. Frontend **85 files / 760 tests passed**;
 production frontend build and `sbt Universal/stage` passed. Linux safety ends
 `LINUX SAFETY CHECKS PASSED`, including reviewed-image recovery and every install crash boundary.
 Exact-SHA push CI is recorded in the delivery message. Windows validation uses
@@ -128,6 +128,13 @@ triggers enabled and retains 500 distinct resources, inventory nodes, membership
 The final targeted PostgreSQL suite passes all 10 cases; the 500-member case takes 2.868 seconds
 locally. Assertions, dataset size and timeout are unchanged. A subsequent exact-SHA push CI is
 required and is identified in the delivery message.
+
+Production backup/restore CI fixtures in `.github/workflows/ci.yml` now reverse V53–V56 additive
+objects before constructing their disposable V29/V41 backups and expect restoration through V56.
+Previously the V54 replacement foreign key blocked fixture preparation. A real PostgreSQL regression
+executes both exact workflow SQL blocks and then Flyway upgrades, checks target versions and retained
+markers. This fixture conversion is confined to CI; production migrations and restore behavior are
+unchanged. Existing V52 terminal onboarding/rollout/upgrade migration checks also remain green.
 
 - frontend/src/components/integrations/NodeOnboarding.tsx
 - frontend/src/types/nodeOnboarding.ts
