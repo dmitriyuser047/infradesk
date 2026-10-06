@@ -122,6 +122,13 @@ This includes migrations, domain/local state, onboarding and fleet application/p
 PostgreSQL repositories/projections, SSH managed files/image/node transport and onboarding UI/types.
 The test and documentation file list is available in the full commit diff.
 
+The first follow-up push CI passed 1276 backend cases and failed only the 500-member fixture's
+30-second preparation deadline. Fixture creation now uses set-based inserts with all ownership
+triggers enabled and retains 500 distinct resources, inventory nodes, memberships and SSH sources.
+The final targeted PostgreSQL suite passes all 10 cases; the 500-member case takes 2.868 seconds
+locally. Assertions, dataset size and timeout are unchanged. A subsequent exact-SHA push CI is
+required and is identified in the delivery message.
+
 - frontend/src/components/integrations/NodeOnboarding.tsx
 - frontend/src/types/nodeOnboarding.ts
 - src/main/resources/db/migration/V53__remnawave_onboarding_firewall_retirement.sql

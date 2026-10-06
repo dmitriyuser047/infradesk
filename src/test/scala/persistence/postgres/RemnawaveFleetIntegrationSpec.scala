@@ -387,25 +387,41 @@ final class RemnawaveFleetIntegrationSpec extends FunSuite {
         _ <- w.run(repo.insertFleet(fleet))
         revision = RemnawaveFleetRevision(uid, w.org, fleet.id, 1, 1, f.content.hash, f.content, actor, now)
         _ <- w.run(repo.insertRevision(revision))
-        members <- (1 to 500).toList.traverse { n =>
-          for {
-            target <- if (n == 1) IO.pure(node) else w.node(s"batch-$n")
-            inventory = if (n == 1) f.nodeObjectId else uid
-            _ <- if (n == 1) IO.unit else w.run(for {
-              _ <- sql"""insert into integration_inventory_object(id,organization_id,integration_id,object_type,
-                external_id,display_name,summary_version,summary,is_active,first_seen_at,last_seen_at,
-                last_seen_sync_session_id,created_at,updated_at)
-                select $inventory,organization_id,integration_id,object_type,${uid.toString},${s"batch-$n"},
-                  summary_version,summary,is_active,first_seen_at,last_seen_at,last_seen_sync_session_id,created_at,updated_at
-                from integration_inventory_object where id=${f.nodeObjectId} and organization_id=${w.org}""".update.run
-              _ <- sql"""insert into integration_resource_binding(id,organization_id,integration_id,inventory_object_id,
-                resource_id,created_by_user_id,created_at,updated_at)
-                values(${uid},${w.org},${f.integrationId},$inventory,${target.resourceId},$actor,$now,$now)""".update.run
-            } yield ())
-            member = RemnawaveFleetMembership(uid,w.org,fleet.id,f.integrationId,inventory,target.resourceId,1L,actor,now)
-            _ <- w.run(repo.insertMembership(member, now))
-          } yield member
-        }
+        members = (1 to 500).toList.map(n => RemnawaveFleetMembership(uid,w.org,fleet.id,f.integrationId,
+          if(n==1) f.nodeObjectId else uid,if(n==1) node.resourceId else uid,1L,actor,now))
+        // Measure read projections, not hundreds of independent fixture transactions.
+        // Real resources, inventory, bindings and ownership triggers remain enabled for all 500.
+        resourceIds = members.tail.map(_.resourceId).toArray[UUID]
+        inventoryIds = members.tail.map(_.inventoryNodeId).toArray[UUID]
+        sourceIds = members.tail.map(_ => uid).toArray[UUID]
+        _ <- w.run(for {
+          _ <- sql"""insert into resource(id,organization_id,environment_id,resource_type_id,code,name,is_active,spec)
+            select n.id,r.organization_id,r.environment_id,r.resource_type_id,n.id::text,n.id::text,true,r.spec
+            from unnest($resourceIds) as n(id) cross join resource r where r.id=${node.resourceId}""".update.run
+          _ <- sql"""insert into connection(id,organization_id,scope_type,connector_type,code,name,config,is_active)
+            select n.id,c.organization_id,c.scope_type,c.connector_type,n.id::text,n.id::text,c.config,c.is_active
+            from unnest($sourceIds) as n(id) cross join connection c where c.id=${node.connectionId}""".update.run
+          _ <- sql"""insert into external_ref(id,organization_id,connection_id,external_type,external_id,resource_id)
+            select gen_random_uuid(),${w.org},n.connection,'NODE',n.resource::text,n.resource
+            from unnest($sourceIds,$resourceIds) as n(connection,resource)""".update.run
+          _ <- sql"""insert into integration_inventory_object(id,organization_id,integration_id,object_type,
+            external_id,display_name,summary_version,summary,is_active,first_seen_at,last_seen_at,
+            last_seen_sync_session_id,created_at,updated_at)
+            select n.id,o.organization_id,o.integration_id,o.object_type,n.id::text,n.id::text,
+              o.summary_version,o.summary,o.is_active,o.first_seen_at,o.last_seen_at,
+              o.last_seen_sync_session_id,o.created_at,o.updated_at
+            from unnest($inventoryIds) as n(id) cross join integration_inventory_object o
+            where o.id=${f.nodeObjectId} and o.organization_id=${w.org}""".update.run
+          _ <- sql"""insert into integration_resource_binding(id,organization_id,integration_id,inventory_object_id,
+            resource_id,created_by_user_id,created_at,updated_at)
+            select gen_random_uuid(),${w.org},${f.integrationId},n.inventory,n.resource,$actor,$now,$now
+            from unnest($inventoryIds,$resourceIds) as n(inventory,resource)""".update.run
+          _ <- sql"""insert into remnawave_fleet_membership(id,organization_id,fleet_id,integration_id,
+            inventory_node_id,resource_id,version,created_by,created_at,next_check_at)
+            select n.id,${w.org},${fleet.id},${f.integrationId},n.inventory,n.resource,1,$actor,$now,$now
+            from unnest(${members.map(_.id).toArray[UUID]},${members.map(_.inventoryNodeId).toArray[UUID]},
+              ${members.map(_.resourceId).toArray[UUID]}) as n(id,inventory,resource)""".update.run
+        } yield ())
         _ <- List(1,10,100,500).traverse_ { count =>
           val selection = members.take(count)
           for {
@@ -434,8 +450,9 @@ final class RemnawaveFleetIntegrationSpec extends FunSuite {
         otherFleetFacts <- w.run(query.rolloutFactsBatch(w.org,f.integrationId,uid,members.map(_.id)))
         missing = uid
         missingSources <- w.run(targets.eligibleBatch(w.foreignOrg,List(node.resourceId,missing)))
+        otherConnection <- w.unrelatedConnection()
         _ <- w.run(sql"""insert into external_ref(id,organization_id,connection_id,external_type,external_id,resource_id)
-          select ${uid},organization_id,connection_id,'NODE','ambiguous-batch',${node.resourceId}
+          select ${uid},organization_id,$otherConnection,'NODE','ambiguous-batch',${node.resourceId}
           from external_ref where organization_id=${w.org} and resource_id=${members(1).resourceId}""".update.run)
         ambiguous <- w.run(targets.eligibleBatch(w.org,List(node.resourceId,members(1).resourceId)))
       } yield {
