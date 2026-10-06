@@ -136,6 +136,11 @@ executes both exact workflow SQL blocks and then Flyway upgrades, checks target 
 markers. This fixture conversion is confined to CI; production migrations and restore behavior are
 unchanged. Existing V52 terminal onboarding/rollout/upgrade migration checks also remain green.
 
+The next push exposed a pre-existing non-atomic test-provider action counter: concurrent UNKNOWN
+actions both completed durably, but `volatile += 1` could lose one count. The fixture now uses
+AtomicInteger; production concurrency and UNKNOWN/no-blind-retry assertions are unchanged.
+The full real-PostgreSQL inventory/desired-state suite passes three consecutive runs, 38/38 each.
+
 - frontend/src/components/integrations/NodeOnboarding.tsx
 - frontend/src/types/nodeOnboarding.ts
 - src/main/resources/db/migration/V53__remnawave_onboarding_firewall_retirement.sql

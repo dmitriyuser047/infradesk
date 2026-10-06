@@ -25,6 +25,7 @@ import io.circe.parser.parse
 
 import java.time.Instant
 import java.util.{Base64, UUID}
+import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.duration._
 
 final class IntegrationInventoryIntegrationSpec extends FunSuite with IntegrationDesiredStateTests {
@@ -92,7 +93,9 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
     val management = new IntegrationManagement[ConnectionIO](integrations, secrets, ids, time, cipher, audit, states,
       actionRepository, inventory, configRepository, configRollouts)
     @volatile var observation: IO[IntegrationObservation] = IO.pure(snapshot())
-    @volatile var remoteActionCalls = 0
+    // The action worker invokes the provider concurrently; volatile += loses increments.
+    private val remoteActionCount = new AtomicInteger
+    def remoteActionCalls: Int = remoteActionCount.get()
     @volatile var remoteOutcome: IO[IntegrationActionRemoteOutcome] =
       IO.pure(IntegrationActionRemoteOutcome.Succeeded)
     val provider: IntegrationProvider[IO] = new IntegrationProvider[IO] {
@@ -106,7 +109,7 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       override def observe(context: IntegrationRuntimeContext) = observation
       override def executeAction(context: IntegrationRuntimeContext, externalId: String,
         action: IntegrationActionCode): IO[IntegrationActionRemoteOutcome] =
-        IO { remoteActionCalls += 1 } *> remoteOutcome
+        IO { remoteActionCount.incrementAndGet() }.void *> remoteOutcome
     }
     val sync = new IntegrationSync[ConnectionIO](new IntegrationSyncTransactions[ConnectionIO](integrations, secrets,
       sessions, inventory, ids, time, audit, new PostgresIntegrationDesiredStateRepository), run, cipher,
