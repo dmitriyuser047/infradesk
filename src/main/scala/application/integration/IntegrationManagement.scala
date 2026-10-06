@@ -102,7 +102,8 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
     integrations.findByIdForUpdate(actor.organizationId, id).flatMap {
       case None => ().pure[Tx]
       case Some(stored) => for {
-        _ <- requireNoActive(actor.organizationId, id)
+        active <- actions.hasActiveForDeletion(actor.organizationId, id)
+        _ <- MonadThrow[Tx].raiseWhen(active)(IntegrationError("INTEGRATION_ACTION_ALREADY_RUNNING", "An action is already active"))
         _ <- integrations.delete(actor.organizationId, id)
         _ <- secrets.delete(actor.organizationId, stored.secretId)
         _ <- audit.record(actor, AuditAction.IntegrationDeleted, AuditTargetType.Integration, Some(id))

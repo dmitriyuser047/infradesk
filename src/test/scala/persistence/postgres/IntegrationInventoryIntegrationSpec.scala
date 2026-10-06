@@ -180,6 +180,16 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
       for {
         _ <- sql"set local session_replication_role='replica'".update.run
         _ <- sql"delete from audit_event where organization_id = $id".update.run
+        _ <- sql"delete from integration_config_rollout_node_baseline where organization_id = $id".update.run
+        _ <- sql"delete from integration_config_deployment where organization_id = $id".update.run
+        _ <- sql"delete from integration_config_rollout where organization_id = $id".update.run
+        _ <- sql"delete from integration_config_profile_binding where organization_id = $id".update.run
+        _ <- sql"delete from integration_action_execution where organization_id = $id".update.run
+        _ <- sql"delete from integration_desired_state where organization_id = $id".update.run
+        _ <- sql"delete from integration_resource_binding where organization_id = $id".update.run
+        _ <- sql"delete from integration_inventory_object where organization_id = $id".update.run
+        _ <- sql"delete from integration_sync_session where organization_id = $id".update.run
+        _ <- sql"delete from integration_sync_state where organization_id = $id".update.run
         _ <- sql"delete from integration where organization_id = $id".update.run
         _ <- sql"delete from configuration_revision_secure_payload where organization_id = $id".update.run
         _ <- sql"delete from configuration_revision where organization_id = $id".update.run

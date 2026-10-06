@@ -86,6 +86,10 @@ final class RemnawaveOnboardingSpec extends FunSuite {
       assertEquals(newPhases.indexOf(OnboardingPhase.RetireNodeFirewall)+1,newPhases.indexOf(OnboardingPhase.RetireLocalNode))
       assert(!OnboardingSnapshotCodec.encode(legacy).hcursor.downField("lifecycleVersion").succeeded)
       assertEquals(OnboardingSnapshotCodec.decode(OnboardingSnapshotCodec.encode(current)).lifecycleVersion,2)
+      List(io.circe.Json.Null,io.circe.Json.fromString("2"),io.circe.Json.fromInt(3)).foreach { invalid =>
+        intercept[IllegalArgumentException](OnboardingSnapshotCodec.decode(
+          OnboardingSnapshotCodec.encode(current).mapObject(_.add("lifecycleVersion",invalid))))
+      }
     }
   }
 

@@ -12,6 +12,8 @@ trait RemnawaveOnboardingRepository[F[_]] {
   def lockResource(org: UUID, resourceId: UUID): F[Unit]
   def active(org: UUID, resourceId: UUID): F[Boolean]
   def start(org: UUID, integrationId: UUID, planId: UUID, requestId: UUID, actor: UUID, now: Instant, confirmRecreate: Boolean = false): F[RemnawaveNodeOnboardingRun]
+  def startResult(org: UUID, integrationId: UUID, planId: UUID, requestId: UUID, actor: UUID, now: Instant,
+    confirmRecreate: Boolean = false): F[OnboardingStartResult]
   def find(org: UUID, integrationId: UUID, id: UUID): F[Option[(RemnawaveNodeOnboardingRun,List[OnboardingPhaseRecord])]]
   def history(org: UUID, integrationId: UUID, limit: Int): F[List[RemnawaveNodeOnboardingRun]]
   /** Latest run for each previously created node on this server; at most two prove ambiguity. */
@@ -34,6 +36,8 @@ trait RemnawaveOnboardingRepository[F[_]] {
   def replaceFleetMembership(run: RemnawaveNodeOnboardingRun, token: UUID, inventoryNodeId: UUID, now: Instant): F[Unit]
   def cleanupPlans(before: Instant, limit: Int): F[Int]
 }
+
+final case class OnboardingStartResult(run: RemnawaveNodeOnboardingRun, newlyStarted: Boolean)
 
 final case class OnboardingServerCandidate(id: UUID, name: String, address: String, environmentName: String)
 final case class OnboardingServerStatus(profileName: Option[String], revisionNumber: Option[Int],

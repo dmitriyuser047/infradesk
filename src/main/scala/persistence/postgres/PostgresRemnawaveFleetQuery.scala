@@ -18,6 +18,26 @@ import java.util.UUID
 final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO] {
   private val repository = new PostgresRemnawaveFleetRepository
 
+  def rolloutFactsBatch(org: UUID, integrationId: UUID, fleetId: UUID,
+    membershipIds: List[UUID]): ConnectionIO[Map[UUID, FleetRolloutStoredFacts]] =
+    if (membershipIds.isEmpty) Map.empty[UUID, FleetRolloutStoredFacts].pure[ConnectionIO] else sql"""
+      select m.id,o.external_id,sa.profile_id,sa.revision_number,ds.desired_state
+      from remnawave_fleet_membership m
+      join integration i on i.id=m.integration_id and i.organization_id=m.organization_id and i.deleted_at is null
+      join integration_inventory_object o on o.id=m.inventory_node_id and o.organization_id=m.organization_id
+        and o.integration_id=m.integration_id and o.object_type='NODE' and o.is_active
+      join integration_resource_binding b on b.inventory_object_id=o.id and b.organization_id=m.organization_id
+        and b.resource_id=m.resource_id
+      left join server_profile_assignment sa on sa.organization_id=m.organization_id and sa.resource_id=m.resource_id
+      left join integration_desired_state ds on ds.organization_id=m.organization_id
+        and ds.integration_id=m.integration_id and ds.inventory_object_id=m.inventory_node_id
+      where m.organization_id=$org and m.integration_id=$integrationId and m.fleet_id=$fleetId
+        and m.removed_at is null and m.id=any(${membershipIds.toArray[UUID]})"""
+      .query[(UUID, String, Option[UUID], Option[Int], Option[String])].to[List].map(_.map {
+        case (id, external, profile, revision, desired) => id -> FleetRolloutStoredFacts(external,
+          profile.zip(revision).headOption, desired.flatMap(IntegrationDesiredNodeState.fromCode))
+      }.toMap)
+
   def configConsumers(org: UUID, integrationId: UUID, externalConfigProfileId: String): ConnectionIO[List[FleetRolloutConfigConsumer]] =
     sql"""select id,external_id,display_name,coalesce((summary->>'isDisabled')::boolean,false),
       coalesce((summary->>'isConnected')::boolean,false),last_seen_at

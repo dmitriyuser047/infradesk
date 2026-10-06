@@ -149,12 +149,7 @@ private[ssh] object SshManagedNodeImages {
   // Normalize exactly the controlled image line; every other byte remains the Stage25C template.
   val ManagedImageProof: String = SshRemnawaveNodeRemote.ManagedFileProof.replace(
     "[ \"$(sha256sum \"$d/compose.yml\" | cut -d' ' -f1)\" = \"$composeHash\" ] || return 1",
-    """[ "$(grep -c '^    image: ' "$d/compose.yml")" = 1 ] || return 1
-      |  controlledImage=$(sed -n 's/^    image: //p' "$d/compose.yml")
-      |  case "$controlledImage" in """.stripMargin + RemnawaveNodeReleaseCatalog.managedReferences.mkString("|") + """ ) ;; *) return 1 ;; esac
-      |  originalImage=${marker##* image=}
-      |  normalizedHash=$(awk -v image="$originalImage" '{if ($0 ~ /^    image: /) print "    image: " image; else print}' "$d/compose.yml" | sha256sum | cut -d' ' -f1)
-      |  [ "$normalizedHash" = "$composeHash" ] || return 1""".stripMargin)
+    SshRemnawaveNodeRemote.controlledComposeProof("return 1"))
   val ObserveImage: String = "set -u; " + ManagedImageProof + """
     |d=$1; marker=$2; port=$3; composeHash=$4; managedPrefix=$5; name=$6
     |managed=0; managed_files "$d" "$marker" "$port" "$composeHash" "$managedPrefix" && managed=1 || true

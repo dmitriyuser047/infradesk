@@ -110,6 +110,8 @@ final class RemnawaveFleetObserverSpec extends FunSuite {
     }
 
     val query = new RemnawaveFleetQuery[IO] {
+      def rolloutFactsBatch(o: UUID, i: UUID, f: UUID, ids: List[UUID]): IO[Map[UUID, FleetRolloutStoredFacts]] =
+        IO.raiseError(new AssertionError("Unexpected rollout query"))
       override def configConsumers(o: UUID, i: UUID, p: String) = IO.pure(Nil)
       override def summaries(o: UUID, i: UUID, ids: List[UUID]) = IO.pure(Map.empty)
       override def memberRowsBatch(o: UUID, f: UUID, ids: List[UUID]): IO[List[FleetMemberRow]] = IO.pure(Nil)

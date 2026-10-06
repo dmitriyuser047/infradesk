@@ -220,7 +220,7 @@ Reconciliation is POST /runs/{runId}/reconcile with RECOVER or DELETE_RECREATE; 
 preview. Start accepts confirmRecreate=true for reviewed recreation actions. No production
 Panel/VPS was mutated during implementation checks.
 
-## Lifecycle hardening (V53–V55)
+## Lifecycle hardening (V53–V56)
 
 New snapshots pin lifecycleVersion=2. Their recreation sequence retires the old firewall in the
 explicit RETIRE_NODE_FIREWALL phase before RETIRE_LOCAL_NODE and CREATE_NODE; delete/recreate
@@ -256,3 +256,23 @@ Database transactions only persist plans, claims, fenced progress and binding/me
 Provider and SSH I/O run between transactions; cleanup and publication uncertainty remain observable
 and recoverable. Stage acceptance still requires exact-SHA CI and disposable VPS failure/recovery
 acceptance; the Linux harness alone does not satisfy live acceptance.
+
+V56 keeps observer lease/progress updates from reversing integration → membership lock order.
+Desired-state workers share the integration lock while claiming disjoint batches and take the
+exclusive integration lock before creating actions. Lease release remains possible after a
+tombstone; new claims and mutation admission still require an active integration. The regression
+retains forty nodes and six concurrent workers and requires every intent to be claimed once.
+
+Start returns a typed `OnboardingStartResult` rather than inferring a new transition from timestamp
+equality. PostgreSQL returns canonical stored timestamps, so HTTP retries return identical durable
+state even when application timestamps have nanoseconds. New transitions still validate source,
+baseline and integration pins and record audit in the same transaction.
+
+Recovery, installation proof and Start share the controlled-image ownership proof used by Stage25F.
+A reviewed catalog image change normalizes only the single image line against the original template;
+the immutable installation marker and metadata keep their original identity. Duplicate image lines,
+unreviewed references, other compose edits and mismatched container identity remain fail-closed.
+
+Live acceptance is reserved for the operator. No VPS or Panel mutation is authorized for the
+implementation agent. Manual scenarios and the acceptance boundary are recorded in
+`remnawave-hardening-review.md`; automated success does not mark Stage25 accepted.

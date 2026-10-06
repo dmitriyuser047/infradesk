@@ -571,6 +571,15 @@ private[ssh] object SshRemnawaveNodeRemote {
     |  [ "$(stat -c '%u:%g:%a' "$d" 2>/dev/null)" = '0:0:755' ] && printf PRESENT || printf FOREIGN
     |else printf ABSENT; fi
     |""".stripMargin
+  private[ssh] def controlledComposeProof(failure: String): String =
+    s"""[ "$$(grep -c '^    image: ' "$$d/compose.yml")" = 1 ] || $failure
+       |controlledImage=$$(sed -n 's/^    image: //p' "$$d/compose.yml")
+       |case "$$controlledImage" in ${domain.integration.RemnawaveNodeReleaseCatalog.managedReferences.mkString("|")} ) ;; *) $failure ;; esac
+       |originalImage=$${marker##* image=}
+       |normalizedHash=$$(awk -v image="$$originalImage" '{if ($$0 ~ /^    image: /) print "    image: " image; else print}' "$$d/compose.yml" | sha256sum | cut -d' ' -f1)
+       |[ "$$normalizedHash" = "$$composeHash" ] || $failure
+       |""".stripMargin
+
   private val RecoveryProbe = """set -u
     |d=$1; marker=$2; managedPrefix=$3; name=$4; image=$5; port=$6; claim=$7; composeHash=$8; sshUid=${9:-0}
     |stageDir=${claim%/.owner-*}/.staging-${claim##*/.owner-}
@@ -672,20 +681,28 @@ private[ssh] object SshRemnawaveNodeRemote {
     |  case "$metadata" in '{"managedBy":"infradesk",'*) case "$metadata" in "$managedPrefix"*) ;; *) result FOREIGN ;; esac ;; esac
     |fi
     |[ "$claimOwned" = 1 ] || [ "$markerOwned" = 1 ] || [ "$managedOwned" = 1 ] || result FOREIGN
+    |composeOwned=0; controlledImage=$image
+    |if [ "$markerOwned" = 1 ]; then
+    |  controlled_compose() {
+    |CONTROLLED_COMPOSE_PROOF
+    |  }
+    |  controlled_compose && composeOwned=1 || true
+    |fi
+    |[ "$composeOwned" = 1 ] || controlledImage=$image
     |containerRunning=0
     |if [ "$ownContainer" = 1 ]; then
     |  info=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files" }}|{{.Config.Image}}|{{.State.Running}}' "$name" 2>/dev/null) || result UNKNOWN
-    |  case "$info" in "$d/compose.yml|$image|true") containerRunning=1 ;; "$d/compose.yml|$image|false") ;; *) result FOREIGN ;; esac
+    |  case "$info" in "$d/compose.yml|$controlledImage|true") containerRunning=1 ;; "$d/compose.yml|$controlledImage|false") ;; *) result FOREIGN ;; esac
     |fi
     |if [ -n "$listeners" ]; then [ "$containerRunning" = 1 ] || result PORT_CONFLICT; fi
     |if [ "$stageOwned" = 0 ] && [ "$staging" = 0 ] && [ "$markerOwned" = 1 ] && [ "$managedOwned" = 1 ] && [ -f "$d/.env" ] &&
-    |  [ "$(sha256sum "$d/compose.yml" | cut -d' ' -f1)" = "$composeHash" ] &&
+    |  [ "$composeOwned" = 1 ] &&
     |  [ "$(sha256sum "$d/.env" | cut -d' ' -f1)" = "$hash" ] &&
     |  [ "$(grep -Ec '^SECRET_KEY=[A-Za-z0-9+/]+={0,2}$' "$d/.env")" = 1 ] &&
     |  [ "$(grep -Fxc "NODE_PORT=$port" "$d/.env")" = 1 ] && [ "$(wc -l < "$d/.env")" = 2 ]; then result OWNED_COMPLETE; fi
     |if [ "$claimOwned" = 1 ] && [ "$stageOwned" = 0 ] && [ "$staging" = 0 ] && [ -f "$d/.env" ] && [ -f "$d/compose.yml" ] && [ -f "$d/managed.json" ] && [ "$markerOwned" = 1 ] && [ "$managedOwned" = 1 ]; then result OWNED_DAMAGED; fi
     |result OWNED_PARTIAL
-    |""".stripMargin
+    |""".stripMargin.replace("CONTROLLED_COMPOSE_PROOF", controlledComposeProof("return 1"))
   private val PrepareInstallation = "recovery_probe() {\n" + RecoveryProbe + "\n}\n" + """set -u
     |d=$1; marker=$2; managedPrefix=$3; name=$4; image=$5; port=$6; claim=$7; composeHash=$8; sshUid=${9:-0}
     |stageDir=${claim%/.owner-*}/.staging-${claim##*/.owner-}
@@ -884,13 +901,13 @@ private[ssh] object SshRemnawaveNodeRemote {
     |rmdir -- "$claim" || result UNCERTAIN
     |result RETIRED
     |""".stripMargin
-  private val InstallationProof = "set -u; " + ManagedFileProof + """
+  private lazy val InstallationProof = "set -u; " + SshManagedNodeImages.ManagedImageProof + """
     |files=0; image=0
     |managed_files "$1" "$2" "$4" "$5" "$6" && files=1 || true
-    |imageId=$(docker image inspect -f '{{.Id}}' "$3" 2>/dev/null) && [ -n "$imageId" ] && image=1 || true
+    |if [ "$files" = 1 ]; then imageReference=$(sed -n 's/^    image: //p' "$1/compose.yml"); imageId=$(docker image inspect -f '{{.Id}}' "$imageReference" 2>/dev/null) && [ -n "$imageId" ] && image=1 || true; fi
     |printf '%s:%s' "$files" "$image"
     |""".stripMargin
-  private val Observe = "set -u; " + SshManagedNodeImages.ManagedImageProof + """
+  private lazy val Observe = "set -u; " + SshManagedNodeImages.ManagedImageProof + """
     |d=$1; marker=$2; image=$3; name=$4; port=$5; composeHash=$6; managedPrefix=$7
     |files=0; images=0; running=0; listener=0; stable=0
     |managed_files "$d" "$marker" "$port" "$composeHash" "$managedPrefix" && files=1 || true
@@ -911,7 +928,7 @@ private[ssh] object SshRemnawaveNodeRemote {
     |[ "$restarts" = 0 ] && [ "$startedSeconds" -gt 0 ] && [ $((nowSeconds-startedSeconds)) -ge 10 ] && stable=1 || true
     |printf '%s:%s:%s:%s:%s' "$files" "$images" "$running" "$listener" "$stable"
     |""".stripMargin
-  private val Start = "set -u; " + ManagedFileProof + """
+  private lazy val Start = "set -u; " + SshManagedNodeImages.ManagedImageProof + """
     |d=$1; marker=$2; image=$3; port=$4; composeHash=$5; managedPrefix=$6; name=$7
     |managed_files "$d" "$marker" "$port" "$composeHash" "$managedPrefix" || { printf FILES; exit 0; }
     |docker compose -f "$d/compose.yml" --env-file "$d/.env" config -q >/dev/null 2>&1 || { printf CONFIG; exit 0; }

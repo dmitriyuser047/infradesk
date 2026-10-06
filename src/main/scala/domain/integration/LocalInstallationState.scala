@@ -11,6 +11,6 @@ object LocalInstallationState {
   case object Foreign extends LocalInstallationState("FOREIGN")
   case object PortConflict extends LocalInstallationState("PORT_CONFLICT")
   case object Unknown extends LocalInstallationState("UNKNOWN")
-  val all: List[LocalInstallationState] = List(Absent, OwnedComplete, OwnedPartial, OwnedDamaged, Foreign, PortConflict, Unknown)
+  lazy val all: List[LocalInstallationState] = List(Absent, OwnedComplete, OwnedPartial, OwnedDamaged, Foreign, PortConflict, Unknown)
   def fromCode(code: String): LocalInstallationState = all.find(_.code == code).getOrElse(Unknown)
 }

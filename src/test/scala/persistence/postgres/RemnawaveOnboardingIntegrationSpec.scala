@@ -150,8 +150,10 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
         foreignPlan <- plan(w, foreign._1, foreign._2, foreignTarget.resourceId, foreignTarget.connectionId, foreignAt, now,
           organizationId = w.foreignOrg)
         requestId = uid
-        started <- w.run(repo.start(w.org, integrationId, approved.id, requestId, AuthorizationFixtures.ActorUserId, now))
-        retry <- w.run(repo.start(w.org, integrationId, approved.id, requestId, AuthorizationFixtures.ActorUserId, now.plusSeconds(1)))
+        initial <- w.run(repo.startResult(w.org, integrationId, approved.id, requestId, AuthorizationFixtures.ActorUserId, now))
+        started = initial.run
+        repeated <- w.run(repo.startResult(w.org, integrationId, approved.id, requestId, AuthorizationFixtures.ActorUserId, now))
+        retry = repeated.run
         foreignStarted <- w.run(repo.start(w.foreignOrg, foreign._1, foreignPlan.id, requestId, AuthorizationFixtures.ActorUserId, now))
         reused <- w.run(repo.start(w.org, integrationId, hidden.id, requestId, AuthorizationFixtures.ActorUserId, now).attempt)
         secondRequest <- w.run(repo.start(w.org, integrationId, hidden.id, uid, AuthorizationFixtures.ActorUserId, now).attempt)
@@ -166,6 +168,9 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
         history <- w.run(repo.history(w.org, integrationId, 50))
       } yield {
         assertEquals(started.state, ProvisioningRunState.Queued)
+        assert(initial.newlyStarted)
+        assert(!repeated.newlyStarted)
+        assertEquals(retry, started)
         assertEquals(retry.id, started.id)
         assertEquals(errorCode(reused), Some("REMNAWAVE_ONBOARDING_REQUEST_REUSED"))
         assertEquals(errorCode(secondRequest), Some("REMNAWAVE_ONBOARDING_RESOURCE_BUSY"))
@@ -502,7 +507,7 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
       unconfirmed <- w.run(repo.start(w.org,integrationId,draft.id,requestId,AuthorizationFixtures.ActorUserId,now)).attempt
       _ <- IO(assertEquals(errorCode(unconfirmed),Some("REMNAWAVE_ONBOARDING_RECREATE_CONFIRMATION_REQUIRED")))
       firstHttp <- httpStart(w,integrationId,draft.id,requestId,confirmed=true)
-      _ <- IO(assertEquals(firstHttp._1,org.http4s.Status.Ok))
+      _ <- IO(assertEquals(firstHttp._1,org.http4s.Status.Accepted))
       first <- w.run(repo.find(w.org,integrationId,draft.id)).map(_.get._1)
       retryHttp <- httpStart(w,integrationId,draft.id,requestId,confirmed=false)
       _ <- IO(assertEquals(retryHttp,firstHttp))
@@ -641,7 +646,9 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
         originalAfter <- w.run(repo.find(w.org,integrationId,original.id))
         _ = assertEquals(List(winners._1.isRight,winners._2.isRight).count(identity),1,s"action=$action bound=$bound")
         _ = assertEquals(originalAfter,originalBefore)
-        _ = assert(List(winners._1.left.toOption,winners._2.left.toOption).flatten.exists(_.getMessage.contains("REMNAWAVE_ONBOARDING_RESOURCE_BUSY")))
+        _ = assert(errorCode(winners._1).contains("REMNAWAVE_ONBOARDING_RESOURCE_BUSY") ||
+          List(winners._1.left.toOption,winners._2.left.toOption).flatten.exists(_.getMessage.contains("REMNAWAVE_ONBOARDING_RESOURCE_BUSY")),
+          List(winners._1.left.toOption,winners._2.left.toOption).flatten.map(_.getMessage).mkString("; "))
         _ <- if(winners._1.isRight) w.run(sql"""insert into integration_action_execution(id,organization_id,integration_id,inventory_object_id,request_id,
             action_code,external_id_snapshot,display_name_snapshot,requested_by_user_id,status,created_at,updated_at)
             values(${uid},${w.org},$integrationId,$inventoryId,${uid},$action,${oldExternal.toString},'Existing node',

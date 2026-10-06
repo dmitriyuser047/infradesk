@@ -121,7 +121,7 @@ final class PostgresIntegrationDesiredStateRepository extends IntegrationDesired
               and d.next_reconcile_at <= $now
               and (d.claim_until is null or d.claim_until <= $now)
             order by d.next_reconcile_at, d.id
-            for update of i, d skip locked
+            for share of i for update of d skip locked
             limit $limit),
           claimed as (
             update integration_desired_state d
@@ -164,11 +164,12 @@ final class PostgresIntegrationDesiredStateRepository extends IntegrationDesired
       val observed = intents.map(_.observedAt.toString).toArray
       for {
         // The same first lock as every intent change, action request, edit and snapshot, so none of
-        // them can interleave with this batch; shared, so other batches are not held up.
+        // them can interleave with this batch. Admission triggers take this same exclusive lock;
+        // acquiring it before desired/inventory rows avoids a shared-to-exclusive upgrade deadlock.
         _ <- sql"""select i.id from integration i
                    where i.deleted_at is null
                      and i.id in (select d.integration_id from integration_desired_state d where d.id = any($ids))
-                   order by i.id for share""".query[UUID].to[List]
+                   order by i.id for update""".query[UUID].to[List]
         created <- sql"""with input as (
               select * from unnest($ids::uuid[], $versions::bigint[], $actions::text[], $observed::timestamptz[])
                 as c(id, version, action, observed_at)),

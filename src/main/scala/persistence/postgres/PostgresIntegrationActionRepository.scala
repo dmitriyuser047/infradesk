@@ -76,6 +76,10 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
       .query[Option[Instant]].unique
 
   override def hasActive(org: UUID, integration: UUID): ConnectionIO[Boolean] =
+    activeWork(org, integration, forDeletion = false)
+  override def hasActiveForDeletion(org: UUID, integration: UUID): ConnectionIO[Boolean] =
+    activeWork(org, integration, forDeletion = true)
+  private def activeWork(org: UUID, integration: UUID, forDeletion: Boolean): ConnectionIO[Boolean] =
     sql"""select
       exists(select 1 from integration_action_execution where organization_id = $org
         and integration_id = $integration and status in ('QUEUED', 'RUNNING'))
@@ -90,12 +94,12 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
         and state in ('QUEUED','RUNNING','PAUSED','ROLLING_BACK'))
       or exists(select 1 from remnawave_node_onboarding where organization_id=$org and integration_id=$integration
         and state in ('QUEUED','RUNNING'))
-      or exists(select 1 from integration_sync_session where organization_id=$org and integration_id=$integration
+      or ($forDeletion and (exists(select 1 from integration_sync_session where organization_id=$org and integration_id=$integration
         and status='RUNNING')
       or exists(select 1 from integration_sync_state where organization_id=$org and integration_id=$integration
         and claim_until > clock_timestamp())
       or exists(select 1 from integration_desired_state where organization_id=$org and integration_id=$integration
-        and claim_until > clock_timestamp())""".query[Boolean].unique
+        and claim_until > clock_timestamp())))""".query[Boolean].unique
 
   override def recoverAndClaim(owner: UUID, token: UUID, at: Instant, recoverAfter: Instant,
     limit: Int): ConnectionIO[(Int, List[IntegrationActionExecution])] = for {

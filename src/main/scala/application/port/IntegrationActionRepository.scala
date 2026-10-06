@@ -15,6 +15,8 @@ trait IntegrationActionRepository[F[_]] {
     inventoryObjectId: UUID): F[Option[Instant]]
   /** Called while holding the integration row lock during endpoint/credential changes or deletion. */
   def hasActive(organizationId: UUID, integrationId: UUID): F[Boolean]
+  def hasActiveForDeletion(organizationId: UUID, integrationId: UUID): F[Boolean] =
+    hasActive(organizationId, integrationId)
   /** Retires stale claims as UNKNOWN, then claims at most limit queued rows. */
   def recoverAndClaim(owner: UUID, token: UUID, at: Instant, recoverAfter: Instant,
     limit: Int): F[(Int, List[IntegrationActionExecution])]

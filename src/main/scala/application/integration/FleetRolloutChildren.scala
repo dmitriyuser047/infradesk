@@ -28,6 +28,8 @@ trait FleetRolloutChildren {
   def owned(rolloutId: UUID, token: UUID): FleetRolloutChildren = this
   def assignment(org: UUID, resourceId: UUID): IO[Option[(UUID, Int)]]
   def sshSource(org: UUID, resourceId: UUID): IO[Option[(UUID, Instant)]]
+  def sshSources(org: UUID, resourceIds: List[UUID]): IO[Map[UUID, (UUID, Instant)]] =
+    resourceIds.distinct.traverse(id => sshSource(org, id).map(_.map(id -> _))).map(_.flatten.toMap)
   def assign(actor: ActorContext, resourceId: UUID, profileId: UUID, revisionNumber: Int): IO[Unit]
   def unassign(actor: ActorContext, resourceId: UUID): IO[Unit]
   /** Left is the first blocking problem; Right is the id of the PLANNED run. Mutates nothing remote. */
@@ -82,6 +84,11 @@ final class LiveFleetRolloutChildren[Tx[_]: MonadThrow](
 
   def sshSource(org: UUID, resourceId: UUID): IO[Option[(UUID, Instant)]] =
     runner.run(targets.eligible(org, resourceId)).map(_.toOption.map(t => t.connectionId -> t.connectionUpdatedAt))
+
+  override def sshSources(org: UUID, resourceIds: List[UUID]): IO[Map[UUID, (UUID, Instant)]] =
+    runner.run(targets.eligibleBatch(org, resourceIds.distinct)).map(_.flatMap { case (id, result) =>
+      result.toOption.map(t => id -> (t.connectionId -> t.connectionUpdatedAt))
+    })
 
   def assign(actor: ActorContext, resourceId: UUID, profileId: UUID, revisionNumber: Int): IO[Unit] =
     serverProfiles.assign(actor, resourceId, profileId, revisionNumber).void

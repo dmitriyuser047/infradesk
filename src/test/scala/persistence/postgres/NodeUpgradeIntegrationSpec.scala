@@ -2,6 +2,7 @@ package ru.bitec.app.ops
 package persistence.postgres
 
 import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 import cats.syntax.all._
 import domain.integration._
 import java.time.Instant
@@ -112,7 +113,7 @@ final class NodeUpgradeIntegrationSpec extends FunSuite {
     val compatibility = NodeApiCompatibility(Some("2.8.0"), Some("PROFILE_PUBKEY"), Some("reviewed-commit"),
       Set(NodeProvisioningCapability.Create, NodeProvisioningCapability.InstallationData,
         NodeProvisioningCapability.Status, NodeProvisioningCapability.ConfigProfile), None)
-    val snapshot = OnboardingSnapshot(input, now, uid, p.sourceConnectionId, p.sourceConnectionAt,
+    val snapshot = OnboardingSnapshot(input, now, uid, p.sourceConnectionId, p.sourceUpdatedAt,
       uid, uid, 1, uid, 1L, "a" * 64, uid, false, compatibility, "remnawave/node:2.8.0", uid,
       "Replacement node", "Baseline", "Profile", List("inbound"), Nil, Nil, Nil)
     val source = RemnawaveNodeOnboardingRun(sourceId, w.org, s.run.integrationId, p.resourceId, None, actor,
@@ -320,9 +321,9 @@ final class NodeUpgradeIntegrationSpec extends FunSuite {
   }
   test("25A and 25C cannot activate during upgrade; their active runs also block upgrade admission") {
     world { (w, s) => start(w, s) *> rejected(w.run(baseline(w, s)), "UPGRADE_RESOURCE_BUSY") *>
-      rejected(w.run(onboarding(w, s)), "UPGRADE_RESOURCE_BUSY") }
+      rejected(w.run(onboarding(w, s)), "REMNAWAVE_ONBOARDING_RESOURCE_BUSY") }
     world { (w, s) => w.run(baseline(w, s)) *> rejected(w.run(repo.start(w.org, s.run.id, uid, Instant.now())), "UPGRADE_RESOURCE_BUSY") }
-    world { (w, s) => w.run(onboarding(w, s)) *> rejected(w.run(repo.start(w.org, s.run.id, uid, Instant.now())), "UPGRADE_RESOURCE_BUSY") }
+    world { (w, s) => w.run(onboarding(w, s)) *> rejected(w.run(repo.start(w.org, s.run.id, uid, Instant.now())), "REMNAWAVE_ONBOARDING_RESOURCE_BUSY") }
   }
   test("25B deployment and manual Panel node action activation are blocked by the same upgrade lock") {
     world { (w, s) =>
@@ -361,5 +362,145 @@ final class NodeUpgradeIntegrationSpec extends FunSuite {
         _ = assertEquals(count, 1L)
       } yield ()
     }
+  }
+
+  test("replacement moves the exact fleet membership once and preserves immutable history") {
+    world { (w, s) => for {
+      plan <- recoveryPlan(w, s)
+      history <- w.run(onboardings.find(w.org, s.run.integrationId, plan.sourceId))
+      replacement <- replacementNode(w, s)
+      (newNode, external) = replacement
+      owned <- runToBindResource(w, plan, external)
+      (run, token, now) = owned
+      p = s.run.snapshot.members.head
+      _ <- w.run(for {
+        _ <- sql"update integration_inventory_object set is_active=false where id=${p.inventoryNodeId}".update.run
+        _ <- sql"delete from integration_resource_binding where inventory_object_id=${p.inventoryNodeId}".update.run
+        _ <- sql"""insert into integration_resource_binding(id,organization_id,integration_id,inventory_object_id,
+          resource_id,created_by_user_id,created_at,updated_at) values(${uid},${w.org},${s.run.integrationId},
+          $newNode,${p.resourceId},$actor,$now,$now)""".update.run
+        _ <- onboardings.replaceFleetMembership(run, token, newNode, now)
+      } yield ())
+      moved <- w.run(fleets.membership(w.org, s.run.fleetId, p.membershipId)).map(_.get)
+      _ = assertEquals(moved.inventoryNodeId, newNode)
+      _ = assertEquals(moved.resourceId, p.resourceId)
+      _ = assertEquals(moved.version, 2L)
+      _ <- w.run(onboardings.replaceFleetMembership(run, token, newNode, now))
+      repeated <- w.run(fleets.membership(w.org, s.run.fleetId, p.membershipId))
+      _ = assertEquals(repeated, Some(moved))
+      trail <- w.run(sql"""select previous_inventory_node_id,inventory_node_id,previous_version,version
+        from remnawave_fleet_membership_replacement where onboarding_id=${run.id}""".query[(UUID,UUID,Long,Long)].to[List])
+      _ = assertEquals(trail,List((p.inventoryNodeId,newNode,1L,2L)))
+      _ <- rejected(w.run(sql"delete from remnawave_fleet_membership_replacement where onboarding_id=${run.id}".update.run),"HISTORY_IMMUTABLE")
+      _ <- rejected(w.run(onboardings.replaceFleetMembership(run, uid, newNode, now)),"LEASE_LOST")
+      _ <- rejected(w.run(onboardings.replaceFleetMembership(run.copy(organizationId=w.foreignOrg), token, newNode, now)),"LEASE_LOST")
+      after <- w.run(onboardings.find(w.org, s.run.integrationId, plan.sourceId))
+      _ = assertEquals(after,history)
+    } yield () }
+  }
+
+  test("replacement binding conflict rolls back without changing membership") {
+    world { (w,s) => for {
+      plan <- recoveryPlan(w,s)
+      replacement <- replacementNode(w,s)
+      owned <- runToBindResource(w,plan,replacement._2)
+      before <- w.run(fleets.members(w.org,s.run.fleetId))
+      _ <- rejected(w.run(onboardings.replaceFleetMembership(owned._1,owned._2,replacement._1,owned._3)),"BINDING_CONFLICT")
+      after <- w.run(fleets.members(w.org,s.run.fleetId))
+      _ = assertEquals(after,before)
+    } yield () }
+  }
+
+  test("simultaneous onboarding recovery and fleet starts admit only one winner") {
+    List(false,true).foreach { upgrade => world { (w,s) => for {
+      plan <- recoveryPlan(w,s)
+      legacy = rolloutPlan(w,s)
+      _ <- w.run(rollouts.insertPlan(legacy._1,legacy._2))
+      results <- (startRecovery(w,plan,Instant.now()).attempt,
+        (if(upgrade) start(w,s) else w.run(rollouts.start(w.org,legacy._1.id,uid,Instant.now())).void).attempt).parTupled
+      _ = assertEquals(List(results._1,results._2).count(_.isRight),1)
+      count <- w.run(sql"""select
+        (select count(*) from remnawave_node_onboarding where id=${plan.run.id} and state='QUEUED')+
+        (select count(*) from remnawave_fleet_rollout where id=${legacy._1.id} and state='QUEUED')+
+        (select count(*) from remnawave_fleet_upgrade_run where id=${s.run.id} and state='QUEUED')""".query[Long].unique)
+      _ = assertEquals(count,1L)
+    } yield () } }
+  }
+
+  test("paused fleet workflows continue to exclude onboarding recovery") {
+    List(false,true).foreach { upgrade => world { (w,s) => for {
+      plan <- recoveryPlan(w,s)
+      legacy = rolloutPlan(w,s)
+      _ <- if(upgrade) start(w,s) *> claim(w,s).flatMap { case(run,token) =>
+        w.run(repo.save(run.copy(state=FleetRolloutState.Paused),token,Instant.now(),false)).void
+      } else w.run(rollouts.insertPlan(legacy._1,legacy._2)) *>
+        w.run(rollouts.start(w.org,legacy._1.id,uid,Instant.now())) *>
+        w.run(sql"update remnawave_fleet_rollout set state='PAUSED' where id=${legacy._1.id}".update.run).void
+      result <- startRecovery(w,plan,Instant.now()).attempt
+      _ = assert(result.isLeft)
+    } yield () } }
+  }
+
+  test("observer progress does not reverse integration then membership lock order") {
+    world { (w,s) =>
+      val locked = new java.util.concurrent.CountDownLatch(1)
+      val release = new java.util.concurrent.CountDownLatch(1)
+      val hold = w.run(for {
+        _ <- sql"select id from integration where id=${s.run.integrationId} for update".query[UUID].unique
+        _ <- org.typelevel.doobie.free.connection.delay {
+          locked.countDown()
+          assert(release.await(10,java.util.concurrent.TimeUnit.SECONDS))
+        }
+      } yield ())
+      for {
+        fiber <- hold.start
+        _ <- IO.blocking(assert(locked.await(5,java.util.concurrent.TimeUnit.SECONDS)))
+        updated <- w.run(for {
+          _ <- sql"set local lock_timeout='1s'".update.run
+          n <- sql"update remnawave_fleet_membership set next_check_at=clock_timestamp() where id=${s.members.head.membershipId}".update.run
+        } yield n).guarantee(IO(release.countDown()))
+        _ <- fiber.joinWithNever
+        _ = assertEquals(updated,1)
+      } yield ()
+    }
+  }
+
+  test("V52 upgrade preserves terminal rollout and image upgrade history") {
+    assume(ConfigurationDeploymentWorld.enabled,"PostgreSQL integration tests are opt-in")
+    val config = PostgresTestDatabase.config
+    val remote = support.RemoteConfigurationServer.start()
+    try PostgresTestDatabase.isolatedTransactor(config,Some("52")).use { xa =>
+      val w = new ConfigurationDeploymentWorld(new infrastructure.database.DoobieTransactionRunner(xa),remote)
+      for {
+        _ <- w.setUp
+        s <- setup(w)
+        legacy = rolloutPlan(w,s)
+        _ <- w.run(rollouts.insertPlan(legacy._1,legacy._2))
+        _ <- w.run(for {
+          _ <- sql"set local session_replication_role='replica'".update.run
+          _ <- sql"""update remnawave_fleet_upgrade_run set state='UNKNOWN',phase='COMPLETE',finished_at=clock_timestamp(),
+            failure_code='NODE_UPGRADE_REMOTE_UNKNOWN' where id=${s.run.id}""".update.run
+          _ <- sql"""update remnawave_fleet_rollout set state='FAILED',phase='COMPLETE',finished_at=clock_timestamp(),
+            failure_code='TEST_FAILURE' where id=${legacy._1.id}""".update.run
+        } yield ())
+        beforeUpgrade <- w.run(repo.byId(s.run.id))
+        beforeUpgradeMembers <- w.run(repo.members(s.run.id))
+        beforeRollout <- w.run(rollouts.rolloutById(legacy._1.id))
+        beforeRolloutMembers <- w.run(rollouts.members(legacy._1.id))
+        migrated <- infrastructure.database.DatabaseMigrator.migrate(config.copy(url=xa.kernel.getJdbcUrl),
+          org.typelevel.log4cats.noop.NoOpLogger[IO])
+        _ = assertEquals(migrated.currentVersion,"56")
+        afterUpgrade <- w.run(repo.byId(s.run.id))
+        afterUpgradeMembers <- w.run(repo.members(s.run.id))
+        afterRollout <- w.run(rollouts.rolloutById(legacy._1.id))
+        afterRolloutMembers <- w.run(rollouts.members(legacy._1.id))
+        _ = assertEquals(afterUpgrade,beforeUpgrade)
+        _ = assertEquals(afterUpgradeMembers,beforeUpgradeMembers)
+        _ = assertEquals(afterRollout,beforeRollout)
+        _ = assertEquals(afterRolloutMembers,beforeRolloutMembers)
+        _ <- rejected(w.run(sql"update remnawave_fleet_upgrade_run set state='QUEUED' where id=${s.run.id}".update.run),"TERMINAL")
+        _ <- rejected(w.run(sql"update remnawave_fleet_rollout set state='QUEUED' where id=${legacy._1.id}".update.run),"TERMINAL")
+      } yield ()
+    }.unsafeRunSync() finally remote.stop()
   }
 }

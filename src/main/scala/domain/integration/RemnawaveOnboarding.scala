@@ -173,6 +173,8 @@ object OnboardingSnapshotCodec {
     def u(k: String) = UUID.fromString(s(k))
     def list(k: String): List[String] = c.get[List[String]](k).toOption.getOrElse(throw new IllegalArgumentException("Invalid onboarding snapshot"))
     def optional(k: String) = c.get[Option[String]](k).toOption.getOrElse(throw new IllegalArgumentException("Invalid onboarding snapshot"))
+    val lifecycleVersion = c.downField("lifecycleVersion").focus.fold(1)(value =>
+      value.asNumber.flatMap(_.toInt).getOrElse(throw new IllegalArgumentException("Invalid onboarding snapshot")))
     val capabilities = List(NodeProvisioningCapability.Inventory, NodeProvisioningCapability.Status,
       NodeProvisioningCapability.Create, NodeProvisioningCapability.InstallationData, NodeProvisioningCapability.ConfigProfile,
       NodeProvisioningCapability.CreateReconciliation, NodeProvisioningCapability.CreateIdempotency)
@@ -194,6 +196,6 @@ object OnboardingSnapshotCodec {
           UUID.fromString(r.get[String]("previousCorrelationId").toOption.get),UUID.fromString(r.get[String]("installationOwnerId").toOption.get),
           r.get[String]("state").toOption.get,r.get[String]("action").toOption.get,
           r.get[Option[List[String]]]("previousPanelCidrs").toOption.getOrElse(throw new IllegalArgumentException("Invalid recovery snapshot")))
-      },c.get[Option[Int]]("lifecycleVersion").toOption.getOrElse(throw new IllegalArgumentException("Invalid onboarding snapshot")).getOrElse(1))
+      },lifecycleVersion)
   }
 }

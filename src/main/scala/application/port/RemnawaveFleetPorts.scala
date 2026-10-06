@@ -73,7 +73,12 @@ trait RemnawaveFleetRepository[F[_]] {
   def rolloutActive(org: UUID, fleetId: UUID): F[Boolean]
 }
 
+final case class FleetRolloutStoredFacts(externalNodeId: String, assignment: Option[(UUID, Int)],
+  desired: Option[IntegrationDesiredNodeState])
+
 trait RemnawaveFleetQuery[F[_]] {
+  def rolloutFactsBatch(org: UUID, integrationId: UUID, fleetId: UUID,
+    membershipIds: List[UUID]): F[Map[UUID, FleetRolloutStoredFacts]]
   def configConsumers(org: UUID, integrationId: UUID, externalConfigProfileId: String): F[List[FleetRolloutConfigConsumer]]
   def summaries(org: UUID, integrationId: UUID, fleetIds: List[UUID]): F[Map[UUID, RemnawaveFleetSummary]]
   def memberRowsBatch(org: UUID, fleetId: UUID, ids: List[UUID]): F[List[FleetMemberRow]]

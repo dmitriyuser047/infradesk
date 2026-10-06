@@ -50,6 +50,8 @@ final class IntegrationLifecycleSpec extends FunSuite {
       val cleanup: ConnectionIO[Unit] = for {
         _ <- sql"set local session_replication_role='replica'".update.run
         _ <- sql"delete from audit_event where organization_id = $org".update.run
+        _ <- sql"delete from integration_sync_session where organization_id = $org".update.run
+        _ <- sql"delete from integration_sync_state where organization_id = $org".update.run
         _ <- sql"delete from integration where organization_id = $org".update.run
         _ <- sql"delete from integration_secret where organization_id = $org".update.run
         _ <- sql"delete from organization_membership where user_id = $user".update.run
@@ -99,7 +101,7 @@ final class IntegrationLifecycleSpec extends FunSuite {
         noSecret <- run.run(secrets.find(org, replaced.secretId))
         events <- run.run(sql"select action from audit_event where organization_id = $org".query[String].to[List])
       } yield {
-        assertEquals(schema, "55")
+        assertEquals(schema, "56")
         assert(!first.enabled)
         assertEquals(first.name, "Main")
         assertEquals(list.map(_.id), List(first.id))

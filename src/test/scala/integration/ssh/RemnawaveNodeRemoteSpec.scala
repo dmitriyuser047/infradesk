@@ -79,7 +79,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     else if (ex == "sh" && args.exists(_.contains("stageInode=$(stat -c '%i'"))) ok.copy(stdout = "PUBLISHED")
     else if (ex == "sh" && args.exists(_.contains("atomic ownership publication"))) ok.copy(stdout = "PREPARED")
     else if (ex == "sh" && args.exists(_.contains("result CLEAN"))) ok.copy(stdout = "CLEAN")
-    else if (ex == "sh" && args.exists(_.contains("d=$1\nif [ -L"))) {
+    else if (ex == "sh" && args.exists(_.contains("printf PRESENT || printf FOREIGN"))) {
       val dir = SshRemnawaveNodeRemote.directory(spec)
       ok.copy(stdout = if (s.remoteFiles.keys.exists(_.startsWith(dir + "/"))) "PRESENT" else "ABSENT")
     }
@@ -152,7 +152,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     assert(!s.calls.exists { case (ex, args) => ex == "docker" && args.contains("up") })
     val validations = s.calls.filter { case (ex, args) => ex == "docker" && args.contains("config") }
     val pulls = s.calls.filter { case (ex, args) => ex == "docker" && args.headOption.contains("pull") }
-    assertEquals(validations.size, 1)
+    assertEquals(validations.size, 2)
     assertEquals(validations.head._2.head, "compose")
     assertEquals(pulls.toList.map(_._2), List(List("pull", image)))
     assert(s.calls.indexWhere(_._2.contains("config")) < s.calls.indexWhere(_._2.headOption.contains("pull")))
@@ -226,9 +226,10 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
       var imagePresent = false
       s.respond = (ex, args) => IO {
         if (ex == "id") ok.copy(stdout = "0")
+        else if (ex == "sh" && args.exists(_.contains("stageInode=$(stat -c '%i'"))) ok.copy(stdout = "PUBLISHED")
         else if (ex == "sh" && args.exists(_.contains("atomic ownership publication"))) ok.copy(stdout = "PREPARED")
         else if (ex == "sh" && args.exists(_.contains("result CLEAN"))) ok.copy(stdout = "CLEAN")
-        else if (ex == "sh" && args.exists(_.contains("d=$1\nif [ -L"))) ok.copy(stdout = if (s.remoteFiles.keys.exists(_.startsWith(dir + "/"))) "PRESENT" else "ABSENT")
+        else if (ex == "sh" && args.exists(_.contains("printf PRESENT || printf FOREIGN"))) ok.copy(stdout = if (s.remoteFiles.keys.exists(_.startsWith(dir + "/"))) "PRESENT" else "ABSENT")
         else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) {
           val complete = List(".env", "compose.yml", "managed.json").forall(n => s.remoteFiles.contains(s"$dir/$n"))
           ok.copy(stdout = if (complete) "OWNED_COMPLETE" else if (s.claimed) "OWNED_PARTIAL" else "ABSENT")
@@ -289,9 +290,10 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
 
   private def recoveryOwned(s: Session): Unit = s.respond = (ex, args) => IO.pure {
     if (ex == "id") ok.copy(stdout = "0")
+    else if (ex == "sh" && args.exists(_.contains("stageInode=$(stat -c '%i'"))) ok.copy(stdout = "PUBLISHED")
     else if (ex == "sh" && args.exists(_.contains("atomic ownership publication"))) ok.copy(stdout = "PREPARED")
     else if (ex == "sh" && args.exists(_.contains("result CLEAN"))) ok.copy(stdout = "CLEAN")
-    else if (ex == "sh" && args.exists(_.contains("d=$1\nif [ -L"))) {
+    else if (ex == "sh" && args.exists(_.contains("printf PRESENT || printf FOREIGN"))) {
       val dir = SshRemnawaveNodeRemote.directory(spec)
       ok.copy(stdout = if (s.remoteFiles.keys.exists(_.startsWith(dir + "/"))) "PRESENT" else "ABSENT")
     }
@@ -335,6 +337,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     val absent = new Session
     absent.respond = (ex, args) => IO.pure {
       if (ex == "id") ok.copy(stdout = "0")
+      else if (ex == "sh" && args.exists(_.contains("stageInode=$(stat -c '%i'"))) ok.copy(stdout = "PUBLISHED")
       else if (ex == "sh" && args.exists(_.contains("atomic ownership publication"))) ok.copy(stdout = "PREPARED")
       else if (ex == "sh" && args.exists(_.contains("result CLEAN"))) ok.copy(stdout = "CLEAN")
       else if (ex == "sh" && args.exists(_.contains("markerOwned=0"))) ok.copy(stdout = if (absent.claimed) "OWNED_PARTIAL" else "ABSENT")
@@ -409,7 +412,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     val script = owned.calls.find(_._1 == "sh").get._2(1)
     assert(script.contains("docker stop --time 15 \"$name\""))
     assert(script.contains("docker rm \"$name\""))
-    assert(script.contains("rm -f -- \"$d/compose.yml\" \"$d/.env\" \"$d/managed.json\""))
+    assert(script.contains("for file in \"$d/compose.yml\" \"$d/.env\" \"$d/managed.json\""))
     assert(script.contains("rmdir -- \"$d\""))
     assert(script.contains("for f in \"$d\"/* \"$d\"/.[!.]* \"$d\"/..?*"))
     assert(!script.contains("rm -rf") && !script.contains("$d/*"))
@@ -530,7 +533,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
       else if (ex == "ufw" && args.headOption.contains("allow")) { if (persist) rules :+= liveNodeRule; ok }
       else if (ex == "ufw" && args.take(3) == List("--force","delete","allow")) {
         val source = args(4).stripSuffix("/32")
-        rules = rules.filterNot(line => line.contains(s"from $source ") && line.endsWith(s"'${args(12)}'")); ok
+        rules = rules.filterNot(line => (line.contains(s"from $source ") || line.contains(s"from $source/32 ")) && line.endsWith(s"'${args(12)}'")); ok
       }
       else ok
     }

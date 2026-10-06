@@ -66,6 +66,8 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     override def lockResource(o: UUID, r: UUID) = IO.unit
     override def active(o: UUID, r: UUID) = IO.pure(false)
     override def start(o: UUID, i: UUID, p: UUID, q: UUID, a: UUID, at: Instant, confirmRecreate: Boolean) = IO.pure(record)
+    override def startResult(o: UUID, i: UUID, p: UUID, q: UUID, a: UUID, at: Instant, confirmRecreate: Boolean) =
+      IO.pure(OnboardingStartResult(record,false))
     override def find(o: UUID, i: UUID, id: UUID) = IO.pure(Some(record -> phases))
     override def history(o: UUID, i: UUID, limit: Int) = IO.pure(List(record))
     override def createdNodes(o: UUID, r: UUID) = IO.pure(List(record).filter(_.externalNodeId.nonEmpty))

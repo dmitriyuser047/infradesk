@@ -65,18 +65,16 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
           _.liftTo[Tx](error("REMNAWAVE_FLEET_REVISION_NOT_FOUND")))
         rows <- query.memberRows(org, fleetId)
         sync <- query.lastSuccessfulSyncAt(org, integrationId)
-        nodes <- rows.traverse(row => inventory.findObject(org, integrationId, row.membership.inventoryNodeId,
-          forUpdate = false))
-      } yield (integration, fleet, revision, rows.filter(_.membership.active), sync, nodes.flatten))
-      (integration, fleet, revision, rows, sync, nodes) = loaded
-      facts <- rows.parTraverseN(8) { row =>
-        val externalId = nodes.find(_.id == row.membership.inventoryNodeId).map(_.externalId)
-        for {
-          assignment <- children.assignment(org, row.membership.resourceId)
-          desired <- children.desiredRecord(org, integrationId, row.membership.inventoryNodeId)
-          source <- children.sshSource(org, row.membership.resourceId)
-        } yield RolloutMemberFacts(row, externalId.getOrElse(""), assignment, desired, source)
+        stored <- query.rolloutFactsBatch(org, integrationId, fleetId, rows.map(_.membership.id))
+      } yield (integration, fleet, revision, rows.filter(_.membership.active), sync, stored))
+      (integration, fleet, revision, rows, sync, stored) = loaded
+      sources <- children.sshSources(org, rows.map(_.membership.resourceId))
+      facts = rows.map { row =>
+        val value = stored.get(row.membership.id)
+        RolloutMemberFacts(row, value.fold("")(_.externalNodeId), value.flatMap(_.assignment),
+          value.flatMap(_.desired), sources.get(row.membership.resourceId))
       }
+      memberNodeIds = rows.map(_.membership.inventoryNodeId).toSet
       anyConfigDrift = facts.exists(_.row.assessment.exists(_.driftReasons.contains(FleetDriftReason.ConfigRevisionDrift)))
       sharedResult <- if (!anyConfigDrift) IO.pure((None, None)) else
         children.sharedImpact(org, integrationId, revision.content.inventoryConfigProfileId,
@@ -87,13 +85,15 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
           })))
       consumers <- if (sharedResult._1.isEmpty) IO.pure(List.empty[FleetRolloutConfigConsumer])
         else runner.run(query.configConsumers(org, integrationId, revision.content.externalConfigProfileId.toString))
-      outcome = RemnawaveFleetRolloutPlanner.plan(fleet, revision, integration, facts, sync, sharedResult._1,
-        sharedResult._2, input, now, settings.staleAfter, settings.maxWaveSize)
+      outcome = if (rows.exists(row => !stored.contains(row.membership.id)))
+        RolloutPlanOutcome.Blocked(List(RolloutIssue(FleetRolloutPreconditions.PlanChanged)), Nil)
+        else RemnawaveFleetRolloutPlanner.plan(fleet, revision, integration, facts, sync, sharedResult._1,
+          sharedResult._2, input, now, settings.staleAfter, settings.maxWaveSize)
       result <- outcome match {
         case RolloutPlanOutcome.RefreshRequired(issues) => IO.pure[RolloutPreview](RolloutPreview.RefreshRequired(issues))
         case RolloutPlanOutcome.Blocked(issues, warnings) => IO.pure[RolloutPreview](RolloutPreview.Blocked(issues, warnings))
         case RolloutPlanOutcome.Ready(_, warnings) if consumers.exists(n => !n.disabled && !n.connected &&
-          !rows.exists(_.membership.inventoryNodeId == n.inventoryNodeId)) =>
+          !memberNodeIds(n.inventoryNodeId)) =>
           IO.pure[RolloutPreview](RolloutPreview.Blocked(List(RolloutIssue(
             "REMNAWAVE_FLEET_SHARED_CONFIG_EXTERNAL_DEPENDENCY")), warnings))
         case RolloutPlanOutcome.Ready(_, _) if consumers.exists(n => !n.observedAt.isAfter(now.minusMillis(settings.staleAfter.toMillis))) =>
@@ -168,22 +168,17 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
       consumers <- if (!snapshot.shared.required) List.empty[FleetRolloutConfigConsumer].pure[Tx]
         else query.configConsumers(org, rollout.integrationId, snapshot.content.externalConfigProfileId.toString)
       config <- inventory.findObject(org, rollout.integrationId, snapshot.content.inventoryConfigProfileId, forUpdate = false)
-      memberDrift <- snapshot.members.traverse { m =>
-        for {
-          membership <- fleets.membership(org, rollout.fleetId, m.membershipId)
-          node <- inventory.findObject(org, rollout.integrationId, m.inventoryNodeId, forUpdate = false)
-          binding <- bindings.find(org, m.inventoryNodeId)
-          evidence <- if (rollout.phase != FleetRolloutPhase.Validate) Option.empty[FleetStoredEvidence].pure[Tx]
-            else revision.flatTraverse(r => query.storedEvidence(org, m.membershipId, r))
-        } yield membership.exists(v => v.active && v.version == m.membershipVersion &&
-          v.resourceId == m.resourceId && v.inventoryNodeId == m.inventoryNodeId) &&
-          node.exists(n => n.isActive && n.externalId == m.externalNodeId) && binding.exists(_.resourceId == m.resourceId) &&
-          (rollout.phase != FleetRolloutPhase.Validate || evidence.exists(e =>
-            e.assignment.map(a => a.profileId -> a.revisionNumber) ==
-              m.baseline.assignmentProfileId.zip(m.baseline.assignmentRevisionNumber).headOption &&
-            e.desiredStateRecord.map(_.state) == m.baseline.desiredState))
-      }
+      stored <- query.rolloutFactsBatch(org, rollout.integrationId, rollout.fleetId, snapshot.members.map(_.membershipId))
     } yield {
+      val activeById = activeMembers.map(m => m.id -> m).toMap
+      val memberDrift = snapshot.members.map { m =>
+        activeById.get(m.membershipId).exists(v => v.version == m.membershipVersion &&
+          v.resourceId == m.resourceId && v.inventoryNodeId == m.inventoryNodeId) &&
+          stored.get(m.membershipId).exists(e => e.externalNodeId == m.externalNodeId &&
+            (rollout.phase != FleetRolloutPhase.Validate || (e.assignment ==
+              m.baseline.assignmentProfileId.zip(m.baseline.assignmentRevisionNumber).headOption &&
+              e.desired == m.baseline.desiredState)))
+      }
       val needsManagement = snapshot.members.exists(_.actions.contains(FleetActionKind.DesiredState))
       val intact = managed && sources && snapshot.hash == rollout.snapshotHash &&
         config.exists(n => n.isActive && n.externalId == snapshot.content.externalConfigProfileId.toString) &&
@@ -230,14 +225,12 @@ final class RemnawaveFleetRollouts[Tx[_]: MonadThrow](
   } yield result))
 
   def detail(org: UUID, integrationId: UUID, fleetId: UUID, id: UUID): IO[RolloutDetail] = runner.run(for {
-    _ <- remnawave(org, integrationId)
     rollout <- loadedRollout(org, integrationId, fleetId, id)
     members <- rollouts.members(id)
     actions <- rollouts.actions(id)
   } yield RolloutDetail(rollout, members, actions))
 
   def history(org: UUID, integrationId: UUID, fleetId: UUID): IO[List[RemnawaveFleetRollout]] = runner.run(for {
-    _ <- remnawave(org, integrationId)
     _ <- loadedFleet(org, integrationId, fleetId)
     items <- rollouts.history(org, fleetId, 50)
   } yield items)

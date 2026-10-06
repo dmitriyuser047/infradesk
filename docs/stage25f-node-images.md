@@ -218,7 +218,7 @@ Scala Universal staging also passes on the review-fix sources.
 
 ## Onboarding replacement and local provenance hardening
 
-V53–V55 extend the existing lifecycle without changing V48–V52 or terminal snapshots. New
+V53–V56 extend the existing lifecycle without changing V48–V52 or terminal snapshots. New
 recreation plans retire the previous node's exact firewall namespace in a separate durable phase.
 At binding, the same transaction transfers the fleet membership to the exact new node, increments
 its version, invalidates assessment/image cache and makes it due for fresh observation. An immutable
@@ -240,3 +240,17 @@ do not replace fresh provider and SSH checks before external mutations or rollba
 
 The earlier validation counts above describe their earlier delivery only. Hardening acceptance
 requires a new full regression run, exact-SHA CI and the disposable VPS failure/recovery scenarios.
+
+Recovery and installation proof accept the same reviewed single image-line replacement as the image
+observer. They preserve the original owner, marker and metadata and verify the currently configured
+catalog image; healthy upgraded nodes are not reinstalled with the initial image. Shared proof helpers
+are initialized lazily so either transport can be loaded first without losing its ownership checks.
+
+Rollout Preview loads exact active inventory/binding, assignment and desired-state facts in one scoped
+projection and SSH sources in two eligibility statements. Its member reads are three statements for
+1, 10, 100 and 500 members, replacing per-member reads. Snapshot drift reloads that projection once
+per validation instead of looking up membership, inventory, binding and provenance per node. Fresh
+pre-mutation checks remain fresh. Upgrade admission already uses batched eligibility, evidence, member
+rows and image cache; observer SSH and provider reads still execute per node with bounded concurrency.
+History/detail remain tenant-scoped and readable after a tombstone; mutation entry points require an
+active integration. See `remnawave-hardening-review.md` for the delivery review and manual acceptance.

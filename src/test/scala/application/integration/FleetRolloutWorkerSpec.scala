@@ -124,6 +124,10 @@ final class FleetRolloutWorkerSpec extends FunSuite {
 
   private final class MemoryQuery(var rows: List[FleetMemberRow],
     var consumers: List[FleetRolloutConfigConsumer] = Nil) extends RemnawaveFleetQuery[IO] {
+    def rolloutFactsBatch(o: UUID, i: UUID, f: UUID, ids: List[UUID]): IO[Map[UUID, FleetRolloutStoredFacts]] =
+      IO(rows.filter(r => ids.contains(r.membership.id) && r.membership.organizationId == o &&
+        r.membership.integrationId == i && r.membership.fleetId == f).map(r =>
+        r.membership.id -> FleetRolloutStoredFacts("external-node", None, r.actualDesiredState)).toMap)
     def configConsumers(o: UUID, i: UUID, p: String) = IO(consumers)
     private def no[A]: IO[A] = IO.raiseError(new AssertionError("Unexpected query"))
     def memberRowsBatch(o: UUID, f: UUID, ids: List[UUID]) = memberRows(o, f).map(_.filter(r => ids.contains(r.membership.id)))
@@ -203,7 +207,7 @@ final class FleetRolloutWorkerSpec extends FunSuite {
       case "membership" => IO.pure(None)
     }
     val integrationPort = port(classOf[IntegrationRepository[IO]]) {
-      case "findById" => IO.pure(Some(Integration(integrationId, org, "panel", IntegrationProviderType.Remnawave,
+      case "findById" | "findByIdForUpdate" => IO.pure(Some(Integration(integrationId, org, "panel", IntegrationProviderType.Remnawave,
         IntegrationBaseUrl.parse("https://panel.example.test").toOption.get, true, uid, false, at, at)))
     }
     val inventoryPort = Proxy.newProxyInstance(classOf[IntegrationInventoryRepository[IO]].getClassLoader,

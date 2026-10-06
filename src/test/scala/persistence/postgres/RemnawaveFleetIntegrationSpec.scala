@@ -1,6 +1,8 @@
 package ru.bitec.app.ops
 package persistence.postgres
 
+import application.port.FleetRolloutStoredFacts
+
 import application.port.FleetStoredEvidence
 import cats.effect.{IO, Ref}
 import cats.syntax.all._
@@ -411,11 +413,15 @@ final class RemnawaveFleetIntegrationSpec extends FunSuite {
             sources <- counted(targets.eligibleBatch(w.org,selection.map(_.resourceId)))
             rows <- counted(query.memberRowsBatch(w.org,fleet.id,selection.map(_.id)))
             observations <- counted(images.observationsBatch(w.org,fleet.id,selection.map(_.id)))
+            rolloutFacts <- counted(query.rolloutFactsBatch(w.org,f.integrationId,fleet.id,selection.map(_.id)))
           } yield {
             assertEquals(evidence._2,2,s"evidence statements for $count")
             assertEquals(sources._2,2,s"source statements for $count")
             assertEquals(rows._2,2,s"member statements for $count")
             assertEquals(observations._2,1,s"image statements for $count")
+            assertEquals(rolloutFacts._2,1,s"rollout facts statements for $count")
+            assertEquals(rolloutFacts._1.keySet,selection.map(_.id).toSet)
+            assert(rolloutFacts._1.values.forall(_.externalNodeId.nonEmpty))
             assertEquals(evidence._1.keySet,selection.map(_.id).toSet)
             assertEquals(sources._1.keySet,selection.map(_.resourceId).toSet)
             assertEquals(rows._1.map(_.membership.id).toSet,selection.map(_.id).toSet)
@@ -424,6 +430,8 @@ final class RemnawaveFleetIntegrationSpec extends FunSuite {
         }
         foreignEvidence <- w.run(query.storedEvidenceBatch(w.foreignOrg,members.map(_.id),revision))
         foreignRows <- w.run(query.memberRowsBatch(w.foreignOrg,fleet.id,members.map(_.id)))
+        foreignRolloutFacts <- w.run(query.rolloutFactsBatch(w.foreignOrg,f.integrationId,fleet.id,members.map(_.id)))
+        otherFleetFacts <- w.run(query.rolloutFactsBatch(w.org,f.integrationId,uid,members.map(_.id)))
         missing = uid
         missingSources <- w.run(targets.eligibleBatch(w.foreignOrg,List(node.resourceId,missing)))
         _ <- w.run(sql"""insert into external_ref(id,organization_id,connection_id,external_type,external_id,resource_id)
@@ -433,6 +441,8 @@ final class RemnawaveFleetIntegrationSpec extends FunSuite {
       } yield {
         assertEquals(foreignEvidence,Map.empty[UUID,FleetStoredEvidence])
         assertEquals(foreignRows,Nil)
+        assertEquals(foreignRolloutFacts,Map.empty[UUID,FleetRolloutStoredFacts])
+        assertEquals(otherFleetFacts,Map.empty[UUID,FleetRolloutStoredFacts])
         assert(missingSources.values.forall(_ == Left("PROVISIONING_TARGET_NOT_FOUND")))
         assertEquals(ambiguous(node.resourceId),Left("PROVISIONING_TARGET_AMBIGUOUS"))
         assert(ambiguous(members(1).resourceId).isRight)

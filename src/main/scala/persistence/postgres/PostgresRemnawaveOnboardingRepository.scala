@@ -36,11 +36,14 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
     _ <- OnboardingPhase.forSnapshot(r.snapshot).zipWithIndex.traverse_ { case (p,i) => sql"""insert into remnawave_node_onboarding_phase(run_id,phase,position,state)
       values(${r.id},${p.code},$i,'PENDING')""".update.run }
   } yield ()
-  def start(org: UUID, integration: UUID, plan: UUID, request: UUID, actor: UUID, now: Instant, confirmRecreate: Boolean = false): ConnectionIO[RemnawaveNodeOnboardingRun] = for {
+  def start(org: UUID, integration: UUID, plan: UUID, request: UUID, actor: UUID, now: Instant, confirmRecreate: Boolean = false): ConnectionIO[RemnawaveNodeOnboardingRun] =
+    startResult(org,integration,plan,request,actor,now,confirmRecreate).map(_.run)
+  def startResult(org: UUID, integration: UUID, plan: UUID, request: UUID, actor: UUID, now: Instant,
+    confirmRecreate: Boolean = false): ConnectionIO[OnboardingStartResult] = for {
     _ <- PostgresProvisioningLocks.lockRequest(org,request)
     existing <- selected(fr"organization_id=$org and request_id=$request").option
     result <- existing match {
-      case Some(r) if r.id == plan && r.integrationId == integration => r.pure[ConnectionIO]
+      case Some(r) if r.id == plan && r.integrationId == integration => OnboardingStartResult(r,false).pure[ConnectionIO]
       case Some(_) => fail("REMNAWAVE_ONBOARDING_REQUEST_REUSED")
       case None => for {
         _ <- sql"select id from integration where organization_id=$org and id=$integration and deleted_at is null for update".query[UUID].option
@@ -70,8 +73,9 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
         }
         _ <- if (!chainValid) fail("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED") else ().pure[ConnectionIO]
         _ <- if (locked.snapshot.blockers.nonEmpty) fail("REMNAWAVE_ONBOARDING_BLOCKED") else ().pure[ConnectionIO]
-        _ <- sql"update remnawave_node_onboarding set state='QUEUED',request_id=$request,updated_at=$now where id=$plan".update.run
-      } yield locked.copy(state=ProvisioningRunState.Queued,requestId=Some(request),updatedAt=now)
+        started <- (fr"update remnawave_node_onboarding set state='QUEUED',request_id=$request,updated_at=$now where id=$plan returning" ++ columns)
+          .query[Row].unique.map(_.domain)
+      } yield OnboardingStartResult(started,true)
     }
   } yield result
   def find(org: UUID, integration: UUID, id: UUID): ConnectionIO[Option[(RemnawaveNodeOnboardingRun,List[OnboardingPhaseRecord])]] =

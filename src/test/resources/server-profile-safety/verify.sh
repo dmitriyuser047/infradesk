@@ -88,8 +88,8 @@ echo 'PASS simulation rejects upgrades, broken packages, removals and apt failur
 mkdir -p /opt/infradesk/remnawave
 node_dir=/opt/infradesk/remnawave/11111111-1111-1111-1111-111111111111
 mkdir -m 0755 "$node_dir"
-node_marker='# infradesk-managed test'
-printf '%s\nservices: {}\n' "$node_marker" >"$node_dir/compose.yml"
+node_marker='# infradesk-managed test image=remnawave/node:2.8.0'
+printf '%s\nservices:\n  node:\n    image: remnawave/node:2.8.0\n' "$node_marker" >"$node_dir/compose.yml"
 printf 'SECRET_KEY=c2VjcmV0\nNODE_PORT=2222\n' >"$node_dir/.env"
 chmod 0600 "$node_dir/.env"
 env_hash=$(sha256sum "$node_dir/.env" | cut -d' ' -f1)
@@ -117,14 +117,14 @@ node_start() { sh /checks/NodeStart.sh "$node_dir" "$node_marker" remnawave/node
 [ "$(node_start)" = STARTED ] && [ -e /tmp/node-started ]
 rm /tmp/node-started
 printf 'SECRET_KEY=c2VjcmV0\nNODE_PORT=2223\n' >"$node_dir/.env"
-[ "$(node_proof)" = '0:1' ] && [ "$(node_start)" = FILES ] && [ ! -e /tmp/node-started ]
+[ "$(node_proof)" = '0:0' ] && [ "$(node_start)" = FILES ] && [ ! -e /tmp/node-started ]
 printf 'SECRET_KEY=c2VjcmV0\nNODE_PORT=2222\n' >"$node_dir/.env"
 chmod 0644 "$node_dir/.env"
-[ "$(node_proof)" = '0:1' ]
+[ "$(node_proof)" = '0:0' ]
 chmod 0600 "$node_dir/.env"; ln "$node_dir/.env" "$node_dir/env-link"
-[ "$(node_proof)" = '0:1' ]
+[ "$(node_proof)" = '0:0' ]
 rm "$node_dir/env-link"; mv "$node_dir/.env" "$node_dir/env-save"; ln -s "$node_dir/env-save" "$node_dir/.env"
-[ "$(node_proof)" = '0:1' ] && [ "$(node_start)" = FILES ]
+[ "$(node_proof)" = '0:0' ] && [ "$(node_start)" = FILES ]
 [ "$(SS_EXIT=1 sh /checks/NodePreflight.sh 2222 1)" = UNKNOWN ]
 [ "$(sh /checks/NodePreflight.sh 2222 1)" = FOREIGN ]
 echo 'PASS node install recovery and start reject credential drift, public modes, hardlinks, symlinks, and failed port probes'
@@ -418,6 +418,7 @@ cat >/mocks/docker <<'MOCK'
 case "$1" in
   ps) [ -e /tmp/remnawave-retire-removed ] || printf '%s' "${DOCKER_CONTAINERS:-}" ;;
   inspect) printf '%s' "${DOCKER_INSPECT_INFO:-}" ;;
+  image) printf image-id ;;
   stop) [ "${DOCKER_STOP_EXIT:-0}" = 0 ] || exit "$DOCKER_STOP_EXIT" ;;
   rm) [ "${DOCKER_RM_EXIT:-0}" = 0 ] || exit "$DOCKER_RM_EXIT"; touch /tmp/remnawave-retire-removed ;;
   *) exit 0 ;;
@@ -425,6 +426,21 @@ esac
 MOCK
 chmod 0755 /mocks/docker
 export DOCKER_CONTAINERS="$recovery_name" DOCKER_INSPECT_INFO="$recovery_dir/compose.yml|$recovery_image|true"
+# An approved image upgrade changes only the controlled image line, never the installation identity.
+target_image=$(head -n1 /checks/NodeImageRefs.txt)
+sed -i "s|^    image: .*|    image: $target_image|" "$recovery_dir/compose.yml"
+export DOCKER_INSPECT_INFO="$recovery_dir/compose.yml|$target_image|true"
+[ "$(node_recovery)" = OWNED_COMPLETE ] || exit 1
+[ "$(sh /checks/NodeInstallationProof.sh "$recovery_dir" "$recovery_marker" "$recovery_image" "$recovery_port" "$recovery_compose_hash" "$recovery_prefix")" = '1:1' ] || exit 1
+sed -i 's|network_mode: host|network_mode: bridge|' "$recovery_dir/compose.yml"
+[ "$(node_recovery)" = FOREIGN ] || exit 1
+sed -i 's|network_mode: bridge|network_mode: host|' "$recovery_dir/compose.yml"
+printf '    image: %s\n' "$target_image" >>"$recovery_dir/compose.yml"
+[ "$(node_recovery)" = FOREIGN ] || exit 1
+sed -i '$d' "$recovery_dir/compose.yml"
+sed -i "s|^    image: .*|    image: $recovery_image|" "$recovery_dir/compose.yml"
+export DOCKER_INSPECT_INFO="$recovery_dir/compose.yml|$recovery_image|true"
+echo 'PASS recovery and installation proof preserve exact ownership after a reviewed image upgrade'
 rm -f /tmp/remnawave-retire-removed
 [ "$(DOCKER_STOP_EXIT=9 node_retire)" = UNCERTAIN ] && [ -f "$recovery_dir/.env" ] && [ -d "$recovery_claim" ] || exit 1
 [ "$(DOCKER_RM_EXIT=9 node_retire)" = UNCERTAIN ] && [ -f "$recovery_dir/.env" ] && [ -d "$recovery_claim" ] || exit 1

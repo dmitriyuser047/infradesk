@@ -160,8 +160,9 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     _ <- IO.raiseUnless(settings.enabled)(error("PROVISIONING_DISABLED"))
     now <- IO.realTimeInstant
     result <- runner.run(for {
-      started <- repo.start(actor.organizationId,integration,plan,request,actor.userId,now,confirmRecreate)
-      _ <- if(started.updatedAt!=now) MonadThrow[Tx].unit else for {
+      outcome <- repo.startResult(actor.organizationId,integration,plan,request,actor.userId,now,confirmRecreate)
+      started = outcome.run
+      _ <- if(!outcome.newlyStarted) MonadThrow[Tx].unit else for {
         target <- targets.eligible(actor.organizationId,started.resourceId)
         i <- integrations.findById(actor.organizationId,integration)
         child <- provisioningPlans.find(actor.organizationId,started.snapshot.baselinePlanId)
