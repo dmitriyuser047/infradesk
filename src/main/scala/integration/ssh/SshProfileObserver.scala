@@ -116,8 +116,15 @@ private[ssh] final class SshProfileObserver(transport: RemoteConfigurationTransp
       (if(d.docker.enabled) List("docker.io","docker-ce","docker-ce-cli","containerd.io","docker-compose","docker-compose-plugin") else Nil) ++
       (if(d.caddy.enabled) List("caddy","ca-certificates") else Nil)).distinct.sorted
     if(names.isEmpty) IO.pure(Nil) else commands.shell("""set -eu; command -v dpkg-query >/dev/null
-      for package in "$@"; do status=$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null || true)
-        case "$status" in ii*) printf '%s\n' "$package";; '') :;; *) exit 1;; esac
+      for package in "$@"; do
+        if status=$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null); then
+          # Match all three columns: the error flag must be clear, including for absent packages.
+          case "$status" in 'ii ') printf '%s\n' "$package";; 'un ') :;; *) exit 1;; esac
+        else
+          query_exit=$?
+          # Exit 1 with no status is an unmatched package; database/usage errors remain blocking.
+          [ "$query_exit" -eq 1 ] && [ -z "$status" ] || exit 1
+        fi
       done""",names).flatMap(r => if(r.exitCode==0) IO.pure(r.stdout.linesIterator.filter(names.contains).toList.distinct.sorted)
         else IO.raiseError(ProfileRemoteFailure("PROVISIONING_PACKAGE_PROBE_FAILED")))
   }
