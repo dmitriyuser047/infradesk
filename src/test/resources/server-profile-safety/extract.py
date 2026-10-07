@@ -31,7 +31,7 @@ for name in ['InstallationProof','Start']:
  (out/('Node'+name+'.sh')).write_text('set -u; '+controlled+margin(body),encoding='utf-8',newline='\n')
 body=re.search(r'private val Preflight = """(.*?)"""\.stripMargin',s,re.S).group(1)
 (out/'NodePreflight.sh').write_text(margin(body),encoding='utf-8',newline='\n')
-body=re.search(r'private val RecoveryProbe = """(.*?)"""\.stripMargin',s,re.S).group(1)
+body=re.search(r'private(?:\[ssh\])? val RecoveryProbe = """(.*?)"""\.stripMargin',s,re.S).group(1)
 (out/'NodeRecoveryProbe.sh').write_text(margin(body).replace('CONTROLLED_COMPOSE_PROOF', controlled_snippet),encoding='utf-8',newline='\n')
 probe=margin(body).replace('CONTROLLED_COMPOSE_PROOF', controlled_snippet)
 for name in ['PrepareInstallation','CleanupInstallationStaging','PublishInstallation','RetireInstallation']:

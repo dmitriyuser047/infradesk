@@ -1,3 +1,4 @@
+import { PackageProbeFindings } from '../resources/PackageProbeFindings'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createRequestId } from '../../app/requestId'
 import { readPendingSubmission, storePendingSubmission, type PendingSubmission } from '../../app/pendingSubmission'
@@ -187,12 +188,12 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
           </InlineAlert> : null}
           <p>{preview.nodeImage}</p><p>{copy.cidrs}: {preview.panelCidrs?.join(', ') ?? cidrValues.join(', ')}</p>
           {preview.nodeApi ? <p>Remnawave {preview.nodeApi.serverVersion} · {preview.nodeApi.apiGeneration} · {preview.nodeApi.sourceCommit}</p> : null}
-          <ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings.filter(code => code !== 'REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE')} /><ReviewList title={copy.serverProfile} values={preview.blockingProblems.filter(code => code.startsWith('PROVISIONING_') && !['PROVISIONING_NODE_INSTALLATION_UNMANAGED', 'PROVISIONING_NODE_PORT_OCCUPIED'].includes(code)).map(code => i18n.t.provisioning.errors[code] ?? code)} danger /><ReviewList title={copy.blockers} values={preview.blockingProblems.filter(code => !code.startsWith('REMNAWAVE_LOCAL_INSTALLATION_') && !code.startsWith('PROVISIONING_')).map(code => localDiagnosis(code, i18n.locale) ?? (['REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW', 'REMNAWAVE_ONBOARDING_RECOVERY_CONFLICT'].includes(code)
+          <PackageProbeFindings findings={preview.packageFindings} /><ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings.filter(code => code !== 'REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE')} /><ReviewList title={copy.serverProfile} values={preview.blockingProblems.filter(code => code.startsWith('PROVISIONING_') && !['PROVISIONING_NODE_INSTALLATION_UNMANAGED', 'PROVISIONING_NODE_PORT_OCCUPIED'].includes(code)).map(code => i18n.t.provisioning.errors[code] ?? code)} danger /><ReviewList title={copy.blockers} values={preview.blockingProblems.filter(code => !code.startsWith('REMNAWAVE_LOCAL_INSTALLATION_') && !code.startsWith('PROVISIONING_')).map(code => localDiagnosis(code, i18n.locale) ?? (['REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW', 'REMNAWAVE_ONBOARDING_RECOVERY_CONFLICT'].includes(code)
             ? i18n.locale === 'ru' ? 'На сервере уже создан узел. Его состояние или новые параметры не допускают безопасное продолжение onboarding. Проверьте предыдущий запуск и узел; не создавайте дубликат.' : 'A node was already created on this server. Its state or the new inputs prevent safe onboarding recovery. Review the previous run and node; do not create a duplicate.'
             : i18n.t.provisioning.errors[code] ?? code))} danger />
           </section> : null}
       </> : null}
-      {step === 3 && preview?.recovery ? <RecoveryReview recovery={preview.recovery} newCorrelation={preview.run.correlationId} confirmed={recoveryConfirmed} onConfirm={setRecoveryConfirmed} copy={copy} /> : null}
+      {step === 3 && preview?.recovery ? <RecoveryReview recovery={preview.recovery} newCorrelation={preview.blockingProblems.length ? undefined : preview.run.correlationId} confirmed={recoveryConfirmed} onConfirm={setRecoveryConfirmed} copy={copy} /> : null}
       {(step === 4 || (hasRun && step !== 3)) && current ? <RunStatus run={current} detail={runQuery.data} copy={copy} /> : null}
       {(step === 4 || (hasRun && step !== 3)) && current && ['FAILED', 'UNKNOWN', 'SUCCEEDED'].includes(current.state) && canConfigure ? <div className="integration-row-actions">
         <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={reconcile.isPending || runQuery.isPending} onClick={() => void reconcileRun(current.id, 'RECOVER')}>{copy.checkAgain}</PendingButton>
@@ -224,6 +225,11 @@ function localDiagnosis(code: string, locale: string): string | undefined {
     CONTAINER_STATE_UNKNOWN: ['Не удалось проверить контейнеры. Проверьте доступность Docker.', 'Containers could not be inspected. Check Docker availability.'],
     FIREWALL_STATE_UNKNOWN: ['Не удалось проверить правила межсетевого экрана. Проверьте состояние UFW.', 'Firewall rules could not be verified. Check UFW.'],
     PORT_STATE_UNKNOWN: ['Не удалось проверить занятость порта. Проверьте состояние сервера.', 'Port occupancy could not be verified. Check the server.'],
+    HASH_PROBE_FAILED: ['?? ??????? ????????? SHA-256 ??? ???????? ?????????.', 'Installation SHA-256 probe failed.'],
+    FILESYSTEM_METADATA_UNAVAILABLE: ['?? ??????? ????????? ?????????? ???????? ???????.', 'Filesystem metadata could not be read.'],
+    STAGING_METADATA_UNAVAILABLE: ['?? ??????? ????????? ?????????? staging.', 'Staging metadata could not be read.'],
+    PROBE_EXECUTION_FAILED: ['Shell-???????? ??????????? ? ??????? ??????????.', 'The shell probe exited with an execution error.'],
+    PROBE_OUTPUT_INVALID: ['Shell-???????? ??????? ???????????? ?????????.', 'The shell probe returned an invalid result.'],
     STATE_UNKNOWN: ['Проверка не подтвердила безопасное состояние. Требуется повторная или ручная проверка.', 'Observation did not prove a safe state. Check again or review manually.'],
   }
   return reasons[code.replace(/^REMNAWAVE_LOCAL_INSTALLATION_/, '')]?.[locale === 'ru' ? 0 : 1]

@@ -16,7 +16,10 @@ private[ssh] final case class ProfileRemoteFailure(code: String, uncertain: Bool
 private[ssh] final class ProfileCommands(session: RemoteConfigurationSession[IO], root: Boolean) {
   def capture(executable: String, args: List[String], timeout: FiniteDuration = 30.seconds,
     privileged: Boolean = true): IO[application.port.RemoteCommandOutput] = {
-    val argv = if (privileged && !root) "sudo" -> (List("-n", executable) ++ args) else executable -> args
+    // Scala multiline literals preserve checkout line endings. POSIX shells require LF even when built on Windows.
+    val shellArgs = if(executable=="sh" && args.headOption.contains("-c") && args.size>=2)
+      args.updated(1,args(1).replace("\r\n","\n")) else args
+    val argv = if (privileged && !root) "sudo" -> (List("-n", executable) ++ shellArgs) else executable -> shellArgs
     session.executeCaptured(argv._1, argv._2, timeout, 65536).flatMap { result =>
       if (result.stdoutTruncated || result.stderrTruncated)
         IO.raiseError(ProfileRemoteFailure("PROVISIONING_REMOTE_OUTPUT_LIMIT", uncertain = true, truncated = true))

@@ -42,8 +42,10 @@ final class SshProfileObserverSpec extends FunSuite {
           """
           val shell=if(System.getProperty("os.name").startsWith("Windows"))
             Paths.get(sys.env.getOrElse("ProgramFiles","C:\\Program Files"),"Git","bin","bash.exe").toString else "sh"
-          val process=new ProcessBuilder((List(shell,"-c",fixture+args(1)) ++ args.drop(2)): _*)
+          val process=new ProcessBuilder((List(shell,"-s","--") ++ args.drop(3)): _*)
             .redirectError(ProcessBuilder.Redirect.DISCARD).start()
+          process.getOutputStream.write((fixture+args(1)).getBytes(java.nio.charset.StandardCharsets.UTF_8))
+          process.getOutputStream.close()
           if(!process.waitFor(5,TimeUnit.SECONDS)) { process.destroyForcibly(); fail("Package probe timed out") }
           val output=scala.util.Using.resource(process.getInputStream)(stream =>
             new String(stream.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8))
@@ -79,12 +81,18 @@ final class SshProfileObserverSpec extends FunSuite {
   }
   test("intermediate, broken, error-flagged and malformed package states fail closed") {
     List("iU ","iF ","iH ","iW ","it ","iiR","unR","in ","ii","un","","unexpected").foreach { status =>
-      assertEquals(observe(status).failureCode,Some("PROVISIONING_PACKAGE_PROBE_FAILED"),s"status=$status")
+      val result=observe(status)
+      assert(result.blockingProblems.contains("PROVISIONING_PACKAGE_PROBE_FAILED"),s"status=$status")
+      val findings=domain.provisioning.PackageProbeFinding.fromObservation(result.content)
+      assertEquals(findings.map(_.name),List("curl"))
+      assertEquals(findings.head.observedState,Option.when(status.matches("[uihrp][ncHUFWti][ R]"))(status))
+      assertEquals(findings.head.classification,if(Set("iU ","iF ","iH ","iW ","it ","iiR","unR")(status)) "BROKEN" else "UNKNOWN")
+      assert(!result.content.noSpaces.contains("unexpected"))
     }
   }
   test("database errors and nonzero queries with status output fail closed") {
     List("" -> 2,"ii " -> 2,"un " -> 2,"iF " -> 1).foreach { case (status,exit) =>
-      assertEquals(observe(status,exit).failureCode,Some("PROVISIONING_PACKAGE_PROBE_FAILED"))
+      assert(observe(status,exit).blockingProblems.contains("PROVISIONING_PACKAGE_PROBE_FAILED"))
     }
   }
 }

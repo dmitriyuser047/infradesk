@@ -1,3 +1,4 @@
+import type { PackageProbeFinding } from './serverProfile'
 import type { NodeApiCompatibility } from './integration'
 
 export interface NodeOnboardingServer {
@@ -33,7 +34,7 @@ export interface LocalInstallationObservation {
 export interface NodeOnboardingPreview {
   run: NodeOnboardingRun; serverName: string; serverProfileName: string; revisionNumber: number
   configProfileName: string; inboundNames: string[]; nodeImage: string | null
-  changes: string[]; warnings: string[]; blockingProblems: string[]
+  changes: string[]; warnings: string[]; blockingProblems: string[]; packageFindings?: PackageProbeFinding[]
   nodeApi?: NodeApiCompatibility; panelCidrs?: string[]
   recovery?: NodeOnboardingRecoverySummary
   localInstallationState?: 'ABSENT' | 'OWNED_COMPLETE' | 'OWNED_PARTIAL' | 'OWNED_DAMAGED' | 'FOREIGN' | 'PORT_CONFLICT' | 'UNKNOWN'

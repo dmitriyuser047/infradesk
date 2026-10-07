@@ -38,7 +38,7 @@ object OnboardingRecoveryObservation {
         val operation=if(state=="CONFIRMED_NOT_FOUND") "RECREATE" else action
         Evidence(Some(OnboardingRecovery(r.id,known.orElse(node),correlation,owner,state,operation,Some(previousCidrs),Some(previousImage),local)),
           if(operation=="RECOVER" && Set("PRESENT_EXACT","PRESENT_UNHEALTHY")(state)) node.orElse(known) else None,
-          if(operation=="RECOVER") correlation else UUID.randomUUID(),local.map(_.state))
+          correlation,local.map(_.state))
       }
       (for {
         exact <- known.traverse(id => nodes.lookupNode(context,id).timeoutTo(15.seconds,

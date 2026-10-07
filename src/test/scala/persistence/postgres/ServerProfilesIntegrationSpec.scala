@@ -32,6 +32,26 @@ final class ServerProfilesIntegrationSpec extends FunSuite {
     val worker=new ProvisioningWorker[ConnectionIO](runs,targets,readiness,w.runner,ProvisioningSettings.Default,
       Slf4jLogger.getLoggerFromName[IO]("test.server.profiles"),scope=Some(w.org),profileHandler=Some(coordinator))
   }
+  test("sanitized package findings persist with the observation and block profile approval") {
+    run { w => val s=new Services(w)
+      val finding=PackageProbeFinding("curl",Some("iF "),"BROKEN","REPAIR")
+      s.remote.facts.set(ServerProfileFixtures.observed().deepMerge(io.circe.Json.obj(
+        "packages" -> io.circe.Json.obj("findings" -> io.circe.Json.arr(finding.json)))))
+      for {
+        node <- w.node("package-diagnosis")
+        p <- s.profiles.create(w.actor,"diagnosis","Diagnosis",None,ServerProfileFixtures.content)
+        _ <- s.profiles.assign(w.actor,node.resourceId,p._1.id,1)
+        plan <- s.profiles.preview(w.actor,node.resourceId)
+        stored <- w.run(s.repository.observation(w.org,node.resourceId))
+        blocked <- s.approvals.start(w.actor,plan.run.id,UUID.randomUUID()).attempt
+      } yield {
+        assertEquals(plan.packageFindings,List(finding))
+        assertEquals(stored.toList.flatMap(o => PackageProbeFinding.fromObservation(o.content)),List(finding))
+        assert(plan.blockingProblems.contains("PROVISIONING_PACKAGE_PROBE_FAILED"))
+        assert(!plan.assessment.compliant && blocked.isLeft)
+      }
+    }
+  }
   test("immutable revisions, canonical no-op and concurrent revision creation produce exactly one audit per change") {
     run { w => val s=new Services(w)
       for {

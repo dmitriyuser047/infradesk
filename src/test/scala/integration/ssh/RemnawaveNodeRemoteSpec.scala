@@ -60,7 +60,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
             remoteFiles.remove(s"$stageDir/$name")
           }
         }
-        if (executable == "sh" && args.contains(ProfileManagedFiles.Commit) && result.exitCode == 0) {
+        if (executable == "sh" && args.contains(ProfileManagedFiles.Commit.replace("\r\n","\n")) && result.exitCode == 0) {
           val bytes = uploads.reverseIterator.find(u => ProfileManagedFiles.sha256(u._2) == args.last).get._2
           val path = args(3)
           remoteFiles.update(path, RemoteConfigurationFile(true, bytes.clone(),
@@ -357,7 +357,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
       assert(s.calls.forall { case (_, args) => !args.exists(_.contains(secret)) })
       assert(!failed.toString.contains(secret) && !repaired.toString.contains(secret))
       val firstPrepare = s.calls.indexWhere(_._2.exists(_.contains("atomic ownership publication")))
-      val firstFilePrepare = s.calls.indexWhere(_._2.contains(ProfileManagedFiles.Prepare))
+      val firstFilePrepare = s.calls.indexWhere(_._2.contains(ProfileManagedFiles.Prepare.replace("\r\n","\n")))
       assert(firstPrepare >= 0 && firstPrepare < firstFilePrepare)
       assert(s.calls(firstPrepare)._2.contains(SshRemnawaveNodeRemote.ownershipDirectory(spec)))
     }
@@ -457,7 +457,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     assertEquals(remote(damaged).repair(connection, spec, NodeInstallationData.fromSecretKey(secret)).unsafeRunSync().failureCode, None)
     assertEquals(damaged.uploads.size, 2)
     val envHash = ProfileManagedFiles.sha256(oldEnv.getBytes(StandardCharsets.UTF_8))
-    val commits = damaged.calls.filter { case (ex, args) => ex == "sh" && args.exists(_ == ProfileManagedFiles.Commit) }
+    val commits = damaged.calls.filter { case (ex, args) => ex == "sh" && args.exists(_ == ProfileManagedFiles.Commit.replace("\r\n","\n")) }
     assert(commits.exists(_._2.contains(envHash)), "repair must pass the observed file hash as the CAS expectation")
     assert(damaged.calls.exists { case (ex, args) =>
       ex=="docker" && args.headOption.contains("compose") && args.takeRight(2)==List("config","-q")

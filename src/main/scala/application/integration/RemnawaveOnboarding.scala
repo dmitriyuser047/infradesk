@@ -115,12 +115,13 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       }) ++ Option.when(action=="DELETE_RECREATE" && recovery.isEmpty)("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW")).distinct
     pinned = baseline.toOption.flatMap(_.run.input.profileApply)
     zero = new UUID(0,0)
+    planCorrelation = if(blocks.isEmpty && recovery.exists(!_.reusesNode)) UUID.randomUUID() else proof.correlation
     now <- IO.realTimeInstant
     snapshot = OnboardingSnapshot(input,c._1.updatedAt,c._1.secretId,target.toOption.fold(zero)(_.connectionId),
       target.toOption.fold(now)(_.connectionUpdatedAt),pinned.fold(zero)(_.profileId),pinned.fold(zero)(_.revisionId),
       pinned.fold(0)(_.revisionNumber),pinned.fold(zero)(_.assignmentId),pinned.fold(0L)(_.assignmentVersion),
       pinned.fold("")(_.revisionHash),baseline.toOption.fold(zero)(_.run.id),baseline.toOption.exists(!_.assessment.compliant),api,
-      image.getOrElse(""),proof.correlation,candidates.find(_.id==input.resourceId).fold("")(_.name),
+      image.getOrElse(""),planCorrelation,candidates.find(_.id==input.resourceId).fold("")(_.name),
       baseline.toOption.fold("")(_.profileName),profile.fold("")(_.obj.displayName),
       input.activeInboundIds.flatMap(id => inbounds.find(_.uuid==id.toString).map(_.tag)),
       if(proof.localInstallation.exists(!_.state.repairable) || recovery.exists(r => Set("UNKNOWN","PRESENT_CONFLICT")(r.state))) Nil else
@@ -150,6 +151,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     "configProfileName" -> str(snapshot.configProfileName),"inboundNames" -> strings(snapshot.inboundNames),
     "nodeImage" -> image.fold(Json.Null)(str),"nodeApi" -> OnboardingJson.compatibility(api),
     "panelCidrs" -> strings(input.panelCidrs),"changes" -> strings(snapshot.changes),"warnings" -> strings(snapshot.warnings),
+    "packageFindings" -> Json.fromValues(baseline.toOption.toList.flatMap(_.packageFindings).map(_.json)),
     "blockingProblems" -> strings(blocks),"localInstallationState" -> proof.localState.fold(Json.Null)(s => str(s.code)),
     "localInstallation" -> proof.localInstallation.fold(Json.Null)(OnboardingSnapshotCodec.encodeLocalInstallation),
     "recovery" -> recovery.fold(Json.Null)(OnboardingSnapshotCodec.encodeRecovery))

@@ -1,3 +1,5 @@
+import { PackageProbeFindings } from './PackageProbeFindings'
+import type { PackageProbeFinding } from '../../types/serverProfile'
 ﻿import { useEffect, useRef, useState } from 'react'
 import { useAssignServerProfile, useObserveServerProfile, usePreviewServerProfile, useServerProfile, useServerProfileAutomation, useServerProfiles, useUnassignServerProfile } from '../../api/serverProfiles'
 import { useProvisioningRun, useStartProvisioning } from '../../api/provisioning'
@@ -87,6 +89,7 @@ export function ServerProfileAutomationPanel({ organizationId, resourceId, resou
   return <WorkspaceSection title={t.assignment} className="server-profile-automation" actions={<StatusIndicator label={t.assessment[status]} tone={status === 'COMPLIANT' ? 'success' : status === 'APPLY_FAILED' ? 'danger' : status === 'DRIFTED' || status === 'UNKNOWN' ? 'warning' : status === 'APPLYING' ? 'info' : 'neutral'} />}>
     {automation.isError ? <InlineAlert tone="warning" title={t.detailError} action={<button className="text-button" type="button" onClick={() => void automation.refetch()}>{i18n.t.common.retry}</button>} /> : null}
     {automation.data?.assignment ? <div className="server-profile-current"><h3>{automation.data.profile?.name ?? '—'}</h3><p className="muted-copy">{t.currentRevision(automation.data.revision?.number ?? automation.data.assignment.revisionNumber)}</p><p>{t.stateSummary[status]}</p></div> : <p>{t.unassigned}</p>}
+    <PackageProbeFindings findings={(automation.data?.observation?.content.packages as { findings?: PackageProbeFinding[] } | undefined)?.findings} />
     {status === 'UNKNOWN' ? <InlineAlert tone="warning" title={t.assessment.UNKNOWN}>{t.unknown}</InlineAlert> : null}
     {status === 'APPLY_FAILED' ? <InlineAlert tone="danger" title={t.assessment.APPLY_FAILED}>{t.applyFailedDetail}</InlineAlert> : null}
     {automation.data?.assessment?.modules.length ? <section className="workflow-group" aria-label={t.moduleSummary}><h3>{t.moduleSummary}</h3><div className="server-profile-module-statuses">{automation.data.assessment.modules.map(item => {
@@ -119,6 +122,7 @@ export function ServerProfileAutomationPanel({ organizationId, resourceId, resou
       actionNote={applyDisabledReason}
       actionFeedback={start.isError ? <InlineAlert tone="danger" title={i18n.t.operations.startFailed}>{failText(start.error,i18n.t.common.operationBlocked)}</InlineAlert> : workflowError ? <InlineAlert tone="danger" title={i18n.t.common.operationBlocked} /> : undefined}
       actions={<><button className="secondary-button" type="button" disabled={start.isPending} onClick={() => setPreviewState(null)}>{i18n.t.common.cancel}</button><PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={t.assessment.APPLYING} disabled={plan.blockingProblems.length > 0 || blocked} onClick={() => void submit({planId:previewState.plan.run.id,requestId:previewState.requestId})}>{t.apply}</PendingButton></>}>
+      <PackageProbeFindings findings={plan.packageFindings} />
       {plan.blockingProblems.map((problem,i)=><OperationProblem key={i} code={problem} messages={profileErrors} title={t.blockers} />)}
       {plan.warnings.map((warning,i)=><OperationProblem key={i} code={warning} messages={profileErrors} title={t.warnings} tone="warning" />)}
       {plan.assessment.changes.some(change => change.module === 'limits') ? <InlineAlert tone="info" title={t.limits}>{t.limitsNote}</InlineAlert> : null}

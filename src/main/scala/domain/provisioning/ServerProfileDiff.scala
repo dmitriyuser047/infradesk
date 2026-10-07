@@ -50,7 +50,10 @@ object ServerProfileDiff {
     }
     val installed = obj("packages").flatMap(_.toMap.get("installed")).flatMap(_.asArray)
       .map(_.toList.flatMap(_.asString)).getOrElse(Nil).toSet
-    module("packages",desired.packages.enabled,desired.packages.packages.filterNot(installed).map(p => ProfileChange("packages","PACKAGE_MISSING",Some(p))))
+    val packageFindings=PackageProbeFinding.fromObservation(actual)
+    module("packages",desired.packages.enabled || packageFindings.nonEmpty,
+      (if(desired.packages.enabled) desired.packages.packages else Nil).filterNot(installed).map(p => ProfileChange("packages","PACKAGE_MISSING",Some(p))) ++
+        packageFindings.map(f => ProfileChange("packages","PACKAGE_STATE_"+f.classification,Some(f.name),f.observedState,Some(f.suggestedAction))))
 
     val networkChanges = effectiveSysctl(desired.network).toList.sortBy(_._1).flatMap { case (key,value) =>
       val live = stringAt("network","sysctl",key)

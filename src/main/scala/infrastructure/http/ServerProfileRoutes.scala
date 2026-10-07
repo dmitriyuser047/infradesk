@@ -117,6 +117,7 @@ final class ServerProfileRoutes[Tx[_]](profiles: ServerProfiles[IO,Tx], authoriz
     "steps" -> Json.fromValues(p.run.input.steps.zipWithIndex.map { case (kind,position) =>
       Json.obj("kind" -> Json.fromString(kind.code),"position" -> Json.fromInt(position)) }),
     "dependencyPackages" -> Json.fromValues(p.dependencyPackages.map(Json.fromString)),
+    "packageFindings" -> Json.fromValues(p.packageFindings.map(_.json)),
     "endpoint" -> p.run.input.profileApply.flatMap(s => Option.when(s.content.caddy.enabled)(s.content.caddy)
       .flatMap(c => c.domain.map(d => s"https://$d:${c.localHttpsPort}"))).fold(Json.Null)(Json.fromString),
     "assessment" -> assessmentJson(p.assessment), "warnings" -> Json.fromValues(p.warnings.map(Json.fromString)),

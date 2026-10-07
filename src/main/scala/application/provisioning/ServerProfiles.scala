@@ -30,7 +30,7 @@ object ServerProfileError {
 
 final case class ServerProfilePlan(run: ProvisioningRun, connectionName: String,
   assessment: ServerProfileAssessment, warnings: List[String], blockingProblems: List[String],
-  profileName: String, dependencyPackages: List[String])
+  profileName: String, dependencyPackages: List[String], packageFindings: List[PackageProbeFinding] = Nil)
 final case class ServerProfileAutomation(assignment: Option[ServerProfileAssignment], profile: Option[ServerProfile],
   revision: Option[ServerProfileRevision], observation: Option[ServerProfileObservation], state: String,
   assessment: Option[ServerProfileAssessment], activeRun: Option[ProvisioningRun], operationsBlocked: Boolean)
@@ -182,7 +182,7 @@ final class ServerProfiles[F[_]: MonadThrow, Tx[_]: MonadThrow](
     observedAt <- writes.run(time.now)
     observation = makeObservation(observationId,actor.organizationId,resourceId,target,Some(a),observed,observedAt,None)
     assessment = ServerProfileDiff.assess(r.content,observed.content)
-    blocks = observed.blockingProblems.distinct
+    blocks = (observed.blockingProblems ++ Option.when(PackageProbeFinding.fromObservation(observed.content).nonEmpty)("PROVISIONING_PACKAGE_PROBE_FAILED")).distinct
     diffHash = ServerProfileDiff.reviewedHash(assessment)
     plan <- writes.run(for {
       _ <- repository.lockResource(actor.organizationId,resourceId)
@@ -207,7 +207,7 @@ final class ServerProfiles[F[_]: MonadThrow, Tx[_]: MonadThrow](
       _ <- runs.insertPlan(run)
       profile <- repository.profile(actor.organizationId,a.profileId).flatMap(_.liftTo[Tx](notFound))
     } yield ServerProfilePlan(run,target.connection.name,assessment,observed.warnings,blocks,profile.name,
-      ServerProfileDiff.requiredPackages(r.content,observed.content)))
+      ServerProfileDiff.requiredPackages(r.content,observed.content),PackageProbeFinding.fromObservation(observed.content)))
   } yield plan
 
   def automation(organizationId: UUID, resourceId: UUID): F[ServerProfileAutomation] = for {

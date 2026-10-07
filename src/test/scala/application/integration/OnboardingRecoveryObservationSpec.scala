@@ -184,7 +184,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     h.assertReadOnly()
   }
 
-  test("typed confirmed absence with no candidate plans recreation using a new correlation") {
+  test("typed confirmed absence retains observation identity until an executable plan is persisted") {
     val h = new Harness(candidates0 = Nil, lookup0 = NodeLookupOutcome.ConfirmedNotFound)
     val result = h.inspect()
     assertEquals(recovery(result).state, "CONFIRMED_NOT_FOUND")
@@ -193,7 +193,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     assertEquals(recovery(result).previousCorrelationId, originalCorrelation)
     assertEquals(recovery(result).installationOwnerId, sourceRunId)
     assertEquals(result.node, None)
-    assertNotEquals(result.correlation, originalCorrelation)
+    assertEquals(result.correlation, originalCorrelation)
     h.assertReadOnly()
   }
 
@@ -204,6 +204,8 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
       assertEquals(recovery(result).state,"CONFIRMED_NOT_FOUND")
       assertEquals(recovery(result).action,"RECREATE")
       assertEquals(result.localInstallation.map(_.state),Some(state))
+      assertEquals(result.correlation,originalCorrelation)
+      assertEquals(h.inspect().correlation,result.correlation)
       assertEquals(result.localInstallation.flatMap(_.blocker).nonEmpty,!state.repairable)
       h.assertReadOnly()
     }
@@ -301,7 +303,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     h.assertReadOnly()
   }
 
-  test("DELETE_RECREATE observation is preview-only and carries old identity while planning a new correlation") {
+  test("DELETE_RECREATE observation carries old identity without allocating mutation identity") {
     val h = new Harness(candidates0 = List(node()))
     val result = h.inspect(action = "DELETE_RECREATE")
     assertEquals(recovery(result).state, "PRESENT_EXACT")
@@ -310,7 +312,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     assertEquals(recovery(result).previousCorrelationId, originalCorrelation)
     assertEquals(recovery(result).installationOwnerId, sourceRunId)
     assertEquals(result.node, None)
-    assertNotEquals(result.correlation, originalCorrelation)
+    assertEquals(result.correlation, originalCorrelation)
     h.assertReadOnly()
   }
 

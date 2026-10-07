@@ -5,7 +5,7 @@ import application.port.{RemoteConfigurationTransport,ServerProfileRemoteObserva
 import cats.effect.IO
 import cats.syntax.all._
 import domain.connection.Connection
-import domain.provisioning.{ServerProfileContent,ServerProfileDiff}
+import domain.provisioning.{ServerProfileContent,ServerProfileDiff,PackageProbeFinding}
 import io.circe.Json
 import java.util.UUID
 import scala.concurrent.duration._
@@ -24,7 +24,9 @@ private[ssh] final class SshProfileObserver(transport: RemoteConfigurationTransp
         _ <- IO.raiseUnless(privilege.exitCode==0)(ProfileRemoteFailure("PROVISIONING_PERMISSION_DENIED"))
         ssh <- commands.shell("printf '%s' \"$SSH_CONNECTION\"",privileged=false)
         endpoint <- parseEndpoint(ssh.stdout).liftTo[IO](ProfileRemoteFailure("PROVISIONING_SSH_SOURCE_UNAVAILABLE"))
-        packages <- collectPackages(commands,desired)
+        packageProbe <- collectPackages(commands,desired)
+        packages=packageProbe._1
+        packageFindings=packageProbe._2
         networkFile <- file(commands,NetworkPath,NetworkMarker,desired.exists(_.network.enabled),content=true)
         effectiveNetwork=desired.filter(_.network.enabled).map(d => ServerProfileDiff.effectiveSysctl(d.network)).getOrElse(Map.empty)
         liveNetwork <- effectiveNetwork.keys.toList.sorted.traverse { key =>
@@ -73,7 +75,8 @@ private[ssh] final class SshProfileObserver(transport: RemoteConfigurationTransp
           case _ => None
         }}.toMap
         facts=Json.obj(
-          "packages" -> Json.obj("installed" -> Json.fromValues(packages.sorted.map(Json.fromString))),
+          "packages" -> Json.obj("installed" -> Json.fromValues(packages.sorted.map(Json.fromString))).deepMerge(
+            if(packageFindings.isEmpty) Json.obj() else Json.obj("findings" -> Json.fromValues(packageFindings.map(_.json)))),
           "network" -> Json.obj("sysctl" -> Json.fromFields(liveNetwork),"managedSysctl" -> Json.fromFields(networkValues),
             "managedFile" -> Json.fromBoolean(networkFile.managed),"managedFileHash" -> hashJson(networkFile),
             "bbr" -> Json.fromBoolean(liveNetwork.toMap.get("net.ipv4.tcp_congestion_control").contains(Json.fromString("bbr"))),
@@ -97,7 +100,7 @@ private[ssh] final class SshProfileObserver(transport: RemoteConfigurationTransp
         blockers=List("NETWORK_CONFIG_UNMANAGED" -> networkFile,"LIMITS_CONFIG_UNMANAGED" -> limitsFile,
           "LIMITS_CONFIG_UNMANAGED" -> managerFile,"FAIL2BAN_CONFIG_UNMANAGED" -> failFile,
           "CADDY_CONFIG_UNMANAGED" -> caddyFile,"SITE_CONTENT_UNMANAGED" -> siteFile)
-          .collect { case (code,f) if Set("UNSAFE","UNMANAGED")(f.state) => code } ++ firewall._3 ++ listeners._2
+          .collect { case (code,f) if Set("UNSAFE","UNMANAGED")(f.state) => code } ++ firewall._3 ++ listeners._2 ++ Option.when(packageFindings.nonEmpty)("PROVISIONING_PACKAGE_PROBE_FAILED")
       } yield ServerProfileRemoteObservation(facts,ServerProfileDiff.hashObservation(facts),warnings=(firewall._2 ++ dnsWarnings).distinct.sorted,
         blockingProblems=blockers.distinct.sorted)
     }.timeoutTo(180.seconds,IO.raiseError(ProfileRemoteFailure("PROVISIONING_REMOTE_TIMEOUT",uncertain=true)))
@@ -110,24 +113,45 @@ private[ssh] final class SshProfileObserver(transport: RemoteConfigurationTransp
         case _ => IO.pure(ServerProfileRemoteObservation(Json.obj(),"",Some("PROVISIONING_REMOTE_UNAVAILABLE")))
       }
 
-  private def collectPackages(commands: ProfileCommands,desired: Option[ServerProfileContent]): IO[List[String]] = {
+  private def collectPackages(commands: ProfileCommands,desired: Option[ServerProfileContent]): IO[(List[String],List[PackageProbeFinding])] = {
     val names=desired.toList.flatMap(d => (if(d.packages.enabled) d.packages.packages else Nil) ++
       (if(d.firewall.enabled) List("ufw") else Nil) ++ (if(d.fail2ban.enabled) List("fail2ban") else Nil) ++
       (if(d.docker.enabled) List("docker.io","docker-ce","docker-ce-cli","containerd.io","docker-compose","docker-compose-plugin") else Nil) ++
       (if(d.caddy.enabled) List("caddy","ca-certificates") else Nil)).distinct.sorted
-    if(names.isEmpty) IO.pure(Nil) else commands.shell("""set -eu; command -v dpkg-query >/dev/null
+    if(names.isEmpty) IO.pure(Nil -> Nil) else commands.shell("""set -eu
+      command -v dpkg-query >/dev/null || exit 2
       for package in "$@"; do
-        if status=$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null); then
-          # Match all three columns: the error flag must be clear, including for absent packages.
-          case "$status" in 'ii ') printf '%s\n' "$package";; 'un ') :;; *) exit 1;; esac
-        else
-          query_exit=$?
-          # Exit 1 with no status is an unmatched package; database/usage errors remain blocking.
-          [ "$query_exit" -eq 1 ] && [ -z "$status" ] || exit 1
+        query_exit=0
+        status=$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null) || query_exit=$?
+        if [ "$query_exit" = 0 ]; then
+          case "$status" in
+            'ii ') printf 'I|%s\n' "$package"; continue ;;
+            'un ') printf 'A|%s\n' "$package"; continue ;;
+          esac
+        elif [ "$query_exit" = 1 ] && [ -z "$status" ]; then
+          printf 'A|%s\n' "$package"; continue
         fi
-      done""",names).flatMap(r => if(r.exitCode==0) IO.pure(r.stdout.linesIterator.filter(names.contains).toList.distinct.sorted)
-        else IO.raiseError(ProfileRemoteFailure("PROVISIONING_PACKAGE_PROBE_FAILED")))
+        safe_status=INVALID; classification=UNKNOWN; action=MANUAL
+        case "$status" in [uihrp][ncHUFWti][\ R]) safe_status=$status ;; esac
+        if [ "$query_exit" = 0 ]; then
+          case "$safe_status" in ?[HUFWt]?|??R) classification=BROKEN; action=REPAIR ;; esac
+        fi
+        printf 'F|%s|%s|%s|%s\n' "$package" "$safe_status" "$classification" "$action"
+      done""",names).map { r =>
+      def unavailable = Nil -> names.map(name => PackageProbeFinding(name,None,"UNKNOWN","MANUAL"))
+      val records=r.stdout.linesIterator.map(_.split("\\|",-1).toList).toList
+      val valid=r.exitCode==0 && records.size==names.size && records.flatMap(_.lift(1)).sorted==names && records.forall {
+        case List(kind,name) => Set("I","A")(kind) && names.contains(name)
+        case List("F",name,state,classification,action) => names.contains(name) &&
+          scala.util.Try(PackageProbeFinding(name,Option.when(state!="INVALID")(state),classification,action)).isSuccess
+        case _ => false
+      }
+      if(!valid) unavailable else records.collect { case List("I",name) => name }.sorted -> records.collect {
+        case List("F",name,state,classification,action) => PackageProbeFinding(name,Option.when(state!="INVALID")(state),classification,action)
+      }
+    }
   }
+
   private def binary(commands: ProfileCommands,name: String,enabled: Boolean): IO[Boolean] =
     if(!enabled) IO.pure(false) else commands.shell("if command -v \"$1\" >/dev/null 2>&1; then \"$1\" \"$2\" >/dev/null && echo YES; else echo NO; fi",
       List(name,if(name=="caddy") "version" else "--version"))

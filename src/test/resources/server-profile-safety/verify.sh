@@ -386,7 +386,7 @@ printf 'SECRET_KEY=ZHVtbXk=\nNODE_PORT=%s\n' "$((recovery_port + 1))" >"$recover
 printf 'SECRET_KEY=ZHVtbXk=\nNODE_PORT=%s\n' "$recovery_port" >"$recovery_dir/.env"; chmod 0600 "$recovery_dir/.env"
 [ "$(node_recovery)" = OWNED_COMPLETE ]
 
-[ "$(SS_EXIT=9 node_recovery)" = UNKNOWN ]
+[ "$(SS_EXIT=9 node_recovery)" = UNKNOWN:REMNAWAVE_LOCAL_INSTALLATION_PORT_STATE_UNKNOWN ]
 [ "$(SS_LISTENERS=LISTEN node_recovery)" = PORT_CONFLICT ]
 [ "$(SS_LISTENERS=LISTEN node_prepare)" = PORT_CONFLICT ]
 [ -f "$recovery_dir/.env" ]

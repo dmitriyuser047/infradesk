@@ -246,8 +246,10 @@ object ServerProfileObservationCodec {
     }
     for {
       _ <- Either.cond(json.asObject.exists(_.keys.toSet == Set("packages","network","limits","firewall","fail2ban","docker","site","caddy")),(),"PROVISIONING_OBSERVATION_INVALID")
-      packages <- exact(child(json,"packages"),Set("installed"))
+      packages <- child(json,"packages").filter(_.asObject.exists(o => o.keys.toSet==Set("installed") || o.keys.toSet==Set("installed","findings"))).toRight("PROVISIONING_OBSERVATION_INVALID")
       _ <- Either.cond(packages.hcursor.get[List[String]]("installed").exists(xs => xs.size <= 128 && xs.distinct == xs && xs.forall(_.matches(PackageName))),(),"PROVISIONING_OBSERVATION_INVALID")
+      _ <- Either.cond(!packages.hcursor.downField("findings").succeeded || packages.hcursor.get[List[Json]]("findings").exists(xs =>
+        xs.size<=128 && xs.forall(PackageProbeFinding.decode(_).nonEmpty) && xs.flatMap(PackageProbeFinding.decode).map(_.name).distinct.size==xs.size),(),"PROVISIONING_OBSERVATION_INVALID")
       network <- exact(child(json,"network"),Set("sysctl","managedSysctl","managedFile","managedFileHash","bbr","managedBbr"))
       _ <- Either.cond(validMap(network,"sysctl") && validMap(network,"managedSysctl") && allBools(network,List("managedFile","bbr","managedBbr")) && hashOrNull(network,"managedFileHash"),(),"PROVISIONING_OBSERVATION_INVALID")
       limits <- exact(child(json,"limits"),Set("managedNofileSoft","managedNofileHard","systemdDefaultLimitNofile","managedFile","managedFileHash","managedSystemdDropin","managedSystemdDropinHash"))

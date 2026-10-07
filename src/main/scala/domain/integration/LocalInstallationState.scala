@@ -27,8 +27,14 @@ object LocalInstallationDiagnosis {
   case object FirewallStateUnknown extends LocalInstallationDiagnosis("REMNAWAVE_LOCAL_INSTALLATION_FIREWALL_STATE_UNKNOWN")
   case object PortStateUnknown extends LocalInstallationDiagnosis("REMNAWAVE_LOCAL_INSTALLATION_PORT_STATE_UNKNOWN")
   case object StateUnknown extends LocalInstallationDiagnosis("REMNAWAVE_LOCAL_INSTALLATION_STATE_UNKNOWN")
+  case object HashProbeFailed extends LocalInstallationDiagnosis("REMNAWAVE_LOCAL_INSTALLATION_HASH_PROBE_FAILED")
+  case object FilesystemMetadataUnavailable extends LocalInstallationDiagnosis("REMNAWAVE_LOCAL_INSTALLATION_FILESYSTEM_METADATA_UNAVAILABLE")
+  case object StagingMetadataUnavailable extends LocalInstallationDiagnosis("REMNAWAVE_LOCAL_INSTALLATION_STAGING_METADATA_UNAVAILABLE")
+  case object ProbeExecutionFailed extends LocalInstallationDiagnosis("REMNAWAVE_LOCAL_INSTALLATION_PROBE_EXECUTION_FAILED")
+  case object ProbeOutputInvalid extends LocalInstallationDiagnosis("REMNAWAVE_LOCAL_INSTALLATION_PROBE_OUTPUT_INVALID")
   val all: List[LocalInstallationDiagnosis] = List(SshUnavailable,ObservationTimeout,OutputTruncated,ComposeUnreadable,
-    OwnerUnproven,ContainerStateUnknown,FirewallStateUnknown,PortStateUnknown,StateUnknown)
+    OwnerUnproven,ContainerStateUnknown,FirewallStateUnknown,PortStateUnknown,StateUnknown,HashProbeFailed,
+    FilesystemMetadataUnavailable,StagingMetadataUnavailable,ProbeExecutionFailed,ProbeOutputInvalid)
   def fromCode(code: String): Option[LocalInstallationDiagnosis] = all.find(_.code==code)
 }
 final case class LocalInstallationObservation(state: LocalInstallationState, diagnosis: Option[LocalInstallationDiagnosis] = None) {

@@ -1,3 +1,4 @@
+export interface PackageProbeFinding { name: string; observedState: string | null; classification: 'BROKEN' | 'UNKNOWN'; suggestedAction: 'REPAIR' | 'MANUAL' }
 export interface ServerProfileContent {
   schemaVersion: 1
   packages: { enabled: boolean; packages: string[] }
@@ -30,7 +31,7 @@ export interface ServerProfilePlan {
   run: { id: string; state: string }
   connectionName: string; resourceKind: string; profileName: string; revisionNumber: number
   steps: { kind: string; position: number }[]; dependencyPackages: string[]; endpoint: string | null
-  assessment: ServerProfileAssessment; warnings: string[]; blockingProblems: string[]
+  assessment: ServerProfileAssessment; warnings: string[]; blockingProblems: string[]; packageFindings?: PackageProbeFinding[]
 }
 export interface ServerProfileAutomation {
   state: 'UNOBSERVED' | 'APPLYING' | 'COMPLIANT' | 'DRIFTED' | 'APPLY_FAILED' | 'UNKNOWN' | 'WAITING_REFRESH'

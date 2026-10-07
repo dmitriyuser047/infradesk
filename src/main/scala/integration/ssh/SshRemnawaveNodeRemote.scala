@@ -393,13 +393,14 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
   private def recoveryObservation(c: ProfileCommands, spec: RemnawaveNodeRemoteSpec, sshUid: Int): IO[LocalInstallationObservation] =
     c.capture("sh", List("-c", RecoveryProbe, "infradesk") ++ recoveryArgs(spec, sshUid), 20.seconds)
       .map { r =>
-        if(r.exitCode!=0) LocalInstallationObservation.unknown(LocalInstallationDiagnosis.StateUnknown)
+        if(r.exitCode!=0) LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ProbeExecutionFailed)
         else r.stdout.trim.split(":",-1).toList match {
           case List("UNKNOWN",reason) => LocalInstallationObservation.unknown(
-            LocalInstallationDiagnosis.fromCode(reason).getOrElse(LocalInstallationDiagnosis.StateUnknown))
+            LocalInstallationDiagnosis.fromCode(reason).getOrElse(LocalInstallationDiagnosis.ProbeOutputInvalid))
+          case List("UNKNOWN") => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ProbeOutputInvalid)
           case List("FOREIGN") => LocalInstallationObservation(LocalInstallationState.Foreign,Some(LocalInstallationDiagnosis.OwnerUnproven))
-          case List(code) => LocalInstallationObservation.fromState(LocalInstallationState.fromCode(code))
-          case _ => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.StateUnknown)
+          case List(code) if LocalInstallationState.all.exists(_.code==code) => LocalInstallationObservation.fromState(LocalInstallationState.fromCode(code))
+          case _ => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ProbeOutputInvalid)
         }
       }.handleErrorWith {
         case RemoteConfigurationFailure.CommandTimeout => IO.pure(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ObservationTimeout))
@@ -642,17 +643,20 @@ private[ssh] object SshRemnawaveNodeRemote {
        |[ "$$normalizedHash" = "$$composeHash" ] || $failure
        |""".stripMargin
 
-  private val RecoveryProbe = """set -u
+  private[ssh] val RecoveryProbe = """set -u
     |d=$1; marker=$2; managedPrefix=$3; name=$4; image=$5; port=$6; claim=$7; composeHash=$8; sshUid=${9:-0}
     |stageDir=${claim%/.owner-*}/.staging-${claim##*/.owner-}
-    |result() { printf '%s' "$1"; if [ "$1" = UNKNOWN ]; then printf ':%s' "${2:-REMNAWAVE_LOCAL_INSTALLATION_STATE_UNKNOWN}"; fi; exit 0; }
+    |result() { printf '%s' "$1"; if [ "$1" = UNKNOWN ]; then printf ':%s' "${2:?Missing sanitized diagnosis}"; fi; exit 0; }
     |owner=${marker#"# infradesk-managed run="}; owner=${owner%% *}
     |resource=${marker#* resource=}; resource=${resource%% *}; node=${d##*/}
-    |imageHash=$(printf '%s' "$image" | sha256sum | cut -d' ' -f1) || result UNKNOWN
+    |imageDigest=$(printf '%s' "$image" | sha256sum 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_HASH_PROBE_FAILED
+    |imageHash=${imageDigest%% *}
+    |[ "${#imageHash}" = 64 ] || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_HASH_PROBE_FAILED
+    |case "$imageHash" in *[!a-f0-9]*) result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_HASH_PROBE_FAILED ;; esac
     |[ "$claim" = "/opt/infradesk/remnawave/.owner-$node-$owner-$resource-$imageHash" ] || result FOREIGN
     |for p in /opt /opt/infradesk /opt/infradesk/remnawave; do
     |  [ ! -L "$p" ] || result FOREIGN
-    |  if [ -e "$p" ]; then [ -d "$p" ] && [ "$(stat -c '%u' "$p" 2>/dev/null)" = 0 ] || result FOREIGN; mode=$(stat -c '%a' "$p" 2>/dev/null) || result UNKNOWN; [ $((0$mode & 07022)) -eq 0 ] || result FOREIGN; fi
+    |  if [ -e "$p" ]; then [ -d "$p" ] || result FOREIGN; metadata=$(stat -c '%u' "$p" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_FILESYSTEM_METADATA_UNAVAILABLE; [ "$metadata" = 0 ] || result FOREIGN; mode=$(stat -c '%a' "$p" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_FILESYSTEM_METADATA_UNAVAILABLE; [ $((0$mode & 07022)) -eq 0 ] || result FOREIGN; fi
     |done
     |claimOwned=0
     |for p in /opt/infradesk/remnawave/.owner-"$node"-*; do
@@ -664,26 +668,26 @@ private[ssh] object SshRemnawaveNodeRemote {
     |  [ "$p" = "$stageDir" ] || result FOREIGN
     |done
     |if [ -e "$claim" ] || [ -L "$claim" ]; then
-    |  [ ! -L "$claim" ] && [ -d "$claim" ] && [ "$(stat -c '%u:%g:%a' "$claim" 2>/dev/null)" = '0:0:700' ] || result FOREIGN
+    |  [ ! -L "$claim" ] && [ -d "$claim" ] || result FOREIGN; metadata=$(stat -c '%u:%g:%a' "$claim" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_FILESYSTEM_METADATA_UNAVAILABLE; [ "$metadata" = '0:0:700' ] || result FOREIGN
     |  for f in "$claim"/* "$claim"/.[!.]* "$claim"/..?*; do [ ! -e "$f" ] && [ ! -L "$f" ] || result FOREIGN; done
     |  claimOwned=1
     |fi
     |stageOwned=0
     |if [ -e "$stageDir" ] || [ -L "$stageDir" ]; then
     |  [ "$claimOwned" = 1 ] || result FOREIGN
-    |  [ ! -L "$stageDir" ] && [ -d "$stageDir" ] && [ "$(stat -c '%u:%g:%a' "$stageDir" 2>/dev/null)" = '0:0:755' ] || result FOREIGN
+    |  [ ! -L "$stageDir" ] && [ -d "$stageDir" ] || result FOREIGN; metadata=$(stat -c '%u:%g:%a' "$stageDir" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_STAGING_METADATA_UNAVAILABLE; [ "$metadata" = '0:0:755' ] || result FOREIGN
     |  for f in "$stageDir"/* "$stageDir"/.[!.]* "$stageDir"/..?*; do
     |    [ -e "$f" ] || [ -L "$f" ] || continue
     |    case "$f" in
     |      "$stageDir/compose.yml"|"$stageDir/.env"|"$stageDir/managed.json")
-    |        [ ! -L "$f" ] && [ -f "$f" ] && [ "$(stat -c '%u:%g:%h' "$f" 2>/dev/null)" = '0:0:1' ] || result FOREIGN
-    |        mode=$(stat -c '%a' "$f" 2>/dev/null) || result UNKNOWN
+    |        [ ! -L "$f" ] && [ -f "$f" ] || result FOREIGN; metadata=$(stat -c '%u:%g:%h' "$f" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_STAGING_METADATA_UNAVAILABLE; [ "$metadata" = '0:0:1' ] || result FOREIGN
+    |        mode=$(stat -c '%a' "$f" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_STAGING_METADATA_UNAVAILABLE
     |        case "$f:$mode" in "$stageDir/.env:600"|"$stageDir/compose.yml:644"|"$stageDir/managed.json:644") ;; *) result FOREIGN ;; esac ;;
     |      "$stageDir/.infradesk-$owner-"*)
     |        nonce=${f#"$stageDir/.infradesk-$owner-"}
     |        printf '%s' "$nonce" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || result FOREIGN
-    |        [ ! -L "$f" ] && [ -d "$f" ] && [ "$(stat -c '%u:%g:%a' "$f" 2>/dev/null)" = '0:0:700' ] || result FOREIGN
-    |        for child in "$f"/* "$f"/.[!.]* "$f"/..?*; do [ ! -e "$child" ] && [ ! -L "$child" ] && continue; case "$child" in "$f/candidate"|"$f/previous") ;; *) result FOREIGN ;; esac; [ ! -L "$child" ] && [ -f "$child" ] && [ "$(stat -c '%u:%g:%h' "$child" 2>/dev/null)" = '0:0:1' ] || result FOREIGN; mode=$(stat -c '%a' "$child" 2>/dev/null) || result UNKNOWN; case "$mode" in 600|644) ;; *) result FOREIGN ;; esac; done ;;
+    |        [ ! -L "$f" ] && [ -d "$f" ] || result FOREIGN; metadata=$(stat -c '%u:%g:%a' "$f" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_STAGING_METADATA_UNAVAILABLE; [ "$metadata" = '0:0:700' ] || result FOREIGN
+    |        for child in "$f"/* "$f"/.[!.]* "$f"/..?*; do [ ! -e "$child" ] && [ ! -L "$child" ] && continue; case "$child" in "$f/candidate"|"$f/previous") ;; *) result FOREIGN ;; esac; [ ! -L "$child" ] && [ -f "$child" ] || result FOREIGN; metadata=$(stat -c '%u:%g:%h' "$child" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_STAGING_METADATA_UNAVAILABLE; [ "$metadata" = '0:0:1' ] || result FOREIGN; mode=$(stat -c '%a' "$child" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_STAGING_METADATA_UNAVAILABLE; case "$mode" in 600|644) ;; *) result FOREIGN ;; esac; done ;;
     |      *) result FOREIGN ;;
     |    esac
     |  done
@@ -700,7 +704,7 @@ private[ssh] object SshRemnawaveNodeRemote {
     |  [ -e "$upload" ] || [ -L "$upload" ] || continue
     |  nonce=${upload#"/tmp/infradesk-$owner-"}
     |  printf '%s' "$nonce" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || result FOREIGN
-    |  [ ! -L "$upload" ] && [ -d "$upload" ] && [ "$(stat -c '%u:%a' "$upload" 2>/dev/null)" = "$sshUid:700" ] || result FOREIGN
+    |  [ ! -L "$upload" ] && [ -d "$upload" ] || result FOREIGN; metadata=$(stat -c '%u:%a' "$upload" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_STAGING_METADATA_UNAVAILABLE; [ "$metadata" = "$sshUid:700" ] || result FOREIGN
     |  for file in "$upload"/* "$upload"/.[!.]* "$upload"/..?*; do
     |    [ -e "$file" ] || [ -L "$file" ] || continue
     |    [ "$file" = "$upload/input" ] && [ ! -L "$file" ] && [ -f "$file" ] &&
@@ -709,26 +713,26 @@ private[ssh] object SshRemnawaveNodeRemote {
     |  staging=1
     |done
     |if [ ! -e "$d" ] && [ ! -L "$d" ]; then [ "$ownContainer" = 0 ] || result FOREIGN; [ -z "$listeners" ] || result PORT_CONFLICT; [ "$claimOwned" = 0 ] && [ "$stageOwned" = 0 ] && result ABSENT; result OWNED_PARTIAL; fi
-    |[ ! -L "$d" ] && [ -d "$d" ] && [ "$(stat -c '%u:%g:%a' "$d" 2>/dev/null)" = '0:0:755' ] || result FOREIGN
+    |[ ! -L "$d" ] && [ -d "$d" ] || result FOREIGN; metadata=$(stat -c '%u:%g:%a' "$d" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_FILESYSTEM_METADATA_UNAVAILABLE; [ "$metadata" = '0:0:755' ] || result FOREIGN
     |for f in "$d"/* "$d"/.[!.]* "$d"/..?*; do
     |  [ -e "$f" ] || [ -L "$f" ] || continue
     |  case "$f" in
     |    "$d/.infradesk-$owner-"*)
     |      nonce=${f#"$d/.infradesk-$owner-"}
     |      printf '%s' "$nonce" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || result FOREIGN
-    |      [ ! -L "$f" ] && [ -d "$f" ] && [ "$(stat -c '%u:%g:%a' "$f" 2>/dev/null)" = '0:0:700' ] || result FOREIGN
+    |      [ ! -L "$f" ] && [ -d "$f" ] || result FOREIGN; metadata=$(stat -c '%u:%g:%a' "$f" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_FILESYSTEM_METADATA_UNAVAILABLE; [ "$metadata" = '0:0:700' ] || result FOREIGN
     |      for child in "$f"/* "$f"/.[!.]* "$f"/..?*; do
     |        [ -e "$child" ] || [ -L "$child" ] || continue
     |        case "$child" in "$f/candidate"|"$f/previous") ;; *) result FOREIGN ;; esac
-    |        [ ! -L "$child" ] && [ -f "$child" ] && [ "$(stat -c '%u:%g:%h' "$child" 2>/dev/null)" = '0:0:1' ] || result FOREIGN
-    |        mode=$(stat -c '%a' "$child" 2>/dev/null) || result UNKNOWN
+    |        [ ! -L "$child" ] && [ -f "$child" ] || result FOREIGN; metadata=$(stat -c '%u:%g:%h' "$child" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_FILESYSTEM_METADATA_UNAVAILABLE; [ "$metadata" = '0:0:1' ] || result FOREIGN
+    |        mode=$(stat -c '%a' "$child" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_FILESYSTEM_METADATA_UNAVAILABLE
     |        case "$mode" in 600|644) ;; *) result FOREIGN ;; esac
     |      done
     |      staging=1; continue ;;
     |    "$d/compose.yml"|"$d/.env"|"$d/managed.json") ;; *) result FOREIGN ;;
     |  esac
-    |  [ ! -L "$f" ] && [ -f "$f" ] && [ "$(stat -c '%u:%g:%h' "$f" 2>/dev/null)" = '0:0:1' ] || result FOREIGN
-    |  mode=$(stat -c '%a' "$f" 2>/dev/null) || result UNKNOWN
+    |  [ ! -L "$f" ] && [ -f "$f" ] || result FOREIGN; metadata=$(stat -c '%u:%g:%h' "$f" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_FILESYSTEM_METADATA_UNAVAILABLE; [ "$metadata" = '0:0:1' ] || result FOREIGN
+    |  mode=$(stat -c '%a' "$f" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_FILESYSTEM_METADATA_UNAVAILABLE
     |  case "$f:$mode" in "$d/.env:600"|"$d/compose.yml:644"|"$d/managed.json:644") ;; *) result FOREIGN ;; esac
     |done
     |markerOwned=0; managedOwned=0

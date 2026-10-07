@@ -46,7 +46,7 @@ final class ProfileRemoteSafetySpec extends FunSuite {
     s.respond=(ex,args) => IO.pure(if(ex=="caddy") ok.copy(exitCode=1) else ok)
     val e=fail(files(s).replace(path,marker,body,Some(previous),validate=Some(List("caddy","validate","--config")),activate=Some(List("reload"))))
     assertEquals(e.code,"PROVISIONING_CADDY_VALIDATION_FAILED")
-    assert(!s.scripts.contains(ProfileManagedFiles.Commit))
+    assert(!s.scripts.contains(ProfileManagedFiles.Commit.replace("\r\n","\n")))
     assert(!s.calls.exists(_._1=="reload"))
     assertEquals(s.creations.size,1)
     assertEquals(s.creations.head._2,RemoteFileCreation(384,None))
@@ -61,7 +61,7 @@ final class ProfileRemoteSafetySpec extends FunSuite {
     assert(!e.uncertain)
     assertEquals(activations,2)
     val scripts=s.scripts
-    assert(scripts.indexOf(ProfileManagedFiles.Commit)<scripts.indexOf(ProfileManagedFiles.Rollback))
+    assert(scripts.indexOf(ProfileManagedFiles.Commit.replace("\r\n","\n"))<scripts.indexOf(ProfileManagedFiles.Rollback.replace("\r\n","\n")))
   }
   test("disconnect or truncated activation is uncertain and never triggers blind rollback") {
     List(false,true).foreach { truncate =>
@@ -71,16 +71,16 @@ final class ProfileRemoteSafetySpec extends FunSuite {
       } else IO.pure(ok)
       val result=files(s).replace(path,marker,body,Some(previous),activate=Some(List("reload"))).attempt.unsafeRunSync()
       assert(result.isLeft)
-      assert(!s.scripts.contains(ProfileManagedFiles.Rollback))
+      assert(!s.scripts.contains(ProfileManagedFiles.Rollback.replace("\r\n","\n")))
       if(truncate) assert(result.swap.toOption.get.asInstanceOf[ProfileRemoteFailure].uncertain)
     }
   }
   test("unsafe target refuses replacement; nonroot helpers use literal sudo -n arguments") {
     val s=new Session
-    s.respond=(ex,args) => IO.pure(if(args.contains(ProfileManagedFiles.Prepare)) ok.copy(exitCode=42) else ok)
+    s.respond=(ex,args) => IO.pure(if(args.contains(ProfileManagedFiles.Prepare.replace("\r\n","\n"))) ok.copy(exitCode=42) else ok)
     val e=fail(files(s,root=false).replace(path,marker,body,Some(previous)))
     assertEquals(e.code,"PROVISIONING_MANAGED_FILE_UNSAFE")
-    assert(!s.calls.exists(_._2.contains(ProfileManagedFiles.Commit)))
+    assert(!s.calls.exists(_._2.contains(ProfileManagedFiles.Commit.replace("\r\n","\n"))))
     assert(s.calls.exists {case (ex,args) => ex=="sudo" && args.take(3)==List("-n","sh","-c")})
     intercept[IllegalArgumentException](files(s).replace("/etc/passwd",marker,body,None))
   }
@@ -93,7 +93,7 @@ final class ProfileRemoteSafetySpec extends FunSuite {
     val skipped=installer.install(c,context).unsafeRunSync()
     assert(skipped.skipped && s.calls.isEmpty)
     val empty=facts.deepMerge(io.circe.Json.obj("packages" -> io.circe.Json.obj("installed" -> io.circe.Json.arr())))
-    s.respond=(ex,args) => IO.pure(if(args.contains(ProfilePackageInstaller.Simulate)) ok.copy(exitCode=54) else ok)
+    s.respond=(ex,args) => IO.pure(if(args.contains(ProfilePackageInstaller.Simulate.replace("\r\n","\n"))) ok.copy(exitCode=54) else ok)
     val result=installer.install(c,context.copy(reviewedObservation=empty)).attempt.unsafeRunSync()
     assert(result.isLeft)
     assert(!s.scripts.exists(_.contains("DEBIAN_FRONTEND=noninteractive apt-get install")))
@@ -115,7 +115,7 @@ final class ProfileRemoteSafetySpec extends FunSuite {
       "caddy" -> io.circe.Json.obj("installed" -> io.circe.Json.False)))
     s.respond=(ex,args) => IO.pure {
       if(ex=="sh" && args.contains("apt-cache policy caddy")) ok.copy(stdout="Candidate: (none)")
-      else if(args.contains(SshProfileObserver.FileProbe)) ok.copy(stdout="UNSAFE")
+      else if(args.contains(SshProfileObserver.FileProbe.replace("\r\n","\n"))) ok.copy(stdout="UNSAFE")
       else if(args.exists(_.contains("ca-certificates 2>/dev/null"))) ok.copy(stdout="ii ")
       else ok
     }
@@ -147,8 +147,8 @@ final class ProfileRemoteSafetySpec extends FunSuite {
     s.respond=(ex,args) => IO {
       if(ex=="id") ok.copy(stdout="0")
       else if(ex=="sh" && args.exists(_.contains("SSH_CONNECTION"))) ok.copy(stdout="172.28.0.5 49152 198.51.100.1 22")
-      else if(args.exists(_.contains("for package in"))) ok.copy(stdout="ufw\nfail2ban\n")
-      else if(args.contains(SshProfileObserver.FileProbe)) ok.copy(stdout="MANAGED\n"+ServerProfileDiff.hashText(ServerProfileDiff.Fail2banContent))
+      else if(args.exists(_.contains("for package in"))) ok.copy(stdout="I|fail2ban\nI|ufw\n")
+      else if(args.contains(SshProfileObserver.FileProbe.replace("\r\n","\n"))) ok.copy(stdout="MANAGED\n"+ServerProfileDiff.hashText(ServerProfileDiff.Fail2banContent))
       else if(args.exists(_.contains("load=$(systemctl"))) ok.copy(stdout="enabled\nactive")
       else if(ex=="ufw" && args==List("show","added")) ok.copy(stdout=added)
       else if(ex=="ufw" && args==List("status")) ok.copy(stdout="Status: active\n22/tcp ALLOW IN Anywhere")
@@ -225,11 +225,11 @@ final class ProfileRemoteSafetySpec extends FunSuite {
     s.respond=(ex,args) => IO.pure {
       if(ex=="id") ok.copy(stdout="0")
       else if(ex=="sh" && args.exists(_.contains("SSH_CONNECTION"))) ok.copy(stdout="192.0.2.3 49152 198.51.100.1 22")
-      else if(args.exists(_.contains("for package in"))) ok.copy(stdout="caddy\nca-certificates\n")
+      else if(args.exists(_.contains("for package in"))) ok.copy(stdout="I|ca-certificates\nI|caddy\n")
       else if(args.exists(_.contains("command -v \"$1\"")))
         if(args.takeRight(2)==List("caddy","version")) ok.copy(stdout="YES") else ok.copy(exitCode=1)
       else if(args.exists(_.contains("load=$(systemctl"))) ok.copy(stdout="enabled\nactive")
-      else if(args.contains(SshProfileObserver.FileProbe)) ok.copy(stdout="MANAGED\n"+ServerProfileDiff.renderedCaddyHash(c.caddy))
+      else if(args.contains(SshProfileObserver.FileProbe.replace("\r\n","\n"))) ok.copy(stdout="MANAGED\n"+ServerProfileDiff.renderedCaddyHash(c.caddy))
       else if(args.exists(_.contains("awk '$1==\"https_port\""))) ok.copy(stdout="8080")
       else if(ex=="systemctl") ok.copy(stdout="123")
       else if(ex=="ss") ok.copy(stdout="State Recv-Q Send-Q Local Peer Process\nLISTEN 0 128 0.0.0.0:8080 0.0.0.0:* users:((\"caddy\",pid=123,fd=5))\n"+
