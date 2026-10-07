@@ -30,13 +30,15 @@ final class SshProfileObserverSpec extends FunSuite {
         executeCaptured(executable,args,timeout,65536).map(_.exitCode)
       override def executeCaptured(executable:String,args:List[String],timeout:scala.concurrent.duration.FiniteDuration,maxOutputBytes:Int)=IO {
         if(args.exists(_.contains("for package in"))) {
-          val fixture=s"""dpkg-query() {
+          val fixture=s"""fixture_dpkg_query() {
             case "$$3" in
               docker-ce|docker-compose-plugin) printf '%s' 'ii '; return 0;;
               docker.io|curl) printf '%s' '$status'; return $exit;;
               *) return 1;;
             esac
           }
+          if command -v shopt >/dev/null 2>&1; then shopt -s expand_aliases; fi
+          alias dpkg-query=fixture_dpkg_query
           """
           val shell=if(System.getProperty("os.name").startsWith("Windows"))
             Paths.get(sys.env.getOrElse("ProgramFiles","C:\\Program Files"),"Git","bin","bash.exe").toString else "sh"
