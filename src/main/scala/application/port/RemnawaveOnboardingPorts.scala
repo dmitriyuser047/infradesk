@@ -43,6 +43,8 @@ final case class OnboardingServerCandidate(id: UUID, name: String, address: Stri
 final case class OnboardingServerStatus(profileName: Option[String], revisionNumber: Option[Int],
   profileAssigned: Boolean, profileState: String, busy: Boolean, bindingConflict: Boolean)
 trait RemnawaveOnboardingQuery[F[_]] {
+  /** A HOST binding alone is not a Panel host: its managed hostname must match this API endpoint. */
+  def managedPanelAddresses(org: UUID,integration: UUID,endpointHost: String)(implicit F: cats.Applicative[F]): F[List[String]] = F.pure(Nil)
   /** Fixed-query projection; targets are the already batched, trusted SSH source identities. */
   def serverStatuses(org: UUID, targets: Map[UUID, Either[String, ProvisioningTarget]]): F[Map[UUID, OnboardingServerStatus]]
   def candidates(org: UUID, limit: Int): F[List[OnboardingServerCandidate]]

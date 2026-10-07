@@ -119,6 +119,24 @@ final class RemnawaveOnboardingSpec extends FunSuite {
     }
   }
 
+  test("V4 network evidence is immutable, closed, and healthy recovery omits every installation mutation") {
+    val source=PanelSourceEvidence(PanelSourceMode.Auto,List("185.10.20.30/32"),"DNS_BASE_URL","AUTO_CANDIDATE",
+      PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.test").toOption.get))
+    val proof=OnboardingRecovery(id,Some(id),snapshot.correlationId,id,"PRESENT_UNHEALTHY","REPAIR_PANEL_CONNECTIVITY",
+      Some(List("2.27.26.18/32")),localInstallation=Some(LocalInstallationObservation.fromState(LocalInstallationState.OwnedComplete)),localVerified=true)
+    val current=snapshot.copy(input=input.copy(panelCidrs=source.sources,panelSourceMode=PanelSourceMode.Auto),
+      lifecycleVersion=4,panelSource=Some(source),recovery=Some(proof))
+    val bytes=OnboardingSnapshotCodec.encode(current)
+    assertEquals(OnboardingSnapshotCodec.decode(bytes),current)
+    assertEquals(OnboardingPhase.forSnapshot(current).map(_.code),List("VALIDATE","PREPARE_SERVER","RESOLVE_PANEL_SOURCE",
+      "ADD_PANEL_SOURCES","WAIT_FOR_PANEL","FINALIZE_PANEL_SOURCES","SYNC_INVENTORY","BIND_RESOURCE","SET_DESIRED_STATE","FINAL_VERIFY"))
+    intercept[IllegalArgumentException](OnboardingSnapshotCodec.decode(bytes.mapObject(_.add("panelSource",PanelSourceEvidence.encode(source)
+      .mapObject(_.add("credential",io.circe.Json.fromString("must-never-be-evidence")))))))
+    intercept[IllegalArgumentException](source.copy(sources=List("0.0.0.0/0")))
+    val blocked=source.copy(sources=Nil,confidence="UNRESOLVED")
+    assert(!blocked.resolved)
+    assert(input.copy(panelSourceMode=PanelSourceMode.Auto,panelCidrs=Nil).normalized.isRight)
+  }
   test("v3 recreation skips retirement only for proven absence and round trips safe diagnosis") {
     LocalInstallationState.all.foreach { state =>
       val observation=LocalInstallationObservation.fromState(state)

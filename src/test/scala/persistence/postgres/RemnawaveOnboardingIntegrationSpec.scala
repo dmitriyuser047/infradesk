@@ -18,10 +18,13 @@ import infrastructure.database.DoobieTransactionRunner
 import org.typelevel.doobie.implicits._
 import org.typelevel.doobie.postgres.implicits._
 import support.AuthorizationFixtures
+import scala.concurrent.duration._
 
 /** PostgreSQL constraints, migrations, and repository behavior for durable onboarding plans. */
 final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
-  import ConfigurationDeploymentWorld.run
+  override val munitTimeout: Duration = 120.seconds
+  // Claims intentionally span all tenants. Keep other concurrently running worker suites out of this database.
+  import ConfigurationDeploymentWorld.{runIsolated => run}
 
   private val repo = new PostgresRemnawaveOnboardingRepository
   private val query = new PostgresRemnawaveOnboardingQuery
@@ -133,6 +136,107 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
     provisioningPlan(w, node, id, now).copy(input = input)
   }
 
+  test("managed Panel source requires the matching tenant HOST binding and active SSH connection") {
+    inWorld { w =>
+      def bind(org: UUID, integrationId: UUID, target: ConfigurationDeploymentWorld.Node, kind: String): IO[Unit] = {
+        val now=Instant.now(); val sessionId=uid; val inventoryId=uid
+        w.run(for {
+          _ <- sql"""update resource set spec='{"hostname":"panel.example.test"}'::jsonb where id=${target.resourceId}""".update.run
+          _ <- sql"""update connection set config=jsonb_set(config,'{host}','"185.10.20.30"'::jsonb) where id=${target.connectionId}""".update.run
+          _ <- sql"""insert into integration_sync_session(id,organization_id,integration_id,trigger,started_at,recover_after_at,finished_at,status)
+            values($sessionId,$org,$integrationId,'MANUAL',$now,$now,$now,'COMPLETED')""".update.run
+          _ <- sql"""insert into integration_inventory_object(id,organization_id,integration_id,object_type,external_id,display_name,
+            summary_version,summary,is_active,first_seen_at,last_seen_at,last_seen_sync_session_id,created_at,updated_at)
+            values($inventoryId,$org,$integrationId,$kind,${uid.toString},'Panel',1,'{}'::jsonb,true,$now,$now,$sessionId,$now,$now)""".update.run
+          _ <- sql"""insert into integration_resource_binding(id,organization_id,integration_id,inventory_object_id,resource_id,
+            created_by_user_id,created_at,updated_at) values(${uid},$org,$integrationId,$inventoryId,${target.resourceId},
+            ${AuthorizationFixtures.ActorUserId},$now,$now)""".update.run
+        } yield ())
+      }
+      for {
+        own <- integration(w,w.org,"managed-panel-source")
+        foreign <- integration(w,w.foreignOrg,"foreign-panel-source")
+        node <- w.node("unrelated-node-source")
+        _ <- bind(w.org,own._1,node,"NODE")
+        unrelated <- w.run(query.managedPanelAddresses(w.org,own._1,"panel.example.test"))
+        _ = assertEquals(unrelated,Nil)
+        panel <- w.node("managed-panel-host")
+        _ <- bind(w.org,own._1,panel,"HOST")
+        sources <- w.run(query.managedPanelAddresses(w.org,own._1,"PANEL.EXAMPLE.TEST"))
+        _ = assertEquals(sources,List("185.10.20.30"))
+        wrongHost <- w.run(query.managedPanelAddresses(w.org,own._1,"other.example.test"))
+        wrongTenant <- w.run(query.managedPanelAddresses(w.foreignOrg,own._1,"panel.example.test"))
+        wrongIntegration <- w.run(query.managedPanelAddresses(w.org,foreign._1,"panel.example.test"))
+        _ = assertEquals(wrongHost,Nil)
+        _ = assertEquals(wrongTenant,Nil)
+        _ = assertEquals(wrongIntegration,Nil)
+        _ <- w.run(sql"update connection set is_active=false where id=${panel.connectionId}".update.run)
+        fallback <- w.run(query.managedPanelAddresses(w.org,own._1,"panel.example.test"))
+        _ = assertEquals(fallback,List("panel.example.test"))
+      } yield ()
+    }
+  }
+
+  test("V3 terminal connectivity failure builds a V4 reuse plan with fenced findings and no create/install phases") {
+    inWorld { w => for {
+      pair <- integration(w,w.org,"panel-connectivity-v4")
+      (integrationId,secretId)=pair
+      target <- w.node("panel-connectivity-v4")
+      sourceAt <- connectionUpdated(w,target.connectionId)
+      now <- IO.realTimeInstant
+      template <- plan(w,integrationId,secretId,target.resourceId,target.connectionId,sourceAt,now)
+      original=template.copy(id=uid,snapshot=template.snapshot.copy(lifecycleVersion=3,
+        input=template.snapshot.input.copy(panelCidrs=List("2.27.26.18/32"))))
+      _ <- w.run(repo.insertPlan(original))
+      _ <- w.run(repo.start(w.org,integrationId,original.id,uid,AuthorizationFixtures.ActorUserId,now))
+      oldToken=uid
+      claimed <- w.run(repo.claim(uid,oldToken,now,now.plusSeconds(300),1))
+      external=uid
+      oldFailed <- w.run(OnboardingPhase.forSnapshot(original.snapshot).takeWhile(_ != OnboardingPhase.WaitForPanel)
+        .foldLeftM(claimed.head) { (r,phase) =>
+          val next=r.copy(phase=OnboardingPhase.next(phase,original.snapshot).get,externalNodeId=Some(external))
+          repo.beginPhase(r,oldToken,now) *> repo.persist(r,oldToken,next,now,true).as(next)
+        }.flatMap(r => repo.beginPhase(r,oldToken,now) *> repo.persist(r,oldToken,r.copy(state=ProvisioningRunState.Failed,
+          failureCode=Some("REMNAWAVE_NODE_CONNECTION_TIMEOUT")),now,false)))
+      before <- w.run(repo.find(w.org,integrationId,original.id))
+      evidence=PanelSourceEvidence(PanelSourceMode.Auto,List("185.10.20.30/32"),"DNS_BASE_URL","AUTO_CANDIDATE",
+        PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.test").toOption.get))
+      proof=OnboardingRecovery(original.id,Some(external),original.snapshot.correlationId,original.id,
+        "PRESENT_UNHEALTHY","REPAIR_PANEL_CONNECTIVITY",Some(original.snapshot.input.panelCidrs),
+        localInstallation=Some(LocalInstallationObservation.fromState(LocalInstallationState.OwnedComplete)),localVerified=true)
+      draft=original.copy(id=uid,externalNodeId=Some(external),createdAt=now.plusMillis(1),snapshot=original.snapshot.copy(
+        lifecycleVersion=4,recovery=Some(proof),input=original.snapshot.input.copy(panelCidrs=evidence.sources,
+          panelSourceMode=PanelSourceMode.Auto),panelSource=Some(evidence)))
+      _ <- w.run(repo.insertPlan(draft))
+      rows <- w.run(repo.find(w.org,integrationId,draft.id))
+      request=uid
+      first <- w.run(repo.startResult(w.org,integrationId,draft.id,request,AuthorizationFixtures.ActorUserId,now))
+      repeat <- w.run(repo.startResult(w.org,integrationId,draft.id,request,AuthorizationFixtures.ActorUserId,now))
+      token=uid
+      active <- w.run(repo.claim(uid,token,now,now.plusSeconds(300),1))
+      stale <- w.run(repo.persist(active.head,uid,active.head.copy(connectivityFinding=Some(PanelConnectivityFinding(evidence.sources,"AUTO_CANDIDATE",false))),now,false))
+      _ <- w.run(OnboardingPhase.forSnapshot(draft.snapshot).foldLeftM(active.head) { (r,phase) =>
+        val next=OnboardingPhase.next(phase,draft.snapshot)
+        val updated=r.copy(phase=next.getOrElse(phase),state=if(next.isEmpty) ProvisioningRunState.Succeeded else ProvisioningRunState.Running,
+          connectivityFinding=if(phase==OnboardingPhase.WaitForPanel) Some(PanelConnectivityFinding(evidence.sources,"AUTO_CANDIDATE",true)) else r.connectivityFinding)
+        repo.beginPhase(r,token,now) *> repo.persist(r,token,updated,now,true).as(updated)
+      })
+      after <- w.run(repo.find(w.org,integrationId,original.id))
+      complete <- w.run(repo.find(w.org,integrationId,draft.id))
+      hidden <- w.run(repo.find(w.foreignOrg,integrationId,draft.id))
+      corrupt <- w.run(sql"update remnawave_node_onboarding set connectivity_finding='{}'::jsonb where id=${draft.id}".update.run).attempt
+    } yield {
+      assert(oldFailed); assert(!stale)
+      assertEquals(rows.get._2.map(_.phase),OnboardingPhase.forSnapshot(draft.snapshot))
+      assert(!rows.get._2.exists(p => Set[OnboardingPhase](OnboardingPhase.CreateNode,OnboardingPhase.DeleteNode,OnboardingPhase.InstallNode)(p.phase)))
+      assert(first.newlyStarted); assert(!repeat.newlyStarted)
+      assertEquals(before,after)
+      assertEquals(complete.get._1.state,ProvisioningRunState.Succeeded)
+      assertEquals(complete.get._1.externalNodeId,Some(external))
+      assertEquals(complete.get._1.connectivityFinding.map(_.connected),Some(true))
+      assertEquals(hidden,None); assert(corrupt.isLeft)
+    } }
+  }
   test("start is request-idempotent, tenant scoped, immutable, and history omits expired drafts") {
     inWorld { w =>
       for {
@@ -618,10 +722,12 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
               cast(${observed.noSpaces} as jsonb),${ServerProfileDiff.hashObservation(observed)},$now
             from server_profile_assignment a where a.organization_id=${w.org} and a.profile_id=$profileId""".update.run
         } yield ())
+        databaseName <- w.run(sql"select current_database()".query[String].unique)
         _ <- List(1,100,500).traverse_ { size => Ref.of[IO,Int](0).flatMap { counter =>
           val handler = new LogHandler[IO] { def run(event: LogEvent): IO[Unit] = counter.update(_+1) }
           val config = PostgresTestDatabase.config
-          val xa = Transactor.fromDriverManager[IO]("org.postgresql.Driver",config.url,config.user,config.password,Some(handler))
+          val url = config.url.replaceFirst("/[^/?]+(?=\\?|$)","/"+databaseName)
+          val xa = Transactor.fromDriverManager[IO]("org.postgresql.Driver",url,config.user,config.password,Some(handler))
           val runner = new DoobieTransactionRunner(xa)
           for {
             result <- runner.run(for {

@@ -17,12 +17,12 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
   private case class Row(id: UUID, org: UUID, integration: UUID, resource: UUID, request: Option[UUID], actor: UUID,
     state: String, phase: String, snapshot: String, created: Instant, updated: Instant,
     node: Option[UUID], baseline: Option[UUID], sync: Option[UUID], failure: Option[String],
-    started: Option[Instant], finished: Option[Instant], token: Option[UUID], deadline: Option[Instant]) {
+    started: Option[Instant], finished: Option[Instant], token: Option[UUID], deadline: Option[Instant], connectivity: Option[String]) {
     def domain = RemnawaveNodeOnboardingRun(id,org,integration,resource,request,actor,ProvisioningRunState.fromCode(state),
       OnboardingPhase.fromCode(phase),OnboardingSnapshotCodec.decode(parse(snapshot).toOption.get),created,updated,
-      node,baseline,sync,failure,started,finished,token,deadline)
+      node,baseline,sync,failure,started,finished,token,deadline,connectivity.map(j => PanelConnectivityFinding.decode(parse(j).toOption.get)))
   }
-  private val columns = fr"id,organization_id,integration_id,resource_id,request_id,created_by,state,phase,input_snapshot::text,created_at,updated_at,external_node_id,baseline_run_id,sync_session_id,failure_code,started_at,finished_at,claim_token,claim_deadline"
+  private val columns = fr"id,organization_id,integration_id,resource_id,request_id,created_by,state,phase,input_snapshot::text,created_at,updated_at,external_node_id,baseline_run_id,sync_session_id,failure_code,started_at,finished_at,claim_token,claim_deadline,connectivity_finding::text"
   private def selected(where: Fragment) = (fr"select" ++ columns ++ fr"from remnawave_node_onboarding where" ++ where).query[Row].map(_.domain)
   private def fail(code: String): ConnectionIO[Nothing] = IntegrationError(code,"Remnawave onboarding could not proceed").raiseError[ConnectionIO,Nothing]
   def lockResource(org: UUID, resourceId: UUID): ConnectionIO[Unit] = PostgresProvisioningLocks.lockResource(org,resourceId)
@@ -130,6 +130,7 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
         finished_at=$now,failure_code=${n.failureCode} where run_id=${r.id} and phase=${r.phase.code} and state='RUNNING'""".update.run else 0.pure[ConnectionIO]
       changed <- sql"""update remnawave_node_onboarding set state=${n.state.code},phase=${n.phase.code},external_node_id=coalesce(${n.externalNodeId},external_node_id),
         baseline_run_id=coalesce(${n.baselineRunId},baseline_run_id),sync_session_id=coalesce(${n.syncSessionId},sync_session_id),failure_code=${n.failureCode},updated_at=$now,
+        connectivity_finding=cast(${n.connectivityFinding.map(f => PanelConnectivityFinding.storage(f).noSpaces)} as jsonb),
         finished_at=${Option.when(n.state.terminal)(now)},
         claim_owner=case when ${n.state.terminal} then null else claim_owner end,
         claim_token=case when ${n.state.terminal} then null else claim_token end,

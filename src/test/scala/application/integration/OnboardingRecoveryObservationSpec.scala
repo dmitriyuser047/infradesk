@@ -68,6 +68,8 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     var observeCalls = 0
     var observedSpec: Option[RemnawaveNodeRemoteSpec] = None
     var forbiddenCalls = List.empty[String]
+    var connectivityBaseline: List[String] = Nil
+    var connectivityFailure: Option[Throwable] = None
 
     private def forbidden[A](name: String): IO[A] = IO {
       forbiddenCalls :+= name
@@ -107,6 +109,9 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
       override def installationPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[Boolean]("installationPresent")
       override def firewallPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[Boolean]("firewallPresent")
       override def managedPanelCidrs(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[List[String]]("managedPanelCidrs")
+      override def connectivitySources(c: Connection,s: RemnawaveNodeRemoteSpec,reviewed: List[String]) = IO {
+        connectivityFailure.foreach(throw _); connectivityBaseline
+      }
     }
 
     def inspect(run: RemnawaveNodeOnboardingRun = previous(), action: String = "RECOVER",
@@ -316,6 +321,22 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     h.assertReadOnly()
   }
 
+  test("V4 rollback leaves a healthy owned Node without rules: recovery reuses its exact UUID without reinstall") {
+    val source=PanelSourceEvidence(PanelSourceMode.Auto,List("185.10.20.30/32"),"DNS_BASE_URL","AUTO_CANDIDATE",PanelSourceEvidence.fingerprint(context.baseUrl))
+    val snap=snapshot().copy(input=input.copy(panelCidrs=source.sources,panelSourceMode=PanelSourceMode.Auto),lifecycleVersion=4,panelSource=Some(source))
+    val h=new Harness(lookup0=NodeLookupOutcome.Found(node(connected=false)),local0=localGood.copy(firewallMatches=false))
+    val found=h.inspect(previous(snap=snap,phase=OnboardingPhase.FinalizePanelSources))
+    assertEquals(found.node,Some(externalId))
+    assertEquals(found.recovery.map(_.action),Some("REPAIR_PANEL_CONNECTIVITY"))
+    assertEquals(found.recovery.flatMap(_.previousPanelCidrs),Some(Nil))
+    assertEquals(found.localState,Some(LocalInstallationState.OwnedComplete))
+    assertEquals(found.correlation,originalCorrelation); h.assertReadOnly()
+    h.connectivityFailure=Some(PanelConnectivityFailure.ManualOnly)
+    val blocked=h.inspect(previous(snap=snap,phase=OnboardingPhase.FinalizePanelSources))
+    assertEquals(blocked.recovery.flatMap(_.connectivityProblem),Some(PanelConnectivityProblem.ManualOnly))
+    assertEquals(blocked.recovery.exists(_.localVerified),false)
+    h.assertReadOnly()
+  }
   test("observation never changes the source run or its immutable snapshot") {
     val proof = OnboardingRecovery(uid, Some(uid), uid, ownerId, "PRESENT_UNHEALTHY", "RECOVER")
     val run = previous(state = ProvisioningRunState.Failed, snap = snapshot(recovery = Some(proof)))

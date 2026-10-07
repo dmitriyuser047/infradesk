@@ -10,6 +10,7 @@ import { useOrganizationPermissions } from '../auth/authorization'
 import { useI18n } from '../../i18n'
 import { InlineAlert, PendingButton, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { IntegrationDialog } from './IntegrationDialog'
+import { PanelNetworkAccess } from './PanelNetworkAccess'
 import type { NodeOnboardingPreview, NodeOnboardingPreviewRequest, NodeOnboardingRecoveryAction, NodeOnboardingRecoverySummary, NodeOnboardingRun } from '../../types/nodeOnboarding'
 
 const phases = ['VALIDATE', 'PREPARE_SERVER', 'CREATE_NODE', 'GET_INSTALLATION_DATA', 'CONFIGURE_NODE_FIREWALL', 'INSTALL_NODE', 'START_NODE', 'VERIFY_LOCAL_NODE', 'WAIT_FOR_PANEL', 'SYNC_INVENTORY', 'BIND_RESOURCE', 'SET_DESIRED_STATE', 'FINAL_VERIFY'] as const
@@ -22,7 +23,7 @@ const texts = {
     automation: 'Open server Automation', next: 'Continue', back: 'Back', preview: 'Review changes', apply: 'Start onboarding', close: 'Close', history: 'Recent onboarding runs', noHistory: 'No onboarding runs yet.',
     changes: 'Changes', warnings: 'Warnings', blockers: 'Blocking problems', run: 'Run', phases: 'Progress', state: 'State', partial: 'Results so far', externalId: 'Remnawave node ID', baseline: 'Server preparation run', syncId: 'Inventory sync session',
     success: 'Node onboarding completed.', failed: 'Onboarding failed. Review the completed phases and safe error message before choosing a next step.', unknown: 'The outcome is unknown. Check Remnawave and the server before taking further action; do not repeat the whole onboarding run.', active: 'Onboarding is in progress. You can leave this page and return using this run.',
-    requestError: 'The request could not be confirmed. Retry with the same request ID to safely recover the result.', formError: 'Enter a node name and address, a port from 1 to 65535, a configuration profile, and valid CIDR ranges.',
+    requestError: 'The request could not be confirmed. Retry with the same request ID to safely recover the result.', formError: 'Check the node name, address, port, profile and inbounds. Manual network settings require valid outbound Panel sources.',
     checkAgain: 'Check again', restore: 'Restore existing node', recreate: 'Recreate node', deleteRecreate: 'Delete and recreate',
     missingNode: 'The node was not found in Remnawave.', conflict: 'The Remnawave node conflicts with the previous installation identity. No action is available.',
     recoveryUnknown: 'The remote state is still unknown. Check again to repeat the read-only observation.',
@@ -38,7 +39,7 @@ const texts = {
     automation: 'Открыть автоматизацию сервера', next: 'Далее', back: 'Назад', preview: 'Проверить изменения', apply: 'Запустить добавление', close: 'Закрыть', history: 'Последние запуски', noHistory: 'Запусков добавления узлов пока нет.',
     changes: 'Изменения', warnings: 'Предупреждения', blockers: 'Блокирующие проблемы', run: 'Запуск', phases: 'Ход выполнения', state: 'Состояние', partial: 'Промежуточные результаты', externalId: 'ID узла Remnawave', baseline: 'Запуск подготовки сервера', syncId: 'Сессия синхронизации инвентаря',
     success: 'Добавление узла завершено.', failed: 'Не удалось добавить узел. Проверьте этапы и безопасное описание ошибки перед выбором дальнейших действий.', unknown: 'Результат неизвестен. Проверьте Remnawave и сервер перед дальнейшими действиями; не повторяйте весь процесс.', active: 'Добавление выполняется. Можно закрыть страницу и вернуться по этой ссылке.',
-    requestError: 'Не удалось подтвердить запрос. Повторите отправку с тем же ID запроса, чтобы безопасно получить результат.', formError: 'Укажите имя и адрес узла, порт от 1 до 65535, профиль конфигурации и корректные CIDR.',
+    requestError: 'Не удалось подтвердить запрос. Повторите отправку с тем же ID запроса, чтобы безопасно получить результат.', formError: 'Проверьте имя, адрес, порт, профиль и inbounds. Для ручной настройки сети нужны корректные исходящие адреса Panel.',
     checkAgain: 'Проверить снова', restore: 'Восстановить существующий узел', recreate: 'Пересоздать узел', deleteRecreate: 'Удалить и пересоздать',
     missingNode: 'Узел больше не найден в Remnawave.', conflict: 'Узел Remnawave конфликтует с исходной идентичностью установки. Действие недоступно.',
     recoveryUnknown: 'Удалённое состояние всё ещё неизвестно. Проверьте снова, чтобы повторить только чтение состояния.',
@@ -49,7 +50,7 @@ const texts = {
 } as const
 
 type Step = 0 | 1 | 2 | 3 | 4
-type OnboardingRunPhase = typeof phases[number] | 'DELETE_NODE' | 'CONFIRM_NODE_DELETED' | 'RETIRE_NODE_FIREWALL' | 'RETIRE_LOCAL_NODE'
+type OnboardingRunPhase = typeof phases[number] | 'DELETE_NODE' | 'CONFIRM_NODE_DELETED' | 'RETIRE_NODE_FIREWALL' | 'RETIRE_LOCAL_NODE' | 'RESOLVE_PANEL_SOURCE' | 'ADD_PANEL_SOURCES' | 'FINALIZE_PANEL_SOURCES'
 const activeRun = (state: NodeOnboardingRun['state']) => state === 'QUEUED' || state === 'RUNNING'
 function validCidr(value: string) {
   const [ip, mask, ...rest] = value.split('/')
@@ -85,6 +86,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const [address, setAddress] = useState(''); const [port, setPort] = useState('2222')
   const [configProfileId, setConfigProfileId] = useState(''); const [activeInboundIds, setActiveInboundIds] = useState<string[]>([])
   const [cidrs, setCidrs] = useState(''); const [reviewed, setReviewed] = useState<{plan:NodeOnboardingPreview;requestId:string}|null>(null)
+  const [sourceMode, setSourceMode] = useState<'AUTO' | 'MANUAL'>('AUTO')
   const preview = reviewed?.plan
   const [workflowError,setWorkflowError] = useState(false)
   const [recoveryConfirmed, setRecoveryConfirmed] = useState(false)
@@ -98,9 +100,9 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const setRunInUrl = (id: string | null) => setParams(previous => { const next = new URLSearchParams(previous); if (id) next.set('onboardingRun', id); else next.delete('onboardingRun'); return next }, { replace: true })
   const closeWizard = () => { setOpen(false); setStep(0); setReviewed(null); setRunInUrl(null) }
   const selectServer = (id: string) => { setResourceId(id); const value = options.data?.servers.find(item => item.id === id); if (value) { setAddress(value.address); if (!nodeName) setNodeName(value.name) } }
-  const exactBody = (): NodeOnboardingPreviewRequest => ({ resourceId, nodeName: nodeName.trim(), address: address.trim(), nodePort: Number(port), configProfileId, activeInboundIds, panelCidrs: cidrValues, desiredState: 'ENABLED' })
-  const formValid = Boolean(server && nodeName.trim().length >= 3 && nodeName.trim().length <= 30 && !/[\x00-\x1f\x7f]/.test(nodeName) && address.trim() && Number.isInteger(Number(port)) && Number(port) >= 1 && Number(port) <= 65535 && profile && activeInboundIds.length > 0 && cidrValues.length > 0 && cidrValues.length <= 32 && new Set(cidrValues).size === cidrValues.length && cidrValues.every(validCidr))
-  const makePreview = async () => { setWorkflowError(false); const value = await previewRequest.mutateAsync(exactBody()); start.reset(); setReviewed({plan:value,requestId:createRequestId()}); setStep(3) }
+  const exactBody = (): NodeOnboardingPreviewRequest => ({ ...(preview?.recovery && preview.input ? preview.input : { resourceId, nodeName: nodeName.trim(), address: address.trim(), nodePort: Number(port), configProfileId, activeInboundIds, desiredState: 'ENABLED' as const }), panelSourceMode: sourceMode, ...(sourceMode === 'MANUAL' ? { panelCidrs: cidrValues } : {}) })
+  const formValid = Boolean(((preview?.recovery && preview.input) || (server && nodeName.trim().length >= 3 && nodeName.trim().length <= 30 && !/[\x00-\x1f\x7f]/.test(nodeName) && address.trim() && Number.isInteger(Number(port)) && Number(port) >= 1 && Number(port) <= 65535 && profile && activeInboundIds.length > 0)) && (sourceMode === 'AUTO' || (cidrValues.length > 0 && cidrValues.length <= 32 && new Set(cidrValues).size === cidrValues.length && cidrValues.every(validCidr))))
+  const makePreview = async () => { setWorkflowError(false); try { const value = await previewRequest.mutateAsync(exactBody()); start.reset(); setReviewed({plan:value,requestId:createRequestId()}); setStep(3) } catch { setWorkflowError(true) } }
   const reconcileRun = async (sourceRunId: string, action: NodeOnboardingRecoveryAction) => {
     if (!canConfigure || activeRun(run?.state ?? 'PLANNED') || reconcile.isPending) return
     setWorkflowError(false); setRecoveryConfirmed(false)
@@ -159,7 +161,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
         {step < 3 ? <button className="primary-button" type="button" disabled={!canConfigure || unsupported || options.isPending || (step === 0 && (!resourceId || !server?.serverProfileName || server.blockingProblems.length > 0)) || (step === 1 && (!nodeName.trim() || !address.trim() || !Number(port) || !profile || activeInboundIds.length === 0)) || (step === 2 && !formValid)} onClick={() => setStep((step + 1) as Step)}>{copy.next}</button> : null}
         {step === 3 && !preview?.recovery ? <PendingButton className={preview ? 'secondary-button' : 'primary-button'} type="button" pending={previewRequest.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!!unresolved || !canConfigure || !formValid} onClick={() => void makePreview().catch(() => setWorkflowError(true))}>{copy.preview}</PendingButton> : null}
         {step === 3 && reviewed?.plan.recovery ? <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure} onClick={() => void reconcileRun(reviewed.plan.recovery!.sourceRunId, reviewed.plan.recovery!.action === 'DELETE_RECREATE' ? 'DELETE_RECREATE' : 'RECOVER')}>{i18n.locale === 'ru' ? 'Проверить локальную установку' : 'Check local installation'}</PendingButton> : null}
-        {step === 3 && reviewed && !recoveryBlocked ? <PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || reviewed.plan.blockingProblems.length > 0 || (needsRecreateApproval && !recoveryConfirmed)} onClick={() => void apply({planId:reviewed.plan.run.id,requestId:reviewed.requestId})}>{recovery?.action === 'RECOVER' ? copy.restore : recovery?.action === 'RECREATE' ? copy.recreate : recovery?.action === 'DELETE_RECREATE' ? copy.deleteRecreate : copy.apply}</PendingButton> : null}
+        {step === 3 && reviewed && !recoveryBlocked ? <PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || reviewed.plan.blockingProblems.length > 0 || (needsRecreateApproval && !recoveryConfirmed)} onClick={() => void apply({planId:reviewed.plan.run.id,requestId:reviewed.requestId})}>{recovery?.action === 'REPAIR_PANEL_CONNECTIVITY' ? i18n.locale === 'ru' ? 'Исправить доступ' : 'Repair Panel access' : recovery?.action === 'RECOVER' ? copy.restore : recovery?.action === 'RECREATE' ? copy.recreate : recovery?.action === 'DELETE_RECREATE' ? copy.deleteRecreate : copy.apply}</PendingButton> : null}
         {step === 3 && recovery?.action === 'RECOVER' && (recovery.state === 'PRESENT_EXACT' || recovery.state === 'PRESENT_UNHEALTHY') ? <button className="secondary-button" type="button" disabled={!canConfigure || reconcile.isPending} onClick={() => void reconcileRun(recovery.sourceRunId, 'DELETE_RECREATE')}>{copy.deleteRecreate}</button> : null}
         {step === 4 || hasRun ? <button className="secondary-button" type="button" onClick={closeWizard}>{copy.close}</button> : null}
       </>}>
@@ -179,16 +181,24 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
           <label className="field">{copy.port}<input type="number" min="1" max="65535" value={port} onChange={event => setPort(event.target.value)} /></label>
           <label className="field">{copy.profile}<select value={configProfileId} onChange={event => { setConfigProfileId(event.target.value); setActiveInboundIds([]) }}><option value="">—</option>{options.data.profiles.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}</select></label>
           {profile ? <fieldset><legend>{copy.inbounds}</legend>{profile.inbounds.map(value => <label key={value.id}><input type="checkbox" checked={activeInboundIds.includes(value.id)} onChange={event => setActiveInboundIds(current => event.target.checked ? [...current, value.id] : current.filter(id => id !== value.id))} />{value.name}</label>)}</fieldset> : null}</section> : null}
-        {step === 2 ? <section><h3>{copy.steps[2]}</h3><label className="field">{copy.cidrs}<textarea value={cidrs} onChange={event => setCidrs(event.target.value)} /></label><p className="muted-copy">{copy.cidrHint}</p>{!formValid ? <p role="alert">{copy.formError}</p> : null}</section> : null}
+        {step === 2 ? <section><h3>{copy.steps[2]}</h3><p>{i18n.locale === 'ru' ? 'Remnawave Panel → Node: сетевой доступ настраивается автоматически.' : 'Remnawave Panel → Node: network access is configured automatically.'}</p>
+          <details><summary>{i18n.locale === 'ru' ? 'Расширенные настройки сети' : 'Advanced network settings'}</summary>
+            <label><input type="radio" name="panelSourceMode" checked={sourceMode === 'AUTO'} onChange={() => setSourceMode('AUTO')} />{i18n.locale === 'ru' ? 'Автоматически' : 'Automatic'}</label>
+            <label><input type="radio" name="panelSourceMode" checked={sourceMode === 'MANUAL'} onChange={() => setSourceMode('MANUAL')} />{i18n.locale === 'ru' ? 'Указать вручную' : 'Manual'}</label>
+            {sourceMode === 'MANUAL' ? <><label className="field">{i18n.locale === 'ru' ? 'Исходящие адреса Remnawave Panel' : 'Remnawave Panel outbound addresses'}<textarea value={cidrs} onChange={event => setCidrs(event.target.value)} /></label><p>{i18n.locale === 'ru'
+              ? 'Это IP/CIDR сервера, с которого Panel подключается к Node, а не адрес вашего компьютера или SSH-клиента. Ручной режим нужен для NAT, reverse proxy или отдельного исходящего адреса.'
+              : 'These are IP/CIDR sources used by Panel to connect to Node, not your computer or SSH client. Use manual mode for NAT, reverse proxies or a separate outbound address.'}</p></> : null}
+          </details>{!formValid ? <p role="alert">{copy.formError}</p> : null}</section> : null}
         {step === 3 && preview ? <section><h3>{copy.steps[3]}</h3><p>{preview.serverName} · {preview.serverProfileName} · r{preview.revisionNumber}</p><p>{preview.configProfileName}: {preview.inboundNames.join(', ')}</p>
           <p>{preview.run.nodeName} · {preview.run.address}:{preview.run.nodePort}</p>
           {preview.run.externalNodeId && !preview.recovery ? <InlineAlert tone="warning" title={i18n.locale === 'ru' ? 'Будет использован уже созданный узел' : 'The previously created node will be reused'}>
             {i18n.locale === 'ru' ? 'InfraDesk подтвердит исходную идентичность узла перед продолжением. Новый узел создаваться не будет.' : 'InfraDesk will verify the original node identity before continuing. A new node will not be created.'}
             <br /><span>{copy.externalId}: {preview.run.externalNodeId}</span>
           </InlineAlert> : null}
-          <p>{preview.nodeImage}</p><p>{copy.cidrs}: {preview.panelCidrs?.join(', ') ?? cidrValues.join(', ')}</p>
+          <p>{preview.nodeImage}</p>{preview.panelSource ? <PanelNetworkAccess source={preview.panelSource} /> : <p>{copy.cidrs}: {preview.panelCidrs?.join(', ') ?? cidrValues.join(', ')}</p>}
+          {preview.panelSource?.confidence === 'UNRESOLVED' ? <div className="integration-row-actions"><button type="button" disabled={previewRequest.isPending || reconcile.isPending} onClick={() => preview.recovery ? void reconcileRun(preview.recovery.sourceRunId, 'RECOVER') : void makePreview().catch(() => setWorkflowError(true))}>{copy.checkAgain}</button><button type="button" onClick={() => setStep(2)}>{i18n.locale === 'ru' ? 'Расширенные настройки' : 'Advanced settings'}</button></div> : null}
           {preview.nodeApi ? <p>Remnawave {preview.nodeApi.serverVersion} · {preview.nodeApi.apiGeneration} · {preview.nodeApi.sourceCommit}</p> : null}
-          <PackageProbeFindings findings={preview.packageFindings} /><ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings.filter(code => code !== 'REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE')} /><ReviewList title={copy.serverProfile} values={preview.blockingProblems.filter(code => code.startsWith('PROVISIONING_') && !['PROVISIONING_NODE_INSTALLATION_UNMANAGED', 'PROVISIONING_NODE_PORT_OCCUPIED'].includes(code)).map(code => i18n.t.provisioning.errors[code] ?? code)} danger /><ReviewList title={copy.blockers} values={preview.blockingProblems.filter(code => !code.startsWith('REMNAWAVE_LOCAL_INSTALLATION_') && !code.startsWith('PROVISIONING_')).map(code => localDiagnosis(code, i18n.locale) ?? (['REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW', 'REMNAWAVE_ONBOARDING_RECOVERY_CONFLICT'].includes(code)
+          <PackageProbeFindings findings={preview.packageFindings} /><ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings.filter(code => code !== 'REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE')} /><ReviewList title={copy.serverProfile} values={preview.blockingProblems.filter(code => code.startsWith('PROVISIONING_') && !['PROVISIONING_NODE_INSTALLATION_UNMANAGED', 'PROVISIONING_NODE_PORT_OCCUPIED'].includes(code)).map(code => i18n.t.provisioning.errors[code] ?? code)} danger /><ReviewList title={copy.blockers} values={preview.blockingProblems.filter(code => !code.startsWith('REMNAWAVE_LOCAL_INSTALLATION_') && !code.startsWith('PROVISIONING_')).map(code => networkPhaseNames(i18n.locale)[code] ?? localDiagnosis(code, i18n.locale) ?? (['REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW', 'REMNAWAVE_ONBOARDING_RECOVERY_CONFLICT'].includes(code)
             ? i18n.locale === 'ru' ? 'На сервере уже создан узел. Его состояние или новые параметры не допускают безопасное продолжение onboarding. Проверьте предыдущий запуск и узел; не создавайте дубликат.' : 'A node was already created on this server. Its state or the new inputs prevent safe onboarding recovery. Review the previous run and node; do not create a duplicate.'
             : i18n.t.provisioning.errors[code] ?? code))} danger />
           </section> : null}
@@ -196,6 +206,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
       {step === 3 && preview?.recovery ? <RecoveryReview recovery={preview.recovery} newCorrelation={preview.blockingProblems.length ? undefined : preview.run.correlationId} confirmed={recoveryConfirmed} onConfirm={setRecoveryConfirmed} copy={copy} /> : null}
       {(step === 4 || (hasRun && step !== 3)) && current ? <RunStatus run={current} detail={runQuery.data} copy={copy} /> : null}
       {(step === 4 || (hasRun && step !== 3)) && current && ['FAILED', 'UNKNOWN', 'SUCCEEDED'].includes(current.state) && canConfigure ? <div className="integration-row-actions">
+        {current.failureCode === 'REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT' || current.failureCode === 'REMNAWAVE_NODE_CONNECTION_TIMEOUT' ? <PendingButton className="primary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={reconcile.isPending || runQuery.isPending} onClick={() => void reconcileRun(current.id, 'RECOVER')}>{i18n.locale === 'ru' ? 'Исправить доступ' : 'Repair Panel access'}</PendingButton> : null}
         <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={reconcile.isPending || runQuery.isPending} onClick={() => void reconcileRun(current.id, 'RECOVER')}>{copy.checkAgain}</PendingButton>
       </div> : null}
       {(step === 4 || (hasRun && step !== 3)) && !current && !runQuery.isPending ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Запуск не найден' : 'Run not found'} /> : null}
@@ -216,6 +227,13 @@ function localStateLabel(state: string, locale: string): string {
   return labels[state]?.[locale === 'ru' ? 0 : 1] ?? state
 }
 function localDiagnosis(code: string, locale: string): string | undefined {
+  const network: Record<string, [string,string]> = {
+    REMNAWAVE_PANEL_SOURCE_UNRESOLVED: ['Не удалось определить сетевой источник Panel. Проверьте снова или откройте расширенные настройки сети.', 'Could not resolve a Panel network source. Check again or open advanced network settings.'],
+    REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED: ['Найдено слишком много адресов для безопасного обновления. Требуется ручная проверка.', 'Too many sources for a safe update. Manual review is required.'],
+    REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY: ['Правила доступа к Node конфликтуют с управляемой политикой. Требуется ручная проверка; чужие правила не изменяются.', 'Node firewall rules conflict with the managed policy. Manual review is required; foreign rules will not be changed.'],
+    REMNAWAVE_ONBOARDING_SOURCE_CHANGED: ['Сетевые источники Panel изменились после проверки. Подготовьте новый план.', 'Panel network sources changed after review. Prepare a new preview.'],
+  }
+  if(network[code]) return network[code][locale === 'ru' ? 0 : 1]
   const reasons: Record<string, [string, string]> = {
     SSH_UNAVAILABLE: ['Нет подтверждённого доступа по SSH. Проверьте подключение и учётные данные.', 'SSH access unavailable. Check the connection and credentials.'],
     OBSERVATION_TIMEOUT: ['Проверка превысила время ожидания. Проверьте доступность сервера.', 'Observation timed out. Check server availability.'],
@@ -225,17 +243,23 @@ function localDiagnosis(code: string, locale: string): string | undefined {
     CONTAINER_STATE_UNKNOWN: ['Не удалось проверить контейнеры. Проверьте доступность Docker.', 'Containers could not be inspected. Check Docker availability.'],
     FIREWALL_STATE_UNKNOWN: ['Не удалось проверить правила межсетевого экрана. Проверьте состояние UFW.', 'Firewall rules could not be verified. Check UFW.'],
     PORT_STATE_UNKNOWN: ['Не удалось проверить занятость порта. Проверьте состояние сервера.', 'Port occupancy could not be verified. Check the server.'],
-    HASH_PROBE_FAILED: ['?? ??????? ????????? SHA-256 ??? ???????? ?????????.', 'Installation SHA-256 probe failed.'],
-    FILESYSTEM_METADATA_UNAVAILABLE: ['?? ??????? ????????? ?????????? ???????? ???????.', 'Filesystem metadata could not be read.'],
-    STAGING_METADATA_UNAVAILABLE: ['?? ??????? ????????? ?????????? staging.', 'Staging metadata could not be read.'],
-    PROBE_EXECUTION_FAILED: ['Shell-???????? ??????????? ? ??????? ??????????.', 'The shell probe exited with an execution error.'],
-    PROBE_OUTPUT_INVALID: ['Shell-???????? ??????? ???????????? ?????????.', 'The shell probe returned an invalid result.'],
+    HASH_PROBE_FAILED: ['Не удалось проверить SHA-256 установки.', 'Installation SHA-256 probe failed.'],
+    FILESYSTEM_METADATA_UNAVAILABLE: ['Не удалось прочитать метаданные файловой системы.', 'Filesystem metadata could not be read.'],
+    STAGING_METADATA_UNAVAILABLE: ['Не удалось прочитать метаданные staging.', 'Staging metadata could not be read.'],
+    PROBE_EXECUTION_FAILED: ['Shell-проверка завершилась с ошибкой исполнения.', 'The shell probe exited with an execution error.'],
+    PROBE_OUTPUT_INVALID: ['Shell-проверка вернула некорректный результат.', 'The shell probe returned an invalid result.'],
     STATE_UNKNOWN: ['Проверка не подтвердила безопасное состояние. Требуется повторная или ручная проверка.', 'Observation did not prove a safe state. Check again or review manually.'],
   }
   return reasons[code.replace(/^REMNAWAVE_LOCAL_INSTALLATION_/, '')]?.[locale === 'ru' ? 0 : 1]
 }
 function ReviewList({ title, values, danger = false }: { title: string; values: string[]; danger?: boolean }) {
-  return <section><h4>{title}</h4>{values.length ? <ul>{values.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ul> : <p>—</p>}{danger && values.length ? <p role="alert">{title}</p> : null}</section>
+  const i18n = useI18n()
+  const labels = networkPhaseNames(i18n.locale)
+  const names = texts[i18n.locale].phaseNames
+  return <section><h4>{title}</h4>{values.length ? <ul>{values.map((value, index) => <li key={`${index}-${value}`}>{labels[value] ?? names[value as keyof typeof names] ?? value}</li>)}</ul> : <p>—</p>}{danger && values.length ? <p role="alert">{title}</p> : null}</section>
+}
+function networkPhaseNames(locale: string): Record<string, string> {
+  return locale === 'ru' ? { RESOLVE_PANEL_SOURCE: 'Определение сетевых источников Panel', ADD_PANEL_SOURCES: 'Добавление проверенных источников Panel', FINALIZE_PANEL_SOURCES: 'Подтверждение или откат сетевого доступа', REMNAWAVE_PANEL_SOURCE_UNRESOLVED: 'Не удалось определить адреса Panel. Повторите проверку или укажите источники в расширенных настройках.', REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED: 'Слишком много сетевых источников. Требуется ручная проверка.', REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY: 'Правила доступа конфликтуют с управляемой политикой. Требуется ручная проверка.' } : { RESOLVE_PANEL_SOURCE: 'Resolve Panel network sources', ADD_PANEL_SOURCES: 'Add reviewed Panel sources', FINALIZE_PANEL_SOURCES: 'Confirm or roll back Panel access', REMNAWAVE_PANEL_SOURCE_UNRESOLVED: 'Could not resolve Panel addresses. Check again or enter sources in advanced settings.', REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED: 'Too many network sources. Manual review is required.', REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY: 'Firewall rules conflict with the managed policy. Manual review is required.' }
 }
 function RecoveryReview({ recovery, newCorrelation, confirmed, onConfirm, copy }: { recovery: NodeOnboardingRecoverySummary; newCorrelation?: string; confirmed: boolean; onConfirm: (value: boolean) => void; copy: typeof texts[keyof typeof texts] }) {
   const i18n = useI18n()
@@ -244,7 +268,7 @@ function RecoveryReview({ recovery, newCorrelation, confirmed, onConfirm, copy }
     {local.diagnosis ? localDiagnosis(local.diagnosis, i18n.locale) : null}
     {['FOREIGN', 'PORT_CONFLICT'].includes(local.state) ? <span>{i18n.locale === 'ru' ? 'Требуется ручная проверка владельца установки и занятого порта. Автоматические изменения заблокированы.' : 'Review installation ownership and the occupied port manually. Automatic changes are blocked.'}</span> : null}
     {local.state === 'UNKNOWN' ? <span>{i18n.locale === 'ru' ? 'Восстановите доступ и повторите проверку локальной установки. Изменения заблокированы.' : 'Restore access and check the local installation again. Changes are blocked.'}</span> : null}
-    {local.state.startsWith('OWNED_') && recovery.action !== 'RECOVER' ? <span>{i18n.locale === 'ru' ? 'После подтверждения InfraDesk удалит только доказанную установку и правила предыдущего узла, затем создаст новый узел.' : 'After confirmation, InfraDesk will retire the proven previous installation and its rules, then create a new node.'}</span> : null}
+    {local.state.startsWith('OWNED_') && ['RECREATE','DELETE_RECREATE'].includes(recovery.action) ? <span>{i18n.locale === 'ru' ? 'После подтверждения InfraDesk удалит только доказанную установку и правила предыдущего узла, затем создаст новый узел.' : 'After confirmation, InfraDesk will retire the proven previous installation and its rules, then create a new node.'}</span> : null}
   </InlineAlert></section> : null
   if (recovery.state === 'UNKNOWN') return <section><h4>Remnawave Panel</h4><InlineAlert tone="warning" title={copy.recoveryUnknown} />{localReview}</section>
   if (recovery.state === 'PRESENT_CONFLICT') return <section><h4>Remnawave Panel</h4><InlineAlert tone="danger" title={copy.conflict} />{localReview}</section>
@@ -258,7 +282,11 @@ function RecoveryReview({ recovery, newCorrelation, confirmed, onConfirm, copy }
 }
 function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: ReturnType<typeof useNodeOnboardingRun>['data']; copy: typeof texts[keyof typeof texts] }) {
   const i18n = useI18n()
-  const failureReason = (code: string) => ['FIREWALL_RULE_UNSUPPORTED', 'PROVISIONING_FIREWALL_RULE_UNSUPPORTED'].includes(code)
+  const failureReason = (code: string) => code === 'REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY' ? i18n.locale === 'ru' ? 'Правила доступа конфликтуют с управляемой политикой. Требуется ручная проверка; чужие правила не изменялись.' : 'Firewall rules conflict with the managed policy. Manual review is required; foreign rules were not changed.'
+    : code === 'REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT' ? i18n.locale === 'ru'
+    ? `Node работает на сервере и слушает порт ${run.nodePort}, но Remnawave Panel не смог подключиться. Вероятная причина: исходящий адрес Panel не входит в разрешённые источники. Также проверьте доступность адреса Node.`
+    : `Node is healthy and listens on port ${run.nodePort}, but Remnawave Panel could not connect. The Panel outbound address may be outside the allowed sources. Also check the Node address.`
+    : ['FIREWALL_RULE_UNSUPPORTED', 'PROVISIONING_FIREWALL_RULE_UNSUPPORTED'].includes(code)
     ? i18n.locale === 'ru' ? 'Не удалось безопасно обработать текущую конфигурацию UFW.' : 'The current UFW configuration could not be safely processed.'
     : code === 'PROVISIONING_FIREWALL_OWNERSHIP_CONFLICT'
       ? i18n.locale === 'ru' ? 'Правило UFW этого узла отличается от проверенного плана. Проверьте правило перед повторной подготовкой.' : 'This node’s UFW rule differs from the reviewed plan. Review the rule before preparing another plan.'
@@ -269,14 +297,17 @@ function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: Retu
   const byPhase = new Map(detail?.phases.map(phase => [phase.phase, phase]))
   const hasFirewallRetirement = detail?.phases.some(phase => phase.phase === 'RETIRE_NODE_FIREWALL') || run.phase === 'RETIRE_NODE_FIREWALL'
   const retirementPhases: OnboardingRunPhase[] = run.recovery?.localInstallation?.state === 'ABSENT' ? [] : [...(hasFirewallRetirement ? ['RETIRE_NODE_FIREWALL' as const] : []), 'RETIRE_LOCAL_NODE']
-  const runPhases: OnboardingRunPhase[] = run.recovery?.action === 'DELETE_RECREATE'
+  const fallbackPhases: OnboardingRunPhase[] = run.recovery?.action === 'DELETE_RECREATE'
     ? [...phases.slice(0, 2), 'DELETE_NODE', 'CONFIRM_NODE_DELETED', ...retirementPhases, ...phases.slice(2)]
     : run.recovery?.action === 'RECREATE' ? [...phases.slice(0, 2), ...retirementPhases, ...phases.slice(2)] : [...phases]
+  const runPhases = detail?.phases.length ? detail.phases.map(p => p.phase) : fallbackPhases
+  const additionalNames = networkPhaseNames(i18n.locale)
   return <section><InlineAlert tone={tone} title={`${copy.run}: ${run.state}`}>{message}{run.failureCode ? <><br />{failure(run.failureCode)}</> : null}</InlineAlert>
+    {run.connectivityFinding ? <section><h4>{i18n.locale === 'ru' ? 'Сетевой доступ Panel' : 'Panel connectivity'}</h4><p>{i18n.locale === 'ru' ? 'Локальная Node исправна. Правила доступа настроены.' : 'The local Node is healthy. Firewall rules are configured.'}</p><p>{run.connectivityFinding.panelSources.join(', ')} · {run.connectivityFinding.sourceEvidence}</p></section> : null}
     <p>{run.nodeName} · {run.address}:{run.nodePort}</p><h3>{copy.phases}</h3><ol>{runPhases.map(phase => {
       const record = byPhase.get(phase)
       const code = record?.failureCode ?? (run.phase === phase ? run.failureCode : null)
-      const name = copy.phaseNames[phase]
+      const name = additionalNames[phase] ?? copy.phaseNames[phase as keyof typeof copy.phaseNames] ?? phase
       return <li key={phase}>{code ? <InlineAlert tone={record?.state === 'UNKNOWN' || run.state === 'UNKNOWN' ? 'warning' : 'danger'} title={`${name} — ${record?.state ?? run.state}`}>{failure(code)}</InlineAlert>
         : <><span>{name}</span> — {record?.state ?? 'PENDING'}</>}</li>
     })}</ol>

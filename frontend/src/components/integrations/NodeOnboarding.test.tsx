@@ -19,6 +19,12 @@ const getRandomValues = crypto.getRandomValues.bind(crypto)
  beforeEach(() => vi.stubGlobal('crypto', {getRandomValues}))
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
+function manualSources(locale: 'en' | 'ru' = 'en') {
+  const summary=screen.getByText(locale === 'en' ? 'Advanced network settings' : 'Расширенные настройки сети')
+  if(!summary.closest('details')?.open) fireEvent.click(summary)
+  fireEvent.click(screen.getByLabelText(locale === 'en' ? 'Manual' : 'Указать вручную'))
+  return screen.getByLabelText(locale === 'en' ? 'Remnawave Panel outbound addresses' : 'Исходящие адреса Remnawave Panel')
+}
 
 function mount(entry = '/', locale: 'en' | 'ru' = 'en', configure: (url: string, method: string, body: unknown) => Response | undefined = () => undefined) {
   const calls: { url: string; method: string; body: unknown }[] = []
@@ -47,6 +53,34 @@ function mount(entry = '/', locale: 'en' | 'ru' = 'en', configure: (url: string,
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
 
 describe('NodeOnboarding', () => {
+  it('ordinary onboarding defaults to AUTO and submits no operator CIDR', async () => {
+    const {calls}=mount()
+    await waitFor(() => expect((screen.getByRole('button',{name:'Add node'}) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button',{name:'Add node'}))
+    fireEvent.change(await screen.findByLabelText('Server'),{target:{value:'resource-1'}})
+    fireEvent.click(screen.getByRole('button',{name:'Continue'}))
+    fireEvent.change(screen.getByLabelText('Configuration profile'),{target:{value:'profile-uuid'}})
+    fireEvent.click(screen.getByLabelText('VLESS TLS'))
+    fireEvent.click(screen.getByRole('button',{name:'Continue'}))
+    expect(screen.queryByRole('textbox',{name:'Remnawave Panel outbound addresses'})).toBeNull()
+    expect((screen.getByRole('button',{name:'Continue'}) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button',{name:'Continue'}))
+    fireEvent.click(screen.getByRole('button',{name:'Review changes'}))
+    await waitFor(() => expect(calls.some(c=>c.url.endsWith('/preview'))).toBe(true))
+    const body=calls.find(c=>c.url.endsWith('/preview'))?.body as Record<string,unknown>
+    expect(body.panelSourceMode).toBe('AUTO'); expect(body).not.toHaveProperty('panelCidrs')
+  })
+  it('offers repair access for a healthy existing Node and shows candidate evidence without recreate approval', async () => {
+    const repair=recoveryPreview(recoverySummary('PRESENT_UNHEALTHY','REPAIR_PANEL_CONNECTIVITY'))
+    repair.panelSource={mode:'AUTO',sources:['185.10.20.30/32'],method:'DNS_BASE_URL',confidence:'AUTO_CANDIDATE',endpointFingerprint:'a'.repeat(64)}
+    repair.changes=['ADD_PANEL_SOURCES','WAIT_FOR_PANEL','FINALIZE_PANEL_SOURCES']
+    const {calls}=mount('/?onboardingRun=run-1','ru',url => url.endsWith('/runs/run-1') ? json({run:run('FAILED'),phases:[]}) : url.endsWith('/reconcile') ? json(repair) : undefined)
+    fireEvent.click(await screen.findByRole('button',{name:'Проверить снова'}))
+    expect(await screen.findByText('185.10.20.30')).toBeTruthy()
+    expect(screen.getByRole('button',{name:'Исправить доступ'})).toBeTruthy()
+    expect(screen.queryByText('Новый ID корреляции')).toBeNull()
+    expect(calls.filter(c=>c.method==='POST' && c.url.endsWith('/runs'))).toHaveLength(0)
+  })
   it('recovers saved onboarding identity after reload without automatically submitting', async () => {
     const identity={planId:'plan-1',requestId:'d1111111-1111-4111-8111-111111111111'}
     sessionStorage.setItem('node-onboarding:org:integration',JSON.stringify(identity))
@@ -92,10 +126,10 @@ describe('NodeOnboarding', () => {
     fireEvent.click(screen.getByLabelText('VLESS TLS'))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     for (const value of ['', '0.0.0.0/0', '::/0', 'panel.example/24', '203.0.113.1', '203.0.113.0/24,203.0.113.0/24']) {
-      fireEvent.change(screen.getByLabelText('Panel CIDRs'), { target: { value } })
+      fireEvent.change(manualSources(), { target: { value } })
       expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
     }
-    fireEvent.change(screen.getByLabelText('Panel CIDRs'), { target: { value: '203.0.113.0/24' } })
+    fireEvent.change(manualSources(), { target: { value: '203.0.113.0/24' } })
     expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(false)
   })
   it('sends only the reviewed basic-flow fields and retains the run in the URL', async () => {
@@ -109,13 +143,13 @@ describe('NodeOnboarding', () => {
     fireEvent.change(screen.getByLabelText('Configuration profile'), { target: { value: 'profile-uuid' } })
     fireEvent.click(screen.getByLabelText('VLESS TLS'))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    fireEvent.change(screen.getByLabelText('Panel CIDRs'), { target: { value: '203.0.113.0/24' } })
+    fireEvent.change(manualSources(), { target: { value: '203.0.113.0/24' } })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
     expect(await screen.findByText('Create node')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Start onboarding' }))
     await waitFor(() => expect(calls.some(value => value.method === 'POST' && value.url.endsWith('/runs'))).toBe(true))
-    expect(calls.find(value => value.url.endsWith('/preview'))?.body).toEqual({ resourceId: 'resource-1', nodeName: 'Frankfurt edge', address: '198.51.100.11', nodePort: 2222, configProfileId: 'profile-uuid', activeInboundIds: ['inbound-uuid'], panelCidrs: ['203.0.113.0/24'], desiredState: 'ENABLED' })
+    expect(calls.find(value => value.url.endsWith('/preview'))?.body).toEqual({ resourceId: 'resource-1', nodeName: 'Frankfurt edge', address: '198.51.100.11', nodePort: 2222, configProfileId: 'profile-uuid', activeInboundIds: ['inbound-uuid'], panelCidrs: ['203.0.113.0/24'], panelSourceMode: 'MANUAL', desiredState: 'ENABLED' })
     expect(calls.find(value => value.method === 'POST' && value.url.endsWith('/runs'))?.body).toEqual({ planId: 'plan-1', requestId: expect.any(String) })
     await waitFor(() => expect(screen.getByTestId('search').textContent).toContain('onboardingRun=run-1'))
   })
@@ -135,7 +169,7 @@ describe('NodeOnboarding', () => {
     fireEvent.change(screen.getByLabelText('Configuration profile'), { target: { value: 'profile-uuid' } })
     fireEvent.click(screen.getByLabelText('VLESS TLS'))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    fireEvent.change(screen.getByLabelText('Panel CIDRs'), { target: { value: '203.0.113.0/24' } })
+    fireEvent.change(manualSources(), { target: { value: '203.0.113.0/24' } })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     fireEvent.click(screen.getByRole('button', { name: 'Review changes' })); await screen.findByText('Create node')
     fireEvent.click(screen.getByRole('button', { name: 'Start onboarding' }))
@@ -158,7 +192,7 @@ describe('NodeOnboarding', () => {
     fireEvent.change(screen.getByLabelText('Configuration profile'), { target: { value: 'profile-uuid' } })
     fireEvent.click(screen.getByLabelText('VLESS TLS'))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    fireEvent.change(screen.getByLabelText('Panel CIDRs'), { target: { value: '203.0.113.0/24' } })
+    fireEvent.change(manualSources(), { target: { value: '203.0.113.0/24' } })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
     expect(await screen.findByText('The selected profile cannot be applied.')).toBeTruthy()
@@ -404,7 +438,8 @@ describe('NodeOnboarding', () => {
   ] as const)('%s: shows the durable firewall retirement phase before local retirement for new recovery history', async (locale, firewallLabel, localLabel) => {
     mount('/?onboardingRun=run-1', locale, url => url.endsWith('/runs/run-1') ? json({
       run: { ...run('FAILED'), phase: 'RETIRE_NODE_FIREWALL', failureCode: null, recovery: recoverySummary('PRESENT_UNHEALTHY', 'RECREATE') },
-      phases: [{ phase: 'RETIRE_NODE_FIREWALL', state: 'SUCCEEDED', startedAt: null, finishedAt: null, failureCode: null }],
+      phases: [{ phase: 'RETIRE_NODE_FIREWALL', state: 'SUCCEEDED', startedAt: null, finishedAt: null, failureCode: null },
+        { phase: 'RETIRE_LOCAL_NODE', state: 'PENDING', startedAt: null, finishedAt: null, failureCode: null }],
     }) : undefined)
     const firewall = await screen.findByText(firewallLabel)
     const local = screen.getByText(localLabel)
@@ -426,7 +461,7 @@ describe('NodeOnboarding', () => {
     fireEvent.change(screen.getByLabelText('Профиль конфигурации'), { target: { value: 'profile-uuid' } })
     fireEvent.click(screen.getByLabelText('VLESS TLS'))
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
-    fireEvent.change(screen.getByLabelText('CIDR панели'), { target: { value: '2.27.26.18/32' } })
+    fireEvent.change(manualSources('ru'), { target: { value: '2.27.26.18/32' } })
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
     fireEvent.click(screen.getByRole('button', { name: 'Проверить изменения' }))
     expect(await screen.findByText('Будет использован уже созданный узел')).toBeTruthy()

@@ -59,7 +59,7 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
     configureFirewall(connection,spec,replaceSources=false)
 
   private def configureFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec,
-    replaceSources: Boolean): IO[ProvisioningStepResult] =
+    replaceSources: Boolean, reviewedSources: Option[Set[String]] = None): IO[ProvisioningStepResult] =
     Ref.of[IO, Boolean](false).flatMap { changed => stepTracked(changed)(withSession(connection) { (_, c, _) =>
       validate(spec) *> firewallRules(spec).flatMap { desired =>
         for {
@@ -72,6 +72,7 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
           _ <- IO.raiseUnless(active || inactive)(ProfileRemoteFailure("PROVISIONING_FIREWALL_OBSERVATION_FAILED"))
           _ <- IO.raiseUnless(active)(ProfileRemoteFailure("PROVISIONING_FIREWALL_SSH_ACCESS_UNPROVEN"))
           old <- nodeRules(c, spec)
+          _ <- connectivityRules(old,spec,reviewedSources)
           _ <- IO.raiseWhen(broadManagementAllow(old, spec))(
             ProfileRemoteFailure("PROVISIONING_FIREWALL_BROAD_RULE_PRESENT"))
           _ <- validateOwnedFirewall(old, spec, replaceSources)
@@ -81,7 +82,7 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
             ProfileRemoteFailure("PROVISIONING_FIREWALL_SSH_ACCESS_UNPROVEN"))
           _ <- desired.traverse_ { case (source, comment) =>
             nodeRules(c, spec).flatMap { fresh =>
-              validateOwnedFirewall(fresh, spec, replaceSources) *>
+              connectivityRules(fresh,spec,reviewedSources) *> validateOwnedFirewall(fresh, spec, replaceSources) *>
               IO.raiseWhen(broadManagementAllow(fresh, spec))(ProfileRemoteFailure("PROVISIONING_FIREWALL_BROAD_RULE_PRESENT")) *>
               IO.raiseWhen(ProfileFirewall.sshBlocked(fresh, endpoint._1, endpoint._2))(ProfileRemoteFailure("PROVISIONING_FIREWALL_SSH_ACCESS_UNPROVEN")) *>
               (if (fresh.exists(r => r.owned && r.action == "allow" && r.rule.port == spec.nodePort && r.rule.protocol == "tcp" && r.rule.sources.contains(source))) IO.unit
@@ -94,10 +95,10 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
           _ <- if (!replaceSources) IO.unit else old.filter(r => r.owned && r.action == "allow" && r.rule.protocol == "tcp" && r.rule.port == spec.nodePort)
             .flatMap(_.rule.sources).distinct.filterNot(s => desired.exists(_._1 == s)).traverse_ { source =>
               nodeRules(c, spec).flatMap { fresh =>
-                if (fresh.exists(r => r.owned && r.action == "allow" && r.rule.port == spec.nodePort && r.rule.sources.contains(source)))
+                connectivityRules(fresh,spec,reviewedSources) *> (if (fresh.exists(r => r.owned && r.action == "allow" && r.rule.port == spec.nodePort && r.rule.sources.contains(source)))
                   changed.set(true) *> checked(c, "ufw", List("--force", "delete", "allow", "from", source,
                     "to", "any", "port", spec.nodePort.toString, "proto", "tcp", "comment", s"infradesk:remnawave:${spec.resourceId}:${spec.externalNodeId}:node"))
-                else IO.unit
+                else IO.unit)
               }
             }
           verified <- firewallProof(c, spec)
@@ -361,6 +362,42 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
         r.action == "allow" && r.rule.protocol == "tcp" && r.rule.port == spec.nodePort)
         .flatMap(_.rule.sources).distinct.sorted)
     }
+
+  override def reconcilePanelSources(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    previousSources: List[String], targetSources: List[String]): IO[ProvisioningStepResult] =
+    step(withSession(connection) { (_,c,_) =>
+      val union = (previousSources ++ spec.panelCidrs).distinct.sorted
+      IO.raiseUnless(targetSources.nonEmpty && targetSources.distinct==targetSources && targetSources.forall(union.contains))(
+        ProfileRemoteFailure("REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY")) *>
+      validate(spec.copy(panelCidrs=union)) *> nodeRules(c,spec).flatMap { rules =>
+        val current = rules.filter(_.owned).flatMap(_.rule.sources).distinct.sorted
+        val compatible = current.forall(union.contains) &&
+          (previousSources.forall(current.contains) || targetSources.forall(current.contains))
+        IO.raiseUnless(compatible && rules.filter(_.owned).forall(r => r.rule.id=="node" &&
+          r.action=="allow" && r.rule.protocol=="tcp" && r.rule.port==spec.nodePort) &&
+          !rules.exists(r => !r.owned && r.rule.port==spec.nodePort))(
+          ProfileRemoteFailure("REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY"))
+      }
+    }.flatMap(_ => configureFirewall(connection,spec.copy(panelCidrs=targetSources),replaceSources=true,
+      reviewedSources=Some((previousSources ++ spec.panelCidrs).toSet))))
+
+  override def connectivitySources(connection: Connection,spec: RemnawaveNodeRemoteSpec,
+    reviewedSources: List[String]): IO[List[String]] = withSession(connection) { (_,c,_) =>
+    validate(spec) *> c.capture("ufw",List("status"),15.seconds).flatMap(r => IO.raiseUnless(
+      r.exitCode==0 && !r.stdoutTruncated && r.stdout.linesIterator.exists(_.trim=="Status: active"))(
+      ProfileRemoteFailure("REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY"))) *> nodeRules(c,spec).flatMap(rules =>
+      connectivityRules(rules,spec,Some(reviewedSources.toSet)).as(rules.filter(_.owned).flatMap(_.rule.sources).distinct.sorted))
+  }.handleErrorWith {
+    case p: ProfileRemoteFailure if Set("REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY","FIREWALL_RULE_UNSUPPORTED")(p.code) =>
+      IO.raiseError(application.port.PanelConnectivityFailure.ManualOnly)
+    case e => IO.raiseError(e)
+  }
+
+  private def connectivityRules(rules: List[ProfileFirewallRule],spec: RemnawaveNodeRemoteSpec,
+    reviewed: Option[Set[String]]): IO[Unit] = reviewed.traverse_(sources => IO.raiseWhen(
+    rules.exists(r => !r.owned && r.rule.port==spec.nodePort) || rules.exists(r => r.owned &&
+      (r.rule.id!="node" || r.action!="allow" || r.rule.protocol!="tcp" || r.rule.port!=spec.nodePort || !r.rule.sources.forall(sources))))(
+      ProfileRemoteFailure("REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY")))
 
   private def withSession[A](connection: Connection)(use: (RemoteConfigurationSession[IO], ProfileCommands, Int) => IO[A]): IO[A] =
     transport.withSessionBounded(connection, 65536) { s =>

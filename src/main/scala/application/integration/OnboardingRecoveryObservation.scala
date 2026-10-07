@@ -34,10 +34,11 @@ object OnboardingRecoveryObservation {
       val previousImage = if(r.externalNodeId.isEmpty && !unknownCreate)
         r.snapshot.recovery.flatMap(_.previousImageReference).getOrElse(r.snapshot.installationImageReference)
         else r.snapshot.installationImageReference
-      def result(state: String,node: Option[UUID],local: Option[LocalInstallationObservation] = None): Evidence = {
-        val operation=if(state=="CONFIRMED_NOT_FOUND") "RECREATE" else action
-        Evidence(Some(OnboardingRecovery(r.id,known.orElse(node),correlation,owner,state,operation,Some(previousCidrs),Some(previousImage),local)),
-          if(operation=="RECOVER" && Set("PRESENT_EXACT","PRESENT_UNHEALTHY")(state)) node.orElse(known) else None,
+      def result(state: String,node: Option[UUID],local: Option[LocalInstallationObservation] = None, verified: Boolean = false,
+        sources: List[String] = previousCidrs,problem: Option[PanelConnectivityProblem] = None): Evidence = {
+        val operation=if(state=="CONFIRMED_NOT_FOUND") "RECREATE" else if(verified && sources.isEmpty && action=="RECOVER") "REPAIR_PANEL_CONNECTIVITY" else action
+        Evidence(Some(OnboardingRecovery(r.id,known.orElse(node),correlation,owner,state,operation,Some(sources),Some(previousImage),local,verified,problem)),
+          if(Set("RECOVER","REPAIR_PANEL_CONNECTIVITY")(operation) && Set("PRESENT_EXACT","PRESENT_UNHEALTHY")(state)) node.orElse(known) else None,
           correlation,local.map(_.state))
       }
       (for {
@@ -54,10 +55,24 @@ object OnboardingRecoveryObservation {
             IO.pure(result("PRESENT_CONFLICT",known))
           case NodeLookupOutcome.Found(n) => connection.liftTo[IO](IntegrationError("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN","SSH connection is unavailable")).flatMap { conn =>
             remote.observe(conn,RemnawaveNodeRemoteSpec(owner,input.resourceId,n.externalId,input.nodePort,previousImage,previousCidrs)).timeout(35.seconds)
-              .map(local => result(if(local.installationState==LocalInstallationState.Unknown) "UNKNOWN"
-                else if(n.connected && !n.disabled && local.verified) "PRESENT_EXACT" else "PRESENT_UNHEALTHY",
-                Some(n.externalId),Some(LocalInstallationObservation.fromState(local.installationState))))
-          }.handleError(_ => result("UNKNOWN",Some(n.externalId),Some(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.SshUnavailable))))
+              .flatMap { local =>
+                val reviewed = (previousCidrs ++ r.snapshot.recovery.toList.flatMap(_.previousPanelCidrs.toList.flatten)).distinct.sorted
+                val baseline = if(local.verified) IO.pure(Some(previousCidrs)) else if(r.snapshot.lifecycleVersion>=4 && local.locallyHealthy)
+                  remote.connectivitySources(conn,RemnawaveNodeRemoteSpec(owner,input.resourceId,n.externalId,input.nodePort,previousImage,previousCidrs),reviewed).map(Some(_))
+                  else IO.pure(None)
+                baseline.map { sources =>
+                  val healthy = local.locallyHealthy && sources.nonEmpty
+                  result(if(local.installationState==LocalInstallationState.Unknown) "UNKNOWN"
+                    else if(n.connected && !n.disabled && healthy) "PRESENT_EXACT" else "PRESENT_UNHEALTHY",
+                    Some(n.externalId),Some(LocalInstallationObservation.fromState(local.installationState)),healthy && !n.disabled,
+                    sources.getOrElse(previousCidrs))
+                }
+              }.timeout(35.seconds)
+          }.handleError {
+            case PanelConnectivityFailure.ManualOnly => result("PRESENT_UNHEALTHY",Some(n.externalId),
+              Some(LocalInstallationObservation.fromState(LocalInstallationState.OwnedComplete)),problem=Some(PanelConnectivityProblem.ManualOnly))
+            case _ => result("UNKNOWN",Some(n.externalId),Some(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.SshUnavailable)))
+          }
           case NodeLookupOutcome.ConfirmedNotFound if known.nonEmpty && candidates.isEmpty =>
             connection.fold(IO.pure(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.SshUnavailable)))(conn =>
               remote.localInstallationObservation(conn,

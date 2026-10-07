@@ -47,9 +47,22 @@ final class RemnawaveOnboardingRoutesSpec extends FunSuite {
     assertEquals(api.received.map(_.nodePort),Some(2222))
     assertEquals(api.received.map(_.desiredState),Some("ENABLED"))
   }
+  test("AUTO is the default without CIDRs; browser forwarding headers cannot supply Panel source") {
+    val api=new Api
+    val body=input.mapObject(_.remove("panelCidrs"))
+    val route=new RemnawaveOnboardingRoutes[IO](api,AuthorizationFixtures.authorization,NoOpLogger[IO]).routes.orNotFound
+    val request=AuthorizationFixtures.as(Request[IO](Method.POST,Uri.unsafeFromString(root+"/preview"))
+      .putHeaders(_root_.org.http4s.Header.Raw(_root_.org.typelevel.ci.CIString("X-Forwarded-For"),"2.27.26.18"))
+      .withEntity(body.noSpaces),org,OrganizationRole.Owner)
+    assertEquals(route.run(request).unsafeRunSync().status,Status.Ok)
+    assertEquals(api.received.map(_.panelSourceMode),Some(domain.integration.PanelSourceMode.Auto))
+    assertEquals(api.received.map(_.panelCidrs),Some(Nil))
+    val spoofed=body.mapObject(_.add("panelSourceMode",Json.fromString("AUTO")).add("panelCidrs",Json.arr(Json.fromString("2.27.26.18/32"))))
+    assertEquals(response(new Api,"/preview",spoofed.noSpaces).status,Status.BadRequest)
+  }
   test("strict body rejects extra keys, missing keys, invalid UUIDs, oversized lists and body") {
     val invalid = List(input.mapObject(_.add("shell",Json.fromString("arbitrary"))),
-      input.mapObject(_.remove("panelCidrs")), input.mapObject(_.add("resourceId",Json.fromString("bad"))),
+      input.mapObject(_.remove("address")), input.mapObject(_.add("resourceId",Json.fromString("bad"))),
       input.mapObject(_.add("activeInboundIds",Json.arr(List.fill(257)(Json.fromString(UUID.randomUUID().toString)): _*))),
       input.mapObject(_.add("nodeName",Json.fromString("x"*17000))))
     invalid.foreach { body =>

@@ -133,6 +133,12 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     var recon = reconciliation
     var create = createOutcome
     var local = localGood
+    var clockNow = now
+    var candidateSources = List("185.10.20.30/32")
+    var connectivitySources = input.panelCidrs
+    var connectOnAdd = true
+    var connectivityMode = false
+    var connectivityChanges = List.empty[List[String]]
     var retiredFirewallResult = ProvisioningStepResult(Map.empty,None,Some(true))
     var retiredCidrs = List.empty[String]
     var firewallResult = ProvisioningStepResult(Map.empty, None, Some(true))
@@ -165,20 +171,32 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       override def localInstallationState(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "installation-state"; installationState.getOrElse(if(repo.record.snapshot.recovery.exists(_.reusesNode) && installationExists) LocalInstallationState.OwnedComplete else LocalInstallationState.Absent) }
       override def recoveryPreflight(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "recovery-preflight"; observedOwner=Some(s.onboardingId); ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def repair(c: Connection,s: RemnawaveNodeRemoteSpec,d: NodeInstallationData) = IO { events += "repair"; observedOwner=Some(s.onboardingId); observedImage=Some(s.imageReference); if(repairResult.failureCode.isEmpty) local=localGood; repairResult }
-      override def retireFirewall(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "retire-firewall"; retiredCidrs=s.panelCidrs; retiredFirewallResult }
+      override def retireFirewall(c: Connection,s: RemnawaveNodeRemoteSpec) = IO {
+        events += "retire-firewall"; retiredCidrs=s.panelCidrs
+        if(connectivityMode && retiredFirewallResult.failureCode.isEmpty) { Harness.this.connectivitySources=Nil; connectivityChanges :+= Nil }; retiredFirewallResult
+      }
       override def retireInstallation(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "retire"; retiredImage=Some(s.imageReference); ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def installationPrerequisites(c: Connection) = IO.pure(ProvisioningStepResult(Map.empty, None, Some(true)))
       override def preflight(c: Connection, r: UUID, p: Int) = IO { events += "preflight"; ProvisioningStepResult(Map.empty, None, Some(true)) }
-      override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "firewall"; firewallResult }
+      override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = IO {
+        events += "firewall"; if(connectivityMode && firewallResult.failureCode.isEmpty) Harness.this.connectivitySources=s.panelCidrs; firewallResult
+      }
       override def configureOnboardingFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = configureFirewall(c,s)
       override def install(c: Connection, s: RemnawaveNodeRemoteSpec, d: NodeInstallationData) = IO {
         events += "install"; installedImage=Some(s.imageReference); assertEquals(d.secretKey, secretText); ProvisioningStepResult(Map.empty, None, Some(true))
       }
       override def start(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "start"; ProvisioningStepResult(Map.empty, None, Some(true)) }
-      override def observe(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "local-observe"; local }
+      override def observe(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "local-observe";
+        if(connectivityMode) local.copy(firewallMatches=s.panelCidrs.sorted==Harness.this.connectivitySources.sorted) else local }
       override def installationPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "install-present"; installationExists }
       override def firewallPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "firewall-present"; true }
       override def managedPanelCidrs(c: Connection, s: RemnawaveNodeRemoteSpec) = IO.pure(s.panelCidrs)
+      override def connectivitySources(c: Connection,s: RemnawaveNodeRemoteSpec,reviewed: List[String]) = IO.pure(Harness.this.connectivitySources)
+      override def reconcilePanelSources(c: Connection,s: RemnawaveNodeRemoteSpec,previous: List[String],target: List[String]) = IO {
+        events += "connectivity-firewall"; connectivityChanges :+= target; Harness.this.connectivitySources=target
+        if(connectOnAdd) panel=panel.copy(connected=true,connecting=false)
+        ProvisioningStepResult(Map.empty,None,Some(true))
+      }
     }
     val operations = new RemnawaveOnboardingOperations[IO] {
       override def runtime(r: RemnawaveNodeOnboardingRun) = IO { events += "runtime"; IntegrationRuntimeContext(integrationId, org,
@@ -273,7 +291,82 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       leaseDuration = 60.seconds, stepTimeout = 30.seconds)
     val worker = new RemnawaveOnboardingWorker[IO](repo, operations,
       new IntegrationProviderRegistry[IO](List(provider)), remote, cipher, runner, auditPair._2, settings, NoOpLogger[IO],
-      RemnawaveOnboardingSettings(1.second, 6.seconds, 6.seconds, 6.seconds), clock = IO.pure(now))
+      RemnawaveOnboardingSettings(1.second, 6.seconds, 6.seconds, 6.seconds), clock = IO {
+        val at=clockNow; if(connectivityMode && !connectOnAdd) clockNow=clockNow.plusSeconds(10); at
+      },
+      panelSources=new RemnawavePanelSourceResolver[IO] {
+        def resolve(endpoint: IntegrationBaseUrl,mode: PanelSourceMode,manual: List[String],managed: Option[String]) = IO.pure(
+          PanelSourceEvidence(mode,if(mode==PanelSourceMode.Auto) candidateSources else manual,
+            if(mode==PanelSourceMode.Auto) "DNS_BASE_URL" else "MANUAL",if(mode==PanelSourceMode.Auto) "AUTO_CANDIDATE" else "MANUAL",
+            PanelSourceEvidence.fingerprint(endpoint)))
+      })
+  }
+
+  private def connectivityHarness(phase: OnboardingPhase = OnboardingPhase.Validate): Harness = {
+    val h=new Harness(phase,initialPanelNode=node(connected=false),startedAt=now.minusSeconds(20))
+    val previous=List("2.27.26.18/32")
+    val source=PanelSourceEvidence(PanelSourceMode.Auto,h.candidateSources,"DNS_BASE_URL","AUTO_CANDIDATE",
+      PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.test").toOption.get))
+    val proof=OnboardingRecovery(uid,Some(nodeId),snap.correlationId,uid,"PRESENT_UNHEALTHY","REPAIR_PANEL_CONNECTIVITY",
+      Some(previous),Some(RemnawaveNodeReleaseCatalog.managedReferences.head),Some(LocalInstallationObservation.fromState(LocalInstallationState.OwnedComplete)),true)
+    h.repo.record=h.repo.record.copy(externalNodeId=Some(nodeId),snapshot=snap.copy(
+      input=input.copy(panelCidrs=h.candidateSources,panelSourceMode=PanelSourceMode.Auto),recovery=Some(proof),lifecycleVersion=4,panelSource=Some(source)))
+    h.connectivityMode=true; h.connectivitySources=previous; h.repo.inFlight=false; h
+  }
+
+  test("V4 repairs the existing healthy UUID: add exact source, confirm Panel, then remove old source; no create/install") {
+    val h=connectivityHarness(); h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded)
+    assertEquals(h.repo.record.externalNodeId,Some(nodeId))
+    assertEquals(h.connectivityChanges,List(List("185.10.20.30/32","2.27.26.18/32"),List("185.10.20.30/32")))
+    assertEquals(h.repo.record.connectivityFinding.map(_.connected),Some(true))
+    assert(!h.events.exists(Set("create","delete","install","repair","start")))
+    assertEquals(h.repo.completed,OnboardingPhase.forSnapshot(h.repo.record.snapshot))
+  }
+  test("unconfirmed new sources are compensated durably and the previous rule is retained") {
+    val h=connectivityHarness(); h.connectOnAdd=false; h.clockNow=now.plusSeconds(100)
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Failed)
+    assertEquals(h.repo.record.failureCode,Some("REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT"))
+    assertEquals(h.connectivityChanges.last,List("2.27.26.18/32"))
+    assertEquals(h.repo.record.connectivityFinding.map(_.connected),Some(false))
+    assert(!h.events.exists(Set("create","delete","install","repair","start")))
+  }
+  test("changed AUTO evidence blocks before connectivity mutation") {
+    val h=connectivityHarness(); h.candidateSources=List("185.10.20.31/32")
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.failureCode,Some("REMNAWAVE_ONBOARDING_SOURCE_CHANGED"))
+    assertEquals(h.connectivityChanges,Nil)
+  }
+  test("crash after adding candidate observes the reviewed union and reuses the same node") {
+    val h=connectivityHarness(OnboardingPhase.AddPanelSources)
+    h.repo.inFlight=true; h.connectivitySources=List("185.10.20.30/32","2.27.26.18/32")
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded)
+    assertEquals(h.repo.record.externalNodeId,Some(nodeId))
+    assert(!h.events.exists(Set("create","delete","install")))
+  }
+  test("new V4 onboarding retires unconfirmed candidate rules while retaining the created UUID and installation") {
+    val h=new Harness(OnboardingPhase.Validate)
+    val evidence=PanelSourceEvidence(PanelSourceMode.Auto,h.candidateSources,"DNS_BASE_URL","AUTO_CANDIDATE",
+      PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.test").toOption.get))
+    h.repo.record=h.repo.record.copy(snapshot=snap.copy(input=input.copy(panelCidrs=evidence.sources,panelSourceMode=PanelSourceMode.Auto),
+      lifecycleVersion=4,panelSource=Some(evidence)))
+    h.repo.inFlight=false; h.connectivityMode=true; h.connectOnAdd=false; h.create=NodeCreateOutcome.Created(node(connected=false))
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.failureCode,Some("REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT"))
+    assertEquals(h.repo.record.externalNodeId,Some(nodeId))
+    assertEquals(h.connectivitySources,Nil)
+    assert(h.events.contains("retire-firewall")); assert(!h.events.contains("retire")); assert(!h.events.contains("delete"))
+  }
+  test("lost Panel observation rolls back added candidates without claiming a disconnected Panel as known") {
+    val h=connectivityHarness(OnboardingPhase.WaitForPanel)
+    h.connectivitySources=List("185.10.20.30/32","2.27.26.18/32"); h.failPanelApi=true; h.connectOnAdd=false
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Unknown)
+    assertEquals(h.repo.record.failureCode,Some("REMNAWAVE_PANEL_OBSERVATION_UNKNOWN"))
+    assertEquals(h.connectivitySources,List("2.27.26.18/32"))
+    assertEquals(h.repo.record.connectivityFinding,None)
   }
 
   test("runs all thirteen durable phases and only succeeds with panel, local, and inventory evidence") {
@@ -601,7 +694,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     val timeout = new Harness(OnboardingPhase.WaitForPanel, initialPanelNode = node(connected = false), startedAt = old)
     timeout.worker.tick.unsafeRunSync()
     assertEquals(timeout.repo.record.state, ProvisioningRunState.Failed)
-    assertEquals(timeout.repo.record.failureCode, Some("REMNAWAVE_NODE_CONNECTION_TIMEOUT"))
+    assertEquals(timeout.repo.record.failureCode, Some("REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT"))
     val unavailable = new Harness(OnboardingPhase.WaitForPanel)
     unavailable.failPanelApi = true
     unavailable.worker.tick.unsafeRunSync()

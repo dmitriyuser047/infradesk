@@ -8,10 +8,14 @@ import java.util.UUID
 /** Backend-controlled values only. Credentials never enter this record. */
 final case class RemnawaveNodeRemoteSpec(onboardingId: UUID, resourceId: UUID, externalNodeId: UUID,
   nodePort: Int, imageReference: String, panelCidrs: List[String])
+object PanelConnectivityFailure {
+  case object ManualOnly extends RuntimeException("REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY")
+}
 
 final case class RemnawaveNodeLocalEvidence(managedFiles: Boolean, imageMatches: Boolean,
   containerRunning: Boolean, portListening: Boolean, stable: Boolean, firewallMatches: Boolean, installationState: LocalInstallationState = LocalInstallationState.Unknown) {
-  def verified: Boolean = installationState == LocalInstallationState.OwnedComplete && managedFiles && imageMatches && containerRunning && portListening && stable && firewallMatches
+  def locallyHealthy: Boolean = installationState == LocalInstallationState.OwnedComplete && managedFiles && imageMatches && containerRunning && portListening && stable
+  def verified: Boolean = locallyHealthy && firewallMatches
 }
 
 /** Each mutation is one separately journalled onboarding phase. No generic shell input. */
@@ -43,4 +47,14 @@ trait RemnawaveNodeRemote[F[_]] {
   def firewallPresent(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[Boolean]
   /** Read-only: the Panel sources currently allowed by this node's own rule namespace, sorted. */
   def managedPanelCidrs(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[List[String]]
+  /** Exact read-only baseline for connectivity recovery; unknown/foreign port policies fail closed. */
+  def connectivitySources(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    reviewedSources: List[String]): F[List[String]] =
+    throw new UnsupportedOperationException("Panel connectivity observation is unavailable")
+  /** Connectivity CAS: only reviewed sources in this exact namespace may exist or be changed.
+    * target is the union while testing, then either the confirmed new sources or the previous ones.
+    */
+  def reconcilePanelSources(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    previousSources: List[String], targetSources: List[String]): F[ProvisioningStepResult] =
+    throw new UnsupportedOperationException("Typed Panel connectivity reconciliation is unavailable")
 }

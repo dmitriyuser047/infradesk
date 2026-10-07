@@ -114,7 +114,7 @@ final class IntegrationLifecycleSpec extends FunSuite {
         noSecret <- run.run(secrets.find(org, replaced.secretId))
         events <- run.run(sql"select action from audit_event where organization_id = $org".query[String].to[List])
       } yield {
-        assertEquals(schema, "58")
+        assertEquals(schema, "59")
         assertEquals(unknownDelete.left.toOption.collect { case e: application.integration.IntegrationError => e.code },
           Some("INTEGRATION_RECOVERY_REQUIRED"))
         assert(credentialRetained.nonEmpty)

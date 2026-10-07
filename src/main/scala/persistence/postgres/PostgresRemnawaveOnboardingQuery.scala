@@ -14,6 +14,19 @@ import java.util.UUID
 
 final class PostgresRemnawaveOnboardingQuery extends RemnawaveOnboardingQuery[ConnectionIO] {
 
+  override def managedPanelAddresses(org: UUID,integration: UUID,endpointHost: String)
+    (implicit F: cats.Applicative[ConnectionIO]): ConnectionIO[List[String]] = sql"""
+    select coalesce(nullif(c.config->>'host',''),r.spec->>'hostname')
+    from integration_resource_binding b
+    join integration_inventory_object o on o.id=b.inventory_object_id and o.organization_id=b.organization_id
+    join resource r on r.id=b.resource_id and r.organization_id=b.organization_id
+    left join external_ref x on x.organization_id=r.organization_id and x.resource_id=r.id
+    left join connection c on c.id=x.connection_id and c.organization_id=r.organization_id and c.connector_type='SSH' and c.is_active
+    where b.organization_id=$org and o.integration_id=$integration and o.object_type='HOST' and o.is_active
+      and r.is_active and lower(r.spec->>'hostname')=lower($endpointHost)
+    order by r.id,c.id limit 2
+    """.query[String].to[List]
+
   private case class Latest(id: UUID, state: String, finishedAt: Option[Instant])
   private type StatusRow = (UUID,Option[String],Option[Int],Option[UUID],Option[Long],Option[UUID],
     Option[String],Option[String],Option[ServerProfileRepositoryRows.ObservationRow],Option[Latest],Boolean,Boolean)

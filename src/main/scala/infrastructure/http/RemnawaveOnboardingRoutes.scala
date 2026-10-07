@@ -5,7 +5,7 @@ import application.integration.{IntegrationError,OnboardingJson,RemnawaveOnboard
 import cats.effect.IO
 import cats.syntax.all._
 import domain.auth.OrganizationPermission
-import domain.integration.OnboardingInput
+import domain.integration.{OnboardingInput,PanelSourceMode}
 import infrastructure.http.dto.{ApiErrorResponse,HttpJsonCodecs}
 import io.circe.Json
 import org.http4s.{HttpRoutes,Request,Response}
@@ -26,7 +26,7 @@ final class RemnawaveOnboardingRoutes[Tx[_]](service: RemnawaveOnboardingApi,aut
     case req @ GET -> Root / "api" / "v1" / "organizations" / _ / "integrations" / integration / "remnawave-node-onboarding" / "options" =>
       authorization.require(req,OrganizationPermission.ManageIntegrations)(ctx => withId(integration)(id => respond(req,ctx)(service.options(ctx.organizationId,id).flatMap(Ok(_)))))
     case req @ POST -> Root / "api" / "v1" / "organizations" / _ / "integrations" / integration / "remnawave-node-onboarding" / "preview" =>
-      mutate(req)(ctx => withId(integration)(id => body(req,Set("resourceId","nodeName","address","nodePort","configProfileId","activeInboundIds","panelCidrs","desiredState")) { json =>
+      mutate(req)(ctx => withId(integration)(id => body(req,Set("resourceId","nodeName","address","nodePort","configProfileId","activeInboundIds","desiredState"),Set("panelCidrs","panelSourceMode")) { json =>
         val c=json.hcursor
         val decoded=for {
           resource <- c.get[String]("resourceId").toOption.flatMap(uuid)
@@ -36,9 +36,15 @@ final class RemnawaveOnboardingRoutes[Tx[_]](service: RemnawaveOnboardingApi,aut
           profile <- c.get[String]("configProfileId").toOption.flatMap(uuid)
           rawInbounds <- c.get[List[String]]("activeInboundIds").toOption.filter(_.size<=256)
           inbounds <- rawInbounds.traverse(uuid)
-          cidrs <- c.get[List[String]]("panelCidrs").toOption.filter(_.size<=32)
+          cidrs <- c.get[Option[List[String]]]("panelCidrs").toOption.map(_.getOrElse(Nil)).filter(_.size<=32)
+          mode <- c.get[Option[String]]("panelSourceMode").toOption.flatMap {
+            case Some(value) => PanelSourceMode.fromCode(value)
+            case None => Some(if(cidrs.nonEmpty) PanelSourceMode.Manual else PanelSourceMode.Auto)
+          }
+          _ <- Option.when(mode != PanelSourceMode.Auto || cidrs.isEmpty)(())
+          _ <- Option.when(mode != PanelSourceMode.Manual || OnboardingInput.canonicalCidrs(cidrs).contains(cidrs.sorted))(())
           desired <- c.get[String]("desiredState").toOption.filter(_=="ENABLED")
-        } yield OnboardingInput(resource,name,address,port,profile,inbounds,cidrs,desired)
+        } yield OnboardingInput(resource,name,address,port,profile,inbounds,cidrs,desired,mode)
         decoded.fold[IO[Response[IO]]](BadRequest(invalid))(input => respond(req,ctx)(service.preview(ctx.actor,id,input).flatMap(Ok(_))))
       }))
     case req @ POST -> Root / "api" / "v1" / "organizations" / _ / "integrations" / integration / "remnawave-node-onboarding" / "runs" =>

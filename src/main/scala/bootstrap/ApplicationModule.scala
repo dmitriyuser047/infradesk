@@ -443,10 +443,11 @@ object ApplicationModule {
       provisioningRuns,integrationSync,integrationSyncTransactions,integrationSyncSessionRepository,
       integrationInventoryRepository,integrationBindingRepository,integrationBindingsService,
       integrationDesiredStateRepository,integrationDesiredStatesService,transactionRunner)
+    val panelSourceResolver = ru.bitec.app.ops.integration.remnawave.RemnawavePanelDnsResolver.production(config.integrations.allowPrivateDestinations)
     val remnawaveOnboarding = new application.integration.RemnawaveOnboarding[ConnectionIO](onboardingRepository,onboardingQuery,
       integrationRepository,integrationSecretRepository,integrations.integrationCredentialCipher,integrations.integrationProviderRegistry,
       provisioningTargetQuery,serverProfiles,integrationInventoryQuery,transactionRunner,onboardingRemote,auditRecorder,
-      config.provisioning,provisioningRunRepository)
+      config.provisioning,provisioningRunRepository,panelSourceResolver)
     val fleetRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetRepository
     val fleetQuery = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetQuery
     val upgradeRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetUpgradeRepository
@@ -504,7 +505,8 @@ object ApplicationModule {
     val remnawaveOnboardingWorker = new application.integration.RemnawaveOnboardingWorker[ConnectionIO](onboardingRepository,
       onboardingOperations,integrations.integrationProviderRegistry,onboardingRemote,
       integration.secret.NodeInstallationCipher.fromConfig(config.secretEncryption),transactionRunner,auditRecorder,
-      config.provisioning,loggers.integration)
+      config.provisioning,loggers.integration,panelSources=panelSourceResolver,
+      panelSourcePolicy=Some(new application.integration.OnboardingPanelSources(onboardingQuery,transactionRunner,panelSourceResolver)))
     val remnawaveFleetUpgrades = new application.integration.RemnawaveFleetUpgrades[ConnectionIO](fleetRepository,
       fleetQuery, upgradeRepository, integrationRepository, integrationSecretRepository, integrations.integrationCredentialCipher,
       integrations.integrationProviderRegistry, provisioningTargetQuery, auditRecorder, transactionRunner,

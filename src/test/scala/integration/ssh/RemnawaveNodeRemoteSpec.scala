@@ -624,7 +624,9 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
       else if (ex == "sh" && args.exists(_.contains("SSH_CONNECTION"))) ok.copy(stdout = "172.28.0.5 45000 198.51.100.1 22")
       else if (ex == "ufw" && args == List("status")) ok.copy(stdout = "Status: active\nDefault: deny incoming")
       else if (ex == "ufw" && args == List("show", "added")) ok.copy(stdout = (header :: rules).mkString("\n"))
-      else if (ex == "ufw" && args.headOption.contains("allow")) { if (persist) rules :+= liveNodeRule; ok }
+      else if (ex == "ufw" && args.headOption.contains("allow")) {
+        if (persist) rules :+= s"ufw allow from ${args(2).stripSuffix("/32")} to any port ${args(6)} proto ${args(8)} comment '${args(10)}'"; ok
+      }
       else if (ex == "ufw" && args.take(3) == List("--force","delete","allow")) {
         val source = args(4).stripSuffix("/32")
         rules = rules.filterNot(line => (line.contains(s"from $source ") || line.contains(s"from $source/32 ")) && line.endsWith(s"'${args(12)}'")); ok
@@ -637,6 +639,37 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     case ("ufw",args) if args != List("status") && args != List("show","added") => args
   }.toList
 
+  test("connectivity adds exact reviewed candidates, then commits or rolls back only its namespace") {
+    val candidate="185.10.20.30/32"
+    val proposed=liveSpec.copy(panelCidrs=List(candidate))
+    val union=(liveSpec.panelCidrs ++ proposed.panelCidrs).sorted
+    for(commit <- List(true,false)) {
+      val s=firewallSession(liveRules :+ liveNodeRule)
+      assertEquals(remote(s).reconcilePanelSources(connection,proposed,liveSpec.panelCidrs,union).unsafeRunSync().failureCode,None)
+      assertEquals(remote(s).managedPanelCidrs(connection,proposed).unsafeRunSync(),union)
+      assertEquals(mutations(s).map(_.head),List("allow"))
+      val target=if(commit) proposed.panelCidrs else liveSpec.panelCidrs
+      assertEquals(remote(s).reconcilePanelSources(connection,proposed,liveSpec.panelCidrs,target).unsafeRunSync().failureCode,None)
+      assertEquals(remote(s).managedPanelCidrs(connection,proposed).unsafeRunSync(),target)
+      assertEquals(mutations(s).size,2)
+      assertEquals(mutations(s).last(4),if(commit) "2.27.26.18/32" else candidate)
+      assert(mutations(s).forall(_.last==s"infradesk:remnawave:$resource:$node:node"))
+      val count=mutations(s).size
+      assertEquals(remote(s).reconcilePanelSources(connection,proposed,liveSpec.panelCidrs,target).unsafeRunSync().failureCode,None)
+      assertEquals(mutations(s).size,count)
+    }
+  }
+  test("foreign collisions and unreviewed owned sources require manual review without mutation") {
+    val comment=s"infradesk:remnawave:$resource:$node:node"
+    for(extra <- List("ufw deny 2222/tcp comment 'operator'","ufw allow from 185.10.20.30 to any port 2222 proto tcp comment 'foreign'",
+      s"ufw allow from 185.10.20.99 to any port 2222 proto tcp comment '$comment'")) {
+      val s=firewallSession(liveRules ++ List(liveNodeRule,extra))
+      val proposed=liveSpec.copy(panelCidrs=List("185.10.20.30/32"))
+      val result=remote(s).reconcilePanelSources(connection,proposed,liveSpec.panelCidrs,(proposed.panelCidrs ++ liveSpec.panelCidrs).sorted).unsafeRunSync()
+      assertEquals(result.failureCode,Some("REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY"))
+      assertEquals(mutations(s),Nil)
+    }
+  }
   test("live UFW 0.36.2 preserves all three Server Profile rules, verifies node access, and converges without duplicates") {
     val s = firewallSession(liveRules)
     val first = remote(s).configureOnboardingFirewall(connection,liveSpec).unsafeRunSync()
