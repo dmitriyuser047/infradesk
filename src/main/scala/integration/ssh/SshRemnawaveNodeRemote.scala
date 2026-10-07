@@ -560,7 +560,7 @@ private[ssh] object SshRemnawaveNodeRemote {
        |        hard: 1048576
        |    env_file: .env
        |    restart: unless-stopped
-       |""".stripMargin
+       |""".stripMargin.replace("\r\n","\n")
   private[ssh] def controlledComposeReference(s: RemnawaveNodeRemoteSpec, bytes: Array[Byte]): Option[String] = {
     val text = new String(bytes, StandardCharsets.UTF_8)
     val images = text.linesIterator.filter(_.startsWith("    image: ")).toList

@@ -3,3 +3,6 @@
 packaging/self-hosted/infradesk text eol=lf
 # Reviewed OCI fixtures are hashed byte for byte against the catalog.
 src/test/resources/integration/remnawave/node-release-3.4.1/*.json text eol=lf
+
+# Scala multiline literals contain executable POSIX scripts and managed Linux files.
+*.scala text eol=lf
