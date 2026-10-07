@@ -98,6 +98,9 @@ final class RemnawaveClient(client: Client[IO], requestTimeout: FiniteDuration,
         request.putHeaders(Header.Raw(CIString("X-Api-Key"), key)))
       client.run(authenticated).use { response =>
         if (response.status.code == 200 || response.status.code == 204) IO.pure(Deleted)
+        else if (response.status.code == 404) boundedBody(response, ConfigProfileMaxResponseBytes).map { body =>
+          if (body.exists(typedNodeNotFound(_, s"$NodesPath/$externalId"))) Deleted else unknown
+        }
         else if (response.status.code == 401) IO.pure(Rejected("INTEGRATION_AUTH_FAILED"))
         else if (response.status.code == 403) IO.pure(Rejected("INTEGRATION_FORBIDDEN"))
         else if (response.status.code == 405) IO.pure(Rejected("INTEGRATION_API_CONTRACT_UNCONFIRMED"))

@@ -42,9 +42,11 @@ object OnboardingPhase {
 
 /** Fresh provider evidence is separate from the immutable history of execution attempts. */
 final case class OnboardingRecovery(sourceRunId: UUID, previousExternalNodeId: Option[UUID],
-  previousCorrelationId: UUID, installationOwnerId: UUID, state: String, action: String, previousPanelCidrs: Option[List[String]] = None) {
+  previousCorrelationId: UUID, installationOwnerId: UUID, state: String, action: String, previousPanelCidrs: Option[List[String]] = None,
+  previousImageReference: Option[String] = None) {
   require(OnboardingRecovery.States(state) && OnboardingRecovery.Actions(action))
   require(previousPanelCidrs.forall(values => OnboardingInput.canonicalCidrs(values).contains(values)))
+  require(previousImageReference.forall(RemnawaveNodeReleaseCatalog.managedReferences.contains))
   def reusesNode: Boolean = action=="RECOVER"
 }
 object OnboardingRecovery {
@@ -67,7 +69,7 @@ final case class OnboardingInput(resourceId: UUID, nodeName: String, address: St
       !nodeName.exists(_.isControl) && OnboardingInput.validAddress(address) && nodePort > 0 && nodePort <= 65535 &&
       activeInboundIds.nonEmpty && activeInboundIds.size <= 256 && activeInboundIds.distinct == activeInboundIds &&
       desiredState == "ENABLED", (), "REMNAWAVE_ONBOARDING_INVALID_INPUT")
-  } yield copy(panelCidrs = cidrs)
+  } yield copy(panelCidrs = cidrs, activeInboundIds = activeInboundIds.sortBy(_.toString))
 }
 object OnboardingInput {
   def validAddress(value: String): Boolean = value.length >= 2 && value.length <= 253 &&
@@ -94,6 +96,8 @@ final case class OnboardingSnapshot(input: OnboardingInput, integrationUpdatedAt
   inboundNames: List[String], changes: List[String], warnings: List[String], blockers: List[String],
   recovery: Option[OnboardingRecovery] = None, lifecycleVersion: Int = 1) {
   require(Set(1,2)(lifecycleVersion))
+  def installationImageReference: String = recovery.filter(_.reusesNode)
+    .flatMap(_.previousImageReference).getOrElse(imageReference)
   def intent: NodeCreateIntent = NodeCreateIntent(input.nodeName, input.address, input.nodePort,
     input.configProfileId, input.activeInboundIds, correlationId)
 }
@@ -110,8 +114,12 @@ object RemnawaveNodeOnboardingRun {
     previous match {
       case Nil => Right(None)
       case r :: Nil if r.integrationId==integration && r.state.terminal &&
-        r.snapshot.input.copy(panelCidrs=input.panelCidrs)==input &&
-        r.snapshot.imageReference==image && r.snapshot.connectionId==connection => Right(Some(r))
+        r.snapshot.input.copy(panelCidrs=input.panelCidrs).normalized.toOption.zip(input.normalized.toOption)
+          .exists { case (previous,current) => previous==current } &&
+        RemnawaveNodeReleaseCatalog.forReference(r.snapshot.installationImageReference).exists(original =>
+          original.status!="BLOCKED" && RemnawaveNodeReleaseCatalog.forReference(image).exists(target =>
+            target.status!="BLOCKED" && target.apiGeneration==original.apiGeneration)) &&
+        r.snapshot.connectionId==connection => Right(Some(r))
       case _ => Left("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW")
     }
 
@@ -160,7 +168,8 @@ object OnboardingSnapshotCodec {
   def encodeRecovery(r: OnboardingRecovery): Json = Json.obj("sourceRunId" -> id(r.sourceRunId),
     "previousExternalNodeId" -> r.previousExternalNodeId.fold(Json.Null)(id),"previousCorrelationId" -> id(r.previousCorrelationId),
     "installationOwnerId" -> id(r.installationOwnerId),"state" -> str(r.state),"action" -> str(r.action)).deepMerge(
-      r.previousPanelCidrs.fold(Json.obj())(values => Json.obj("previousPanelCidrs" -> strings(values))))
+      r.previousPanelCidrs.fold(Json.obj())(values => Json.obj("previousPanelCidrs" -> strings(values)))).deepMerge(
+      r.previousImageReference.fold(Json.obj())(value => Json.obj("previousImageReference" -> str(value))))
   def decode(json: Json): OnboardingSnapshot = {
     val expectedKeys = Set("resourceId", "nodeName", "address", "nodePort", "configProfileId", "activeInboundIds", "panelCidrs",
       "desiredState", "integrationUpdatedAt", "integrationSecretId", "connectionId", "connectionUpdatedAt", "profileId",
@@ -189,13 +198,14 @@ object OnboardingSnapshotCodec {
       s("imageReference"),u("correlationId"),s("serverName"),s("serverProfileName"),s("configProfileName"),
       list("inboundNames"),list("changes"),list("warnings"),list("blockers"),
       c.downField("recovery").focus.filterNot(_.isNull).map { j =>
-        require(j.asObject.exists(o => (o.keys.toSet -- Set("previousPanelCidrs"))==Set("sourceRunId","previousExternalNodeId","previousCorrelationId","installationOwnerId","state","action")),"Invalid recovery snapshot")
+        require(j.asObject.exists(o => (o.keys.toSet -- Set("previousPanelCidrs","previousImageReference"))==Set("sourceRunId","previousExternalNodeId","previousCorrelationId","installationOwnerId","state","action")),"Invalid recovery snapshot")
         val r=j.hcursor
         OnboardingRecovery(UUID.fromString(r.get[String]("sourceRunId").toOption.get),
           r.get[Option[String]]("previousExternalNodeId").toOption.get.map(UUID.fromString),
           UUID.fromString(r.get[String]("previousCorrelationId").toOption.get),UUID.fromString(r.get[String]("installationOwnerId").toOption.get),
           r.get[String]("state").toOption.get,r.get[String]("action").toOption.get,
-          r.get[Option[List[String]]]("previousPanelCidrs").toOption.getOrElse(throw new IllegalArgumentException("Invalid recovery snapshot")))
+          r.get[Option[List[String]]]("previousPanelCidrs").toOption.getOrElse(throw new IllegalArgumentException("Invalid recovery snapshot")),
+          r.get[Option[String]]("previousImageReference").toOption.getOrElse(throw new IllegalArgumentException("Invalid recovery snapshot")))
       },lifecycleVersion)
   }
 }

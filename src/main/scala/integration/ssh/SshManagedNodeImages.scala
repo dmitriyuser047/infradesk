@@ -107,8 +107,7 @@ private[ssh] final class SshManagedNodeImages(transport: RemoteConfigurationTran
         bytes = renderCompose(spec).replace(s"    image: ${spec.imageReference}\n", s"    image: $reference\n").getBytes(StandardCharsets.UTF_8)
         _ <- authorize
         _ <- new ProfileManagedFiles(s, c, uid, spec.onboardingId).replace(s"${directory(spec)}/compose.yml", markerLine(spec),
-          bytes, Some(expectedComposeHash), validate = Some(List("docker", "compose", "-f", "{candidate}",
-            "--env-file", s"${directory(spec)}/.env", "config", "-q")),
+          bytes, Some(expectedComposeHash), validate = Some(ManagedNodeCompose.validation(directory(spec))),
           validationFailureCode = "NODE_UPGRADE_COMPOSE_INVALID", beforeCommit = authorize)
         // Re-prove the unchanged marker and the committed target before the container mutation.
         committed <- observe(c, spec)

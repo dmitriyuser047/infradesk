@@ -346,6 +346,14 @@ stage_hash=$(sha256sum "$userdir/input" | cut -d' ' -f1); env_hash=$(sha256sum "
 sh /checks/Prepare.sh "$recovery_dir/.env" "$userdir/input" "$stage" 0 "$stage_hash" "$env_hash" "$recovery_marker" true 0600
 rm "$userdir/input"; rmdir "$userdir"
 [ "$(node_recovery)" = OWNED_PARTIAL ]
+# Inject a failed cleanup command after real Prepare: private candidate must remain visible.
+cat >/mocks/rm <<'MOCK'
+#!/bin/sh
+exit 9
+MOCK
+chmod 0755 /mocks/rm
+[ "$(node_cleanup)" = UNKNOWN ] && [ -f "$stage/candidate" ] && [ "$(node_recovery)" = OWNED_PARTIAL ] || exit 1
+/bin/rm /mocks/rm
 [ "$(node_cleanup)" = CLEAN ] && [ "$(node_recovery)" = OWNED_COMPLETE ] || exit 1
 [ "$(node_cleanup)" = CLEAN ]
 [ "$(stat -c '%i' "$recovery_claim")" = "$claim_inode" ] && [ "$(stat -c '%i' "$recovery_dir")" = "$node_inode" ] || exit 1
@@ -353,6 +361,13 @@ tmpnonce=66666666-6666-6666-6666-666666666666
 tmpupload=/tmp/infradesk-$recovery_run-$tmpnonce
 mkdir -m 0700 "$tmpupload"; printf 'private input\n' >"$tmpupload/input"; chmod 0600 "$tmpupload/input"
 [ "$(node_recovery)" = OWNED_PARTIAL ]
+cat >/mocks/rm <<'MOCK'
+#!/bin/sh
+exit 9
+MOCK
+chmod 0755 /mocks/rm
+[ "$(node_cleanup)" = UNKNOWN ] && [ -f "$tmpupload/input" ] && [ "$(node_recovery)" = OWNED_PARTIAL ] || exit 1
+/bin/rm /mocks/rm
 [ "$(node_cleanup)" = CLEAN ] && [ ! -e "$tmpupload" ] && [ "$(node_recovery)" = OWNED_COMPLETE ] || exit 1
 mkdir -m 0700 "$tmpupload"; printf 'private input\n' >"$tmpupload/input"; chmod 0600 "$tmpupload/input"; chown 501:501 "$tmpupload" "$tmpupload/input"
 [ "$(node_recovery_uid 501)" = OWNED_PARTIAL ]
@@ -438,8 +453,6 @@ sed -i 's|network_mode: bridge|network_mode: host|' "$recovery_dir/compose.yml"
 printf '    image: %s\n' "$target_image" >>"$recovery_dir/compose.yml"
 [ "$(node_recovery)" = FOREIGN ] || exit 1
 sed -i '$d' "$recovery_dir/compose.yml"
-sed -i "s|^    image: .*|    image: $recovery_image|" "$recovery_dir/compose.yml"
-export DOCKER_INSPECT_INFO="$recovery_dir/compose.yml|$recovery_image|true"
 echo 'PASS recovery and installation proof preserve exact ownership after a reviewed image upgrade'
 rm -f /tmp/remnawave-retire-removed
 [ "$(DOCKER_STOP_EXIT=9 node_retire)" = UNCERTAIN ] && [ -f "$recovery_dir/.env" ] && [ -d "$recovery_claim" ] || exit 1

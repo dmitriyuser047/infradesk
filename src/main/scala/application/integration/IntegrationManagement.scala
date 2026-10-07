@@ -98,12 +98,17 @@ final class IntegrationManagement[Tx[_]: MonadThrow](
       } yield next
     }
 
-  def delete(actor: ActorContext, id: UUID): Tx[Unit] =
+  def delete(actor: ActorContext, id: UUID, abandonRecovery: Boolean = false): Tx[Unit] =
     integrations.findByIdForUpdate(actor.organizationId, id).flatMap {
       case None => ().pure[Tx]
       case Some(stored) => for {
         active <- actions.hasActiveForDeletion(actor.organizationId, id)
         _ <- MonadThrow[Tx].raiseWhen(active)(IntegrationError("INTEGRATION_ACTION_ALREADY_RUNNING", "An action is already active"))
+        unresolved <- actions.hasUnresolvedUnknown(actor.organizationId, id)
+        _ <- MonadThrow[Tx].raiseWhen(unresolved && !abandonRecovery)(IntegrationError(
+          "INTEGRATION_RECOVERY_REQUIRED", "Reconcile unknown outcomes or explicitly abandon recovery before deletion"))
+        _ <- if(abandonRecovery) audit.record(actor, AuditAction.IntegrationRecoveryAbandoned,
+          AuditTargetType.Integration, Some(id)) else ().pure[Tx]
         _ <- integrations.delete(actor.organizationId, id)
         _ <- secrets.delete(actor.organizationId, stored.secretId)
         _ <- audit.record(actor, AuditAction.IntegrationDeleted, AuditTargetType.Integration, Some(id))

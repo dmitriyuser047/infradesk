@@ -89,7 +89,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
     started = stored.toList.flatMap(_._2).find(_.phase==r.phase).flatMap(_.startedAt).getOrElse(r.createdAt)
   } yield !now.isBefore(started.plusMillis(timeout.toMillis))
   private def spec(r: RemnawaveNodeOnboardingRun) = RemnawaveNodeRemoteSpec(RemnawaveNodeOnboardingRun.installationOwner(r),r.resourceId,r.externalNodeId.get,
-    r.snapshot.input.nodePort,r.snapshot.imageReference,r.snapshot.input.panelCidrs)
+    r.snapshot.input.nodePort,r.snapshot.installationImageReference,r.snapshot.input.panelCidrs)
   private def provider = providers.find(IntegrationProviderType.Remnawave).get
   private def matches(r: RemnawaveNodeOnboardingRun,n: ProvisionedNode): Boolean = {
     val i = r.snapshot.intent
@@ -187,7 +187,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
             case Left(stop) => IO.pure(stop)
           }
         def oldSpec(proof: OnboardingRecovery) = RemnawaveNodeRemoteSpec(proof.installationOwnerId,r.resourceId,
-          proof.previousExternalNodeId.get,r.snapshot.input.nodePort,r.snapshot.imageReference,proof.previousPanelCidrs.getOrElse(r.snapshot.input.panelCidrs))
+          proof.previousExternalNodeId.get,r.snapshot.input.nodePort,proof.previousImageReference.getOrElse(r.snapshot.imageReference),proof.previousPanelCidrs.getOrElse(r.snapshot.input.panelCidrs))
         def oldAbsent: IO[Unit] = r.snapshot.recovery.filter(!_.reusesNode).traverse_ { proof =>
           nodes.lookupNode(context,proof.previousExternalNodeId.get).flatMap {
             case NodeLookupOutcome.ConfirmedNotFound => nodes.findNodes(context).flatMap(candidates => IO.raiseWhen(

@@ -61,8 +61,12 @@ export function useSetIntegrationEnabled(org: string) {
 }
 export function useDeleteIntegration(org: string) {
   const client = useQueryClient()
-  return useMutation({ mutationFn: (id: string) => requestVoid(`${path(org)}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-    onSuccess: (_value, id) => {
+  return useMutation({ mutationFn: (input: string | { id: string; abandonRecovery: true }) => {
+    const id = typeof input === 'string' ? input : input.id
+    return requestVoid(`${path(org)}/${encodeURIComponent(id)}${typeof input === 'string' ? '' : '/abandon-recovery-and-delete'}`,
+      { method: typeof input === 'string' ? 'DELETE' : 'POST' })
+  }, onSuccess: (_value, input) => {
+      const id = typeof input === 'string' ? input : input.id
       client.removeQueries({ queryKey: itemKey(org, id) })
       client.setQueryData<IntegrationResponse[]>(listKey(org), old => old?.filter(item => item.id !== id))
     } })

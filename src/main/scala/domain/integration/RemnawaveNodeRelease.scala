@@ -86,6 +86,9 @@ object RemnawaveNodeReleaseCatalog {
     compatibility(r, api).compatible).sortBy(r => NodeRelease.version(r.nodeVersion).get).lastOption
   def identify(imageId: String, platform: String): Option[NodeRelease] = releases.find(_.forPlatform(platform)
     .exists(_.configDigest == imageId))
+  def forReference(reference: String): Option[NodeRelease] = releases.find(r =>
+    reference == r.imageReference || r.platforms.exists(p => reference == s"${r.imageRepository}@${p.manifestDigest}") ||
+      (Set("2.8.0","3.4.1")(r.nodeVersion) && reference == s"remnawave/node:${r.nodeVersion}"))
   def managedReferences: List[String] = (releases.flatMap(r => r.imageReference ::
     r.platforms.map(p => s"${r.imageRepository}@${p.manifestDigest}")) ++
     List("remnawave/node:2.8.0", "remnawave/node:3.4.1")).distinct

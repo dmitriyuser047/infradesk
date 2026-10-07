@@ -12,7 +12,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 final class DatabaseMigratorIntegrationSpec extends FunSuite {
-  test("V43 configuration, integration and desired-state data survive migration to V56") {
+  test("V43 configuration, integration and desired-state data survive migration to V57") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
     val base = DatabaseConfig.fromEnvironment(sys.env).fold(throw _, identity)
@@ -110,8 +110,8 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
         "'SUCCEEDED', now(), now(), now())")
       val result = DatabaseMigrator.migrate(testConfig,
         Slf4jLogger.getLoggerFromName[IO]("test.database.migrator")).unsafeRunSync()
-      assertEquals(result.migrationsApplied, 13)
-      assertEquals(result.currentVersion, "56")
+      assertEquals(result.migrationsApplied, 14)
+      assertEquals(result.currentVersion, "57")
       val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
       try {
         val statement = connection.createStatement()
@@ -158,7 +158,7 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
     } finally sql(maintenanceUrl, s"DROP DATABASE $databaseName WITH (FORCE)")
   }
 
-  test("Flyway applies V1 through V56 to an empty PostgreSQL database and is idempotent") {
+  test("Flyway applies V1 through V57 to an empty PostgreSQL database and is idempotent") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"),
       "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true to run PostgreSQL integration tests")
 
@@ -186,10 +186,10 @@ final class DatabaseMigratorIntegrationSpec extends FunSuite {
       first <- DatabaseMigrator.migrate(testConfig, logger)
       second <- DatabaseMigrator.migrate(testConfig, logger)
       _ <- IO.blocking {
-        assertEquals(first.migrationsApplied, 56)
-        assertEquals(first.currentVersion, "56")
+        assertEquals(first.migrationsApplied, 57)
+        assertEquals(first.currentVersion, "57")
         assertEquals(second.migrationsApplied, 0)
-        assertEquals(second.currentVersion, "56")
+        assertEquals(second.currentVersion, "57")
         val connection = DriverManager.getConnection(testConfig.url, testConfig.user, testConfig.password)
         try {
           val statement = connection.createStatement()

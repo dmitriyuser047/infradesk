@@ -127,6 +127,9 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     var installationState: Option[LocalInstallationState] = None
     var repairResult = ProvisioningStepResult(Map.empty,None,Some(true))
     var observedOwner: Option[UUID] = None
+    var observedImage: Option[String] = None
+    var retiredImage: Option[String] = None
+    var installedImage: Option[String] = None
     var recon = reconciliation
     var create = createOutcome
     var local = localGood
@@ -161,15 +164,15 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     val remote = new RemnawaveNodeRemote[IO] {
       override def localInstallationState(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "installation-state"; installationState.getOrElse(if(repo.record.snapshot.recovery.exists(_.reusesNode) && installationExists) LocalInstallationState.OwnedComplete else LocalInstallationState.Absent) }
       override def recoveryPreflight(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "recovery-preflight"; observedOwner=Some(s.onboardingId); ProvisioningStepResult(Map.empty,None,Some(true)) }
-      override def repair(c: Connection,s: RemnawaveNodeRemoteSpec,d: NodeInstallationData) = IO { events += "repair"; observedOwner=Some(s.onboardingId); if(repairResult.failureCode.isEmpty) local=localGood; repairResult }
+      override def repair(c: Connection,s: RemnawaveNodeRemoteSpec,d: NodeInstallationData) = IO { events += "repair"; observedOwner=Some(s.onboardingId); observedImage=Some(s.imageReference); if(repairResult.failureCode.isEmpty) local=localGood; repairResult }
       override def retireFirewall(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "retire-firewall"; retiredCidrs=s.panelCidrs; retiredFirewallResult }
-      override def retireInstallation(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "retire"; ProvisioningStepResult(Map.empty,None,Some(true)) }
+      override def retireInstallation(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "retire"; retiredImage=Some(s.imageReference); ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def installationPrerequisites(c: Connection) = IO.pure(ProvisioningStepResult(Map.empty, None, Some(true)))
       override def preflight(c: Connection, r: UUID, p: Int) = IO { events += "preflight"; ProvisioningStepResult(Map.empty, None, Some(true)) }
       override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "firewall"; firewallResult }
       override def configureOnboardingFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = configureFirewall(c,s)
       override def install(c: Connection, s: RemnawaveNodeRemoteSpec, d: NodeInstallationData) = IO {
-        events += "install"; assertEquals(d.secretKey, secretText); ProvisioningStepResult(Map.empty, None, Some(true))
+        events += "install"; installedImage=Some(s.imageReference); assertEquals(d.secretKey, secretText); ProvisioningStepResult(Map.empty, None, Some(true))
       }
       override def start(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "start"; ProvisioningStepResult(Map.empty, None, Some(true)) }
       override def observe(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { events += "local-observe"; local }
@@ -693,6 +696,38 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     assert(h.repo.completed.contains(OnboardingPhase.FinalVerify))
   }
 
+  test("recovery after reviewed upgrade or rollback keeps the original installation identity") {
+    List("remnawave/node:3.4.1", RemnawaveNodeReleaseCatalog.releases.find(_.nodeVersion=="3.4.0").get.imageReference).foreach { target =>
+      val h=new Harness(OnboardingPhase.Validate)
+      val owner=reviewedRecovery(h)
+      val original="remnawave/node:3.4.1"
+      val reviewed=h.repo.record.snapshot
+      h.repo.record=h.repo.record.copy(snapshot=reviewed.copy(imageReference=target,
+        recovery=reviewed.recovery.map(_.copy(previousImageReference=Some(original)))))
+      h.installationState=Some(LocalInstallationState.OwnedDamaged)
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded)
+      assertEquals(h.repo.record.externalNodeId,Some(nodeId))
+      assertEquals(h.observedOwner,Some(owner))
+      assertEquals(h.observedImage,Some(original))
+      assertEquals(h.events.count(_=="create"),0)
+    }
+  }
+
+  test("known repair failure is FAILED while an uncertain repair remains UNKNOWN") {
+    List(false,true).foreach { uncertain =>
+      val h=new Harness(OnboardingPhase.InstallNode)
+      reviewedRecovery(h)
+      h.installationState=Some(LocalInstallationState.OwnedPartial)
+      h.repo.storedSecret=Some(cipher.encrypt(h.repo.record.id,org,NodeInstallationData.fromSecretKey(secretText)))
+      h.repairResult=ProvisioningStepResult(Map("localInstallationState"->"OWNED_PARTIAL"),Some("PROVISIONING_NODE_COMPOSE_INVALID"),Some(false),uncertain=uncertain)
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record.state,if(uncertain) ProvisioningRunState.Unknown else ProvisioningRunState.Failed)
+      assertEquals(h.events.count(_=="create"),0)
+      assert(!h.events.contains("start"))
+    }
+  }
+
   test("fresh identity conflict and uncertain exact lookup prevent all recovery mutations") {
     List(NodeLookupOutcome.Found(node(wrongName=true)),NodeLookupOutcome.Unknown("INTEGRATION_REMOTE_UNAVAILABLE")).foreach { outcome =>
       val h=new Harness(OnboardingPhase.CreateNode)
@@ -722,7 +757,9 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
   test("confirmed deletion and fresh exact NOT_FOUND precede one recreate with a new durable identity") {
     val h=new Harness(OnboardingPhase.DeleteNode)
     reviewedRecovery(h,action="DELETE_RECREATE")
-    h.repo.record=h.repo.record.copy(snapshot=h.repo.record.snapshot.copy(lifecycleVersion=2))
+    val target=RemnawaveNodeReleaseCatalog.releases.find(_.nodeVersion=="3.4.0").get.imageReference
+    h.repo.record=h.repo.record.copy(snapshot=h.repo.record.snapshot.copy(lifecycleVersion=2,imageReference=target,
+      recovery=h.repo.record.snapshot.recovery.map(_.copy(previousImageReference=Some("remnawave/node:3.4.1")))))
     val next=node(id=uid).copy(correlationTags=List("ID:"+h.repo.record.snapshot.correlationId.toString.replace("-","").toUpperCase(java.util.Locale.ROOT)))
     h.create=NodeCreateOutcome.Created(next)
     // The exact old lookup must report the previous identity until DELETE succeeds.
@@ -732,6 +769,8 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     assertEquals(h.repo.record.externalNodeId,Some(next.externalId))
     assertEquals(h.events.count(_=="delete"),1)
     assertEquals(h.events.count(_=="create"),1)
+    assertEquals(h.retiredImage,Some("remnawave/node:3.4.1"))
+    assertEquals(h.installedImage,Some(target))
     assert(h.repo.completed.contains(OnboardingPhase.ConfirmNodeDeleted))
     assert(h.events.indexOf("delete")<h.events.indexOf("retire-firewall"))
     assert(h.events.indexOf("retire-firewall")<h.events.indexOf("retire"))

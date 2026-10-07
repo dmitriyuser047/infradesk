@@ -16,7 +16,7 @@ import org.typelevel.log4cats.noop.NoOpLogger
 import support.{AuthorizationFixtures,RemoteConfigurationServer}
 
 final class RemnawaveHardeningMigrationSpec extends FunSuite {
-  test("production CI V29 and V41 backup fixtures upgrade cleanly through V56") {
+  test("production CI V29 and V41 backup fixtures upgrade cleanly through V57") {
     assume(ConfigurationDeploymentWorld.enabled,"PostgreSQL integration tests are opt-in")
     val config = PostgresTestDatabase.config
     val workflow = java.nio.file.Files.readString(java.nio.file.Paths.get(".github/workflows/ci.yml"))
@@ -43,8 +43,8 @@ final class RemnawaveHardeningMigrationSpec extends FunSuite {
           version <- runner.run(sql"select version from flyway_schema_history where success order by installed_rank desc limit 1".query[String].unique)
           _ = assertEquals(version,target)
           migrated <- DatabaseMigrator.migrate(isolated,NoOpLogger[IO])
-          _ = assertEquals(migrated.currentVersion,"56")
-          _ = assertEquals(migrated.migrationsApplied,56-target.toInt)
+          _ = assertEquals(migrated.currentVersion,"57")
+          _ = assertEquals(migrated.migrationsApplied,57-target.toInt)
           retained <- runner.run(sql"select count(*) from organization where id=$org and name='Backup marker'".query[Long].unique)
           _ = assertEquals(retained,1L)
         } yield ()
@@ -52,11 +52,11 @@ final class RemnawaveHardeningMigrationSpec extends FunSuite {
     }.unsafeRunSync()
   }
 
-  test("V52 upgrades preserve terminal legacy snapshots, journal sequences and fleet identity") {
+  test("V52 and V56 upgrades preserve terminal legacy snapshots, journal sequences and fleet identity") {
     assume(ConfigurationDeploymentWorld.enabled,"PostgreSQL integration tests are opt-in")
     val config=PostgresTestDatabase.config
     val remote=RemoteConfigurationServer.start()
-    try PostgresTestDatabase.isolatedTransactor(config,Some("52")).use { xa =>
+    try List("52","56").traverse_ { version => PostgresTestDatabase.isolatedTransactor(config,Some(version)).use { xa =>
       val runner=new DoobieTransactionRunner(xa)
       val w=new ConfigurationDeploymentWorld(runner,remote)
       val repo=new PostgresRemnawaveOnboardingRepository
@@ -96,19 +96,23 @@ final class RemnawaveHardeningMigrationSpec extends FunSuite {
         before <- w.run(ids.traverse(repo.find(w.org,integration,_)))
         fleetBefore <- w.run(fleets.fleet(w.org,integration,fleet))
         result <- DatabaseMigrator.migrate(config.copy(url=xa.kernel.getJdbcUrl),NoOpLogger[IO])
-        _ = assertEquals(result.migrationsApplied,4)
-        _ = assertEquals(result.currentVersion,"56")
+        _ = assertEquals(result.migrationsApplied,57-version.toInt)
+        _ = assertEquals(result.currentVersion,"57")
         after <- w.run(ids.traverse(repo.find(w.org,integration,_)))
         fleetAfter <- w.run(fleets.fleet(w.org,integration,fleet))
         _ = assertEquals(after,before)
         _ = assertEquals(fleetAfter,fleetBefore)
         _ = assert(after.flatten.forall(_._1.snapshot.lifecycleVersion==1))
         _ <- ids.traverse_ { id => w.run(sql"update remnawave_node_onboarding set failure_code='MUTATED' where id=$id".update.run).attempt.map(r => assert(r.isLeft)) }
+        blocked <- w.run(new PostgresIntegrationRepository().delete(w.org,integration)).attempt
+        _ = assert(blocked.isLeft)
+        _ <- w.run(sql"""insert into audit_event(id,organization_id,actor_user_id,action,target_type,target_id,occurred_at,created_at)
+          values(${UUID.randomUUID()},${w.org},$actor,'INTEGRATION_RECOVERY_ABANDONED','INTEGRATION',$integration,$now,$now)""".update.run)
         tombstone <- w.run(new PostgresIntegrationRepository().delete(w.org,integration))
         _ <- w.run(new PostgresIntegrationSecretRepository().delete(w.org,secret))
         retained <- w.run(ids.traverse(repo.find(w.org,integration,_)))
         _ = assertEquals(retained,before)
       } yield ()
-    }.unsafeRunSync() finally remote.stop()
+    }}.unsafeRunSync() finally remote.stop()
   }
 }

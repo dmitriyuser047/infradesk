@@ -1,3 +1,5 @@
 # Shell scripts run on Linux hosts: always LF, whatever the checkout platform.
 *.sh text eol=lf
 packaging/self-hosted/infradesk text eol=lf
+# Reviewed OCI fixtures are hashed byte for byte against the catalog.
+src/test/resources/integration/remnawave/node-release-3.4.1/*.json text eol=lf

@@ -1,5 +1,13 @@
 # Remnawave hardening delivery review
 
+## Current Stage 25 re-fix (October 2026)
+
+The live candidate Compose regression invalidated the previous automated acceptance boundary.
+Stage 25 remains **NOT ACCEPTED** until the operator completes the preserved-fixture recovery
+and the follow-up live matrix. Current changes, route review, automated evidence and the delivery
+commit/CI boundary are recorded in [Stage25 Remnawave re-fix](stage25-remnawave-refix.md).
+The sections below retain the earlier review evidence; they do not prove live acceptance of this fix.
+
 Follow-up to user commit `3a605b85c8d19c83dafc84bc650851e46efaa406` and failed
 [CI run 37449298899](https://github.com/dmitriyuser047/infradesk/actions/runs/37449298899).
 The delivery message identifies the final commit and exact push CI; this report belongs to that

@@ -65,6 +65,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     var lookupCalls = 0
     var findCalls = 0
     var observeCalls = 0
+    var observedSpec: Option[RemnawaveNodeRemoteSpec] = None
     var forbiddenCalls = List.empty[String]
 
     private def forbidden[A](name: String): IO[A] = IO {
@@ -90,7 +91,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     }
 
     val remote: RemnawaveNodeRemote[IO] = new RemnawaveNodeRemote[IO] {
-      override def localInstallationState(c: Connection,s: RemnawaveNodeRemoteSpec) = IO.pure(local.installationState)
+      override def localInstallationState(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { observedSpec=Some(s); local.installationState }
       override def preflight(c: Connection, r: UUID, p: Int) = forbidden[ProvisioningStepResult]("preflight")
       override def installationPrerequisites(c: Connection) = forbidden[ProvisioningStepResult]("installationPrerequisites")
       override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[ProvisioningStepResult]("configureFirewall")
@@ -101,7 +102,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
       override def retireFirewall(c: Connection,s: RemnawaveNodeRemoteSpec) = forbidden[ProvisioningStepResult]("retireFirewall")
       override def retireInstallation(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[ProvisioningStepResult]("retireInstallation")
       override def start(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[ProvisioningStepResult]("start")
-      override def observe(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { observeCalls += 1; local }
+      override def observe(c: Connection, s: RemnawaveNodeRemoteSpec) = IO { observeCalls += 1; observedSpec=Some(s); local }
       override def installationPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[Boolean]("installationPresent")
       override def firewallPresent(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[Boolean]("firewallPresent")
       override def managedPanelCidrs(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[List[String]]("managedPanelCidrs")
@@ -166,6 +167,20 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
       assertEquals(recovery(result).state,if(state==LocalInstallationState.Unknown) "UNKNOWN" else "PRESENT_UNHEALTHY")
       h.assertReadOnly()
     }
+  }
+
+  test("a recovery chain observes the immutable previous image and owner after target representation changes") {
+    val original="remnawave/node:2.8.0"
+    val target=RemnawaveNodeReleaseCatalog.forReference(original).get.imageReference
+    val proof=OnboardingRecovery(uid,Some(externalId),originalCorrelation,ownerId,"PRESENT_UNHEALTHY","RECOVER",
+      previousImageReference=Some(original))
+    val h=new Harness()
+    val result=h.inspect(previous(snap=snapshot(recovery=Some(proof)).copy(imageReference=target)))
+    assertEquals(h.observedSpec.map(_.imageReference),Some(original))
+    assertEquals(h.observedSpec.map(_.onboardingId),Some(ownerId))
+    assertEquals(recovery(result).previousImageReference,Some(original))
+    assertEquals(result.node,Some(externalId))
+    h.assertReadOnly()
   }
 
   test("typed confirmed absence with no candidate plans recreation using a new correlation") {

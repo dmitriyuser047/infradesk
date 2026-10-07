@@ -36,6 +36,7 @@ object AuditAction {
   case object IntegrationEnabled extends AuditAction { override val code: String = "INTEGRATION_ENABLED" }
   case object IntegrationDisabled extends AuditAction { override val code: String = "INTEGRATION_DISABLED" }
   case object IntegrationDeleted extends AuditAction { override val code: String = "INTEGRATION_DELETED" }
+  case object IntegrationRecoveryAbandoned extends AuditAction { override val code: String = "INTEGRATION_RECOVERY_ABANDONED" }
   case object IntegrationTestRequested extends AuditAction { override val code: String = "INTEGRATION_TEST_REQUESTED" }
   case object IntegrationSyncRequested extends AuditAction { override val code: String = "INTEGRATION_SYNC_REQUESTED" }
   case object IntegrationResourceBound extends AuditAction { override val code: String = "INTEGRATION_RESOURCE_BOUND" }
@@ -141,6 +142,7 @@ object AuditAction {
     IntegrationEnabled,
     IntegrationDisabled,
     IntegrationDeleted,
+    IntegrationRecoveryAbandoned,
     IntegrationTestRequested,
     IntegrationSyncRequested,
     IntegrationResourceBound,

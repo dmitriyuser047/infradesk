@@ -44,7 +44,7 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
   { status, headers: { 'Content-Type': 'application/json' } })
 
 function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syncFails?: string; activeDisabled?: boolean; loseFirstActionResponse?: boolean
-  hideActionHistory?: boolean; enabled?: boolean; managed?: boolean; nodes?: InventoryObject<RemnawaveNodeSummary>[]
+  hideActionHistory?: boolean; enabled?: boolean; managed?: boolean; unresolvedUnknown?: boolean; nodes?: InventoryObject<RemnawaveNodeSummary>[]
   executions?: IntegrationActionExecution[]; locale?: 'ru' | 'en'; testError?: string; testOk?: boolean; readError?: number; neverSynced?: boolean; sessions?: IntegrationSyncSession[] } = {}) {
   const calls: Call[] = []
   let nodes = options.nodes ?? [frankfurt, options.activeDisabled ? { ...idle, active: true } : idle]
@@ -65,6 +65,10 @@ function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syn
     const url = String(input); const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined
     calls.push({ url, method, body })
+    if (url === base && method === 'DELETE') return options.unresolvedUnknown
+      ? json({ code: 'INTEGRATION_RECOVERY_REQUIRED', message: 'SECRET-REMOTE-BODY' }, 409)
+      : new Response(null, { status: 204 })
+    if (url === `${base}/abandon-recovery-and-delete` && method === 'POST') return new Response(null, { status: 204 })
     if (url === '/api/v1/me/organizations') return json([{ id: 'org', code: 'ORG', name: 'Org', role }])
     if (url.includes('/projects') || url.includes('/environments')) return json([])
     if (url === '/api/v1/organizations/org/integrations' && method === 'GET') return json([{ ...current, overview: currentOverview() }])
@@ -150,6 +154,23 @@ function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syn
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('integration detail', () => {
+  it.each(['en', 'ru'] as const)('requires a second explicit abandonment confirmation in %s', async locale => {
+    const { calls } = setup('/organizations/org/integrations/one', 'OWNER', { locale, unresolvedUnknown: true })
+    await screen.findByRole('heading', { name: 'Main Remnawave' })
+    fireEvent.click(screen.getByRole('button', { name: locale === 'en' ? 'Actions' : 'Действия' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: locale === 'en' ? 'Delete' : 'Удалить' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: locale === 'en' ? 'Confirm delete' : 'Подтвердить удаление' }))
+    const label = locale === 'en' ? 'Delete integration and abandon recovery' : 'Удалить интеграцию и отказаться от восстановления'
+    fireEvent.click(await screen.findByRole('button', { name: label }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(locale === 'en' ? /will no longer be able to reconcile/ : /больше не сможет проверить/)).toBeTruthy()
+    expect(calls.filter(call => call.url.endsWith('/abandon-recovery-and-delete'))).toHaveLength(0)
+    expect(screen.queryByText('SECRET-REMOTE-BODY')).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: label }))
+    await waitFor(() => expect(calls.filter(call => call.url.endsWith('/abandon-recovery-and-delete') && call.method === 'POST')).toHaveLength(1))
+    expect(calls.filter(call => call.url === base && call.method === 'DELETE')).toHaveLength(1)
+  })
+
   it('uses the operational labels in the Russian overview without changing counts', async () => {
     setup('/organizations/org/integrations/one', 'OWNER', { locale: 'ru', enabled: true, managed: true,
       nodes: [{ ...frankfurt, desiredState: desired('ENABLED', 'COMPLIANT') },

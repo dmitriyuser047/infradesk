@@ -167,7 +167,7 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
 
   override def install(connection: Connection, spec: RemnawaveNodeRemoteSpec,
     credential: NodeInstallationData): IO[ProvisioningStepResult] = Ref.of[IO, Boolean](false).flatMap { changed =>
-    stepTracked(changed)(withSession(connection) { (s, c, sshUid) =>
+    installationStep(connection, spec, changed)(withSession(connection) { (s, c, sshUid) =>
       installInSession(s, c, sshUid, spec, credential, changed)
     })
   }
@@ -196,7 +196,7 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
         _ <- installationCommand(c, spec, CleanupInstallationStaging, "CLEAN", sshUid)
         _ <- put(s"$stage/.env", env.getBytes(StandardCharsets.UTF_8), 384).flatTap(_ => changed.set(true))
         _ <- put(s"$stage/compose.yml", compose.getBytes(StandardCharsets.UTF_8), 420,
-          Some(List("docker", "compose", "-f", "{candidate}", "--env-file", s"$stage/.env", "config", "-q"))).flatTap(_ => changed.set(true))
+          Some(ManagedNodeCompose.validation(stage))).flatTap(_ => changed.set(true))
         _ <- put(s"$stage/managed.json", managed.getBytes(StandardCharsets.UTF_8), 420).flatTap(_ => changed.set(true))
         _ <- c.capture("docker", List("compose", "-f", s"$stage/compose.yml", "--env-file", s"$stage/.env", "config", "-q"))
           .flatMap(r => IO.raiseUnless(r.exitCode == 0)(ProfileRemoteFailure("PROVISIONING_NODE_COMPOSE_INVALID")))
@@ -225,7 +225,7 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
 
   override def repair(connection: Connection, spec: RemnawaveNodeRemoteSpec,
     credential: NodeInstallationData): IO[ProvisioningStepResult] = Ref.of[IO, Boolean](false).flatMap { changed =>
-    stepTracked(changed)(withSession(connection) { (s, c, sshUid) =>
+    installationStep(connection, spec, changed)(withSession(connection) { (s, c, sshUid) =>
       val dir = directory(spec)
       validate(spec) *> validateSecret(credential.secretKey) *> recoveryState(c, spec, sshUid).flatMap {
         case LocalInstallationState.Absent => installInSession(s, c, sshUid, spec, credential, changed)
@@ -249,10 +249,8 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
     val dir = directory(spec)
     val marker = markerLine(spec)
     val env = s"SECRET_KEY=${credential.secretKey}\nNODE_PORT=${spec.nodePort}\n".getBytes(StandardCharsets.UTF_8)
-    val compose = renderCompose(spec).getBytes(StandardCharsets.UTF_8)
     val managed = renderManaged(spec, ProfileManagedFiles.sha256(env)).getBytes(StandardCharsets.UTF_8)
     val names = List(".env", "compose.yml", "managed.json")
-    val desired = Map(".env" -> env, "compose.yml" -> compose, "managed.json" -> managed)
     for {
       _ <- prepareInstallation(c, spec, sshUid).flatTap(_ => changed.set(true))
       _ <- installationCommand(c, spec, CleanupInstallationStaging, "CLEAN", sshUid)
@@ -260,23 +258,29 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
       current = existing.toMap
       _ <- IO.raiseUnless(names.forall(name => safeExistingFile(current(name), name).isRight))(
         ProfileRemoteFailure("PROVISIONING_NODE_INSTALLATION_UNMANAGED"))
+      // A reviewed image-line change keeps the installation identity even when cleaning residue.
+      compose = controlledComposeReference(spec, current("compose.yml").bytes)
+        .fold(renderCompose(spec))(reference => renderCompose(spec).replace(
+          s"    image: ${spec.imageReference}\n", s"    image: $reference\n")).getBytes(StandardCharsets.UTF_8)
+      desired = Map(".env" -> env, "compose.yml" -> compose, "managed.json" -> managed)
+      runtimeImage = controlledComposeReference(spec, compose).getOrElse(spec.imageReference)
       alreadyExact = names.forall(name => current(name).exists && current(name).bytes.sameElements(desired(name)))
-      imageExists <- c.capture("docker", List("image", "inspect", "-f", "{{.Id}}", spec.imageReference), 20.seconds)
+      imageExists <- c.capture("docker", List("image", "inspect", "-f", "{{.Id}}", runtimeImage), 20.seconds)
       _ <- if (alreadyExact && imageExists.exitCode == 0 && imageExists.stdout.trim.nonEmpty) IO.unit
-        else if (alreadyExact) checked(c, "docker", List("pull", spec.imageReference), 5.minutes).flatTap(_ => changed.set(true))
+        else if (alreadyExact) checked(c, "docker", List("pull", runtimeImage), 5.minutes).flatTap(_ => changed.set(true))
         else for {
           _ <- if (current(".env").exists && current(".env").bytes.sameElements(env)) IO.unit else files.replace(s"$dir/.env", marker, env, current(".env").sha256,
             installOwned = true, targetMode = 384, beforeCommit = assertOwned(c, spec, sshUid)).flatTap(_ => changed.set(true))
           _ <- if (current("compose.yml").exists && current("compose.yml").bytes.sameElements(compose)) IO.unit else files.replace(s"$dir/compose.yml", marker, compose, current("compose.yml").sha256,
-            installOwned = true, validate = Some(List("docker", "compose", "-f", "{candidate}", "--env-file", s"$dir/.env", "config", "-q")),
+            installOwned = true, validate = Some(ManagedNodeCompose.validation(dir)),
             validationFailureCode = "PROVISIONING_NODE_COMPOSE_INVALID", beforeCommit = assertOwned(c, spec, sshUid)).flatTap(_ => changed.set(true))
           _ <- if (current("compose.yml").exists && current("compose.yml").bytes.sameElements(compose))
             checked(c, "docker", List("compose", "-f", s"$dir/compose.yml", "--env-file", s"$dir/.env", "config", "-q")) else IO.unit
           _ <- if (current("managed.json").exists && current("managed.json").bytes.sameElements(managed)) IO.unit else files.replace(s"$dir/managed.json", marker, managed, current("managed.json").sha256,
             installOwned = true, beforeCommit = assertOwned(c, spec, sshUid)).flatTap(_ => changed.set(true))
-          imageExistsAfterRepair <- c.capture("docker", List("image", "inspect", "-f", "{{.Id}}", spec.imageReference), 20.seconds)
+          imageExistsAfterRepair <- c.capture("docker", List("image", "inspect", "-f", "{{.Id}}", runtimeImage), 20.seconds)
           _ <- if (imageExistsAfterRepair.exitCode == 0 && imageExistsAfterRepair.stdout.trim.nonEmpty) IO.unit
-            else checked(c, "docker", List("pull", spec.imageReference), 5.minutes).flatTap(_ => changed.set(true))
+            else checked(c, "docker", List("pull", runtimeImage), 5.minutes).flatTap(_ => changed.set(true))
         } yield ()
     } yield success("repaired" -> (!alreadyExact).toString)
   }
@@ -453,6 +457,18 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
   private def stepTracked(changed: Ref[IO, Boolean])(action: IO[ProvisioningStepResult]): IO[ProvisioningStepResult] =
     action.handleErrorWith(e => changed.get.map(mutated => failure(e, uncertainAfterMutation = mutated)))
 
+  private def installationStep(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    changed: Ref[IO, Boolean])(action: IO[ProvisioningStepResult]): IO[ProvisioningStepResult] =
+    action.handleErrorWith { e => changed.get.flatMap { mutated =>
+      val outcome = failure(e)
+      if (!mutated || outcome.uncertain || outcome.outputTruncated) IO.pure(outcome)
+      else localInstallationState(connection, spec).timeoutTo(25.seconds, IO.pure(LocalInstallationState.Unknown))
+        .handleError(_ => LocalInstallationState.Unknown).map { state =>
+          outcome.copy(facts = Map("localInstallationState" -> state.code),
+            uncertain = state == LocalInstallationState.Unknown)
+        }
+    }}
+
   private def failure(e: Throwable, uncertainAfterMutation: Boolean = false): ProvisioningStepResult = e match {
     case p: ProfileRemoteFailure => ProvisioningStepResult(Map.empty, Some(p.code), None,
       uncertain = p.uncertain || uncertainAfterMutation, outputTruncated = p.truncated)
@@ -509,6 +525,17 @@ private[ssh] object SshRemnawaveNodeRemote {
        |    env_file: .env
        |    restart: unless-stopped
        |""".stripMargin
+  private[ssh] def controlledComposeReference(s: RemnawaveNodeRemoteSpec, bytes: Array[Byte]): Option[String] = {
+    val text = new String(bytes, StandardCharsets.UTF_8)
+    val images = text.linesIterator.filter(_.startsWith("    image: ")).toList
+    images match {
+      case List(line) =>
+        val reference = line.stripPrefix("    image: ")
+        Option.when(RemnawaveNodeReleaseCatalog.managedReferences.contains(reference) &&
+          text.replace(s"    image: $reference\n", s"    image: ${s.imageReference}\n") == renderCompose(s))(reference)
+      case _ => None
+    }
+  }
   private def renderManaged(s: RemnawaveNodeRemoteSpec, envHash: String): String = s"${managedPrefix(s)}$envHash\"}\n"
   private def firewallRules(s: RemnawaveNodeRemoteSpec): IO[List[(String, String)]] = IO.pure(s.panelCidrs.distinct.sorted.map(c =>
     c -> s"infradesk:remnawave:${s.resourceId}:${s.externalNodeId}:node"))
@@ -687,6 +714,9 @@ private[ssh] object SshRemnawaveNodeRemote {
     |CONTROLLED_COMPOSE_PROOF
     |  }
     |  controlled_compose && composeOwned=1 || true
+    |  [ "$(grep -c '^    image: ' "$d/compose.yml")" = 1 ] || result FOREIGN
+    |  configuredImage=$(sed -n 's/^    image: //p' "$d/compose.yml")
+    |  [ "$configuredImage" = "$image" ] || [ "$composeOwned" = 1 ] || result FOREIGN
     |fi
     |[ "$composeOwned" = 1 ] || controlledImage=$image
     |containerRunning=0
@@ -839,7 +869,9 @@ private[ssh] object SshRemnawaveNodeRemote {
     |ownContainer=0; printf '%s\n' "$allContainers" | grep -Fxq "$name" && ownContainer=1 || true
     |if [ "$ownContainer" = 1 ]; then
     |  info=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files" }}|{{.Config.Image}}|{{.State.Running}}' "$name" 2>/dev/null) || result UNKNOWN
-    |  case "$info" in "$d/compose.yml|$image|true"|"$d/compose.yml|$image|false") ;; *) result FOREIGN ;; esac
+    |  retiredImage=$image
+    |  if [ -f "$d/compose.yml" ]; then retiredImage=$(sed -n 's/^    image: //p' "$d/compose.yml"); fi
+    |  case "$info" in "$d/compose.yml|$retiredImage|true"|"$d/compose.yml|$retiredImage|false") ;; *) result FOREIGN ;; esac
     |  state=${info##*|}
     |  if [ "$state" = true ]; then docker stop --time 15 "$name" >/dev/null 2>&1 || result UNCERTAIN; fi
     |  docker rm "$name" >/dev/null 2>&1 || result UNCERTAIN

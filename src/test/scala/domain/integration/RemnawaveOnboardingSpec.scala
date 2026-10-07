@@ -31,6 +31,32 @@ final class RemnawaveOnboardingSpec extends FunSuite {
     assert(input.copy(nodePort = 0).normalized.isLeft)
   }
 
+  test("inbound set order produces canonical equality and identical snapshot bytes") {
+    val second = id
+    val a = input.copy(activeInboundIds=List(inbound,second)).normalized.toOption.get
+    val b = input.copy(activeInboundIds=List(second,inbound)).normalized.toOption.get
+    assertEquals(a,b)
+    assertEquals(OnboardingSnapshotCodec.encode(snapshot.copy(input=a)),OnboardingSnapshotCodec.encode(snapshot.copy(input=b)))
+  }
+
+  test("reviewed target evolution preserves original installation image across recovery and recreation") {
+    val original = snapshot.copy(imageReference="remnawave/node:3.4.1")
+    val at = original.integrationUpdatedAt
+    val previous = RemnawaveNodeOnboardingRun(id,id,id,input.resourceId,Some(id),id,
+      domain.provisioning.ProvisioningRunState.Succeeded,OnboardingPhase.FinalVerify,original,at,at,externalNodeId=Some(id))
+    val target = RemnawaveNodeReleaseCatalog.find("node-3.4.0").get.imageReference
+    assertEquals(RemnawaveNodeOnboardingRun.recoveryCandidate(List(previous),previous.integrationId,input,target,
+      snapshot.connectionId),Right(Some(previous)))
+    val proof = OnboardingRecovery(previous.id,previous.externalNodeId,original.correlationId,previous.id,
+      "PRESENT_EXACT","RECOVER",Some(input.panelCidrs.sorted),Some(original.imageReference))
+    val recovered = snapshot.copy(imageReference=target,recovery=Some(proof),lifecycleVersion=2)
+    assertEquals(recovered.installationImageReference,original.imageReference)
+    assertEquals(OnboardingSnapshotCodec.decode(OnboardingSnapshotCodec.encode(recovered)).installationImageReference,original.imageReference)
+    assertEquals(recovered.copy(recovery=Some(proof.copy(action="DELETE_RECREATE"))).installationImageReference,target)
+    assert(RemnawaveNodeOnboardingRun.recoveryCandidate(List(previous),previous.integrationId,input,"unreviewed",
+      snapshot.connectionId).isLeft)
+  }
+
   test("one terminal identity chain can seed reconciliation, independent of its last failure phase") {
     val integration = id
     val at = snapshot.integrationUpdatedAt

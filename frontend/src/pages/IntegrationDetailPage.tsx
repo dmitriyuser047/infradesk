@@ -49,7 +49,7 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
   const location = useLocation(); const navigate = useNavigate()
   const lifecycle = useSetIntegrationEnabled(organizationId)
   const remove = useDeleteIntegration(organizationId)
-  const [confirmation, setConfirmation] = useState<'disable' | 'delete' | null>(null)
+  const [confirmation, setConfirmation] = useState<'disable' | 'delete' | 'abandon' | null>(null)
   const [checkedAt, setCheckedAt] = useState<string | null>(null)
   const ui = i18n.t.integrationUi
   const [searchParams, setSearchParams] = useSearchParams()
@@ -101,15 +101,18 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
     <p className="muted-copy">{ui.purpose}</p>
     {query.isError ? <RefreshWarning updatedAt={query.dataUpdatedAt} retry={() => query.refetch()} /> : null}
     {lifecycle.isError ? <InlineAlert tone="danger" title={describeIntegrationError(lifecycle.error, i18n)} /> : null}
-    {confirmation ? <IntegrationDialog title={confirmation === 'delete' ? ui.deleteTitle : ui.disableTitle}
+    {confirmation ? <IntegrationDialog title={confirmation === 'abandon' ? ui.abandonTitle : confirmation === 'delete' ? ui.deleteTitle : ui.disableTitle}
       onClose={() => setConfirmation(null)} busy={remove.isPending || lifecycle.isPending} actions={<>
         <button className="secondary-button" onClick={() => setConfirmation(null)}>{i18n.t.common.cancel}</button>
         <button className="primary-button" disabled={remove.isPending || lifecycle.isPending} onClick={() => {
-          if (confirmation === 'delete') remove.mutate(integration.id, { onSuccess: () => navigate(back.to) })
+          if (confirmation === 'abandon') remove.mutate({ id: integration.id, abandonRecovery: true }, { onSuccess: () => navigate(back.to) })
+          else if (confirmation === 'delete') remove.mutate(integration.id, { onSuccess: () => navigate(back.to) })
           else lifecycle.mutate({ id: integration.id, enabled: false }, { onSuccess: () => setConfirmation(null) })
-        }}>{confirmation === 'delete' ? i18n.t.integrations.confirmDelete : i18n.t.integrations.disable}</button></>}>
-      <strong>{integration.name}</strong><p>{confirmation === 'delete' ? ui.deleteDetail : ui.disableDetail}</p>
+        }}>{confirmation === 'abandon' ? ui.abandonTitle : confirmation === 'delete' ? i18n.t.integrations.confirmDelete : i18n.t.integrations.disable}</button></>}>
+      <strong>{integration.name}</strong><p>{confirmation === 'abandon' ? ui.abandonDetail : confirmation === 'delete' ? ui.deleteDetail : ui.disableDetail}</p>
       {remove.isError ? <InlineAlert tone="danger" title={describeIntegrationError(remove.error, i18n)} /> : null}
+      {confirmation === 'delete' && remove.error instanceof ApiError && remove.error.code === 'INTEGRATION_RECOVERY_REQUIRED' ?
+        <button className="secondary-button" onClick={() => { remove.reset(); setConfirmation('abandon') }}>{ui.abandonTitle}</button> : null}
     </IntegrationDialog> : null}
     {!integration.enabled ? <InlineAlert tone="info" title={t.autoDisabled}>{t.autoDisabledDetail}</InlineAlert> : null}
     {syncResult?.status === 'COMPLETED' ? <InlineAlert tone="success" title={t.syncDone}>

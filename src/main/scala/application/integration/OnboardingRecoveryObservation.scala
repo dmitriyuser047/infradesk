@@ -28,9 +28,12 @@ object OnboardingRecoveryObservation {
       val previousCidrs = if(r.externalNodeId.isEmpty && !unknownCreate)
         r.snapshot.recovery.flatMap(_.previousPanelCidrs).getOrElse(r.snapshot.input.panelCidrs)
         else r.snapshot.input.panelCidrs
+      val previousImage = if(r.externalNodeId.isEmpty && !unknownCreate)
+        r.snapshot.recovery.flatMap(_.previousImageReference).getOrElse(r.snapshot.installationImageReference)
+        else r.snapshot.installationImageReference
       def result(state: String,node: Option[UUID],local: Option[LocalInstallationState] = None): Evidence = {
         val operation=if(state=="CONFIRMED_NOT_FOUND") "RECREATE" else action
-        Evidence(Some(OnboardingRecovery(r.id,known.orElse(node),correlation,owner,state,operation,Some(previousCidrs))),
+        Evidence(Some(OnboardingRecovery(r.id,known.orElse(node),correlation,owner,state,operation,Some(previousCidrs),Some(previousImage))),
           if(operation=="RECOVER" && Set("PRESENT_EXACT","PRESENT_UNHEALTHY")(state)) node.orElse(known) else None,
           if(operation=="RECOVER") correlation else UUID.randomUUID(),local)
       }
@@ -46,14 +49,14 @@ object OnboardingRecoveryObservation {
           case NodeLookupOutcome.Found(n) if !OnboardingRecovery.matches(n,intent,known) || candidates.exists(_.externalId!=n.externalId) =>
             IO.pure(result("PRESENT_CONFLICT",known))
           case NodeLookupOutcome.Found(n) => connection.liftTo[IO](IntegrationError("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN","SSH connection is unavailable")).flatMap { conn =>
-            remote.observe(conn,RemnawaveNodeRemoteSpec(owner,input.resourceId,n.externalId,input.nodePort,r.snapshot.imageReference,input.panelCidrs))
+            remote.observe(conn,RemnawaveNodeRemoteSpec(owner,input.resourceId,n.externalId,input.nodePort,previousImage,input.panelCidrs))
               .map(local => result(if(local.installationState==LocalInstallationState.Unknown) "UNKNOWN"
                 else if(n.connected && !n.disabled && local.verified) "PRESENT_EXACT" else "PRESENT_UNHEALTHY",
                 Some(n.externalId),Some(local.installationState)))
           }
           case NodeLookupOutcome.ConfirmedNotFound if known.nonEmpty && candidates.isEmpty =>
             connection.traverse(conn => remote.localInstallationState(conn,
-              RemnawaveNodeRemoteSpec(owner,input.resourceId,known.get,input.nodePort,r.snapshot.imageReference,input.panelCidrs)))
+              RemnawaveNodeRemoteSpec(owner,input.resourceId,known.get,input.nodePort,previousImage,previousCidrs)))
               .map(local => result("CONFIRMED_NOT_FOUND",None,Some(local.getOrElse(LocalInstallationState.Unknown))))
           case NodeLookupOutcome.ConfirmedNotFound => IO.pure(result("PRESENT_CONFLICT",known))
           case NodeLookupOutcome.Unknown("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW") => IO.pure(result("PRESENT_CONFLICT",known))

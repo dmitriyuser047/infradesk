@@ -281,7 +281,9 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
     inventoryNodeId: UUID): ConnectionIO[Option[FleetLocalProvenance]] = sql"""
     select case when ob.input_snapshot->'recovery'->>'action'='RECOVER'
       then (ob.input_snapshot->'recovery'->>'installationOwnerId')::uuid else ob.id end,
-      ob.external_node_id, ob.input_snapshot->>'imageReference',
+      ob.external_node_id, case when ob.input_snapshot->'recovery'->>'action'='RECOVER'
+        then coalesce(ob.input_snapshot->'recovery'->>'previousImageReference',ob.input_snapshot->>'imageReference')
+        else ob.input_snapshot->>'imageReference' end,
       coalesce(ob.input_snapshot->>'apiGeneration','') <> '' and ob.input_snapshot->>'compatibilityBlocker' is null,
       ob.finished_at
     from remnawave_node_onboarding ob
@@ -300,7 +302,9 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
     sql"""select distinct on (m.id) m.id,
       case when ob.input_snapshot->'recovery'->>'action'='RECOVER'
         then (ob.input_snapshot->'recovery'->>'installationOwnerId')::uuid else ob.id end,
-      ob.external_node_id,ob.input_snapshot->>'imageReference',
+      ob.external_node_id,case when ob.input_snapshot->'recovery'->>'action'='RECOVER'
+        then coalesce(ob.input_snapshot->'recovery'->>'previousImageReference',ob.input_snapshot->>'imageReference')
+        else ob.input_snapshot->>'imageReference' end,
       coalesce(ob.input_snapshot->>'apiGeneration','') <> '' and ob.input_snapshot->>'compatibilityBlocker' is null,
       ob.finished_at
       from remnawave_fleet_membership m

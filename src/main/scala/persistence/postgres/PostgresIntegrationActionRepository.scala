@@ -79,6 +79,8 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
     activeWork(org, integration, forDeletion = false)
   override def hasActiveForDeletion(org: UUID, integration: UUID): ConnectionIO[Boolean] =
     activeWork(org, integration, forDeletion = true)
+  override def hasUnresolvedUnknown(org: UUID, integration: UUID): ConnectionIO[Boolean] =
+    sql"select infradesk_integration_unresolved_unknown($org,$integration)".query[Boolean].unique
   private def activeWork(org: UUID, integration: UUID, forDeletion: Boolean): ConnectionIO[Boolean] =
     sql"""select
       exists(select 1 from integration_action_execution where organization_id = $org

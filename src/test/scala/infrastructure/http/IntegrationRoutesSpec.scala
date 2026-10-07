@@ -66,8 +66,10 @@ final class IntegrationRoutesSpec extends FunSuite {
       Map("INFRADESK_SECRET_MASTER_KEY_BASE64" -> key)).toOption.get)
     val audit = TestAuditRecorder(journal)
     @volatile var activeAction = false
+    @volatile var unresolvedUnknown = false
     @volatile var activeRollout = false
     val actionRepository = new IntegrationActionRepository[IO] {
+      override def hasUnresolvedUnknown(organizationId: UUID, integrationId: UUID): IO[Boolean] = IO(unresolvedUnknown)
       override def hasActive(organizationId: UUID, integrationId: UUID): IO[Boolean] = IO(activeAction)
       override def insertOrFind(value: IntegrationActionExecution): IO[(IntegrationActionExecution, Boolean)] =
         IO.raiseError(new UnsupportedOperationException)
@@ -189,6 +191,25 @@ final class IntegrationRoutesSpec extends FunSuite {
     val unsupported = f.call(Method.POST, root, Some(s"""{"name":"Bad","providerType":"UNKNOWN",
       "baseUrl":"https://panel.example.test","credentials":{"apiToken":"$token"}}"""))
     assertEquals(unsupported.status, Status.BadRequest)
+  }
+
+  test("UNKNOWN blocks ordinary deletion and abandonment requires management permission and a separate action") {
+    val f = new World
+    val id = f.created()
+    f.unresolvedUnknown = true
+    assertEquals(f.call(Method.DELETE,s"$root/$id").status,Status.Conflict)
+    assert(f.integrations.findById(org,UUID.fromString(id)).unsafeRunSync().nonEmpty)
+    assert(!f.actions.contains("INTEGRATION_DELETED"))
+    val path=s"$root/$id/abandon-recovery-and-delete"
+    assertEquals(f.call(Method.POST,path,role=OrganizationRole.Member).status,Status.Forbidden)
+    f.activeAction=true
+    assertEquals(f.call(Method.POST,path).status,Status.Conflict)
+    assert(!f.actions.contains("INTEGRATION_RECOVERY_ABANDONED"))
+    f.activeAction=false
+    assertEquals(f.call(Method.POST,path).status,Status.NoContent)
+    assertEquals(f.actions.count(_=="INTEGRATION_RECOVERY_ABANDONED"),1)
+    assertEquals(f.actions.count(_=="INTEGRATION_DELETED"),1)
+    assert(!f.journal.recorded.toString.contains(token))
   }
 
   test("manual sync works while disabled, audits before contacting the provider and lists nodes") {

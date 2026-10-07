@@ -17,6 +17,7 @@ trait IntegrationActionRepository[F[_]] {
   def hasActive(organizationId: UUID, integrationId: UUID): F[Boolean]
   def hasActiveForDeletion(organizationId: UUID, integrationId: UUID): F[Boolean] =
     hasActive(organizationId, integrationId)
+  def hasUnresolvedUnknown(organizationId: UUID, integrationId: UUID): F[Boolean]
   /** Retires stale claims as UNKNOWN, then claims at most limit queued rows. */
   def recoverAndClaim(owner: UUID, token: UUID, at: Instant, recoverAfter: Instant,
     limit: Int): F[(Int, List[IntegrationActionExecution])]

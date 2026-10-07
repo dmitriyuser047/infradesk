@@ -1,5 +1,48 @@
 # Stage 25C — One-click Remnawave Node Onboarding
 
+## Current lifecycle (Stage 25 re-fix, V57)
+
+Stage 25 is reopened. Code/automated verification and operator live acceptance are separate.
+See [the re-fix route review and acceptance report](stage25-remnawave-refix.md).
+Stage25D fleet, Stage25E config rollout and Stage25F image lifecycle are implemented.
+
+New plans use lifecycleVersion 2 and catalog-reviewed digest-pinned images. Legacy V1/V2
+snapshots remain readable and immutable. Recovery records explicitly pin `previousImageReference`
+for the old installation, separately from `snapshot.imageReference`, the current reviewed target.
+RECOVER retains the external UUID, correlation and original installation owner. The shared
+Stage25F controlled Compose proof permits exactly one reviewed image-line change; other edits,
+duplicates and unreviewed images fail closed. Repair preserves that proven runtime image.
+RECREATE/DELETE_RECREATE retire the previous owner/image/CIDRs and install the new selected image.
+
+Clean/RECOVER order: VALIDATE → PREPARE_SERVER → CREATE_NODE (read-only reconciliation for RECOVER)
+→ GET_INSTALLATION_DATA → CONFIGURE_NODE_FIREWALL → INSTALL_NODE → START_NODE → VERIFY_LOCAL_NODE
+→ WAIT_FOR_PANEL → SYNC_INVENTORY → BIND_RESOURCE → SET_DESIRED_STATE → FINAL_VERIFY.
+RECREATE inserts RETIRE_NODE_FIREWALL → RETIRE_LOCAL_NODE before CREATE_NODE.
+DELETE_RECREATE inserts DELETE_NODE → CONFIRM_NODE_DELETED before those retirement phases.
+No CREATE follows an uncertain DELETE or unproven absence.
+
+LocalInstallationState is ABSENT, OWNED_PARTIAL, OWNED_DAMAGED, OWNED_COMPLETE, FOREIGN,
+PORT_CONFLICT or UNKNOWN. A known post-mutation error receives bounded read-only reconciliation:
+deterministic Compose rejection with OWNED_PARTIAL is FAILED; unavailable proof is UNKNOWN.
+Timeout, disconnect and truncated output remain UNKNOWN. Terminal history is never resumed or edited.
+
+All temporary Compose candidates use `--project-directory <intended project>` as well as
+`--env-file <project>/.env`: interpolation and service `env_file: .env` have different semantics.
+Initial install uses the installation staging directory; repair/image switch/rollback use the
+final managed directory. `.env` stays 0600 and secrets are absent from argv and Compose.
+Real Compose positive/negative controls supplement the mocked Docker filesystem harness.
+
+Ordinary integration deletion blocks unresolved UNKNOWN. The separate, permission-checked
+abandonment confirmation removes credentials and records INTEGRATION_RECOVERY_ABANDONED with
+the tombstone in one transaction. It performs no remote mutation and retains immutable history.
+Active work still blocks both deletion actions.
+
+The first operator acceptance case must recover the preserved node
+`b745e2e1-bee0-468f-a2fa-318693ac3502` from its existing owner/staging/.env without a CREATE POST.
+No live fixture cleanup or deployment is part of this implementation.
+
+## Historical initial Stage25C implementation (superseded where indicated above)
+
 Implemented on top of accepted foundation commits `fb62f36` and `7d74477`.
 The final commit SHA is provided in the delivery message; this document is part of that commit.
 Stage 25D/25E/25F are not started. Live deployment acceptance remains a separate review boundary.

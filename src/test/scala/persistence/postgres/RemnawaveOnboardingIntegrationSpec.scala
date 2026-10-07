@@ -220,11 +220,12 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
         existing <- w.run(repo.createdNodes(w.org,target.resourceId))
         foreign <- w.run(repo.createdNodes(w.foreignOrg,target.resourceId))
         staleStart <- w.run(repo.start(w.org,integrationId,stalePlan.id,uid,AuthorizationFixtures.ActorUserId,now)).attempt
+        reviewedImage = RemnawaveNodeReleaseCatalog.forReference(approved.snapshot.imageReference).get.imageReference
         candidate <- IO.fromEither(RemnawaveNodeOnboardingRun.recoveryCandidate(existing,integrationId,
-          approved.snapshot.input,approved.snapshot.imageReference,approved.snapshot.connectionId).leftMap(new RuntimeException(_)))
+          approved.snapshot.input,reviewedImage,approved.snapshot.connectionId).leftMap(new RuntimeException(_)))
         recovery = approved.copy(id=uid,createdAt=now.plusSeconds(2),externalNodeId=candidate.flatMap(_.externalNodeId),
-          snapshot=approved.snapshot.copy(recovery=Some(OnboardingRecovery(failed.id,Some(external),
-            approved.snapshot.correlationId,approved.id,"PRESENT_UNHEALTHY","RECOVER"))))
+          snapshot=approved.snapshot.copy(imageReference=reviewedImage,recovery=Some(OnboardingRecovery(failed.id,Some(external),
+            approved.snapshot.correlationId,approved.id,"PRESENT_UNHEALTHY","RECOVER",previousImageReference=Some(approved.snapshot.imageReference)))))
         _ <- w.run(repo.insertPlan(recovery))
         readPlan <- w.run(repo.find(w.org,integrationId,recovery.id))
         queued <- w.run(repo.start(w.org,integrationId,recovery.id,uid,AuthorizationFixtures.ActorUserId,now))
@@ -241,6 +242,8 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
           failureCode=Some("INTEGRATION_NODE_CREATE_RESULT_UNKNOWN")),now,complete=false))
         heads <- w.run(repo.createdNodes(w.org,target.resourceId))
         preservedUnknown <- w.run(repo.find(w.org,integrationId,recovery.id))
+        unresolvedBefore <- w.run(new PostgresIntegrationActionRepository().hasUnresolvedUnknown(w.org,integrationId))
+        foreignUnresolved <- w.run(new PostgresIntegrationActionRepository().hasUnresolvedUnknown(w.foreignOrg,integrationId))
         retry=recovery.copy(id=uid,createdAt=now.plusSeconds(3),snapshot=recovery.snapshot.copy(
           recovery=recovery.snapshot.recovery.map(_.copy(sourceRunId=recovery.id))))
         competitor=retry.copy(id=uid)
@@ -266,8 +269,15 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
           summary_version,summary,is_active,first_seen_at,last_seen_at,last_seen_sync_session_id,created_at,updated_at)
           values($inventoryId,${w.org},$integrationId,'NODE',${external.toString},'Recovered node',1,'{}'::jsonb,true,$now,$now,$syncId,$now,$now)""".update.run)
         provenance <- w.run(new PostgresRemnawaveFleetQuery().provenance(w.org,integrationId,target.resourceId,inventoryId))
+        unresolvedAfter <- w.run(new PostgresIntegrationActionRepository().hasUnresolvedUnknown(w.org,integrationId))
       } yield {
+        assert(unresolvedBefore)
+        assert(!foreignUnresolved)
+        assert(!unresolvedAfter)
         assertEquals(provenance.map(_.onboardingId),Some(approved.id))
+        assertEquals(provenance.map(_.imageReference),Some(approved.snapshot.imageReference))
+        assertEquals(queued.snapshot.imageReference,reviewedImage)
+        assertEquals(queued.snapshot.installationImageReference,approved.snapshot.imageReference)
         assertEquals(heads.map(_.id),List(recovery.id))
         assertEquals(winners.count(_.isRight),1)
         assertEquals(errorCode(winners.find(_.isLeft).get),Some("REMNAWAVE_ONBOARDING_RESOURCE_BUSY"))

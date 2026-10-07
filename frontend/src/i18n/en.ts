@@ -92,6 +92,7 @@ export const en = {
     tryLater: 'Please try again shortly.',
     codes: {
       INTEGRATION_ACTION_ALREADY_RUNNING: 'A node action is still queued or running. Wait for it to finish before changing the endpoint, the credentials or deleting the integration.',
+      INTEGRATION_RECOVERY_REQUIRED: 'An operation has an unresolved unknown outcome. Check its remote state before deleting, or explicitly abandon recovery.',
       INTEGRATION_MANAGEMENT_ACTIVE: 'This integration manages selected nodes. Switch it back to Observe before changing the endpoint or the credentials.',
       INTEGRATION_MANAGEMENT_REQUIRES_SYNC: 'Managing nodes requires automatic synchronization. Switch back to Observe before disabling the integration.',
       INTEGRATION_ACTION_CONFLICTS_WITH_DESIRED_STATE: 'This action works against the node’s desired state. Change the desired state instead.',
@@ -529,7 +530,9 @@ export const en = {
     disableTitle: "Disable integration?",
     disableDetail: "Automatic synchronization will stop. Remnawave nodes remain in their current state. Disabling is unavailable while automatic management or a safe deployment is active.",
     deleteTitle: "Delete integration?",
-    deleteDetail: "The integration, saved credentials and related inventory will be deleted from InfraDesk. InfraDesk servers and Remnawave objects remain.",
+    deleteDetail: "Saved credentials will be removed. Immutable execution and inventory history remains. InfraDesk servers and Remnawave objects remain.",
+    abandonTitle: "Delete integration and abandon recovery",
+    abandonDetail: "This permanently removes the saved credentials and abandons unresolved remote outcomes. InfraDesk will no longer be able to reconcile or recover those operations. Remote objects remain; history is retained and this decision is audited.",
     unlinkTitle: "Remove server link?",
     unlinkDetail: "Only the link will be removed. The Remnawave node and InfraDesk server remain unchanged.",
     unknownError: "The request could not be completed. Test the connection or synchronize again.",

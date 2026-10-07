@@ -89,7 +89,20 @@ final class IntegrationLifecycleSpec extends FunSuite {
         claimDelete <- run.run(management.delete(actor, first.id).attempt)
         _ <- run.run(sql"update integration_sync_state set claim_token=null,claimed_by=null,claim_until=null where integration_id=${first.id}".update.run)
         eventsBeforeDelete <- run.run(sql"select action from audit_event where organization_id = $org order by occurred_at, id".query[String].to[List])
-        _ <- run.run(management.delete(actor, first.id))
+        objectId = UUID.randomUUID()
+        actionId = UUID.randomUUID()
+        _ <- run.run(sql"""insert into integration_inventory_object(id,organization_id,integration_id,object_type,external_id,
+          display_name,summary_version,summary,is_active,first_seen_at,last_seen_at,last_seen_sync_session_id,created_at,updated_at)
+          values($objectId,$org,${first.id},'NODE','unknown-node','Unknown',1,'{}'::jsonb,true,$runningAt,$runningAt,
+            $runningSessionId,$runningAt,$runningAt)""".update.run)
+        _ <- run.run(sql"""insert into integration_action_execution(id,organization_id,integration_id,inventory_object_id,
+          request_id,action_code,external_id_snapshot,display_name_snapshot,requested_by_user_id,status,created_at,finished_at,error_code,updated_at)
+          values($actionId,$org,${first.id},$objectId,${UUID.randomUUID()},'NODE_RESTART','unknown-node','Unknown',$user,
+            'UNKNOWN',$runningAt,$runningAt,'TEST_UNKNOWN',$runningAt)""".update.run)
+        unknownDelete <- run.run(management.delete(actor, first.id).attempt)
+        credentialRetained <- run.run(secrets.find(org,replaced.secretId))
+        directDelete <- run.run(repository.delete(org,first.id).attempt)
+        _ <- run.run(management.delete(actor, first.id,abandonRecovery=true))
         _ <- run.run(management.delete(actor, first.id))
         _ <- run.run(management.delete(ActorContext(user, foreign), first.id))
         gone <- run.run(management.get(org, first.id))
@@ -101,7 +114,12 @@ final class IntegrationLifecycleSpec extends FunSuite {
         noSecret <- run.run(secrets.find(org, replaced.secretId))
         events <- run.run(sql"select action from audit_event where organization_id = $org".query[String].to[List])
       } yield {
-        assertEquals(schema, "56")
+        assertEquals(schema, "57")
+        assertEquals(unknownDelete.left.toOption.collect { case e: application.integration.IntegrationError => e.code },
+          Some("INTEGRATION_RECOVERY_REQUIRED"))
+        assert(credentialRetained.nonEmpty)
+        assert(directDelete.isLeft)
+        assertEquals(events.count(_ == "INTEGRATION_RECOVERY_ABANDONED"),1)
         assert(!first.enabled)
         assertEquals(first.name, "Main")
         assertEquals(list.map(_.id), List(first.id))

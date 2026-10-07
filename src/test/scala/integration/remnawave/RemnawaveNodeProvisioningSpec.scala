@@ -129,6 +129,22 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
     assertEquals(timedCalls.get.unsafeRunSync().count(_._1 == "DELETE"), 1)
   }
 
+  test("GET-present DELETE-absent race succeeds only for the exact typed expected node response") {
+    val typed = Json.obj("timestamp" -> Json.fromString(java.time.Instant.now().toString),
+      "path" -> Json.fromString(s"/api/nodes/$nodeId"), "message" -> Json.fromString("Node not found"),
+      "errorCode" -> Json.fromString("A011")).noSpaces
+    List(typed -> NodeDeleteOutcome.Deleted,
+      typed.replace(nodeId.toString,UUID.randomUUID().toString) -> NodeDeleteOutcome.Unknown("INTEGRATION_NODE_DELETE_RESULT_UNKNOWN"),
+      typed.replace("A011","A124") -> NodeDeleteOutcome.Unknown("INTEGRATION_NODE_DELETE_RESULT_UNKNOWN"),
+      "malformed" -> NodeDeleteOutcome.Unknown("INTEGRATION_NODE_DELETE_RESULT_UNKNOWN")).foreach { case(body,expected) =>
+      val (transport,_,seen) = setup(write = _ => IO.pure(Response[IO](Status.NotFound).withEntity(body)))
+      val reviewed = transport.inspect(context).unsafeRunSync()
+      assert(transport.lookupNode(context,nodeId).unsafeRunSync().isInstanceOf[NodeLookupOutcome.Found])
+      assertEquals(transport.deleteNode(context,nodeId,reviewed).unsafeRunSync(),expected)
+      assertEquals(seen.get.unsafeRunSync().count(_._1=="DELETE"),1)
+    }
+  }
+
   test("reviewed released patches share generation adapters and never claim create idempotency") {
     assertEquals(RemnawaveNodeApi.releases.size, 16)
     RemnawaveNodeApi.releases.values.foreach { release =>

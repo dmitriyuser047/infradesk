@@ -105,6 +105,13 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
         }
       }
 
+    case request @ POST -> Root / "api" / "v1" / "organizations" / org / "integrations" / id / "abandon-recovery-and-delete" =>
+      authorization.require(request, OrganizationPermission.ManageIntegrations) { context =>
+        withIntegration(org, context.organizationId, id) { (_, integrationId) =>
+          respond(runner.run(management.delete(context.actor, integrationId, abandonRecovery = true)) *> NoContent())
+        }
+      }
+
     case request @ POST -> Root / "api" / "v1" / "organizations" / org / "integrations" / id / "test" =>
       authorization.require(request, OrganizationPermission.ManageIntegrations) { context =>
         withIntegration(org, context.organizationId, id) { (_, integrationId) =>
@@ -253,6 +260,8 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
         Conflict(ApiErrorResponse(error.code, "Integration synchronization is already running"))
       case "INTEGRATION_ACTION_ALREADY_RUNNING" =>
         Conflict(ApiErrorResponse(error.code, "An action is already active on this integration"))
+      case "INTEGRATION_RECOVERY_REQUIRED" =>
+        Conflict(ApiErrorResponse(error.code, "Reconcile unknown outcomes or explicitly abandon recovery before deletion"))
       case "INTEGRATION_OBJECT_NOT_FOUND" => NotFound(ApiErrorResponse(error.code, "Integration object was not found"))
       case "INTEGRATION_BINDING_INVALID_RESOURCE" =>
         UnprocessableEntity(ApiErrorResponse(error.code, "Only an active NODE resource can be bound"))

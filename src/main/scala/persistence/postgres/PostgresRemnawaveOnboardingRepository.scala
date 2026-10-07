@@ -63,7 +63,11 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
         recovery <- RemnawaveNodeOnboardingRun.recoveryCandidate(previous,integration,locked.snapshot.input,
           locked.snapshot.imageReference,locked.snapshot.connectionId).leftMap(code => IntegrationError(code,"Existing node requires review")).liftTo[ConnectionIO]
         chainValid=locked.snapshot.recovery match {
-          case Some(proof) => recovery.exists(r => r.id==proof.sourceRunId) &&
+          case Some(proof) => recovery.exists(r => r.id==proof.sourceRunId &&
+            proof.previousImageReference.getOrElse(locked.snapshot.imageReference) == (if(r.externalNodeId.isEmpty &&
+              !(r.state==ProvisioningRunState.Unknown && r.phase==OnboardingPhase.CreateNode))
+              r.snapshot.recovery.flatMap(_.previousImageReference).getOrElse(r.snapshot.installationImageReference)
+              else r.snapshot.installationImageReference)) &&
             Set("PRESENT_EXACT","PRESENT_UNHEALTHY","CONFIRMED_NOT_FOUND")(proof.state) &&
             (if(proof.reusesNode) locked.externalNodeId.nonEmpty && locked.snapshot.correlationId==proof.previousCorrelationId
              else locked.externalNodeId.isEmpty && proof.previousExternalNodeId.nonEmpty &&

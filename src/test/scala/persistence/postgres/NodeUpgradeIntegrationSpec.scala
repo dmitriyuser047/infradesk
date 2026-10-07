@@ -379,8 +379,9 @@ final class NodeUpgradeIntegrationSpec extends FunSuite {
         _ <- sql"""insert into integration_resource_binding(id,organization_id,integration_id,inventory_object_id,
           resource_id,created_by_user_id,created_at,updated_at) values(${uid},${w.org},${s.run.integrationId},
           $newNode,${p.resourceId},$actor,$now,$now)""".update.run
-        _ <- onboardings.replaceFleetMembership(run, token, newNode, now)
       } yield ())
+      // Two fresh bind completions serialize on the DB ownership lock and increment only once.
+      _ <- List.fill(2)(()).parTraverse_(_ => w.run(onboardings.replaceFleetMembership(run, token, newNode, now)))
       moved <- w.run(fleets.membership(w.org, s.run.fleetId, p.membershipId)).map(_.get)
       _ = assertEquals(moved.inventoryNodeId, newNode)
       _ = assertEquals(moved.resourceId, p.resourceId)
@@ -489,7 +490,7 @@ final class NodeUpgradeIntegrationSpec extends FunSuite {
         beforeRolloutMembers <- w.run(rollouts.members(legacy._1.id))
         migrated <- infrastructure.database.DatabaseMigrator.migrate(config.copy(url=xa.kernel.getJdbcUrl),
           org.typelevel.log4cats.noop.NoOpLogger[IO])
-        _ = assertEquals(migrated.currentVersion,"56")
+        _ = assertEquals(migrated.currentVersion,"57")
         afterUpgrade <- w.run(repo.byId(s.run.id))
         afterUpgradeMembers <- w.run(repo.members(s.run.id))
         afterRollout <- w.run(rollouts.rolloutById(legacy._1.id))

@@ -172,6 +172,80 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     assert(!s.calls.exists(_._2.contains("down")))
   }
 
+  test("deterministic candidate rejection after owner and env is FAILED with fresh OWNED_PARTIAL proof") {
+    val s = new Session; idResponse(s)
+    val base = s.respond
+    s.respond = (ex,args) => if(ex=="docker" && args.contains("config")) IO.pure(ok.copy(exitCode=1)) else base(ex,args)
+    val result = remote(s).install(connection,spec,NodeInstallationData.fromSecretKey("dGVzdC1zZWNyZXQ=")).unsafeRunSync()
+    assertEquals(result.failureCode,Some("PROVISIONING_NODE_COMPOSE_INVALID"))
+    assert(!result.uncertain)
+    assertEquals(result.facts,Map("localInstallationState" -> "OWNED_PARTIAL"))
+    assert(s.claimed)
+    assert(s.remoteFiles.contains(SshRemnawaveNodeRemote.stagingDirectory(spec)+"/.env"))
+    assert(!s.remoteFiles.keys.exists(_.endsWith("/compose.yml")))
+    assert(!s.calls.exists(_._2.contains("pull")))
+    val validation = s.calls.find(c => c._1=="docker" && c._2.contains("config")).get._2
+    assertEquals(validation(validation.indexOf("--project-directory")+1),SshRemnawaveNodeRemote.stagingDirectory(spec))
+  }
+
+  test("a deterministic pull rejection retains a proven published installation as a known failure") {
+    val s = new Session; idResponse(s)
+    val base = s.respond
+    s.respond = (ex,args) => if(ex=="docker" && args.headOption.contains("pull")) IO.pure(ok.copy(exitCode=1)) else base(ex,args)
+    val result = remote(s).install(connection,spec,NodeInstallationData.fromSecretKey("dGVzdA==")).unsafeRunSync()
+    assertEquals(result.failureCode,Some("PROVISIONING_NODE_REMOTE_COMMAND_FAILED"))
+    assert(!result.uncertain)
+    assertEquals(result.facts,Map("localInstallationState" -> "OWNED_COMPLETE"))
+    assert(s.remoteFiles.contains(SshRemnawaveNodeRemote.directory(spec)+"/managed.json"))
+    assert(!s.calls.exists(_._2.contains("up")))
+  }
+
+  test("repair of reviewed image evolution preserves its controlled image line while replacing damaged credentials") {
+    val s=new Session; idResponse(s)
+    val dir=SshRemnawaveNodeRemote.directory(spec)
+    val target=domain.integration.RemnawaveNodeReleaseCatalog.find("node-2.8.0").get.imageReference
+    val compose=SshRemnawaveNodeRemote.renderCompose(spec).replace(s"    image: $image\n",s"    image: $target\n").getBytes(StandardCharsets.UTF_8)
+    s.remoteFiles.update(s"$dir/compose.yml",RemoteConfigurationFile(true,compose,Some(RemoteFileMetadata(420,0,0))))
+    val base=s.respond
+    s.respond=(ex,args) => if(ex=="sh" && args.exists(_.contains("markerOwned=0")) &&
+      !args.exists(a => a.contains("atomic ownership publication") || a.contains("result CLEAN")))
+      IO.pure(ok.copy(stdout="OWNED_DAMAGED")) else base(ex,args)
+    val result=remote(s).repair(connection,spec,NodeInstallationData.fromSecretKey("dGVzdA==")).unsafeRunSync()
+    assertEquals(result.failureCode,None)
+    assert(s.remoteFiles(s"$dir/compose.yml").bytes.sameElements(compose))
+    assert(!s.uploads.exists(u => new String(u._2,StandardCharsets.UTF_8).contains(s"    image: $image\n")))
+    assert(s.calls.exists { case ("docker",args) => args==List("pull",target); case _ => false })
+    assert(!s.calls.exists { case ("docker",args) => args==List("pull",image); case _ => false })
+  }
+
+  test("candidate failure with unavailable reconciliation remains UNKNOWN; disconnect and truncation never downgrade") {
+    List("unreadable","disconnect","truncated").foreach { boundary =>
+      val s = new Session; idResponse(s)
+      val base = s.respond
+      var rejected = false
+      s.respond = (ex,args) => if(ex=="docker" && args.contains("config")) {
+        rejected=true
+        if(boundary=="disconnect") IO.raiseError(RemoteConfigurationFailure.Unavailable)
+        else IO.pure(ok.copy(exitCode=1,stdoutTruncated=boundary=="truncated"))
+      } else if(rejected && ex=="sh" && args.exists(_.contains("markerOwned=0"))) IO.raiseError(RemoteConfigurationFailure.Unavailable)
+      else base(ex,args)
+      val result = remote(s).install(connection,spec,NodeInstallationData.fromSecretKey("dGVzdA==")).unsafeRunSync()
+      assert(result.uncertain,boundary)
+      assert(!s.calls.exists(_._2.contains("pull")))
+    }
+  }
+
+  test("controlled image normalization rejects unreviewed, duplicate and unrelated edits") {
+    val text = SshRemnawaveNodeRemote.renderCompose(spec)
+    val target = domain.integration.RemnawaveNodeReleaseCatalog.find("node-3.4.1").get.imageReference
+    val changed = text.replace(s"    image: $image\n",s"    image: $target\n")
+    assertEquals(SshRemnawaveNodeRemote.controlledComposeReference(spec,changed.getBytes(StandardCharsets.UTF_8)),Some(target))
+    List(changed.replace("network_mode: host","network_mode: bridge"),changed+s"    image: $target\n",
+      changed.replace(target,"unreviewed/node:latest")).foreach { invalid =>
+      assertEquals(SshRemnawaveNodeRemote.controlledComposeReference(spec,invalid.getBytes(StandardCharsets.UTF_8)),None)
+    }
+  }
+
   test("known compose start failure is returned as a known failure") {
     val s = new Session; idResponse(s)
     s.respond = (ex, args) => if (ex == "id") IO.pure(ok.copy(stdout = "0"))
