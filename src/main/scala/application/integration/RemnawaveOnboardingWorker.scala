@@ -197,6 +197,17 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
             case _ => IO.raiseError(IntegrationError("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN","Previous node absence is unproven"))
           }
         }
+        def freshLocal(requireAbsent: Boolean): IO[Unit] =
+          r.snapshot.recovery.filter(_ => r.snapshot.lifecycleVersion >= 3).traverse_ { proof =>
+            remote.localInstallationObservation(connection,if(proof.reusesNode) spec(r) else oldSpec(proof)).flatMap { current =>
+              current.blocker match {
+                case Some(code) => IO.raiseError(IntegrationError(code,"Local installation could not be safely verified"))
+                case None => IO.raiseUnless(if(requireAbsent) current.state==LocalInstallationState.Absent
+                  else proof.localInstallation.exists(_.state==current.state))(
+                    IntegrationError("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED","Local installation changed; review a fresh plan"))
+              }
+            }
+          }
         def reconciliation: IO[Decision] = nodes.reconcileCreate(context,r.snapshot.intent,r.snapshot.compatibility).map {
           case NodeCreateReconciliation.Confirmed(n) if matches(r,n) => Advance(r.copy(externalNodeId=Some(n.externalId)))
           case _ => Stop("INTEGRATION_NODE_CREATE_RESULT_UNKNOWN",true)
@@ -211,7 +222,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           } else mutation
         }
         r.phase match {
-          case Validate => operations.validate(r,false) *> (r.snapshot.recovery match {
+          case Validate => operations.validate(r,false) *> freshLocal(false) *> (r.snapshot.recovery match {
             case Some(proof) => remote.recoveryPreflight(connection,if(proof.reusesNode) spec(r) else oldSpec(proof))
             case None => remote.preflight(connection,r.resourceId,r.snapshot.input.nodePort)
           }).flatMap(x =>
@@ -237,7 +248,8 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           case RetireLocalNode => oldAbsent *> result(remote.retireInstallation(connection,oldSpec(r.snapshot.recovery.get)))
           case CreateNode if r.snapshot.recovery.exists(_.reusesNode) => operations.validate(r,true) *> existing
           case CreateNode if !fresh || r.externalNodeId.nonEmpty => operations.validate(r,true) *> reconciliation
-          case CreateNode => operations.validate(r,true) *> oldAbsent *> remote.installationPrerequisites(connection).flatMap { prerequisites =>
+          case CreateNode => operations.validate(r,true) *> oldAbsent *> (if(r.snapshot.recovery.nonEmpty && !r.snapshot.needsRetirement)
+            freshLocal(true) else IO.unit) *> remote.installationPrerequisites(connection).flatMap { prerequisites =>
             IO.raiseUnless(prerequisites.failureCode.isEmpty && !prerequisites.uncertain && !prerequisites.outputTruncated)(
               IntegrationError(prerequisites.failureCode.getOrElse("REMNAWAVE_ONBOARDING_PREREQUISITES_UNKNOWN"),"Installation prerequisites are unavailable"))
           } *> provider.observe(context).flatMap { observation =>

@@ -62,6 +62,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     var lookupOutcome = lookup0
     var lookupError: Option[Throwable] = None
     var local = local0
+    var localError: Option[Throwable] = None
     var lookupCalls = 0
     var findCalls = 0
     var observeCalls = 0
@@ -91,7 +92,7 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     }
 
     val remote: RemnawaveNodeRemote[IO] = new RemnawaveNodeRemote[IO] {
-      override def localInstallationState(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { observedSpec=Some(s); local.installationState }
+      override def localInstallationState(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { observedSpec=Some(s); localError.foreach(throw _); local.installationState }
       override def preflight(c: Connection, r: UUID, p: Int) = forbidden[ProvisioningStepResult]("preflight")
       override def installationPrerequisites(c: Connection) = forbidden[ProvisioningStepResult]("installationPrerequisites")
       override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = forbidden[ProvisioningStepResult]("configureFirewall")
@@ -194,6 +195,26 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
     assertEquals(result.node, None)
     assertNotEquals(result.correlation, originalCorrelation)
     h.assertReadOnly()
+  }
+
+  test("Panel absence survives every local classification and SSH failure without mutations") {
+    LocalInstallationState.all.foreach { state =>
+      val h=new Harness(lookup0=NodeLookupOutcome.ConfirmedNotFound,local0=localGood.copy(installationState=state))
+      val result=h.inspect()
+      assertEquals(recovery(result).state,"CONFIRMED_NOT_FOUND")
+      assertEquals(recovery(result).action,"RECREATE")
+      assertEquals(result.localInstallation.map(_.state),Some(state))
+      assertEquals(result.localInstallation.flatMap(_.blocker).nonEmpty,!state.repairable)
+      h.assertReadOnly()
+    }
+    val h=new Harness(lookup0=NodeLookupOutcome.ConfirmedNotFound)
+    h.localError=Some(new RuntimeException("stderr containing secret"))
+    val result=h.inspect()
+    assertEquals(recovery(result).state,"CONFIRMED_NOT_FOUND")
+    assertEquals(result.localInstallation,Some(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.SshUnavailable)))
+    assert(!OnboardingSnapshotCodec.encodeRecovery(recovery(result)).noSpaces.contains("secret"))
+    h.assertReadOnly()
+    assertEquals(recovery(h.inspect(conn=None)).state,"CONFIRMED_NOT_FOUND")
   }
 
   test("lookup unknown, timeout, and 5xx outcomes stay UNKNOWN and never create") {

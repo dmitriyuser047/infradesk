@@ -2,7 +2,7 @@ package ru.bitec.app.ops
 package application.port
 
 import domain.connection.Connection
-import domain.integration.{LocalInstallationState, NodeInstallationData}
+import domain.integration.{LocalInstallationState, LocalInstallationObservation, NodeInstallationData}
 import java.util.UUID
 
 /** Backend-controlled values only. Credentials never enter this record. */
@@ -17,6 +17,9 @@ final case class RemnawaveNodeLocalEvidence(managedFiles: Boolean, imageMatches:
 /** Each mutation is one separately journalled onboarding phase. No generic shell input. */
 trait RemnawaveNodeRemote[F[_]] {
   def localInstallationState(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[LocalInstallationState]
+  /** Read-only diagnosis, including proof that absent installations have no own firewall artifacts. */
+  def localInstallationObservation(connection: Connection, spec: RemnawaveNodeRemoteSpec)(implicit F: cats.Functor[F]): F[LocalInstallationObservation] =
+    F.map(localInstallationState(connection,spec))(LocalInstallationObservation.fromState)
   def preflight(connection: Connection, resourceId: UUID, nodePort: Int): F[ProvisioningStepResult]
   /** Fresh post-baseline readiness check, before creating anything in the Panel. */
   def installationPrerequisites(connection: Connection): F[ProvisioningStepResult]

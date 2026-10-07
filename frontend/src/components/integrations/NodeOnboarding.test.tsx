@@ -230,7 +230,7 @@ describe('NodeOnboarding', () => {
     })
     fireEvent.click(await screen.findByRole('button', { name: 'Check again' }))
     await screen.findByText('The remote state is still unknown. Check again to repeat the read-only observation.')
-    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Check local installation' }))
     await waitFor(() => expect(reads).toBe(2))
     expect(calls.filter(call => call.method === 'POST' && call.url.endsWith('/reconcile')).map(call => [call.url, call.body])).toEqual([
       ['/api/v1/organizations/org/integrations/integration/remnawave-node-onboarding/runs/run-1/reconcile', { action: 'RECOVER' }],
@@ -274,6 +274,31 @@ describe('NodeOnboarding', () => {
     fireEvent.click(start)
     await waitFor(() => expect(calls.some(call => call.method === 'POST' && call.url.endsWith('/runs'))).toBe(true))
     expect(calls.find(call => call.method === 'POST' && call.url.endsWith('/runs'))?.body).toEqual({ planId: 'plan-1', requestId: expect.any(String), confirmRecreate: true })
+  })
+  it.each(['ABSENT', 'OWNED_COMPLETE', 'OWNED_PARTIAL', 'OWNED_DAMAGED', 'FOREIGN', 'PORT_CONFLICT', 'UNKNOWN'] as const)('keeps Panel absence visible with local %s and rechecks without starting', async state => {
+    const unsafe = ['FOREIGN', 'PORT_CONFLICT', 'UNKNOWN'].includes(state)
+    const proof = { ...recoverySummary('CONFIRMED_NOT_FOUND', 'RECREATE'), localInstallation: {
+      state, diagnosis: state === 'UNKNOWN' ? 'REMNAWAVE_LOCAL_INSTALLATION_SSH_UNAVAILABLE' : null,
+    } }
+    let checks = 0
+    const { calls } = mount('/?onboardingRun=run-1', 'en', (url, method) => {
+      if (url.endsWith('/runs/run-1') && method === 'GET') return json({ run: run('FAILED'), phases: [] })
+      if (url.endsWith('/runs/run-1/reconcile') && method === 'POST') {
+        checks++
+        return json({ ...recoveryPreview(proof), changes: unsafe ? [] : ['CREATE_NODE'], blockingProblems: unsafe ? ['REMNAWAVE_LOCAL_INSTALLATION_SSH_UNAVAILABLE'] : [] })
+      }
+      return undefined
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    expect(await screen.findByText('The node was not found in Remnawave.')).toBeTruthy()
+    expect(screen.getByText('Local installation')).toBeTruthy()
+    const approval = screen.queryByLabelText('I reviewed the previous node UUID and approve creating a new Remnawave node with a new correlation ID.')
+    expect(approval !== null).toBe(!unsafe)
+    if (approval) fireEvent.click(approval)
+    fireEvent.click(screen.getByRole('button', { name: 'Check local installation' }))
+    await waitFor(() => expect(checks).toBe(2))
+    expect(calls.some(call => call.method === 'POST' && call.url.endsWith('/runs'))).toBe(false)
+    if (!unsafe) await waitFor(() => expect((screen.getByRole('button', { name: 'Recreate node' }) as HTMLButtonElement).disabled).toBe(true))
   })
   it.each([
     ['RECREATE', 'CONFIRMED_NOT_FOUND'],

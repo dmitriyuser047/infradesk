@@ -157,7 +157,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
         {step > 0 && step < 4 && !preview?.recovery ? <button className="secondary-button" type="button" disabled={!!unresolved || start.isPending || previewRequest.isPending} onClick={() => { setReviewed(null); setStep((step - 1) as Step) }}>{copy.back}</button> : null}
         {step < 3 ? <button className="primary-button" type="button" disabled={!canConfigure || unsupported || options.isPending || (step === 0 && (!resourceId || !server?.serverProfileName || server.blockingProblems.length > 0)) || (step === 1 && (!nodeName.trim() || !address.trim() || !Number(port) || !profile || activeInboundIds.length === 0)) || (step === 2 && !formValid)} onClick={() => setStep((step + 1) as Step)}>{copy.next}</button> : null}
         {step === 3 && !preview?.recovery ? <PendingButton className={preview ? 'secondary-button' : 'primary-button'} type="button" pending={previewRequest.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!!unresolved || !canConfigure || !formValid} onClick={() => void makePreview().catch(() => setWorkflowError(true))}>{copy.preview}</PendingButton> : null}
-        {step === 3 && reviewed?.plan.recovery?.state === 'UNKNOWN' ? <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure} onClick={() => void reconcileRun(reviewed.plan.recovery!.sourceRunId, 'RECOVER')}>{copy.checkAgain}</PendingButton> : null}
+        {step === 3 && reviewed?.plan.recovery ? <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure} onClick={() => void reconcileRun(reviewed.plan.recovery!.sourceRunId, reviewed.plan.recovery!.action === 'DELETE_RECREATE' ? 'DELETE_RECREATE' : 'RECOVER')}>{i18n.locale === 'ru' ? 'Проверить локальную установку' : 'Check local installation'}</PendingButton> : null}
         {step === 3 && reviewed && !recoveryBlocked ? <PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || reviewed.plan.blockingProblems.length > 0 || (needsRecreateApproval && !recoveryConfirmed)} onClick={() => void apply({planId:reviewed.plan.run.id,requestId:reviewed.requestId})}>{recovery?.action === 'RECOVER' ? copy.restore : recovery?.action === 'RECREATE' ? copy.recreate : recovery?.action === 'DELETE_RECREATE' ? copy.deleteRecreate : copy.apply}</PendingButton> : null}
         {step === 3 && recovery?.action === 'RECOVER' && (recovery.state === 'PRESENT_EXACT' || recovery.state === 'PRESENT_UNHEALTHY') ? <button className="secondary-button" type="button" disabled={!canConfigure || reconcile.isPending} onClick={() => void reconcileRun(recovery.sourceRunId, 'DELETE_RECREATE')}>{copy.deleteRecreate}</button> : null}
         {step === 4 || hasRun ? <button className="secondary-button" type="button" onClick={closeWizard}>{copy.close}</button> : null}
@@ -187,9 +187,9 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
           </InlineAlert> : null}
           <p>{preview.nodeImage}</p><p>{copy.cidrs}: {preview.panelCidrs?.join(', ') ?? cidrValues.join(', ')}</p>
           {preview.nodeApi ? <p>Remnawave {preview.nodeApi.serverVersion} · {preview.nodeApi.apiGeneration} · {preview.nodeApi.sourceCommit}</p> : null}
-          <ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings.filter(code => code !== 'REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE')} /><ReviewList title={copy.blockers} values={preview.blockingProblems.map(code => ['REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW', 'REMNAWAVE_ONBOARDING_RECOVERY_CONFLICT'].includes(code)
+          <ReviewList title={copy.changes} values={preview.changes} /><ReviewList title={copy.warnings} values={preview.warnings.filter(code => code !== 'REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE')} /><ReviewList title={copy.serverProfile} values={preview.blockingProblems.filter(code => code.startsWith('PROVISIONING_') && !['PROVISIONING_NODE_INSTALLATION_UNMANAGED', 'PROVISIONING_NODE_PORT_OCCUPIED'].includes(code)).map(code => i18n.t.provisioning.errors[code] ?? code)} danger /><ReviewList title={copy.blockers} values={preview.blockingProblems.filter(code => !code.startsWith('REMNAWAVE_LOCAL_INSTALLATION_') && !code.startsWith('PROVISIONING_')).map(code => localDiagnosis(code, i18n.locale) ?? (['REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW', 'REMNAWAVE_ONBOARDING_RECOVERY_CONFLICT'].includes(code)
             ? i18n.locale === 'ru' ? 'На сервере уже создан узел. Его состояние или новые параметры не допускают безопасное продолжение onboarding. Проверьте предыдущий запуск и узел; не создавайте дубликат.' : 'A node was already created on this server. Its state or the new inputs prevent safe onboarding recovery. Review the previous run and node; do not create a duplicate.'
-            : code)} danger />
+            : i18n.t.provisioning.errors[code] ?? code))} danger />
           </section> : null}
       </> : null}
       {step === 3 && preview?.recovery ? <RecoveryReview recovery={preview.recovery} newCorrelation={preview.run.correlationId} confirmed={recoveryConfirmed} onConfirm={setRecoveryConfirmed} copy={copy} /> : null}
@@ -202,19 +202,53 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   </WorkspaceSection>
 }
 
+function localStateLabel(state: string, locale: string): string {
+  const labels: Record<string, [string, string]> = {
+    ABSENT: ['Установка отсутствует; удаление предыдущей установки не требуется.', 'Installation absent; no previous installation needs retirement.'],
+    OWNED_COMPLETE: ['Подтверждена установка предыдущего узла.', 'Previous node installation confirmed.'],
+    OWNED_PARTIAL: ['Подтверждены части установки предыдущего узла.', 'Previous node installation artifacts confirmed.'],
+    OWNED_DAMAGED: ['Подтверждена повреждённая установка предыдущего узла.', 'Damaged previous node installation confirmed.'],
+    FOREIGN: ['Владелец установки не подтверждён.', 'Installation ownership is unproven.'],
+    PORT_CONFLICT: ['Порт занят другой установкой.', 'Another installation occupies the port.'],
+    UNKNOWN: ['Состояние локальной установки неизвестно.', 'Local installation state is unknown.'],
+  }
+  return labels[state]?.[locale === 'ru' ? 0 : 1] ?? state
+}
+function localDiagnosis(code: string, locale: string): string | undefined {
+  const reasons: Record<string, [string, string]> = {
+    SSH_UNAVAILABLE: ['Нет подтверждённого доступа по SSH. Проверьте подключение и учётные данные.', 'SSH access unavailable. Check the connection and credentials.'],
+    OBSERVATION_TIMEOUT: ['Проверка превысила время ожидания. Проверьте доступность сервера.', 'Observation timed out. Check server availability.'],
+    OUTPUT_TRUNCATED: ['Ответ проверки неполный. Повторите проверку.', 'Observation output incomplete. Check again.'],
+    COMPOSE_UNREADABLE: ['Не удалось прочитать файлы установки. Проверьте права доступа.', 'Installation files could not be read. Check access permissions.'],
+    OWNER_UNPROVEN: ['Не удалось подтвердить владельца установки. Требуется ручная проверка.', 'Installation ownership could not be proven. Manual review required.'],
+    CONTAINER_STATE_UNKNOWN: ['Не удалось проверить контейнеры. Проверьте доступность Docker.', 'Containers could not be inspected. Check Docker availability.'],
+    FIREWALL_STATE_UNKNOWN: ['Не удалось проверить правила межсетевого экрана. Проверьте состояние UFW.', 'Firewall rules could not be verified. Check UFW.'],
+    PORT_STATE_UNKNOWN: ['Не удалось проверить занятость порта. Проверьте состояние сервера.', 'Port occupancy could not be verified. Check the server.'],
+    STATE_UNKNOWN: ['Проверка не подтвердила безопасное состояние. Требуется повторная или ручная проверка.', 'Observation did not prove a safe state. Check again or review manually.'],
+  }
+  return reasons[code.replace(/^REMNAWAVE_LOCAL_INSTALLATION_/, '')]?.[locale === 'ru' ? 0 : 1]
+}
 function ReviewList({ title, values, danger = false }: { title: string; values: string[]; danger?: boolean }) {
   return <section><h4>{title}</h4>{values.length ? <ul>{values.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ul> : <p>—</p>}{danger && values.length ? <p role="alert">{title}</p> : null}</section>
 }
 function RecoveryReview({ recovery, newCorrelation, confirmed, onConfirm, copy }: { recovery: NodeOnboardingRecoverySummary; newCorrelation?: string; confirmed: boolean; onConfirm: (value: boolean) => void; copy: typeof texts[keyof typeof texts] }) {
-  if (recovery.state === 'UNKNOWN') return <InlineAlert tone="warning" title={copy.recoveryUnknown} />
-  if (recovery.state === 'PRESENT_CONFLICT') return <InlineAlert tone="danger" title={copy.conflict} />
-  if (recovery.state === 'CONFIRMED_NOT_FOUND') return <section><InlineAlert tone="warning" title={copy.missingNode} />
+  const i18n = useI18n()
+  const local = recovery.localInstallation
+  const localReview = local ? <section><h4>{i18n.locale === 'ru' ? 'Локальная установка' : 'Local installation'}</h4><InlineAlert tone={['FOREIGN', 'PORT_CONFLICT', 'UNKNOWN'].includes(local.state) ? 'warning' : 'info'} title={localStateLabel(local.state, i18n.locale)}>
+    {local.diagnosis ? localDiagnosis(local.diagnosis, i18n.locale) : null}
+    {['FOREIGN', 'PORT_CONFLICT'].includes(local.state) ? <span>{i18n.locale === 'ru' ? 'Требуется ручная проверка владельца установки и занятого порта. Автоматические изменения заблокированы.' : 'Review installation ownership and the occupied port manually. Automatic changes are blocked.'}</span> : null}
+    {local.state === 'UNKNOWN' ? <span>{i18n.locale === 'ru' ? 'Восстановите доступ и повторите проверку локальной установки. Изменения заблокированы.' : 'Restore access and check the local installation again. Changes are blocked.'}</span> : null}
+    {local.state.startsWith('OWNED_') && recovery.action !== 'RECOVER' ? <span>{i18n.locale === 'ru' ? 'После подтверждения InfraDesk удалит только доказанную установку и правила предыдущего узла, затем создаст новый узел.' : 'After confirmation, InfraDesk will retire the proven previous installation and its rules, then create a new node.'}</span> : null}
+  </InlineAlert></section> : null
+  if (recovery.state === 'UNKNOWN') return <section><h4>Remnawave Panel</h4><InlineAlert tone="warning" title={copy.recoveryUnknown} />{localReview}</section>
+  if (recovery.state === 'PRESENT_CONFLICT') return <section><h4>Remnawave Panel</h4><InlineAlert tone="danger" title={copy.conflict} />{localReview}</section>
+  if (recovery.state === 'CONFIRMED_NOT_FOUND') return <section><h4>Remnawave Panel</h4><InlineAlert tone="warning" title={copy.missingNode} />{localReview}
     <dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd><dt>{copy.oldCorrelation}</dt><dd>{recovery.previousCorrelationId}</dd><dt>{copy.newCorrelation}</dt><dd>{newCorrelation ?? '—'}</dd></dl>
-    <label><input type="checkbox" checked={confirmed} onChange={event => onConfirm(event.target.checked)} />{copy.recreateApproval}</label></section>
-  if (recovery.action === 'DELETE_RECREATE') return <section><InlineAlert tone="warning" title={copy.deleteRecreate} />
+    {!local || !['FOREIGN', 'PORT_CONFLICT', 'UNKNOWN'].includes(local.state) ? <label><input type="checkbox" checked={confirmed} onChange={event => onConfirm(event.target.checked)} />{copy.recreateApproval}</label> : null}</section>
+  if (recovery.action === 'DELETE_RECREATE') return <section><h4>Remnawave Panel</h4><InlineAlert tone="warning" title={copy.deleteRecreate} />{localReview}
     <dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd><dt>{copy.oldCorrelation}</dt><dd>{recovery.previousCorrelationId}</dd><dt>{copy.newCorrelation}</dt><dd>{newCorrelation ?? '—'}</dd></dl>
-    <label><input type="checkbox" checked={confirmed} onChange={event => onConfirm(event.target.checked)} />{copy.deleteApproval}</label></section>
-  return <section><InlineAlert tone="info" title={copy.restore} /><dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd></dl></section>
+    {!local || !['FOREIGN', 'PORT_CONFLICT', 'UNKNOWN'].includes(local.state) ? <label><input type="checkbox" checked={confirmed} onChange={event => onConfirm(event.target.checked)} />{copy.deleteApproval}</label> : null}</section>
+  return <section><h4>Remnawave Panel</h4><InlineAlert tone="info" title={copy.restore} />{localReview}<dl><dt>{copy.oldIdentity}</dt><dd>{recovery.previousExternalNodeId ?? '—'}</dd></dl></section>
 }
 function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: ReturnType<typeof useNodeOnboardingRun>['data']; copy: typeof texts[keyof typeof texts] }) {
   const i18n = useI18n()
@@ -228,7 +262,7 @@ function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: Retu
   const message = run.state === 'SUCCEEDED' ? copy.success : run.state === 'FAILED' ? copy.failed : run.state === 'UNKNOWN' ? copy.unknown : copy.active
   const byPhase = new Map(detail?.phases.map(phase => [phase.phase, phase]))
   const hasFirewallRetirement = detail?.phases.some(phase => phase.phase === 'RETIRE_NODE_FIREWALL') || run.phase === 'RETIRE_NODE_FIREWALL'
-  const retirementPhases: OnboardingRunPhase[] = [...(hasFirewallRetirement ? ['RETIRE_NODE_FIREWALL' as const] : []), 'RETIRE_LOCAL_NODE']
+  const retirementPhases: OnboardingRunPhase[] = run.recovery?.localInstallation?.state === 'ABSENT' ? [] : [...(hasFirewallRetirement ? ['RETIRE_NODE_FIREWALL' as const] : []), 'RETIRE_LOCAL_NODE']
   const runPhases: OnboardingRunPhase[] = run.recovery?.action === 'DELETE_RECREATE'
     ? [...phases.slice(0, 2), 'DELETE_NODE', 'CONFIRM_NODE_DELETED', ...retirementPhases, ...phases.slice(2)]
     : run.recovery?.action === 'RECREATE' ? [...phases.slice(0, 2), ...retirementPhases, ...phases.slice(2)] : [...phases]

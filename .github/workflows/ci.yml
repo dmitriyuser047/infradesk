@@ -369,7 +369,7 @@ jobs:
           drop table terminal_session;
           drop table account_security_event;
           drop index ix_incident_resource_opened;
-          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49', '50', '51', '52', '53', '54', '55', '56', '57');
+          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49', '50', '51', '52', '53', '54', '55', '56', '57', '58');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
@@ -397,7 +397,7 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "57"
+          test "${migrated}" = "58"
           # What V26 built survives the upgrade: the notification_delivery.context column was in the
           # dump and is still there after Flyway ran V29 on the restored database.
           delivery_context="$(docker compose -f compose.prod.yml exec -T postgres \
@@ -691,7 +691,7 @@ jobs:
             'INTEGRATION_ACTION_REQUESTED',
             'INTEGRATION_MANAGEMENT_MODE_CHANGED','INTEGRATION_DESIRED_STATE_SET','INTEGRATION_DESIRED_STATE_REMOVED'
           ));
-          delete from flyway_schema_history where version in ('42', '43', '44', '45', '46', '47', '48', '49', '50', '51', '52', '53', '54', '55', '56', '57');
+          delete from flyway_schema_history where version in ('42', '43', '44', '45', '46', '47', '48', '49', '50', '51', '52', '53', '54', '55', '56', '57', '58');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/v40-backups" ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/v40-backups" -name 'infradesk-*.dump' -type f -print -quit)"
@@ -704,7 +704,7 @@ jobs:
             sleep 5
           done
           curl --silent --fail "${base}/ready" > /dev/null
-          test "$(psql_value "select version from flyway_schema_history where success order by installed_rank desc limit 1")" = "57"
+          test "$(psql_value "select version from flyway_schema_history where success order by installed_rank desc limit 1")" = "58"
           test "$(psql_value "select count(*) from configuration_profile where code = 'v40-preserved' and kind = 'FILE_TEMPLATE'")" = "1"
           test "$(psql_value "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('configuration_revision_secure_payload','integration_config_profile_binding','integration_config_deployment','integration_config_rollout','integration_config_rollout_node_baseline')")" = "5"
           test "$(psql_value "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('integration', 'integration_secret', 'integration_sync_session', 'integration_inventory_object', 'integration_resource_binding', 'integration_sync_state', 'integration_action_execution', 'integration_desired_state')")" = "8"

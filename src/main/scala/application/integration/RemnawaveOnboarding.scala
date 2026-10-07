@@ -108,12 +108,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       baseline.left.toOption.map(safeCode).toList ++ baseline.toOption.toList.flatMap(_.blockingProblems) ++
       local.toList.flatMap(_.fold(e => List(safeCode(e)),r => r.failureCode.toList ++ Option.when(r.uncertain)("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN"))) ++
       live.left.toOption.map(safeCode) ++ candidate.left.toOption ++
-      proof.localState.toList.flatMap {
-        case LocalInstallationState.Foreign => List("PROVISIONING_NODE_INSTALLATION_UNMANAGED")
-        case LocalInstallationState.PortConflict => List("PROVISIONING_NODE_PORT_OCCUPIED")
-        case LocalInstallationState.Unknown => List("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN")
-        case _ => Nil
-      } ++ recovery.toList.flatMap(r => r.state match {
+      proof.localInstallation.toList.flatMap(_.blocker) ++ recovery.toList.flatMap(r => r.state match {
         case "PRESENT_CONFLICT" => List("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW")
         case "UNKNOWN" => List("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN")
         case _ => Nil
@@ -128,12 +123,13 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       image.getOrElse(""),proof.correlation,candidates.find(_.id==input.resourceId).fold("")(_.name),
       baseline.toOption.fold("")(_.profileName),profile.fold("")(_.obj.displayName),
       input.activeInboundIds.flatMap(id => inbounds.find(_.uuid==id.toString).map(_.tag)),
+      if(proof.localInstallation.exists(!_.state.repairable) || recovery.exists(r => Set("UNKNOWN","PRESENT_CONFLICT")(r.state))) Nil else
       baseline.toOption.toList.flatMap(_.assessment.modules.filterNot(_._2).map(_._1)) ++
         (if(recovery.exists(_.action=="DELETE_RECREATE")) List("DELETE_NODE","CONFIRM_NODE_DELETED") else Nil) ++
-        (if(recovery.exists(!_.reusesNode)) List("RETIRE_NODE_FIREWALL","RETIRE_LOCAL_NODE") else Nil) ++
+        (if(recovery.exists(r => !r.reusesNode && !r.localInstallation.exists(_.state==LocalInstallationState.Absent))) List("RETIRE_NODE_FIREWALL","RETIRE_LOCAL_NODE") else Nil) ++
         (if(recovery.exists(_.reusesNode)) Nil else List("CREATE_NODE")) ++
         List("CONFIGURE_NODE_FIREWALL", "INSTALL_NODE", "START_NODE", "SYNC_INVENTORY", "BIND_RESOURCE", "SET_DESIRED_STATE", "FINAL_VERIFY"),
-      baseline.toOption.toList.flatMap(_.warnings) ++ Option.when(recovery.exists(_.reusesNode))("REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE"),blocks,recovery,lifecycleVersion=2)
+      baseline.toOption.toList.flatMap(_.warnings) ++ Option.when(recovery.exists(_.reusesNode))("REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE"),blocks,recovery,lifecycleVersion=3)
     run = RemnawaveNodeOnboardingRun(UUID.randomUUID(),actor.organizationId,integration,input.resourceId,None,actor.userId,
       ProvisioningRunState.Planned,OnboardingPhase.Validate,snapshot,now,now,externalNodeId=proof.node)
     _ <- if (blocks.nonEmpty) IO.unit else runner.run(for {
@@ -154,7 +150,9 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     "configProfileName" -> str(snapshot.configProfileName),"inboundNames" -> strings(snapshot.inboundNames),
     "nodeImage" -> image.fold(Json.Null)(str),"nodeApi" -> OnboardingJson.compatibility(api),
     "panelCidrs" -> strings(input.panelCidrs),"changes" -> strings(snapshot.changes),"warnings" -> strings(snapshot.warnings),
-    "blockingProblems" -> strings(blocks),"localInstallationState" -> proof.localState.fold(Json.Null)(s => str(s.code)),"recovery" -> recovery.fold(Json.Null)(OnboardingSnapshotCodec.encodeRecovery))
+    "blockingProblems" -> strings(blocks),"localInstallationState" -> proof.localState.fold(Json.Null)(s => str(s.code)),
+    "localInstallation" -> proof.localInstallation.fold(Json.Null)(OnboardingSnapshotCodec.encodeLocalInstallation),
+    "recovery" -> recovery.fold(Json.Null)(OnboardingSnapshotCodec.encodeRecovery))
 
   def start(actor: ActorContext,integration: UUID,plan: UUID,request: UUID,confirmRecreate: Boolean): IO[RemnawaveNodeOnboardingRun] = for {
     _ <- IO.raiseUnless(settings.enabled)(error("PROVISIONING_DISABLED"))

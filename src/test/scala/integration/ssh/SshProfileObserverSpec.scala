@@ -32,7 +32,7 @@ final class SshProfileObserverSpec extends FunSuite {
         if(args.exists(_.contains("for package in"))) {
           val fixture=s"""fixture_dpkg_query() {
             case "$$3" in
-              docker-ce|docker-compose-plugin) printf '%s' 'ii '; return 0;;
+              docker-ce|docker-ce-cli|containerd.io|docker-compose-plugin) printf '%s' 'ii '; return 0;;
               docker.io|curl) printf '%s' '$status'; return $exit;;
               *) return 1;;
             esac
@@ -66,7 +66,7 @@ final class SshProfileObserverSpec extends FunSuite {
     val result=observe("un ",docker=true)
     assertEquals(result.failureCode,None)
     assertEquals(result.content.hcursor.downField("packages").get[List[String]]("installed"),
-      Right(List("docker-ce","docker-compose-plugin")))
+      Right(List("containerd.io","docker-ce","docker-ce-cli","docker-compose-plugin")))
     assertEquals(result.content.hcursor.downField("docker").get[Boolean]("installed"),Right(true))
     assertEquals(result.content.hcursor.downField("docker").get[Boolean]("composeAvailable"),Right(true))
   }

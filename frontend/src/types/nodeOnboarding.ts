@@ -23,6 +23,12 @@ export type NodeOnboardingRecoveryAction = 'RECOVER' | 'RECREATE' | 'DELETE_RECR
 export interface NodeOnboardingRecoverySummary {
   state: NodeOnboardingRecoveryState; action: NodeOnboardingRecoveryAction; sourceRunId: string
   previousExternalNodeId: string | null; previousCorrelationId: string; installationOwnerId: string
+  localInstallation?: LocalInstallationObservation
+}
+export interface LocalInstallationObservation {
+  state: 'ABSENT' | 'OWNED_COMPLETE' | 'OWNED_PARTIAL' | 'OWNED_DAMAGED' | 'FOREIGN' | 'PORT_CONFLICT' | 'UNKNOWN'
+  diagnosis: string | null
+  remediation?: 'MANUAL_ONLY' | 'DIAGNOSIS_ONLY' | 'RECREATE' | 'CONTROLLED_RETIREMENT'
 }
 export interface NodeOnboardingPreview {
   run: NodeOnboardingRun; serverName: string; serverProfileName: string; revisionNumber: number

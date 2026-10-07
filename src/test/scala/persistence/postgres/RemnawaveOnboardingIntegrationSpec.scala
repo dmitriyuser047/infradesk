@@ -492,7 +492,7 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
     }
   }
   test("approved recreate has its own durable phases and identity; deletion plans require every extra phase") {
-    List("RECREATE","DELETE_RECREATE").flatMap(a => List(a -> 1,a -> 2)).foreach { case(action,lifecycleVersion) => inWorld { w => for {
+    List("RECREATE","DELETE_RECREATE").flatMap(a => List((a,1,None),(a,2,None)) ++ List(LocalInstallationState.Absent,LocalInstallationState.OwnedComplete,LocalInstallationState.OwnedPartial,LocalInstallationState.OwnedDamaged).map(s => (a,3,Some(LocalInstallationObservation.fromState(s))))).foreach { case(action,lifecycleVersion,localInstallation) => inWorld { w => for {
       pair <- integration(w,w.org,"recreate-"+action)
       (integrationId,secretId)=pair
       target <- w.node("recreate-"+action)
@@ -508,7 +508,7 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
         externalNodeId=Some(oldExternal),failureCode=Some("TEST_FAILURE")),now,complete=false))
       oldHistory <- w.run(repo.find(w.org,integrationId,original.id))
       recovery=OnboardingRecovery(original.id,Some(oldExternal),original.snapshot.correlationId,original.id,
-        if(action=="RECREATE") "CONFIRMED_NOT_FOUND" else "PRESENT_EXACT",action)
+        if(action=="RECREATE") "CONFIRMED_NOT_FOUND" else "PRESENT_EXACT",action,localInstallation=localInstallation)
       draft=original.copy(id=uid,createdAt=now.plusSeconds(1),snapshot=original.snapshot.copy(correlationId=uid,recovery=Some(recovery),lifecycleVersion=lifecycleVersion))
       _ <- w.run(repo.insertPlan(draft))
       phases <- w.run(repo.find(w.org,integrationId,draft.id))
@@ -548,7 +548,7 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
       provenance <- w.run(new PostgresRemnawaveFleetQuery().provenance(w.org,integrationId,target.resourceId,inventoryId))
     } yield {
       assertEquals(phases.get._2.map(_.phase),OnboardingPhase.forSnapshot(draft.snapshot))
-      assertEquals(phases.get._2.length,(if(action=="RECREATE") 14 else 16)+(if(lifecycleVersion==2) 1 else 0))
+      assertEquals(phases.get._2.length,(if(action=="RECREATE") 14 else 16)+(if(lifecycleVersion>=2) 1 else 0)-(if(localInstallation.exists(_.state==LocalInstallationState.Absent)) 2 else 0))
       assertEquals(errorCode(foreignStart),Some("REMNAWAVE_ONBOARDING_NOT_FOUND"))
       assert(premature.isLeft)
       assert(invalidPhase.isLeft)
@@ -560,6 +560,32 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
       assertEquals(heads.map(_.id),List(draft.id))
       assertEquals(provenance.map(_.onboardingId),Some(draft.id))
       assertNotEquals(completed.snapshot.correlationId,original.snapshot.correlationId)
+    } } }
+  }
+
+  test("v3 unsafe local observations cannot be forced by confirmation even without a copied blocker") {
+    List(LocalInstallationState.Foreign,LocalInstallationState.PortConflict,LocalInstallationState.Unknown).foreach { state => inWorld { w => for {
+      pair <- integration(w,w.org,"unsafe-local")
+      target <- w.node("unsafe-local")
+      at <- connectionUpdated(w,target.connectionId)
+      now <- IO.realTimeInstant
+      original <- plan(w,pair._1,pair._2,target.resourceId,target.connectionId,at,now)
+      _ <- w.run(repo.start(w.org,pair._1,original.id,uid,AuthorizationFixtures.ActorUserId,now))
+      token=uid
+      claimed <- w.run(repo.claim(uid,token,now,now.plusSeconds(300),1))
+      _ <- w.run(repo.beginPhase(claimed.head,token,now))
+      oldExternal=uid
+      _ <- w.run(repo.persist(claimed.head,token,claimed.head.copy(state=ProvisioningRunState.Failed,
+        externalNodeId=Some(oldExternal),failureCode=Some("TEST_FAILURE")),now,complete=false))
+      proof=OnboardingRecovery(original.id,Some(oldExternal),original.snapshot.correlationId,original.id,"CONFIRMED_NOT_FOUND","RECREATE",
+        localInstallation=Some(LocalInstallationObservation.fromState(state)))
+      draft=original.copy(id=uid,snapshot=original.snapshot.copy(correlationId=uid,recovery=Some(proof),lifecycleVersion=3))
+      _ <- w.run(repo.insertPlan(draft))
+      started <- w.run(repo.start(w.org,pair._1,draft.id,uid,AuthorizationFixtures.ActorUserId,now,confirmRecreate=true)).attempt
+      stored <- w.run(repo.find(w.org,pair._1,draft.id))
+    } yield {
+      assertEquals(errorCode(started),Some("REMNAWAVE_ONBOARDING_BLOCKED"))
+      assertEquals(stored.map(_._1.state),Some(ProvisioningRunState.Planned))
     } } }
   }
 

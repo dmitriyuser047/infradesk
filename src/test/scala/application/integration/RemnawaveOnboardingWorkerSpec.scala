@@ -792,6 +792,24 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     }
   }
 
+  test("v3 ABSENT recreation never retires and requires unchanged local absence before CREATE") {
+    LocalInstallationState.all.foreach { state =>
+      val h=new Harness(OnboardingPhase.CreateNode)
+      reviewedRecovery(h,"CONFIRMED_NOT_FOUND","RECREATE")
+      h.repo.record=h.repo.record.copy(snapshot=h.repo.record.snapshot.copy(lifecycleVersion=3,
+        recovery=h.repo.record.snapshot.recovery.map(_.copy(localInstallation=Some(LocalInstallationObservation.fromState(LocalInstallationState.Absent))))))
+      h.lookup=Some(NodeLookupOutcome.ConfirmedNotFound)
+      h.candidateNodes=Some(Nil)
+      h.installationState=Some(state)
+      val created=node(id=uid).copy(correlationTags=List("ID:"+h.repo.record.snapshot.correlationId.toString.replace("-","").toUpperCase(java.util.Locale.ROOT)))
+      h.create=NodeCreateOutcome.Created(created)
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.events.count(_=="retire"),0)
+      assertEquals(h.events.count(_=="retire-firewall"),0)
+      assertEquals(h.events.count(_=="create"),if(state==LocalInstallationState.Absent) 1 else 0)
+    }
+  }
+
   test("uncertain enable remains UNKNOWN even when the failure code does not contain UNKNOWN") {
     val h=new Harness(OnboardingPhase.StartNode,initialPanelNode=node(disabled=true))
     reviewedRecovery(h)

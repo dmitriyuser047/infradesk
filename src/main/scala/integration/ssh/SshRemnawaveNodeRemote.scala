@@ -6,7 +6,7 @@ import cats.effect.IO
 import cats.effect.Ref
 import cats.syntax.all._
 import domain.connection.Connection
-import domain.integration.{LocalInstallationState, NodeInstallationData, NodeImageObservation, NodeRelease, NodeReleasePlatform, RemnawaveNodeReleaseCatalog}
+import domain.integration.{LocalInstallationState, LocalInstallationObservation, LocalInstallationDiagnosis, NodeInstallationData, NodeImageObservation, NodeRelease, NodeReleasePlatform, RemnawaveNodeReleaseCatalog}
 import domain.provisioning.ServerProfileContent
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -330,6 +330,27 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
   override def localInstallationState(connection: Connection, spec: RemnawaveNodeRemoteSpec): IO[domain.integration.LocalInstallationState] =
     withSession(connection) { (_, c, sshUid) => validate(spec) *> recoveryState(c, spec, sshUid) }
 
+  override def localInstallationObservation(connection: Connection, spec: RemnawaveNodeRemoteSpec)(implicit F: cats.Functor[IO]): IO[LocalInstallationObservation] =
+    withSession(connection) { (_,c,sshUid) => validate(spec) *> recoveryObservation(c,spec,sshUid).flatMap { observed =>
+      if(!observed.state.repairable) IO.pure(observed)
+      else nodeRules(c,spec).flatMap { rules =>
+        validateOwnedFirewall(rules,spec,replaceSources=false).as(
+          if(observed.state==LocalInstallationState.Absent && rules.exists(_.owned))
+            LocalInstallationObservation.fromState(LocalInstallationState.OwnedPartial) else observed)
+      }.handleError {
+        case RemoteConfigurationFailure.CommandTimeout => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ObservationTimeout)
+        case p: ProfileRemoteFailure if p.truncated => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.OutputTruncated)
+        case p: ProfileRemoteFailure if p.code=="PROVISIONING_FIREWALL_OWNERSHIP_CONFLICT" =>
+          LocalInstallationObservation(LocalInstallationState.Foreign,Some(LocalInstallationDiagnosis.OwnerUnproven))
+        case _ => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.FirewallStateUnknown)
+      }
+    }}.timeoutTo(35.seconds,IO.pure(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ObservationTimeout)))
+      .handleError {
+        case p: ProfileRemoteFailure if p.truncated => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.OutputTruncated)
+        case p: ProfileRemoteFailure if p.code=="PROVISIONING_REMOTE_TIMEOUT" => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ObservationTimeout)
+        case _ => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.SshUnavailable)
+      }
+
   override def firewallPresent(connection: Connection, spec: RemnawaveNodeRemoteSpec): IO[Boolean] = withSession(connection) { (_, c, _) =>
     validate(spec) *> firewallRules(spec).flatMap(wanted => if (wanted.isEmpty) IO.pure(false) else firewallProof(c, spec))
   }
@@ -367,9 +388,23 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) 
     }
 
   private def recoveryState(c: ProfileCommands, spec: RemnawaveNodeRemoteSpec, sshUid: Int): IO[LocalInstallationState] =
+    recoveryObservation(c,spec,sshUid).map(_.state)
+
+  private def recoveryObservation(c: ProfileCommands, spec: RemnawaveNodeRemoteSpec, sshUid: Int): IO[LocalInstallationObservation] =
     c.capture("sh", List("-c", RecoveryProbe, "infradesk") ++ recoveryArgs(spec, sshUid), 20.seconds)
-      .map(r => if (r.exitCode == 0 && !r.stdoutTruncated && !r.stderrTruncated)
-        LocalInstallationState.fromCode(r.stdout.trim) else LocalInstallationState.Unknown)
+      .map { r =>
+        if(r.exitCode!=0) LocalInstallationObservation.unknown(LocalInstallationDiagnosis.StateUnknown)
+        else r.stdout.trim.split(":",-1).toList match {
+          case List("UNKNOWN",reason) => LocalInstallationObservation.unknown(
+            LocalInstallationDiagnosis.fromCode(reason).getOrElse(LocalInstallationDiagnosis.StateUnknown))
+          case List("FOREIGN") => LocalInstallationObservation(LocalInstallationState.Foreign,Some(LocalInstallationDiagnosis.OwnerUnproven))
+          case List(code) => LocalInstallationObservation.fromState(LocalInstallationState.fromCode(code))
+          case _ => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.StateUnknown)
+        }
+      }.handleErrorWith {
+        case RemoteConfigurationFailure.CommandTimeout => IO.pure(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ObservationTimeout))
+        case e => IO.raiseError(e)
+      }
 
   private def recoveryArgs(spec: RemnawaveNodeRemoteSpec, sshUid: Int): List[String] = List(directory(spec), markerLine(spec),
     managedPrefix(spec), containerName(spec), spec.imageReference, spec.nodePort.toString, ownershipDirectory(spec),
@@ -610,7 +645,7 @@ private[ssh] object SshRemnawaveNodeRemote {
   private val RecoveryProbe = """set -u
     |d=$1; marker=$2; managedPrefix=$3; name=$4; image=$5; port=$6; claim=$7; composeHash=$8; sshUid=${9:-0}
     |stageDir=${claim%/.owner-*}/.staging-${claim##*/.owner-}
-    |result() { printf '%s' "$1"; exit 0; }
+    |result() { printf '%s' "$1"; if [ "$1" = UNKNOWN ]; then printf ':%s' "${2:-REMNAWAVE_LOCAL_INSTALLATION_STATE_UNKNOWN}"; fi; exit 0; }
     |owner=${marker#"# infradesk-managed run="}; owner=${owner%% *}
     |resource=${marker#* resource=}; resource=${resource%% *}; node=${d##*/}
     |imageHash=$(printf '%s' "$image" | sha256sum | cut -d' ' -f1) || result UNKNOWN
@@ -655,10 +690,10 @@ private[ssh] object SshRemnawaveNodeRemote {
     |  stageOwned=1
     |fi
     |[ ! -e /opt/remnawave ] && [ ! -L /opt/remnawave ] && [ ! -e /opt/remnawave-node ] && [ ! -L /opt/remnawave-node ] || result FOREIGN
-    |command -v ss >/dev/null 2>&1 || result UNKNOWN
-    |listeners=$(ss -H -ltn "sport = :$port" 2>/dev/null) || result UNKNOWN
-    |command -v docker >/dev/null 2>&1 || { [ ! -e "$d" ] && [ ! -L "$d" ] && [ "$claimOwned" = 0 ] && [ -z "$listeners" ] && result ABSENT; result UNKNOWN; }
-    |allContainers=$(docker ps -a --format '{{.Names}}') || result UNKNOWN
+    |command -v ss >/dev/null 2>&1 || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_PORT_STATE_UNKNOWN
+    |listeners=$(ss -H -ltn "sport = :$port" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_PORT_STATE_UNKNOWN
+    |command -v docker >/dev/null 2>&1 || { [ ! -e "$d" ] && [ ! -L "$d" ] && [ "$claimOwned" = 0 ] && [ -z "$listeners" ] && result ABSENT; result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_CONTAINER_STATE_UNKNOWN; }
+    |allContainers=$(docker ps -a --format '{{.Names}}') || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_CONTAINER_STATE_UNKNOWN
     |ownContainer=0; printf '%s\n' "$allContainers" | grep -Fxq "$name" && ownContainer=1 || true
     |staging=0
     |for upload in /tmp/infradesk-"$owner"-*; do
@@ -698,12 +733,12 @@ private[ssh] object SshRemnawaveNodeRemote {
     |done
     |markerOwned=0; managedOwned=0
     |if [ -f "$d/compose.yml" ]; then
-    |  first=''; IFS= read -r first < "$d/compose.yml" || true
+    |  first=$(head -n1 "$d/compose.yml" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_COMPOSE_UNREADABLE
     |  [ "$first" = "$marker" ] && markerOwned=1 || true
     |  case "$first" in '# infradesk-managed'*) [ "$markerOwned" = 1 ] || result FOREIGN ;; esac
     |fi
     |if [ -f "$d/managed.json" ]; then
-    |  metadata=$(cat "$d/managed.json") || result UNKNOWN
+    |  metadata=$(cat "$d/managed.json") || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_COMPOSE_UNREADABLE
     |  case "$metadata" in "$managedPrefix"*) tail=${metadata#"$managedPrefix"}; hash=${tail%??}; suffix=${tail#"$hash"}; [ "${#hash}" = 64 ] && [ "$suffix" = '"}' ] && case "$hash" in *[!a-f0-9]*) ;; *) managedOwned=1 ;; esac ;; esac
     |  case "$metadata" in '{"managedBy":"infradesk",'*) case "$metadata" in "$managedPrefix"*) ;; *) result FOREIGN ;; esac ;; esac
     |fi
@@ -721,7 +756,7 @@ private[ssh] object SshRemnawaveNodeRemote {
     |[ "$composeOwned" = 1 ] || controlledImage=$image
     |containerRunning=0
     |if [ "$ownContainer" = 1 ]; then
-    |  info=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files" }}|{{.Config.Image}}|{{.State.Running}}' "$name" 2>/dev/null) || result UNKNOWN
+    |  info=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files" }}|{{.Config.Image}}|{{.State.Running}}' "$name" 2>/dev/null) || result UNKNOWN REMNAWAVE_LOCAL_INSTALLATION_CONTAINER_STATE_UNKNOWN
     |  case "$info" in "$d/compose.yml|$controlledImage|true") containerRunning=1 ;; "$d/compose.yml|$controlledImage|false") ;; *) result FOREIGN ;; esac
     |fi
     |if [ -n "$listeners" ]; then [ "$containerRunning" = 1 ] || result PORT_CONFLICT; fi

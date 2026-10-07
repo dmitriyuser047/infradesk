@@ -112,11 +112,32 @@ final class RemnawaveOnboardingSpec extends FunSuite {
       assertEquals(newPhases.indexOf(OnboardingPhase.RetireNodeFirewall)+1,newPhases.indexOf(OnboardingPhase.RetireLocalNode))
       assert(!OnboardingSnapshotCodec.encode(legacy).hcursor.downField("lifecycleVersion").succeeded)
       assertEquals(OnboardingSnapshotCodec.decode(OnboardingSnapshotCodec.encode(current)).lifecycleVersion,2)
-      List(io.circe.Json.Null,io.circe.Json.fromString("2"),io.circe.Json.fromInt(3)).foreach { invalid =>
+      List(io.circe.Json.Null,io.circe.Json.fromString("2"),io.circe.Json.fromInt(4)).foreach { invalid =>
         intercept[IllegalArgumentException](OnboardingSnapshotCodec.decode(
           OnboardingSnapshotCodec.encode(current).mapObject(_.add("lifecycleVersion",invalid))))
       }
     }
+  }
+
+  test("v3 recreation skips retirement only for proven absence and round trips safe diagnosis") {
+    LocalInstallationState.all.foreach { state =>
+      val observation=LocalInstallationObservation.fromState(state)
+      val proof=OnboardingRecovery(id,Some(id),id,id,"CONFIRMED_NOT_FOUND","RECREATE",localInstallation=Some(observation))
+      val current=snapshot.copy(recovery=Some(proof),lifecycleVersion=3)
+      val decoded=OnboardingSnapshotCodec.decode(OnboardingSnapshotCodec.encode(current))
+      assertEquals(decoded.recovery,Some(proof))
+      assertEquals(OnboardingPhase.forSnapshot(current).contains(OnboardingPhase.RetireLocalNode),state!=LocalInstallationState.Absent)
+      assertEquals(OnboardingPhase.forSnapshot(current).contains(OnboardingPhase.RetireNodeFirewall),state!=LocalInstallationState.Absent)
+      assertEquals(observation.blocker.nonEmpty,!state.repairable)
+    }
+    LocalInstallationDiagnosis.all.foreach { diagnosis =>
+      val obs=LocalInstallationObservation.unknown(diagnosis)
+      val proof=OnboardingRecovery(id,Some(id),id,id,"CONFIRMED_NOT_FOUND","RECREATE",localInstallation=Some(obs))
+      assertEquals(OnboardingSnapshotCodec.decode(OnboardingSnapshotCodec.encode(snapshot.copy(recovery=Some(proof),lifecycleVersion=3))).recovery.flatMap(_.localInstallation),Some(obs))
+    }
+    val invalid=OnboardingRecovery(id,Some(id),id,id,"CONFIRMED_NOT_FOUND","RECREATE",localInstallation=Some(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.StateUnknown)))
+    val json=OnboardingSnapshotCodec.encode(snapshot.copy(recovery=Some(invalid),lifecycleVersion=3))
+    intercept[IllegalArgumentException](OnboardingSnapshotCodec.decode(json.hcursor.downField("recovery").downField("localInstallation").downField("diagnosis").withFocus(_ => io.circe.Json.fromString("raw stderr secret")).top.get))
   }
 
 }

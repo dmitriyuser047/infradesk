@@ -5,7 +5,7 @@ import application.port._
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
-import domain.integration.{LocalInstallationState, NodeInstallationData}
+import domain.integration.{LocalInstallationState, LocalInstallationDiagnosis, NodeInstallationData}
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.UUID
@@ -113,6 +113,26 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     val unknown = new Session
     unknown.respond = (ex, args) => IO.pure(if (ex == "id") ok.copy(stdout = "0") else ok.copy(stdout = "unexpected"))
     assertEquals(remote(unknown).localInstallationState(connection, spec).unsafeRunSync(), LocalInstallationState.Unknown)
+  }
+
+  test("diagnosis is read-only, closed and distinguishes local probe from firewall uncertainty") {
+    LocalInstallationDiagnosis.all.foreach { diagnosis =>
+      val s=new Session; idResponse(s)
+      val original=s.respond
+      s.respond=(ex,args) => if(args.exists(_.contains("markerOwned=0"))) IO.pure(ok.copy(stdout="UNKNOWN:"+diagnosis.code)) else original(ex,args)
+      val result=remote(s).localInstallationObservation(connection,spec).unsafeRunSync()
+      assertEquals(result.state,LocalInstallationState.Unknown)
+      assertEquals(result.diagnosis,Some(diagnosis))
+      assertEquals(s.uploads.size,0)
+      assert(!s.calls.exists(_._1=="docker"))
+    }
+    val s=new Session; idResponse(s)
+    assertEquals(remote(s).localInstallationObservation(connection,spec).unsafeRunSync().state,LocalInstallationState.Absent)
+    val original=s.respond
+    s.respond=(ex,args) => if(ex=="ufw") IO.pure(ok.copy(exitCode=1,stderr="secret stderr")) else original(ex,args)
+    val unknown=remote(s).localInstallationObservation(connection,spec).unsafeRunSync()
+    assertEquals(unknown.diagnosis,Some(LocalInstallationDiagnosis.FirewallStateUnknown))
+    assertEquals(s.uploads.size,0)
   }
 
   test("staging paths are narrowly allowlisted and final node paths remain canonical") {

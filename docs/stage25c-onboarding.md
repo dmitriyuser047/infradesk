@@ -1,12 +1,12 @@
 # Stage 25C — One-click Remnawave Node Onboarding
 
-## Current lifecycle (Stage 25 re-fix, V57)
+## Current lifecycle (RECREATE diagnosis, V58)
 
 Stage 25 is reopened. Code/automated verification and operator live acceptance are separate.
 See [the re-fix route review and acceptance report](stage25-remnawave-refix.md).
 Stage25D fleet, Stage25E config rollout and Stage25F image lifecycle are implemented.
 
-New plans use lifecycleVersion 2 and catalog-reviewed digest-pinned images. Legacy V1/V2
+New plans use lifecycleVersion 3 and catalog-reviewed digest-pinned images. Legacy V1/V2
 snapshots remain readable and immutable. Recovery records explicitly pin `previousImageReference`
 for the old installation, separately from `snapshot.imageReference`, the current reviewed target.
 RECOVER retains the external UUID, correlation and original installation owner. The shared
@@ -39,7 +39,37 @@ Active work still blocks both deletion actions.
 
 The first operator acceptance case must recover the preserved node
 `b745e2e1-bee0-468f-a2fa-318693ac3502` from its existing owner/staging/.env without a CREATE POST.
-No live fixture cleanup or deployment is part of this implementation.
+This diagnosis update is deployed as a commit build without Git tags or a GitHub release.
+The Panel now reports this old UUID absent, so operator acceptance must use a fresh RECREATE preview.
+SSH access alone is not application authorization; live RECREATE remains separate from deployment health.
+
+## Local diagnosis and read-only recheck
+
+Panel absence and SSH installation evidence are independent. A local SSH failure, timeout,
+unreadable Compose/metadata, unavailable Docker/container/port inspection, unproven ownership,
+unknown firewall rules or truncated output returns a closed safe diagnosis without raw output.
+CONFIRMED_NOT_FOUND is retained when local observation fails. FOREIGN/PORT_CONFLICT return
+MANUAL_ONLY; UNKNOWN returns DIAGNOSIS_ONLY. Unsafe previews have no executable changes and
+are not persisted as executable onboarding drafts. Explicit confirmation never bypasses blockers.
+
+The existing permission-checked reconcile endpoint powers ?Check local installation?. It reads
+Panel and SSH, prepares a fresh immutable preview, and never invokes CREATE, retirement, install,
+repair, Docker start or UFW mutation. The old source run/history remains unchanged. The UI resets
+approval on every fresh preview and separates Panel, local evidence and server profile problems.
+At VALIDATE the worker checks that local classification still matches the preview. ABSENT plans
+repeat the absence proof immediately before CREATE; changed or uncertain proof requires recheck.
+Owned retirement continues to use the previous owner, image, UUID and approved Panel CIDRs.
+
+V58 extends the DB lifecycle constraint and derives journal order/success count from the immutable
+snapshot. V1/V2 phase sequences are unchanged. Fresh install, upgrades from V29/V41/V43/V52/V56,
+terminal history, missing-retirement rejection, tenant scope and confirmation remain tested in PostgreSQL.
+
+The regression shell executes the production package collector with docker-ce, docker-ce-cli,
+containerd.io and docker-compose-plugin installed, docker.io `un `, and docker-compose unmatched.
+Docker and Compose remain available; inconsistent dpkg states and fatal query errors still block.
+
+This delivery uses `[skip ci]` by the user's explicit instruction. Local verification and production
+image builds are required; this report does not claim CI success or completed live RECREATE acceptance.
 
 ## Historical initial Stage25C implementation (superseded where indicated above)
 

@@ -77,6 +77,8 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
         }
         _ <- if (!chainValid) fail("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED") else ().pure[ConnectionIO]
         _ <- if (locked.snapshot.blockers.nonEmpty) fail("REMNAWAVE_ONBOARDING_BLOCKED") else ().pure[ConnectionIO]
+        _ <- if (locked.snapshot.lifecycleVersion>=3 && locked.snapshot.recovery.exists(r =>
+          r.localInstallation.forall(!_.state.repairable))) fail("REMNAWAVE_ONBOARDING_BLOCKED") else ().pure[ConnectionIO]
         started <- (fr"update remnawave_node_onboarding set state='QUEUED',request_id=$request,updated_at=$now where id=$plan returning" ++ columns)
           .query[Row].unique.map(_.domain)
       } yield OnboardingStartResult(started,true)
