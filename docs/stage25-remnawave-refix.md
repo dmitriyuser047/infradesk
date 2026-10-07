@@ -111,7 +111,8 @@ cover symlinks, hardlinks, UID/GID/mode, special parent modes, conflicting stage
 foreign containers/listeners and controlled image-line edits. They mock Docker. The mandatory
 real Compose test separately proves parser/base-directory semantics.
 
-Local validation: `sbt testFull` reports 1292 total, 1273 passed, 19 existing POSIX skips,
+Local validation: `sbt testFull` reports 1292 total, 1273 passed, 18 POSIX checks and the one
+opt-in live deployment contract test skipped,
 zero failures/errors with real PostgreSQL 17.11 and installed Docker Compose v5.0.2. The four real
 Compose contexts pass their positive checks and fail their negative controls. `Universal / stage`
 passes. Frontend reports 762 passed across 85 files; production build passes. Existing ScalaDoc
@@ -119,8 +120,13 @@ link/deprecation and frontend chunk-size warnings remain. A contention-induced 3
 in the 500-member fixture during an earlier full run was followed by a passing full run without
 changing timeouts, fixture size, production behavior or validation requirements.
 
-Exact-SHA push CI job results are recorded in the delivery message. Local Windows skips of existing
-POSIX tests must be distinguished from Linux CI execution; they are not live acceptance evidence.
+Implementation commit `aa8832f99660e331ef09516f6745f94f04dab92f` passed full
+[push CI 37601287530](https://github.com/dmitriyuser047/infradesk/actions/runs/37601287530):
+backend, frontend, images, Ubuntu 22.04 and Ubuntu 24.04 all SUCCESS. Linux backend reports
+1292 total, 1291 passed, one opt-in live deployment contract test skipped, no failures/errors.
+PostgreSQL and real Compose tests are mandatory in that run. The delivery message records the
+exact final HEAD push run, including documentation corrections. Local Windows POSIX skips are
+distinct from Linux execution; the opt-in live test remains part of operator acceptance.
 
 Operator acceptance begins with the preserved UNKNOWN run: deploy the fixed exact SHA, check
 `application.started gitSha` and Flyway V57, then Check again. It must show the same external UUID,
