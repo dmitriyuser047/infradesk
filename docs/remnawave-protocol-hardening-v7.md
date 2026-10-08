@@ -75,6 +75,8 @@ fixture keeps the IPv4 chain absent in ip6tables and proves IPv6 foreign-rule pr
 
 HTTP-01 cleanup proves an absent ephemeral container through a successful exact-name Docker container listing after inspect fails. Docker 29's lowercase missing-object message does not block export of an already issued certificate. A daemon/listing failure or a remaining container still fails closed. The real-shell fixture covers the Docker 29 response, retained rules during daemon failure and reuse of the same certificate after cleanup recovers.
 
+Collected systemd timers are absent only with successful `LoadState=not-found` and `ActiveState=inactive` evidence. Their default unit-name Description is expected. Loaded timers still require the exact ownership Description; command failures, malformed metadata and foreign ownership block recovery. Real-shell reuse covers the collected-timer response and retains UNKNOWN for systemd failure or a foreign timer.
+
 ## TLS identities and filesystem asset lifetime
 
 Expired PLANNED cleanup locks the selected plans with FOR UPDATE SKIP LOCKED. In the

@@ -22,7 +22,15 @@ elif args == ['show', '--property=SystemState', '--value']:
     print('running')
 elif args[0] == 'show':
     path = root / args[1].removesuffix('.timer')
-    if path.exists():
+    if '--property=LoadState' in args:
+        if (root/'unavailable').exists(): sys.exit(1)
+        exists = path.exists()
+        description = json.loads(path.read_text())['description'] if exists else args[1]
+        if (root/'foreign').exists(): exists = True; description = 'foreign timer'
+        print('Description='+description)
+        print('LoadState='+('loaded' if exists else 'not-found'))
+        print('ActiveState='+('active' if exists else 'inactive'))
+    elif path.exists():
         print(json.loads(path.read_text())['description'])
     else:
         sys.exit(1)

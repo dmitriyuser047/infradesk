@@ -48,10 +48,15 @@ cleanup=""" + io.circe.Json.fromString(Cleanup).noSpaces + """
 def call(args,timeout=15): return subprocess.run(args,capture_output=True,timeout=timeout)
 def clean():
  if call(['/usr/bin/python3','-c',cleanup,resource,identity,image]).returncode: raise RuntimeError()
- r=call(['/usr/bin/systemctl','show',unit+'.timer','--property=Description','--value'])
- desc=r.stdout.decode().strip() if r.returncode==0 else ''
- if desc and desc!=marker: raise RuntimeError()
- if desc and call(['/usr/bin/systemctl','stop',unit+'.timer']).returncode: raise RuntimeError()
+ r=call(['/usr/bin/systemctl','show',unit+'.timer','--property=LoadState','--property=ActiveState','--property=Description'])
+ if r.returncode: raise RuntimeError()
+ lines=r.stdout.decode().splitlines(); fields=dict(line.split('=',1) for line in lines)
+ if len(lines)!=3 or set(fields)!=set(['LoadState','ActiveState','Description']): raise RuntimeError()
+ # Collected transient units still have a default Description in systemctl show.
+ # Only explicit not-found/inactive evidence permits treating the timer as absent.
+ if fields['LoadState']=='not-found' and fields['ActiveState']=='inactive': return
+ if fields['LoadState']!='loaded' or fields['Description']!=marker: raise RuntimeError()
+ if call(['/usr/bin/systemctl','stop',unit+'.timer']).returncode: raise RuntimeError()
 if mode=='cleanup':
  try: clean(); print('CLEANED'); sys.exit(0)
  except Exception: sys.exit(43)

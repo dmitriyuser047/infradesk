@@ -56,6 +56,18 @@ final class NodeHttp01ProbeShellSpec extends FunSuite {
       assert(!ipv6AfterIssue.contains("infradesk:acme:")); assert(ipv6AfterIssue.contains("foreign-management"))
       val reused=issue(resource,request,false).!!
       assertEquals(io.circe.parser.parse(reused).toOption.get,material)
+      val timer="infradesk-acme-"+request.certificateId+"-cleanup.timer"
+      val absentTimer=exec("/usr/bin/systemctl","show",timer,"--property=LoadState","--property=ActiveState","--property=Description")
+      assert(absentTimer.contains("LoadState=not-found")); assert(absentTimer.contains("Description="+timer))
+      for (fault<-List("foreign","unavailable")) {
+        exec("touch","/fixture/timers/"+fault)
+        val failed=new StringBuilder
+        assertEquals(issue(resource,request,false).!(ProcessLogger(line=>failed.append(line),_=>())),45)
+        assertEquals(failed.toString,"UNKNOWN")
+        assertEquals(exec("cat","/fixture/timers/"+fault),"")
+        exec("rm","/fixture/timers/"+fault)
+      }
+      assertEquals(io.circe.parser.parse(issue(resource,request,false).!!).toOption.get,material)
       val marker="infradesk:acme:"+resource+":"+request.certificateId
       for ((exe,chain)<-List(("/usr/sbin/iptables","ufw-before-input"),("/usr/sbin/ip6tables","ufw6-before-input")))
         exec(exe,"-A",chain,"-p","tcp","--dport","80","-m","comment","--comment",marker,"-j","ACCEPT")
