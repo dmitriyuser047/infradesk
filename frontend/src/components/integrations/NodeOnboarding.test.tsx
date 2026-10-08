@@ -475,6 +475,7 @@ describe('NodeOnboarding', () => {
   it.each([
     ['RECREATE', 'CONFIRMED_NOT_FOUND'],
     ['DELETE_RECREATE', 'PRESENT_UNHEALTHY'],
+    ['RECREATE_WITH_NEW_CONFIG', 'CONFIRMED_NOT_FOUND'],
   ] as const)('retries an uncertain %s start after reload with the same identity and confirmation', async (action, state) => {
     const storageKey = 'node-onboarding:org:integration'
     const rawSafeMessage = 'RAW_BACKEND_SAFE_MESSAGE_SECRET'
@@ -482,6 +483,9 @@ describe('NodeOnboarding', () => {
     let submits = 0
     let reconciles = 0
     const configure = (url: string, method: string, body: unknown) => {
+      if (action === 'RECREATE_WITH_NEW_CONFIG' && url.endsWith('/options')) return json({ ...options,
+        nodeApi: { ...options.nodeApi!, capabilities: ['PROTOCOL_PROFILE_CREATE'] } })
+      if (action === 'RECREATE_WITH_NEW_CONFIG' && url.endsWith('/preview') && method === 'POST') return json(recoveryPreview(plannedRecovery))
       if (url.endsWith('/runs/run-1') && method === 'GET') return json({ run: { ...run('FAILED'), safeMessage: rawSafeMessage }, phases: [] })
       if (url.endsWith('/runs/plan-1') && method === 'GET') return json({
         run: { ...preview.run, recovery: plannedRecovery, safeMessage: rawSafeMessage }, phases: [],
@@ -499,14 +503,26 @@ describe('NodeOnboarding', () => {
       }
       return undefined
     }
-    const { calls: firstCalls } = mount('/?onboardingRun=run-1', 'en', configure)
-    fireEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const { calls: firstCalls } = mount(action === 'RECREATE_WITH_NEW_CONFIG' ? '/' : '/?onboardingRun=run-1', 'en', configure)
+    if (action === 'RECREATE_WITH_NEW_CONFIG') {
+      await waitFor(() => expect((screen.getByRole('button', { name: 'Add node' }) as HTMLButtonElement).disabled).toBe(false))
+      fireEvent.click(screen.getByRole('button', { name: 'Add node' }))
+      fireEvent.change(await screen.findByLabelText('Server'), { target: { value: 'resource-1' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+      fireEvent.click(screen.getByLabelText(/Hysteria2/))
+      fireEvent.change(screen.getByLabelText('TLS domain (SNI)'), { target: { value: 'hy2.example.org' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+      fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'operator@example.org' } })
+      fireEvent.click(screen.getByLabelText(/I agree to the Let’s Encrypt terms/))
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+    } else fireEvent.click(await screen.findByRole('button', { name: 'Check again' }))
     if (action === 'DELETE_RECREATE') fireEvent.click(await screen.findByRole('button', { name: 'Delete and recreate' }))
-    const approval = action === 'RECREATE'
+    const approval = action === 'RECREATE_WITH_NEW_CONFIG' ? 'I confirm recreation of the managed node with the new settings.' : action === 'RECREATE'
       ? 'I reviewed the previous node UUID and approve creating a new Remnawave node with a new correlation ID.'
       : 'I approve deleting the existing Remnawave node and creating a replacement with a new correlation ID.'
     fireEvent.click(await screen.findByLabelText(approval))
-    fireEvent.click(screen.getByRole('button', { name: action === 'RECREATE' ? 'Recreate node' : 'Delete and recreate' }))
+    fireEvent.click(screen.getByRole('button', { name: action === 'RECREATE_WITH_NEW_CONFIG' ? 'Recreate with new settings' : action === 'RECREATE' ? 'Recreate node' : 'Delete and recreate' }))
     await screen.findByText('The request could not be confirmed. Retry with the same request ID to safely recover the result.')
     const saved = JSON.parse(sessionStorage.getItem(storageKey)!)
     expect(Object.keys(saved).sort()).toEqual(['planId', 'requestId'])
@@ -528,6 +544,8 @@ describe('NodeOnboarding', () => {
     await waitFor(() => expect(retryCalls.some(call => call.method === 'POST' && call.url.endsWith('/runs'))).toBe(true))
     const retryStart = retryCalls.find(call => call.method === 'POST' && call.url.endsWith('/runs'))!
     expect(retryStart.body).toEqual({ planId: 'plan-1', requestId: saved.requestId, confirmRecreate: true })
+    expect(retryCalls.filter(call => call.method === 'POST' && call.url.endsWith('/runs'))).toHaveLength(1)
+    expect(retryCalls.some(call => call.method === 'POST' && (call.url.endsWith('/preview') || call.url.endsWith('/reconcile')))).toBe(false)
     expect(sessionStorage.getItem(storageKey)).toBeNull()
     expect(document.body.textContent).not.toContain(rawSafeMessage)
   })

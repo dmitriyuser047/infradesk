@@ -53,6 +53,8 @@ const texts = {
 type Step = 0 | 1 | 2 | 3 | 4
 type OnboardingRunPhase = typeof phases[number] | 'DELETE_NODE' | 'CONFIRM_NODE_DELETED' | 'RETIRE_NODE_FIREWALL' | 'RETIRE_LOCAL_NODE' | 'CONFIRM_PREVIOUS_NODE_ABSENT' | 'UNBIND_PREVIOUS_NODE' | 'RETIRE_PREVIOUS_CLIENT_FIREWALL' | 'VERIFY_PREVIOUS_RETIRED' | 'RESOLVE_PANEL_SOURCE' | 'ADD_PANEL_SOURCES' | 'FINALIZE_PANEL_SOURCES'
 const replacementLabel = (locale: string) => locale === 'ru' ? 'Пересоздать с новыми параметрами' : 'Recreate with new settings'
+const requiresRecreateApproval = (action?: NodeOnboardingRecoveryAction) =>
+  action === 'RECREATE' || action === 'DELETE_RECREATE' || action === 'RECREATE_WITH_NEW_CONFIG'
 const serverProblem = (code: string, locale: string) => ({
   REMNAWAVE_ONBOARDING_PROFILE_REQUIRED: locale === 'ru' ? 'Назначьте серверный профиль.' : 'Assign a server profile.',
   REMNAWAVE_ONBOARDING_BINDING_CONFLICT: locale === 'ru' ? 'Сервер уже связан с другим узлом Remnawave.' : 'This server is already bound to another Remnawave node.',
@@ -147,11 +149,11 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
     } catch { setWorkflowError(true) }
   }
   const recovery = preview?.recovery
-  const needsRecreateApproval = recovery?.action === 'RECREATE' || recovery?.action === 'DELETE_RECREATE' || recovery?.action === 'RECREATE_WITH_NEW_CONFIG'
+  const needsRecreateApproval = requiresRecreateApproval(recovery?.action)
   const recoveryBlocked = recovery?.state === 'UNKNOWN' || recovery?.state === 'PRESENT_CONFLICT'
   const apply = async (identity:PendingSubmission, retryConfirmed = false) => {
     const requestRecoveryAction = preview?.recovery?.action ?? (identity.planId === unresolved?.planId ? runQuery.data?.run.recovery?.action : undefined)
-    const requestNeedsRecreateApproval = requestRecoveryAction === 'RECREATE' || requestRecoveryAction === 'DELETE_RECREATE' || requestRecoveryAction === 'RECREATE_WITH_NEW_CONFIG'
+    const requestNeedsRecreateApproval = requiresRecreateApproval(requestRecoveryAction)
     const confirmed = recoveryConfirmed || retryConfirmed
     if (submitting.current || start.isPending || !canConfigure || (preview?.blockingProblems.length ?? 0)>0 || recoveryBlocked || (requestNeedsRecreateApproval && !confirmed)) {setWorkflowError(true);return}
     submitting.current=true;setWorkflowError(false)
@@ -185,7 +187,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
       {item.nodeName} · {item.address} · {item.state}</button>)}
     {hasRun && runQuery.isPending ? <p role="status">{copy.loading}</p> : null}
     {hasRun && runQuery.isError ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Не удалось загрузить запуск' : 'Could not load onboarding run'} /> : null}
-    {unresolved && !open ? <InlineAlert tone="warning" title={i18n.t.common.unresolvedSubmission} action={<PendingButton pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || !runQuery.isSuccess} onClick={()=>void apply(unresolved, runQuery.data?.run.recovery?.action === 'RECREATE' || runQuery.data?.run.recovery?.action === 'DELETE_RECREATE')}>{i18n.t.common.recoverSubmission}</PendingButton>} /> : null}
+    {unresolved && !open ? <InlineAlert tone="warning" title={i18n.t.common.unresolvedSubmission} action={<PendingButton pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || !runQuery.isSuccess} onClick={()=>void apply(unresolved, requiresRecreateApproval(runQuery.data?.run.recovery?.action))}>{i18n.t.common.recoverSubmission}</PendingButton>} /> : null}
     {workflowError && !previewRequest.isError ? <InlineAlert tone="danger" title={i18n.t.common.operationBlocked} /> : null}
     {!open && start.isError ? <InlineAlert tone="danger" title={copy.requestError} /> : null}
     {open || hasRun ? <IntegrationDialog title={copy.title} size="large" onClose={closeWizard} busy={start.isPending || previewRequest.isPending || reconcile.isPending}
