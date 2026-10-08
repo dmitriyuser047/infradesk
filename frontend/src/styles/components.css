@@ -17,7 +17,7 @@ code, .technical-value { font-family: var(--font-mono); font-size: var(--font-si
 /* Form controls */
 input:not([type="checkbox"]):not([type="radio"]), select, textarea {
   width: 100%; min-height: var(--control-height); padding: 0 var(--space-3);
-  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
   background: var(--surface); color: var(--text-primary);
   transition: border-color .12s, box-shadow .12s;
 }
@@ -68,7 +68,7 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 /* Sections (cards) */
 .workspace-section {
   min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg);
-  background: var(--surface); box-shadow: var(--shadow-sm);
+  background: var(--surface); box-shadow: none;
 }
 .workspace-section-heading {
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-3);
@@ -86,13 +86,13 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
 .resource-count, .section-meta { color: var(--text-tertiary); font-size: var(--font-size-small); white-space: nowrap; }
 
 /* Tabs */
-.workspace-tabs { display: flex; gap: var(--space-1); overflow-x: auto; border-bottom: 1px solid var(--border); }
+.workspace-tabs { display: flex; gap: var(--space-1); overflow-x: auto; padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
 .workspace-tab {
-  flex: 0 0 auto; white-space: nowrap; min-height: 40px; padding: 0 var(--space-3); border: 0; border-bottom: 2px solid transparent;
+  flex: 0 0 auto; white-space: nowrap; min-height: 40px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-md);
   background: transparent; color: var(--text-secondary); font-weight: 500;
 }
-.workspace-tab:hover { color: var(--text-primary); }
-.workspace-tab.active { border-bottom-color: var(--primary); color: var(--primary); }
+.workspace-tab:hover { background: var(--surface-hover); color: var(--text-primary); }
+.workspace-tab.active { background: var(--primary-soft); color: var(--primary); }
 
 /* Status: always text (and usually an icon) plus color, never color alone */
 .status-indicator {
@@ -386,3 +386,24 @@ input::placeholder, textarea::placeholder { color: var(--text-disabled); }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 [role="tabpanel"] { display: grid; gap: var(--space-5); min-width: 0; }
+
+/* At-a-glance detail summaries keep unknown data visible instead of inventing healthy counts. */
+.workspace-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
+.workspace-metric {
+  display: grid; align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-5);
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); text-align: left;
+}
+button.workspace-metric:hover { border-color: var(--primary); background: var(--surface-selected); }
+.metric-heading { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); color: var(--text-secondary); font-size: var(--font-size-small); }
+.metric-heading svg { flex-shrink: 0; color: var(--primary); }
+.metric-value { font-size: var(--font-size-title); font-weight: 600; letter-spacing: -.03em; line-height: 1.2; overflow-wrap: anywhere; }
+.metric-detail { font-size: var(--font-size-caption); color: var(--text-tertiary); }
+.metric-warning .metric-value, .metric-warning .metric-heading svg { color: var(--warning); }
+.metric-danger .metric-value, .metric-danger .metric-heading svg { color: var(--danger); }
+.metric-success .metric-value { color: var(--success); }
+@media (max-width: 1100px) { .workspace-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) {
+  .workspace-metric { padding: var(--space-3); }
+  .metric-value { font-size: var(--font-size-section); }
+  .metric-detail { overflow-wrap: anywhere; }
+}

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ComponentType } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Activity, CircleAlert, Cable, Layers } from 'lucide-react'
 
 import { ApiError } from '../api/httpClient'
 import { useResourceContext } from '../api/infrastructure'
@@ -14,7 +14,7 @@ import { supportsConfigurationAssignment } from '../components/configuration/con
 import { isUnavailableError, RefreshWarning } from '../components/layout/RefreshWarning'
 import { AppShell } from '../components/layout/AppShell'
 import {
-  InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs,
+  InlineAlert, PageLoading, PageUnavailable, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs, WorkspaceMetrics,
 } from '../components/layout/WorkspacePrimitives'
 import { useAvailableResourceOperations, useResourceOperationExecutions } from '../api/resourceOperations'
 import { operationsApplicability } from '../components/resources/operationPresentation'
@@ -141,6 +141,15 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
           <SourceConnectionLinks organizationId={organizationId} sources={context.sourceConnections} linkQuery={linkQuery} />
         </details> : null}</>} />
     {resourceQuery.isError ? <RefreshWarning updatedAt={resourceQuery.dataUpdatedAt} retry={() => resourceQuery.refetch()} /> : null}
+    <WorkspaceMetrics items={[
+      { label: i18n.t.design.observedState, value: status?.label ?? (resource.active ? i18n.t.common.active : t.inactive),
+        icon: Activity, tone: status?.tone, detail: typeLabel },
+      { label: i18n.t.infrastructure.openIncidents, value: context?.openIncidentCount ?? '—', icon: CircleAlert,
+        tone: (context?.openIncidentCount ?? 0) > 0 ? 'warning' : 'neutral',
+        ...(monitored ? { onSelect: () => selectTab('incidents') } : {}) },
+      { label: i18n.t.design.sourceConnections, value: context?.sourceConnections.length ?? '—', icon: Cable, detail: i18n.t.design.discoverySources },
+      { label: i18n.t.design.childResources, value: context?.activeChildCount ?? '—', icon: Layers, detail: i18n.t.design.observedObjects },
+    ]} />
     <WorkspaceTabs tabs={tabs} active={active} onChange={selectTab} />
     {active === 'overview' && monitored && context && context.openIncidentCount > 0 ? <InlineAlert tone="warning" title={i18n.t.infrastructure.openIncidents}
       action={<button className="secondary-button" type="button" onClick={() => selectTab('incidents')}>{i18n.t.infrastructure.viewAllIncidents}</button>}>

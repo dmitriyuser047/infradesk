@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { I18nProvider, LocaleStorageKey, type Locale } from '../../i18n'
 import { AppShell, ShellLayout } from './AppShell'
 import { InfraDeskMark } from './InfraDeskMark'
+import { initializeTheme, setTheme } from '../../app/theme'
 import { ApiError } from '../../api/httpClient'
 
 function Page({ title }: { title: string }) {
@@ -374,13 +375,27 @@ describe('application shell', () => {
     const items = Array.from(menu.querySelectorAll<HTMLElement>('[role^="menuitem"]'))
     const firstRadio = within(menu).getAllByRole('menuitemradio')[0]
 
-    // The first language option is focused when the menu opens.
+    // The first appearance option is focused when the menu opens.
     expect(document.activeElement).toBe(firstRadio)
     const start = items.indexOf(firstRadio)
     fireEvent.keyDown(menu, { key: 'ArrowDown' })
     expect(document.activeElement).toBe(items[(start + 1) % items.length])
     fireEvent.keyDown(menu, { key: 'End' })
     expect(document.activeElement).toBe(within(menu).getByRole('menuitem', { name: 'Sign out' }))
+  })
+
+  it('changes the interface theme from the account menu and restores the saved choice', () => {
+    setup('/organizations/org/overview', 'MEMBER', 'en')
+    fireEvent.click(screen.getByRole('button', { name: 'Account menu for Dmitriy' }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Dark theme' }))
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(window.localStorage.getItem('infradesk.theme')).toBe('dark')
+    expect(screen.getByRole('menuitemradio', { name: 'Dark theme' }).getAttribute('aria-checked')).toBe('true')
+    document.documentElement.dataset.theme = 'light'
+    act(() => initializeTheme())
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    act(() => setTheme('light'))
+    expect(screen.getByRole('menuitemradio', { name: 'Light theme' }).getAttribute('aria-checked')).toBe('true')
   })
 
   it('shows management shortcuts in the switcher only to an owner', () => {

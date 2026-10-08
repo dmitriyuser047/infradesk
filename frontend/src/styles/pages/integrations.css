@@ -112,3 +112,12 @@
 .onboarding-progress-groups li[data-state="RUNNING"] { border-color: var(--accent); }
 .onboarding-progress-groups li[data-state="FAILED"],
 .onboarding-progress-groups li[data-state="UNKNOWN"] { border-color: var(--danger); }
+
+.remnawave-onboarding-steps { display: flex; flex-wrap: wrap; gap: var(--space-3); list-style: none; margin: 0; padding: 0; counter-reset: onboarding-step; }
+.remnawave-onboarding-steps li { counter-increment: onboarding-step; display: flex; align-items: center; gap: var(--space-2); }
+.remnawave-onboarding-steps li::before { content: counter(onboarding-step); display: grid; place-items: center; flex: 0 0 24px; height: 24px; border-radius: 50%; background: var(--surface-sunken); color: var(--text-secondary); }
+.remnawave-onboarding-steps li[aria-current="step"]::before { background: var(--primary); color: var(--text-on-primary); }
+.onboarding-progress-groups li { border-radius: var(--radius-lg); background: var(--surface-muted); }
+.onboarding-progress-groups li[data-state="SUCCEEDED"] { border-color: var(--success-border); background: var(--success-soft); }
+.onboarding-progress-groups li[data-state="UNKNOWN"] { border-color: var(--warning-border); background: var(--warning-soft); }
+.onboarding-progress-groups li[data-state="FAILED"] { border-color: var(--danger-border); background: var(--danger-soft); }

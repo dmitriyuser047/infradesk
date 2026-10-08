@@ -1,7 +1,8 @@
-import { Check, LogOut, Settings } from 'lucide-react'
+import { Check, LogOut, Settings, Moon, Sun } from 'lucide-react'
 import type { KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { setTheme, useTheme } from '../../app/theme'
 import { useLogout, useMe } from '../../api/auth'
 import { Locales, useI18n } from '../../i18n'
 import { usePopover } from './usePopover'
@@ -11,6 +12,7 @@ import { useOptionalTerminalWorkspace } from '../workspace/TerminalWorkspaceProv
 export function AccountMenu() {
   const i18n = useI18n()
   const t = i18n.t.shell
+  const theme = useTheme()
   const me = useMe()
   const logout = useLogout()
   const workspace = useOptionalTerminalWorkspace()
@@ -49,9 +51,17 @@ export function AccountMenu() {
         <span className="menu-check" aria-hidden><Settings size={16} /></span>{t.accountSettings}
       </button>
       <div className="menu-separator" role="separator" />
+      <div className="menu-group-label" role="presentation">{t.appearance}</div>
+      <button type="button" role="menuitemradio" autoFocus aria-checked={theme === 'light'} className="menu-item" onClick={() => setTheme('light')}>
+        <span className="menu-check" aria-hidden><Sun size={16} /></span>{t.lightTheme}
+      </button>
+      <button type="button" role="menuitemradio" aria-checked={theme === 'dark'} className="menu-item" onClick={() => setTheme('dark')}>
+        <span className="menu-check" aria-hidden><Moon size={16} /></span>{t.darkTheme}
+      </button>
+      <div className="menu-separator" role="separator" />
       <div className="menu-group-label" role="presentation">{t.language}</div>
-      {Locales.map((locale, index) => <button key={locale} type="button" role="menuitemradio"
-        aria-checked={i18n.locale === locale} className="menu-item" autoFocus={index === 0}
+      {Locales.map(locale => <button key={locale} type="button" role="menuitemradio"
+        aria-checked={i18n.locale === locale} className="menu-item"
         lang={locale} onClick={() => i18n.setLocale(locale)}>
         <span className="menu-check" aria-hidden>{i18n.locale === locale ? <Check size={16} /> : null}</span>
         {t.languages[locale]}

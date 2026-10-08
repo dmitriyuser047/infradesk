@@ -126,6 +126,18 @@ export function WorkspaceTabs<T extends string>({ tabs, active, onChange }: {
 
 export type StatusTone = 'success' | 'danger' | 'info' | 'warning' | 'neutral'
 
+/** A compact summary of the existing read projection; optional actions open the relevant section. */
+export function WorkspaceMetrics({ items }: { items: readonly {
+  label: string; value: ReactNode; detail?: ReactNode; icon: LucideIcon; tone?: StatusTone; onSelect?: () => void
+}[] }) {
+  return <div className="workspace-metrics">{items.map(({ label, value, detail, icon: Icon, tone = 'neutral', onSelect }) => {
+    const content = <><span className="metric-heading"><span>{label}</span><Icon aria-hidden size={18} /></span>
+      <strong className="metric-value">{value}</strong>{detail ? <span className="metric-detail">{detail}</span> : null}</>
+    return onSelect ? <button key={label} type="button" className={`workspace-metric metric-${tone}`} onClick={onSelect}>{content}</button>
+      : <div key={label} className={`workspace-metric metric-${tone}`}>{content}</div>
+  })}</div>
+}
+
 /** Both labels occupy the same grid cell, reserving their width before a request starts. */
 export function PendingButton({ pending, pendingLabel, children, disabled, className = 'secondary-button', ...button }: {
   pending: boolean; pendingLabel: string; children: ReactNode

@@ -287,7 +287,9 @@ export const en = {
     sessionActionFailed: 'Could not complete the action.',
   },
 
+  design: { observedObjects: 'Present in inventory', managementFindings: 'Automatic management findings', observedState: 'Observed state', sourceConnections: 'Connections', discoverySources: 'Infrastructure discovery sources', childResources: 'Nested resources' },
   shell: {
+    appearance: 'Appearance', lightTheme: 'Light theme', darkTheme: 'Dark theme',
     brandHome: 'InfraDesk home',
     primaryNavigation: 'Primary navigation',
     account: 'Account',

@@ -220,7 +220,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
       {options.isPending ? <p role="status">{copy.loading}</p> : null}
       {options.isError ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Не удалось загрузить параметры' : 'Could not load onboarding options'} /> : null}
       {step < 4 && options.data ? <>
-        <ol className="onboarding-steps" aria-label={copy.title}>{copy.steps.map((label, index) => <li key={label} aria-current={step === index ? 'step' : undefined}>{label}</li>)}</ol>
+        <ol className="remnawave-onboarding-steps" aria-label={copy.title}>{copy.steps.map((label, index) => <li key={label} aria-current={step === index ? 'step' : undefined}>{label}</li>)}</ol>
         {step === 0 ? <section><h3>{copy.server}</h3><p className="muted-copy">{copy.serverHint}</p>
           <label className="field">{copy.server}<select value={resourceId} onChange={event => selectServer(event.target.value)}><option value="">—</option>{options.data.servers.map(value => <option key={value.id} value={value.id}>{value.name} · {value.address} · {value.environmentName}</option>)}</select></label>
           {server ? <dl><dt>{copy.environment}</dt><dd>{server.environmentName}</dd><dt>{copy.ssh}</dt><dd>{server.sshStatus}</dd><dt>{copy.serverProfile}</dt><dd>{server.serverProfileName ?? server.serverProfileStatus}</dd></dl> : null}

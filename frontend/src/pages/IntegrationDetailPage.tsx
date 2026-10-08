@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { Link, useLocation, useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { RefreshCw, Search } from 'lucide-react'
+import { RefreshCw, Search, Server, Globe, FileSliders, CircleAlert } from 'lucide-react'
 import { ApiError } from '../api/httpClient'
 import { useDeleteIntegration, useSetIntegrationEnabled, useIntegration, useTestIntegration } from '../api/integrations'
 import { useIntegrationActions } from '../api/integrationActions'
@@ -14,7 +14,7 @@ import { AppShell } from '../components/layout/AppShell'
 import { contextSearch } from '../components/layout/workspaceNavigation'
 import {
   EmptyWorkspaceState, InlineAlert, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader,
-  WorkspaceSection, WorkspaceTabs,
+  WorkspaceSection, WorkspaceTabs, WorkspaceMetrics,
 } from '../components/layout/WorkspacePrimitives'
 import { connectionHealth, nodeStateTones, sessionTones, useSyncErrorText } from '../components/integrations/integrationPresentation'
 import { NodeActionControls } from '../components/integrations/NodeActionControls'
@@ -100,6 +100,13 @@ function IntegrationDetail({ organizationId, integrationId }: { organizationId: 
         ]} />
       </>} />
     <p className="muted-copy">{ui.purpose}</p>
+    <WorkspaceMetrics items={[
+      { label: t.tabs.nodes, value: integration.overview?.inventory.nodes.active ?? '—', icon: Server, detail: i18n.t.design.observedObjects, onSelect: () => selectTab('nodes') },
+      { label: t.tabs.hosts, value: integration.overview?.inventory.hosts.active ?? '—', icon: Globe, detail: i18n.t.design.observedObjects, onSelect: () => selectTab('hosts') },
+      { label: t.tabs.profiles, value: integration.overview?.inventory.configProfiles.active ?? '—', icon: FileSliders, detail: i18n.t.design.observedObjects, onSelect: () => selectTab('profiles') },
+      { label: ui.attention, value: integration.overview?.desiredState.needsAttention ?? '—', icon: CircleAlert,
+        tone: (integration.overview?.desiredState.needsAttention ?? 0) > 0 ? 'warning' : 'neutral', detail: i18n.t.design.managementFindings, onSelect: () => selectTab('overview') },
+    ]} />
     {query.isError ? <RefreshWarning updatedAt={query.dataUpdatedAt} retry={() => query.refetch()} /> : null}
     {lifecycle.isError ? <InlineAlert tone="danger" title={describeIntegrationError(lifecycle.error, i18n)} /> : null}
     {confirmation ? <IntegrationDialog title={confirmation === 'abandon' ? ui.abandonTitle : confirmation === 'delete' ? ui.deleteTitle : ui.disableTitle}

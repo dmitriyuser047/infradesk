@@ -297,7 +297,9 @@ export const ru: Messages = {
     sessionActionFailed: 'Не удалось выполнить действие.',
   },
 
+  design: { observedObjects: 'Обнаружены в инвентаре', managementFindings: 'Результаты автоматического управления', observedState: 'Наблюдаемое состояние', sourceConnections: 'Подключения', discoverySources: 'Источники обнаружения', childResources: 'Вложенные ресурсы' },
   shell: {
+    appearance: 'Оформление', lightTheme: 'Светлая тема', darkTheme: 'Тёмная тема',
     brandHome: 'InfraDesk — на главную',
     primaryNavigation: 'Основная навигация',
     account: 'Учётная запись',
