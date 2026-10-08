@@ -9,7 +9,8 @@ object IntegrationActionCode {
   case object NodeEnable extends IntegrationActionCode { val code = "NODE_ENABLE" }
   case object NodeDisable extends IntegrationActionCode { val code = "NODE_DISABLE" }
   case object NodeRestart extends IntegrationActionCode { val code = "NODE_RESTART" }
-  val All: List[IntegrationActionCode] = List(NodeEnable, NodeDisable, NodeRestart)
+  case object NodeDelete extends IntegrationActionCode { val code = "NODE_DELETE" }
+  val All: List[IntegrationActionCode] = List(NodeEnable, NodeDisable, NodeRestart, NodeDelete)
   def fromCode(code: String): Option[IntegrationActionCode] = All.find(_.code == code)
 }
 

@@ -176,6 +176,7 @@ final case class ApplicationComponents(
   integrationConfigRollouts: application.integration.IntegrationConfigRollouts[ConnectionIO],
   integrationConfigRolloutWorker: application.integration.IntegrationConfigRolloutWorker[ConnectionIO],
   integrationBindings: IntegrationBindings[ConnectionIO],
+  integrationInventoryMaintenance: application.integration.IntegrationInventoryMaintenance[ConnectionIO],
   integrationSyncScheduler: IntegrationSyncScheduler[ConnectionIO],
   testNotificationChannel: TestNotificationChannel,
   listHistoryEvents: ListHistoryEvents[ConnectionIO],
@@ -752,6 +753,9 @@ object ApplicationModule {
       integrationConfigRollouts = integrationConfigRolloutService,
       integrationConfigRolloutWorker = integrationConfigRolloutWorker,
       integrationBindings = integrationBindingsService,
+      integrationInventoryMaintenance = new application.integration.IntegrationInventoryMaintenance[ConnectionIO](
+        integrationRepository, integrationInventoryRepository, integrationActionRepository,
+        integrationDesiredStatesService, integrationBindingsService, transactionTimeProvider, auditRecorder),
       // Its own claims, lease and instance identity: never the connection scheduler's.
       integrationSyncScheduler = new IntegrationSyncScheduler[ConnectionIO](integrationSync,
         integrationSyncStateRepository, transactionRunner, timeProvider, loggers.integration,

@@ -22,6 +22,19 @@ export function useIntegrationSummary(organizationId: string, id: string, enable
     queryFn: () => requestJson<IntegrationOverview>(`${base(organizationId, id)}/inventory/summary`) })
 }
 
+export function useArchiveInventoryObject(organizationId: string, id: string) {
+  const client = useQueryClient()
+  return useMutation({ mutationFn: (objectId: string) => requestVoid(
+    `${base(organizationId, id)}/inventory/objects/${encodeURIComponent(objectId)}/archive`, { method: 'POST' }),
+    onSuccess: () => Promise.all([
+      client.invalidateQueries({ queryKey: scope(organizationId, id) }),
+      client.invalidateQueries({ queryKey: ['integration', organizationId, id] }),
+      client.invalidateQueries({ queryKey: ['integrations', organizationId] }),
+      client.invalidateQueries({ queryKey: ['resource-integration-bindings', organizationId] }),
+    ]),
+  })
+}
+
 export function useIntegrationInventory<K extends InventoryKind>(organizationId: string, id: string, kind: K,
   params: InventoryParams, enabled: boolean) {
   const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset) })

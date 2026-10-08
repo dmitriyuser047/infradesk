@@ -97,6 +97,15 @@ final class PostgresIntegrationSyncSessionRepository extends IntegrationSyncSess
 final class PostgresIntegrationInventoryRepository extends IntegrationInventoryRepository[ConnectionIO] {
   import IntegrationInventoryRows._
 
+  override def hasFleetMembership(org: UUID, integration: UUID, obj: UUID): ConnectionIO[Boolean] =
+    sql"""select exists(select 1 from remnawave_fleet_membership where organization_id=$org
+      and integration_id=$integration and inventory_node_id=$obj and removed_at is null)""".query[Boolean].unique
+
+  override def archiveAbsent(org: UUID, integration: UUID, obj: UUID, at: Instant): ConnectionIO[Boolean] =
+    sql"""update integration_inventory_object set archived_at=$at, updated_at=$at
+      where organization_id=$org and integration_id=$integration and id=$obj
+        and not is_active and archived_at is null""".update.run.map(_ == 1)
+
   override def deactivateAll(organizationId: UUID, integrationId: UUID, at: Instant): ConnectionIO[Int] =
     sql"""update integration_inventory_object set is_active = false, updated_at = $at
       where organization_id = $organizationId and integration_id = $integrationId and is_active""".update.run
@@ -124,7 +133,7 @@ final class PostgresIntegrationInventoryRepository extends IntegrationInventoryR
                   display_name = excluded.display_name,
                   summary_version = excluded.summary_version,
                   summary = excluded.summary,
-                  is_active = true,
+                  is_active = true, archived_at = null,
                   last_seen_at = excluded.last_seen_at,
                   last_seen_sync_session_id = excluded.last_seen_sync_session_id,
                   updated_at = case
@@ -231,7 +240,7 @@ final class PostgresIntegrationInventoryQuery extends IntegrationInventoryQuery[
   override def list(organizationId: UUID, integrationId: UUID, objectType: IntegrationObjectType,
     filter: InventoryFilter): ConnectionIO[InventoryPage[InventoryItem]] = {
     val conditions = List(
-      Some(fr"o.organization_id = $organizationId and o.integration_id = $integrationId and o.object_type = ${objectType.code}"),
+      Some(fr"o.organization_id = $organizationId and o.integration_id = $integrationId and o.object_type = ${objectType.code} and o.archived_at is null"),
       filter.active.map(value => fr"o.is_active = $value"),
       filter.search.map(likePattern).map(pattern =>
         fr"""(o.display_name ilike $pattern escape '\' or o.external_id ilike $pattern escape '\'
@@ -311,7 +320,7 @@ final class PostgresIntegrationInventoryQuery extends IntegrationInventoryQuery[
                   count(*) filter (where o.object_type = 'CONFIG_PROFILE' and o.is_active) as profiles_active,
                   count(*) filter (where o.object_type = 'CONFIG_PROFILE' and not o.is_active) as profiles_inactive
            from integration_inventory_object o
-           where o.organization_id = i.organization_id and o.integration_id = i.id) n on true
+           where o.organization_id = i.organization_id and o.integration_id = i.id and o.archived_at is null) n on true
          left join lateral (
            select count(*) as managed,
                   count(*) filter (where x.status = 'COMPLIANT') as compliant,

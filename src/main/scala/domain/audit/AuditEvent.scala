@@ -42,6 +42,7 @@ object AuditAction {
   case object IntegrationResourceBound extends AuditAction { override val code: String = "INTEGRATION_RESOURCE_BOUND" }
   case object IntegrationResourceUnbound extends AuditAction { override val code: String = "INTEGRATION_RESOURCE_UNBOUND" }
   case object IntegrationActionRequested extends AuditAction { override val code: String = "INTEGRATION_ACTION_REQUESTED" }
+  case object IntegrationInventoryArchived extends AuditAction { override val code: String = "INTEGRATION_INVENTORY_ARCHIVED" }
   case object IntegrationManagementModeChanged extends AuditAction { override val code: String = "INTEGRATION_MANAGEMENT_MODE_CHANGED" }
   case object IntegrationDesiredStateSet extends AuditAction { override val code: String = "INTEGRATION_DESIRED_STATE_SET" }
   case object IntegrationDesiredStateRemoved extends AuditAction { override val code: String = "INTEGRATION_DESIRED_STATE_REMOVED" }
@@ -151,6 +152,7 @@ object AuditAction {
     IntegrationResourceBound,
     IntegrationResourceUnbound,
     IntegrationActionRequested,
+    IntegrationInventoryArchived,
     IntegrationManagementModeChanged,
     IntegrationDesiredStateSet,
     IntegrationDesiredStateRemoved,

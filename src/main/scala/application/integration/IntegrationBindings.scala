@@ -63,7 +63,7 @@ final class IntegrationBindings[Tx[_]: MonadThrow](integrations: IntegrationRepo
 
   // The object row is locked so concurrent bind and unbind of one node are serialized.
   private def lockedNode(org: UUID, integrationId: UUID, objectId: UUID): Tx[IntegrationInventoryObject] = for {
-    _ <- integrations.findById(org, integrationId).flatMap(
+    _ <- integrations.findByIdForUpdate(org, integrationId).flatMap(
       _.liftTo[Tx](IntegrationError("INTEGRATION_NOT_FOUND", "Integration was not found")))
     found <- inventory.findObject(org, integrationId, objectId, forUpdate = true)
     node <- found.filter(_.objectType == IntegrationObjectType.Node)

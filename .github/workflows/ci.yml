@@ -247,11 +247,20 @@ jobs:
             --command "insert into organization (id, code, name) values ('${marker_id}', 'restore-check', 'Restore check')"
           # Build a representative production V29 dump: the version production runs before this
           # release. Restoring it proves that a real upgrade boundary is crossed — Flyway applies
-          # V30 through V64 to the restored database before the backend reports itself ready.
+          # V30 through V65 to the restored database before the backend reports itself ready.
           # Remove the additive tables and Stage 21 index; earlier schema stays as in production.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          -- Inventory V65: restore the older action contract in this disposable fixture.
+          drop function if exists infradesk_inventory_archive_guard() cascade;
+          drop function if exists infradesk_archived_inventory_reference_guard() cascade;
+          drop function if exists infradesk_inventory_mutation_busy(uuid,uuid) cascade;
+          drop function if exists infradesk_panel_delete_guard() cascade;
+          drop function if exists infradesk_panel_delete_exclusion() cascade;
+          alter table integration_inventory_object drop column if exists archived_at;
+          alter table integration_action_execution drop constraint integration_action_execution_action_code_check;
+          alter table integration_action_execution add constraint integration_action_execution_action_code_check check (action_code in ('NODE_ENABLE','NODE_DISABLE','NODE_RESTART'));
           -- Hardening V53-V56: remove additive ownership/admission objects in this disposable fixture.
           -- Protocol onboarding V61-V62: remove only new intent/receipt and encrypted TLS objects.
           drop function if exists infradesk_onboarding_protocol_binding_guard() cascade;
@@ -388,14 +397,14 @@ jobs:
           drop table terminal_session;
           drop table account_security_event;
           drop index ix_incident_resource_opened;
-          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49', '50', '51', '52', '53', '54', '55', '56', '57', '58', '59', '60', '61', '62', '63', '64');
+          delete from flyway_schema_history where version in ('30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49', '50', '51', '52', '53', '54', '55', '56', '57', '58', '59', '60', '61', '62', '63', '64', '65');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/infradesk-backups" \
             ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/infradesk-backups" -name 'infradesk-*.dump' -type f -print -quit)"
           test -n "${dump}"
           # Mutate the source database after the backup. The restore must replace the database,
-          # recover the marker and let Flyway apply V30 through V64.
+          # recover the marker and let Flyway apply V30 through V65.
           docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 \
             --command "delete from organization where id = '${marker_id}'"
@@ -416,7 +425,7 @@ jobs:
           migrated="$(docker compose -f compose.prod.yml exec -T postgres \
             psql --username infradesk --dbname infradesk --tuples-only --no-align \
             --command "select version from flyway_schema_history where success order by installed_rank desc limit 1")"
-          test "${migrated}" = "64"
+          test "${migrated}" = "65"
           # What V26 built survives the upgrade: the notification_delivery.context column was in the
           # dump and is still there after Flyway ran V29 on the restored database.
           delivery_context="$(docker compose -f compose.prod.yml exec -T postgres \
@@ -589,9 +598,18 @@ jobs:
               '90000000-0000-0000-0000-000000000008', 'V40 observed node',
               (select id from user_account where email = 'terminal-ci@example.test'), 'SUCCEEDED', now(), now(), now());
           SQL
-          # Reverse V42 through V64's additive changes, so the dump is what a V41 production holds.
+          # Reverse V42 through V65's additive changes, so the dump is what a V41 production holds.
           docker compose -f compose.prod.yml stop backend proxy
           docker compose -f compose.prod.yml exec -T postgres psql --username infradesk --dbname infradesk --set ON_ERROR_STOP=1 <<'SQL'
+          -- Inventory V65: restore the older action contract in this disposable fixture.
+          drop function if exists infradesk_inventory_archive_guard() cascade;
+          drop function if exists infradesk_archived_inventory_reference_guard() cascade;
+          drop function if exists infradesk_inventory_mutation_busy(uuid,uuid) cascade;
+          drop function if exists infradesk_panel_delete_guard() cascade;
+          drop function if exists infradesk_panel_delete_exclusion() cascade;
+          alter table integration_inventory_object drop column if exists archived_at;
+          alter table integration_action_execution drop constraint integration_action_execution_action_code_check;
+          alter table integration_action_execution add constraint integration_action_execution_action_code_check check (action_code in ('NODE_ENABLE','NODE_DISABLE','NODE_RESTART'));
           -- Hardening V53-V56: remove additive ownership/admission objects in this disposable fixture.
           -- Protocol onboarding V61-V62: remove only new intent/receipt and encrypted TLS objects.
           drop function if exists infradesk_onboarding_protocol_binding_guard() cascade;
@@ -728,7 +746,7 @@ jobs:
             'INTEGRATION_ACTION_REQUESTED',
             'INTEGRATION_MANAGEMENT_MODE_CHANGED','INTEGRATION_DESIRED_STATE_SET','INTEGRATION_DESIRED_STATE_REMOVED'
           ));
-          delete from flyway_schema_history where version in ('42', '43', '44', '45', '46', '47', '48', '49', '50', '51', '52', '53', '54', '55', '56', '57', '58', '59', '60', '61', '62', '63', '64');
+          delete from flyway_schema_history where version in ('42', '43', '44', '45', '46', '47', '48', '49', '50', '51', '52', '53', '54', '55', '56', '57', '58', '59', '60', '61', '62', '63', '64', '65');
           SQL
           INFRADESK_BACKUP_DIR="${RUNNER_TEMP}/v40-backups" ./scripts/backup-database.sh
           dump="$(find "${RUNNER_TEMP}/v40-backups" -name 'infradesk-*.dump' -type f -print -quit)"
@@ -741,7 +759,7 @@ jobs:
             sleep 5
           done
           curl --silent --fail "${base}/ready" > /dev/null
-          test "$(psql_value "select version from flyway_schema_history where success order by installed_rank desc limit 1")" = "64"
+          test "$(psql_value "select version from flyway_schema_history where success order by installed_rank desc limit 1")" = "65"
           test "$(psql_value "select count(*) from configuration_profile where code = 'v40-preserved' and kind = 'FILE_TEMPLATE'")" = "1"
           test "$(psql_value "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('configuration_revision_secure_payload','integration_config_profile_binding','integration_config_deployment','integration_config_rollout','integration_config_rollout_node_baseline')")" = "5"
           test "$(psql_value "select count(*) from information_schema.tables where table_schema = current_schema() and table_name in ('integration', 'integration_secret', 'integration_sync_session', 'integration_inventory_object', 'integration_resource_binding', 'integration_sync_state', 'integration_action_execution', 'integration_desired_state')")" = "8"

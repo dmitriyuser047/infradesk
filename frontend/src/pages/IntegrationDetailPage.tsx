@@ -18,6 +18,7 @@ import {
 } from '../components/layout/WorkspacePrimitives'
 import { connectionHealth, nodeStateTones, sessionTones, useSyncErrorText } from '../components/integrations/integrationPresentation'
 import { NodeActionControls } from '../components/integrations/NodeActionControls'
+import { InventoryArchiveControl } from '../components/integrations/InventoryArchiveControl'
 import { DesiredStateControl, ManagementSection, useDesiredStateCopy } from '../components/integrations/DesiredStateControls'
 import { PageActionMenu } from '../components/layout/PageActionMenu'
 import { RefreshWarning, isUnavailableError } from '../components/layout/RefreshWarning'
@@ -277,21 +278,22 @@ function NodesTab({ organizationId, integrationId, managementMode }: {
     {unbind.isError ? <InlineAlert tone="danger" title={t.bindError}>{describeIntegrationError(unbind.error, i18n)}</InlineAlert> : null}
     <InventoryTable<RemnawaveNodeSummary> kind="nodes" organizationId={organizationId} integrationId={integrationId}
       title={t.tabs.nodes} emptyTitle={t.emptyNodes} withState
-      head={<tr><th>{t.name}</th><th>{t.address}</th><th>{t.state}</th><th>{t.version}</th><th>{t.users}</th>
-        <th>{t.traffic}</th><th>{desiredCopy.desired}</th><th title={i18n.t.integrationUi.bindingHelp}>{t.resource}</th><th>{t.actions}</th></tr>}
+      head={<tr><th>{t.name} / {t.address}</th><th>{t.state}</th><th>{t.users} / {t.traffic}</th>
+        <th>{desiredCopy.desired}</th><th title={i18n.t.integrationUi.bindingHelp}>{t.resource}</th><th>{t.actions}</th></tr>}
       row={item => <tr key={item.id} className={item.active ? undefined : 'row-quiet'}>
-        <td><strong>{item.displayName}</strong>{!item.active ? <><small className="integration-last-seen">{t.lastSeen}: {i18n.format.dateTime(item.lastSeenAt)}</small></> : null}</td>
-        <td className="property-technical">{hostPort(item.summary.address, item.summary.port)}</td>
-        <td><StatusIndicator label={item.active ? t.nodeState[item.summary.state] : t.gone} tone={item.active ? nodeStateTones[item.summary.state] : "neutral"} /></td>
-        <td>{item.summary.xrayVersion ?? '—'}</td>
-        <td>{i18n.format.number(item.summary.usersOnline)}</td>
-        <td>{formatBytes(item.summary.trafficUsedBytes, i18n.format.number)}</td>
+        <td><strong>{item.displayName}</strong><div className="property-technical integration-node-address">{hostPort(item.summary.address, item.summary.port)}</div>
+          {!item.active ? <small className="integration-last-seen">{t.lastSeen}: {i18n.format.dateTime(item.lastSeenAt)}</small> : null}</td>
+        <td><StatusIndicator label={item.active ? t.nodeState[item.summary.state] : t.gone} tone={item.active ? nodeStateTones[item.summary.state] : "neutral"} />
+          <div className="muted-copy integration-node-version">Xray {item.summary.xrayVersion ?? '—'}</div></td>
+        <td><span>{t.users}: {i18n.format.number(item.summary.usersOnline)}</span>
+          <div className="muted-copy">{formatBytes(item.summary.trafficUsedBytes, i18n.format.number)}</div></td>
         <td><DesiredStateControl organizationId={organizationId} integrationId={integrationId}
           managementMode={managementMode} node={item} /></td>
         <td>{item.binding ? <Link to={`${orgPath}/environments/${encodeURIComponent(item.binding.environment.id)}/resources/${encodeURIComponent(item.binding.resource.id)}${scope}`}>
           {item.binding.resource.name}</Link> : <span className="muted-copy">{t.notBound}</span>}
           {item.binding ? <div className="muted-copy">{item.binding.project.name} · {item.binding.environment.name}</div> : null}</td>
         <td><div className="integration-row-actions">
+          <InventoryArchiveControl organizationId={organizationId} integrationId={integrationId} item={item} />
           <NodeActionControls organizationId={organizationId} integrationId={integrationId} node={item} compact
             extraActions={[
               ...(item.active ? [{ label: item.binding ? t.change : t.bind, onSelect: () => setBinding(item) }] : []),
@@ -376,7 +378,7 @@ function HostsTab({ organizationId, integrationId }: { organizationId: string; i
   const i18n = useI18n(); const text = i18n.t.integrationInventory
   return <InventoryTable<RemnawaveHostSummary> kind="hosts" organizationId={organizationId} integrationId={integrationId}
     title={text.tabs.hosts} emptyTitle={text.emptyHosts}
-    head={<tr><th>{text.name}</th><th>{text.address}</th><th>{text.security}</th><th>{text.flags}</th><th>{text.nodes}</th></tr>}
+    head={<tr><th>{text.name}</th><th>{text.address}</th><th>{text.security}</th><th>{text.flags}</th><th>{text.nodes}</th><th>{text.actions}</th></tr>}
     row={item => <tr key={item.id} className={item.active ? undefined : 'row-quiet'}>
       <td><strong>{item.displayName}</strong>{!item.active ? <><StatusIndicator label={text.gone} /><small className="integration-last-seen">{text.lastSeen}: {i18n.format.dateTime(item.lastSeenAt)}</small></> : null}</td>
       <td className="property-technical">{hostPort(item.summary.address, item.summary.port)}</td>
@@ -384,6 +386,7 @@ function HostsTab({ organizationId, integrationId }: { organizationId: string; i
       <td>{[item.summary.isDisabled ? text.disabledFlag : null, item.summary.isHidden ? text.hidden : null]
         .filter(Boolean).join(' · ') || '—'}</td>
       <td>{item.summary.nodeUuids.length}</td>
+      <td><InventoryArchiveControl organizationId={organizationId} integrationId={integrationId} item={item} /></td>
     </tr>} />
 }
 
@@ -394,7 +397,7 @@ function ProfilesTab({ organizationId, integrationId }: { organizationId: string
   return <InventoryTable<RemnawaveConfigProfileSummary> kind="config-profiles" organizationId={organizationId}
     integrationId={integrationId} title={text.tabs.profiles} emptyTitle={text.emptyProfiles}
     head={<tr><th>{text.name}</th><th>{text.inbounds}</th><th>{text.nodes}</th><th>{text.updated}</th>
-      <th>{c.management}</th><th>{c.status}</th></tr>}
+      <th>{c.management}</th><th>{c.status}</th><th>{text.actions}</th></tr>}
     row={item => <tr key={item.id} className={item.active ? undefined : 'row-quiet'}>
       <td><strong>{item.displayName}</strong>{!item.active ? <><StatusIndicator label={text.gone} /><small className="integration-last-seen">{text.lastSeen}: {i18n.format.dateTime(item.lastSeenAt)}</small></> : null}</td>
       <td>{item.summary.inbounds.length === 0 ? '—' : item.summary.inbounds.map(inbound =>
@@ -403,6 +406,7 @@ function ProfilesTab({ organizationId, integrationId }: { organizationId: string
       <td>{i18n.format.dateTime(item.summary.updatedAt)}</td>
       <ProfileManagementCell organizationId={organizationId} integrationId={integrationId} item={item}
         enabled={canManageConfig} />
+      <td><InventoryArchiveControl organizationId={organizationId} integrationId={integrationId} item={item} /></td>
     </tr>} />
 }
 

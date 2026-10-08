@@ -52,7 +52,7 @@ export interface IntegrationSyncSession {
   errorMessage: string | null
   counts: { nodes: number; hosts: number; configProfiles: number; deactivated: number } | null
 }
-export type IntegrationActionCode = 'NODE_ENABLE' | 'NODE_DISABLE' | 'NODE_RESTART'
+export type IntegrationActionCode = 'NODE_ENABLE' | 'NODE_DISABLE' | 'NODE_RESTART' | 'NODE_DELETE'
 export type IntegrationActionStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'
 export interface IntegrationActionExecution {
   id: string; requestId: string; integrationId: string; inventoryObjectId: string

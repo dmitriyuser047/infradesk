@@ -16,6 +16,7 @@ final class InMemoryIntegrationInventory {
   private val lock = new Object
   @volatile var sessionRows: Vector[IntegrationSyncSession] = Vector.empty
   @volatile var objects: Vector[IntegrationInventoryObject] = Vector.empty
+  private var archivedObjects: Set[UUID] = Set.empty
   @volatile var states: Map[(UUID, UUID), (Instant, Long, Option[UUID])] = Map.empty
   @volatile var bindingRows: Vector[IntegrationResourceBinding] = Vector.empty
   @volatile var resources: Map[UUID, (UUID, BindableResource)] = Map.empty
@@ -61,6 +62,12 @@ final class InMemoryIntegrationInventory {
   }
 
   val inventory: IntegrationInventoryRepository[IO] = new IntegrationInventoryRepository[IO] {
+    override def hasFleetMembership(org: UUID, integration: UUID, obj: UUID): IO[Boolean] = IO.pure(false)
+    override def archiveAbsent(org: UUID, integration: UUID, obj: UUID, at: Instant): IO[Boolean] = sync {
+      val changed = objects.exists(o => o.organizationId == org && o.integrationId == integration && o.id == obj && !o.isActive) && !archivedObjects(obj)
+      if (changed) archivedObjects += obj
+      changed
+    }
     override def deactivateAll(organizationId: UUID, integrationId: UUID, at: Instant): IO[Int] = sync {
       val affected = objects.count(value => value.organizationId == organizationId &&
         value.integrationId == integrationId && value.isActive)
@@ -80,6 +87,7 @@ final class InMemoryIntegrationInventory {
             summary = observed.summary, isActive = true, lastSeenAt = at, lastSeenSyncSessionId = sessionId))
         }
       }
+      archivedObjects = archivedObjects.filterNot(id => objects.exists(o => o.id == id && o.isActive))
       val missing = objects.filter(value => value.organizationId == organizationId &&
         value.integrationId == integrationId && value.isActive &&
         observation.completeObjectTypes.contains(value.objectType) && value.lastSeenSyncSessionId != sessionId)
@@ -143,7 +151,7 @@ final class InMemoryIntegrationInventory {
     override def list(organizationId: UUID, integrationId: UUID, objectType: IntegrationObjectType,
       filter: InventoryFilter): IO[InventoryPage[InventoryItem]] = sync {
       val matching = objects.filter(value => value.organizationId == organizationId &&
-        value.integrationId == integrationId && value.objectType == objectType &&
+        value.integrationId == integrationId && value.objectType == objectType && !archivedObjects(value.id) &&
         filter.active.forall(_ == value.isActive) &&
         filter.search.forall(term => value.displayName.toLowerCase.contains(term.toLowerCase)))
         .sortBy(value => (value.displayName, value.id.toString))

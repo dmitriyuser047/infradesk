@@ -12,6 +12,21 @@ import java.time.Instant
 import java.util.UUID
 
 final class PostgresIntegrationActionRepository extends IntegrationActionRepository[ConnectionIO] {
+  override def deletionPermitted(value: IntegrationActionExecution, token: UUID, at: Instant): ConnectionIO[Boolean] =
+    sql"""select m.role from integration_action_execution a
+      join integration_inventory_object o on o.id=a.inventory_object_id and o.integration_id=a.integration_id and o.organization_id=a.organization_id
+      join organization_membership m on m.organization_id=a.organization_id and m.user_id=a.requested_by_user_id and m.is_active
+      join user_account u on u.id=m.user_id and u.is_active
+      where a.id=${value.id} and a.organization_id=${value.organizationId} and a.integration_id=${value.integrationId}
+        and a.status='RUNNING' and a.action_code='NODE_DELETE' and a.source='MANUAL' and a.claim_token=$token
+        and a.recover_after_at>greatest($at,clock_timestamp()) and o.object_type='NODE'
+        and a.inventory_object_id=${value.target.inventoryObjectId} and a.external_id_snapshot=${value.target.externalId}
+        and o.external_id=${value.target.externalId} and o.archived_at is null""".query[String].option.map { role =>
+      import domain.auth.{OrganizationAuthorizationPolicy, OrganizationPermission, OrganizationRole}
+      role.flatMap(OrganizationRole.fromCode(_).toOption).exists(r =>
+        OrganizationAuthorizationPolicy.allows(r, OrganizationPermission.ManageIntegrations) &&
+        OrganizationAuthorizationPolicy.allows(r, OrganizationPermission.ExecuteOperations))
+    }
   private final case class Row(id: UUID, org: UUID, integration: UUID, obj: UUID, request: UUID,
     action: String, externalId: String, name: String, user: UUID, status: String, created: Instant,
     started: Option[Instant], recover: Option[Instant], finished: Option[Instant], owner: Option[UUID],
@@ -137,6 +152,8 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
 
   override def complete(value: IntegrationActionExecution, token: UUID, at: Instant,
     status: String, errorCode: Option[String], errorMessage: Option[String]): ConnectionIO[Boolean] = for {
+    _ <- sql"""select id from integration where id=${value.integrationId} and organization_id=${value.organizationId}
+      for update""".query[UUID].option.void
     // Serializes UNKNOWN completion with request validation on this object.
     _ <- sql"""select id from integration_inventory_object where id = ${value.target.inventoryObjectId}
       and integration_id = ${value.integrationId} and organization_id = ${value.organizationId}
@@ -144,7 +161,14 @@ final class PostgresIntegrationActionRepository extends IntegrationActionReposit
     count <- sql"""update integration_action_execution set status = $status, finished_at = $at,
       error_code = $errorCode, error_message = $errorMessage, updated_at = $at
       where id = ${value.id} and organization_id = ${value.organizationId} and status = 'RUNNING'
-        and claim_token = $token""".update.run
+        and claim_token = $token
+        and (action_code <> 'NODE_DELETE' or recover_after_at > greatest($at, clock_timestamp()))""".update.run
+    // Only a fenced completion backed by confirmed provider absence may invalidate the object.
+    _ <- if (count == 1 && status == "SUCCEEDED" && value.action == IntegrationActionCode.NodeDelete)
+      sql"""update integration_inventory_object set is_active=false, updated_at=$at
+        where id=${value.target.inventoryObjectId} and integration_id=${value.integrationId}
+          and organization_id=${value.organizationId} and external_id=${value.target.externalId}""".update.run.void
+      else ().pure[ConnectionIO]
     _ <- if (count == 1 && (status == "SUCCEEDED" || status == "UNKNOWN"))
       sql"""update integration_sync_state s set next_run_at = least(s.next_run_at, $at),
         action_nudge_at = least(coalesce(s.action_nudge_at, $at), $at), updated_at = $at

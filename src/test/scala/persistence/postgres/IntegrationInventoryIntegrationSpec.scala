@@ -214,6 +214,84 @@ final class IntegrationInventoryIntegrationSpec extends FunSuite with Integratio
     }.unsafeRunSync()
   }
 
+  test("confirmed manual node deletion retires intent, keeps identity/history and fences absence completion") {
+    withWorld { w =>
+      val integration=w.create("Delete node")
+      w.run.run(sql"""insert into organization_membership(user_id,organization_id,role,created_at,updated_at)
+        values(${w.user},${w.org},'OWNER',now(),now())""".update.run).unsafeRunSync()
+      val external=UUID.randomUUID().toString
+      w.observation=IO.pure(snapshot(node(external,"Delete target")))
+      w.manual(integration.id)
+      val obj=w.objects(integration.id).head._5
+      w.run.run(w.management.setEnabled(w.actor,integration.id,true)).unsafeRunSync()
+      w.run.run(w.desiredStates().setMode(w.actor,integration.id,IntegrationManagementMode.ManagedSelected)).unsafeRunSync()
+      w.run.run(w.desiredStates().set(w.actor,integration.id,obj,IntegrationDesiredNodeState.Enabled)).unsafeRunSync()
+      def request(key: UUID, approved: Boolean)=w.run.run(w.actionService.request(w.actor,integration.id,obj,key,
+        IntegrationActionCode.NodeDelete,approved))
+      assertEquals(request(UUID.randomUUID(),false).attempt.unsafeRunSync().left.toOption.collect {
+        case e:IntegrationError=>e.code },Some("INTEGRATION_NODE_DELETE_CONFIRMATION_REQUIRED"))
+      assert(w.run.run(w.desiredRepository.find(w.org,integration.id,obj)).unsafeRunSync().nonEmpty)
+      val key=UUID.randomUUID()
+      val simultaneous=List.fill(2)(request(key,true)).parSequence.unsafeRunSync()
+      assertEquals(simultaneous.map(_.id).distinct.size,1)
+      val submitted=simultaneous.head
+      assertEquals(request(key,true).unsafeRunSync().id,submitted.id)
+      assert(w.run.run(w.desiredRepository.find(w.org,integration.id,obj)).unsafeRunSync().isEmpty)
+      assert(w.run.run(w.inventory.findObject(w.org,integration.id,obj,false)).unsafeRunSync().get.isActive)
+      assert(w.run.run(w.desiredStates().set(w.actor,integration.id,obj,IntegrationDesiredNodeState.Enabled)).attempt.unsafeRunSync().isLeft)
+      val at=Instant.now()
+      val claimed=w.run.run(w.actionRepository.recoverAndClaim(UUID.randomUUID(),UUID.randomUUID(),at,at.plusSeconds(60),1)).unsafeRunSync()._2.head
+      assert(w.run.run(w.actionRepository.deletionPermitted(claimed,claimed.claimToken.get,at)).unsafeRunSync())
+      w.run.run(sql"update organization_membership set role='MEMBER' where organization_id=${w.org} and user_id=${w.user}".update.run).unsafeRunSync()
+      assert(!w.run.run(w.actionRepository.deletionPermitted(claimed,claimed.claimToken.get,at)).unsafeRunSync())
+      w.run.run(sql"update organization_membership set role='OWNER' where organization_id=${w.org} and user_id=${w.user}".update.run).unsafeRunSync()
+      assert(!w.run.run(w.actionRepository.complete(claimed,claimed.claimToken.get,at.plusSeconds(61),"SUCCEEDED",None,None)).unsafeRunSync())
+      assert(!w.run.run(w.actionRepository.complete(claimed,UUID.randomUUID(),at,"SUCCEEDED",None,None)).unsafeRunSync())
+      assert(w.run.run(w.inventory.findObject(w.org,integration.id,obj,false)).unsafeRunSync().get.isActive)
+      assert(w.run.run(w.actionRepository.complete(claimed,claimed.claimToken.get,at,"SUCCEEDED",None,None)).unsafeRunSync())
+      assert(!w.run.run(w.inventory.findObject(w.org,integration.id,obj,false)).unsafeRunSync().get.isActive)
+      assertEquals(w.run.run(w.actionRepository.find(w.org,integration.id,submitted.id)).unsafeRunSync().get.status,IntegrationActionStatus.Succeeded)
+      assertEquals(request(key,true).unsafeRunSync().id,submitted.id)
+      assertEquals(w.actions.count(_=="INTEGRATION_ACTION_REQUESTED"),1)
+    }
+  }
+
+  test("archive absent inventory preserves identities and action history, is tenant scoped and returns on rediscovery") {
+    withWorld { w =>
+      val integration=w.create("Archive inventory")
+      val external=UUID.randomUUID().toString
+      val observed=node(external,"Archive target")
+      w.observation=IO.pure(snapshot(observed,host,profile)); w.manual(integration.id)
+      val obj=w.objects(integration.id).find(_._1==external).get._5
+      val maintenance=new IntegrationInventoryMaintenance[ConnectionIO](w.integrations,w.inventory,w.actionRepository,
+        w.desiredStates(),w.bindings,w.time,w.audit)
+      assert(w.run.run(maintenance.archive(w.actor,integration.id,obj)).attempt.unsafeRunSync().isLeft)
+      w.run.run(w.bindings.bind(w.actor,integration.id,obj,w.nodeResource)).unsafeRunSync()
+      val action=w.run.run(w.actionService.request(w.actor,integration.id,obj,UUID.randomUUID(),IntegrationActionCode.NodeRestart)).unsafeRunSync()
+      w.observation=IO.pure(snapshot()); w.manual(integration.id)
+      assert(w.run.run(maintenance.archive(w.actor,integration.id,obj)).attempt.unsafeRunSync().isLeft)
+      val at=Instant.now()
+      val claimed=w.run.run(w.actionRepository.recoverAndClaim(UUID.randomUUID(),UUID.randomUUID(),at,at.plusSeconds(60),1)).unsafeRunSync()._2.head
+      w.run.run(w.actionRepository.complete(claimed,claimed.claimToken.get,at,"UNKNOWN",Some("INTEGRATION_ACTION_RESULT_UNKNOWN"),Some("Unknown"))).unsafeRunSync()
+      assert(w.run.run(maintenance.archive(w.actor.copy(organizationId=w.foreign),integration.id,obj)).attempt.unsafeRunSync().isLeft)
+      w.run.run(maintenance.archive(w.actor,integration.id,obj)).unsafeRunSync()
+      w.run.run(maintenance.archive(w.actor,integration.id,obj)).unsafeRunSync()
+      assertEquals(w.page(integration.id,InventoryFilter(None,None,None,50,0)).total,0L)
+      assert(w.run.run(w.inventory.findObject(w.org,integration.id,obj,false)).unsafeRunSync().nonEmpty)
+      assert(w.run.run(w.bindingRepository.find(w.org,obj)).unsafeRunSync().isEmpty)
+      assert(w.run.run(w.bindings.bind(w.actor,integration.id,obj,w.nodeResource)).attempt.unsafeRunSync().isLeft)
+      assertEquals(w.run.run(w.actionRepository.find(w.org,integration.id,action.id)).unsafeRunSync().get.status,IntegrationActionStatus.Unknown)
+      val others=w.objects(integration.id).filterNot(_._5==obj)
+      others.foreach(o=>w.run.run(maintenance.archive(w.actor,integration.id,o._5)).unsafeRunSync())
+      val counts=w.run.run(w.query.overviews(w.org)).unsafeRunSync().apply(integration.id).inventory
+      assertEquals(counts.nodes.inactive+counts.hosts.inactive+counts.configProfiles.inactive,0L)
+      assertEquals(w.actions.count(_=="INTEGRATION_INVENTORY_ARCHIVED"),3)
+      w.observation=IO.pure(snapshot(observed)); w.manual(integration.id)
+      assertEquals(w.page(integration.id,InventoryFilter(None,None,None,50,0)).items.head.obj.id,obj)
+      assertEquals(w.remoteActionCalls,0)
+    }
+  }
+
   test("managed config adoption, encrypted revisions and preflight-protected durable deployment") {
     withWorld { w =>
       val external = UUID.randomUUID().toString

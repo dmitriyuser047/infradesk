@@ -69,6 +69,7 @@ final class IntegrationRoutesSpec extends FunSuite {
     @volatile var unresolvedUnknown = false
     @volatile var activeRollout = false
     val actionRepository = new IntegrationActionRepository[IO] {
+      override def deletionPermitted(value: IntegrationActionExecution, token: UUID, at: Instant): IO[Boolean] = IO.pure(false)
       override def hasUnresolvedUnknown(organizationId: UUID, integrationId: UUID): IO[Boolean] = IO(unresolvedUnknown)
       override def hasActive(organizationId: UUID, integrationId: UUID): IO[Boolean] = IO(activeAction)
       override def insertOrFind(value: IntegrationActionExecution): IO[(IntegrationActionExecution, Boolean)] =
@@ -138,7 +139,9 @@ final class IntegrationRoutesSpec extends FunSuite {
       support.NoDesiredStates, registry, new SystemIdGenerator, new SystemTimeProvider, audit, desiredStateOperational = true)
     val routes = cats.syntax.semigroupk.toSemigroupKOps(new IntegrationRoutes[IO](management,
       new TestIntegration[IO](management, runner, cipher, registry), registry, runner,
-      AuthorizationFixtures.authorization, sync, bindings, memory.query, memory.sessions).routes)
+      AuthorizationFixtures.authorization, sync, bindings, memory.query, memory.sessions,
+      new application.integration.IntegrationInventoryMaintenance[IO](integrations, memory.inventory, actionRepository,
+        desiredStates, bindings, new SystemTimeProvider, audit)).routes)
       .combineK(new IntegrationDesiredStateRoutes[IO](desiredStates, runner, AuthorizationFixtures.authorization,
         NoOpLogger[IO]).routes).orNotFound
 
@@ -191,6 +194,24 @@ final class IntegrationRoutesSpec extends FunSuite {
     val unsupported = f.call(Method.POST, root, Some(s"""{"name":"Bad","providerType":"UNKNOWN",
       "baseUrl":"https://panel.example.test","credentials":{"apiToken":"$token"}}"""))
     assertEquals(unsupported.status, Status.BadRequest)
+  }
+
+  test("archive endpoint is scoped, permission checked, absent-only and idempotent without provider mutations") {
+    val f=new World
+    val id=f.created()
+    f.call(Method.POST,s"$root/$id/sync")
+    val obj=f.memory.objects.find(_.externalId=="node-a").get
+    val path=s"$root/$id/inventory/objects/${obj.id}/archive"
+    assertEquals(f.call(Method.POST,path,role=OrganizationRole.Member).status,Status.Forbidden)
+    assertEquals(f.call(Method.POST,path).status,Status.UnprocessableEntity)
+    f.memory.objects=f.memory.objects.map(o=>if(o.id==obj.id)o.copy(isActive=false)else o)
+    assertEquals(f.call(Method.POST,path.replace(id,UUID.randomUUID().toString)).status,Status.NotFound)
+    assertEquals(f.call(Method.POST,path).status,Status.NoContent)
+    assertEquals(f.call(Method.POST,path).status,Status.NoContent)
+    assert(f.memory.objects.exists(_.id==obj.id))
+    val response=f.call(Method.GET,s"$root/$id/inventory/nodes")
+    assert(!response.as[Json].unsafeRunSync().noSpaces.contains(obj.id.toString))
+    assertEquals(f.actions.count(_=="INTEGRATION_INVENTORY_ARCHIVED"),1)
   }
 
   test("UNKNOWN blocks ordinary deletion and abandonment requires management permission and a separate action") {

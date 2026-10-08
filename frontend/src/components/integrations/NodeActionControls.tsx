@@ -19,7 +19,7 @@ function savedSubmission(key: string): PendingSubmission | null {
     const value: unknown = JSON.parse(raw)
     if (typeof value === 'object' && value !== null && 'requestId' in value && 'action' in value &&
       typeof value.requestId === 'string' &&
-      (value.action === 'NODE_ENABLE' || value.action === 'NODE_DISABLE' || value.action === 'NODE_RESTART'))
+      (value.action === 'NODE_ENABLE' || value.action === 'NODE_DISABLE' || value.action === 'NODE_RESTART' || value.action === 'NODE_DELETE'))
       return value as PendingSubmission
   } catch { /* Session storage may be unavailable. Keep the in-memory request ID. */ }
   return null
@@ -70,10 +70,10 @@ export function NodeActionControls({ organizationId, integrationId, node, compac
   const requiresRefresh = unknown?.finishedAt && Date.parse(node.lastSeenAt) <= Date.parse(unknown.finishedAt)
   // A one-shot action that works against the node's desired state is not offered; the backend refuses it anyway.
   const desired = node.desiredState?.state
-  const observedChoices: IntegrationActionCode[] = node.summary.isDisabled ? ['NODE_ENABLE'] : ['NODE_DISABLE', 'NODE_RESTART']
+  const observedChoices: IntegrationActionCode[] = node.summary.isDisabled ? ['NODE_ENABLE', 'NODE_DELETE'] : ['NODE_DISABLE', 'NODE_RESTART', 'NODE_DELETE']
   const choices = observedChoices.filter(action =>
     !(desired === 'ENABLED' && action === 'NODE_DISABLE') && !(desired === 'DISABLED' && action === 'NODE_ENABLE'))
-  const label = (action: IntegrationActionCode) => action === 'NODE_ENABLE' ? t.enable : action === 'NODE_DISABLE' ? t.disable : t.restart
+  const label = (action: IntegrationActionCode) => action === 'NODE_DELETE' ? t.delete : action === 'NODE_ENABLE' ? t.enable : action === 'NODE_DISABLE' ? t.disable : t.restart
   const submit = () => {
     if (!pendingAction || submitting.current) return
     submitting.current = true
@@ -95,7 +95,7 @@ export function NodeActionControls({ organizationId, integrationId, node, compac
   return <div className="integration-node-actions">
     {compact ? <PageActionMenu actions={[
       ...(!active && !requiresRefresh && !unresolved ? choices.map(action => ({ label: label(action),
-        danger: action === 'NODE_DISABLE', onSelect: () => { mutation.reset(); requestId.current = null; setPendingAction(action) } })) : []),
+        danger: action === 'NODE_DISABLE' || action === 'NODE_DELETE', onSelect: () => { mutation.reset(); requestId.current = null; setPendingAction(action) } })) : []),
       ...extraActions,
     ]} /> : !active && !requiresRefresh && !unresolved ? choices.map(action => <button key={action} className="secondary-button" type="button"
       onClick={() => { mutation.reset(); requestId.current = null; setPendingAction(action) }}>{label(action)}</button>) : null}
@@ -122,7 +122,8 @@ export function NodeActionControls({ organizationId, integrationId, node, compac
         onClick={() => { requestId.current = null; setPendingAction(null) }}>{t.cancel}</button>
         <button className="primary-button" type="button" disabled={mutation.isPending} onClick={submit}>
           {unresolved ? t.retryRequest : t.confirm}</button></>}>
-      <div>{pendingAction === 'NODE_DISABLE' ? t.warningDisable
+      <div><p className="property-technical">{node.summary.address}:{node.summary.port} · {node.externalId}</p>
+        {pendingAction === 'NODE_DELETE' ? <p>{t.warningDelete}</p> : pendingAction === 'NODE_DISABLE' ? t.warningDisable
         : pendingAction === 'NODE_RESTART' ? t.warningRestart : null}
         {unresolved ? <p>{t.uncertainRequest}</p> : null}</div></IntegrationDialog> : null}
   </div>

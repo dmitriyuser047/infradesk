@@ -24,7 +24,7 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
   test: TestIntegration[Tx], providers: IntegrationProviderRegistry[IO],
   runner: TransactionRunner[IO, Tx], authorization: OrganizationAuthorization,
   sync: IntegrationSync[Tx], bindings: IntegrationBindings[Tx], inventory: IntegrationInventoryQuery[Tx],
-  sessions: IntegrationSyncSessionRepository[Tx]) {
+  sessions: IntegrationSyncSessionRepository[Tx], maintenance: application.integration.IntegrationInventoryMaintenance[Tx]) {
   import IntegrationRoutes._
   import CirceEntityDecoder._
   import CirceEntityEncoder._
@@ -35,6 +35,16 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
   private val internal = ApiErrorResponse("INTERNAL_ERROR", "Internal server error")
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
+    case request @ POST -> Root / "api" / "v1" / "organizations" / org / "integrations" / id /
+        "inventory" / "objects" / objectId / "archive" =>
+      authorization.require(request, OrganizationPermission.ManageIntegrations) { context =>
+        withIntegration(org, context.organizationId, id) { (_, integrationId) =>
+          authorization.require(request, OrganizationPermission.ExecuteOperations) { _ => uuid(objectId) match {
+            case None => BadRequest(invalid)
+            case Some(obj) => respond(runner.run(maintenance.archive(context.actor, integrationId, obj)) *> NoContent())
+          } }
+        }
+      }
     case request @ GET -> Root / "api" / "v1" / "organizations" / org / "integration-providers" =>
       authorization.require(request, OrganizationPermission.ManageIntegrations) { context =>
         withOrganization(org, context.organizationId) { _ =>
@@ -263,6 +273,8 @@ final class IntegrationRoutes[Tx[_]: Monad](management: IntegrationManagement[Tx
       case "INTEGRATION_RECOVERY_REQUIRED" =>
         Conflict(ApiErrorResponse(error.code, "Reconcile unknown outcomes or explicitly abandon recovery before deletion"))
       case "INTEGRATION_OBJECT_NOT_FOUND" => NotFound(ApiErrorResponse(error.code, "Integration object was not found"))
+      case "INTEGRATION_OBJECT_STILL_PRESENT" | "INTEGRATION_NODE_FLEET_MEMBERSHIP_REQUIRED_REMOVAL" =>
+        UnprocessableEntity(ApiErrorResponse(error.code, "Review the object's presence and fleet membership before removal"))
       case "INTEGRATION_BINDING_INVALID_RESOURCE" =>
         UnprocessableEntity(ApiErrorResponse(error.code, "Only an active NODE resource can be bound"))
       case "INTEGRATION_CREDENTIAL_MISSING" | "INTEGRATION_CREDENTIAL_INVALID" =>

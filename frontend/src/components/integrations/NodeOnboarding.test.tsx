@@ -53,6 +53,19 @@ function mount(entry = '/', locale: 'en' | 'ru' = 'en', configure: (url: string,
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
 
 describe('NodeOnboarding', () => {
+  it('shows compact recent history, keeps older active runs visible and expands the remaining history', async () => {
+    const items = Array.from({ length: 6 }, (_, index) => ({ ...run(index === 4 ? 'RUNNING' : 'FAILED'),
+      id: `history-${index}`, nodeName: `History node ${index}`, createdAt: '2026-10-08T12:00:00Z' }))
+    mount('/', 'en', (url, method) => url.endsWith('/runs') && method === 'GET' ? json({ items }) : undefined)
+    expect(await screen.findByText('History node 0')).toBeTruthy()
+    expect(screen.getByText('History node 4')).toBeTruthy()
+    expect(screen.queryByText('History node 3')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show all history (6)' }))
+    expect(screen.getByText('History node 3')).toBeTruthy()
+    expect(screen.getByText('History node 5')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse history' }))
+    expect(screen.queryByText('History node 5')).toBeNull()
+  })
   it.each([
     ['REMNAWAVE_PROTOCOL_PORT_OCCUPIED', 'Another process occupies the client port. Choose a free port or review the server manually.'],
     ['REMNAWAVE_PROTOCOL_PORT_OBSERVATION_UNKNOWN', 'Port state could not be confirmed. Restore access and check again.'],
@@ -207,8 +220,8 @@ describe('NodeOnboarding', () => {
     await waitFor(()=>expect(sessionStorage.length).toBe(0))
   })
   it.each([
-    ['en', 'ReadOrganization members can view onboarding history and details without loading provisioning options', 'Frankfurt edge · 198.51.100.11 · FAILED', 'Run: FAILED'],
-    ['ru', 'Участники с правом чтения организации могут просматривать историю и запуски без параметров подготовки', 'Frankfurt edge · 198.51.100.11 · FAILED', 'Запуск: FAILED'],
+    ['en', 'ReadOrganization members can view onboarding history and details without loading provisioning options', /Frankfurt edge.*198.51.100.11:443.*Failed/, 'Run: FAILED'],
+    ['ru', 'Участники с правом чтения организации могут просматривать историю и запуски без параметров подготовки', /Frankfurt edge.*198.51.100.11:443.*Ошибка/, 'Запуск: FAILED'],
   ] as const)('%s: %s', async (locale, _description, historyLabel, detailLabel) => {
     const secret = 'RAW_BACKEND_SAFE_MESSAGE'
     const { calls } = mount('/', locale, (url, method) => {

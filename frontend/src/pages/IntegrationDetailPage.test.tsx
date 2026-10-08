@@ -117,6 +117,11 @@ function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syn
       if (lostResponses > 0) { lostResponses -= 1; throw new TypeError('Failed to fetch') }
       return json(value, 202)
     }
+    if (url.endsWith('/archive') && method === 'POST') {
+      const objectId = url.split('/').at(-2)!
+      nodes = nodes.filter(value => value.id !== objectId)
+      return new Response(null, { status: 204 })
+    }
     if (url.startsWith(`${base}/inventory/nodes`)) {
       const params = new URL(url, 'http://x').searchParams
       const filtered = nodes.filter(node => (!params.get('state') || node.summary.state === params.get('state'))
@@ -154,6 +159,46 @@ function setup(entry: string, role: 'OWNER' | 'MEMBER' = 'OWNER', options: { syn
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('integration detail', () => {
+  it('deletes a Panel node only after confirmation, and recovers the same approved request after reload', async () => {
+    const { calls } = setup('/organizations/org/integrations/one?tab=nodes', 'OWNER',
+      { loseFirstActionResponse: true, hideActionHistory: true, managed: true,
+        nodes: [{ ...frankfurt, desiredState: desired('ENABLED', 'COMPLIANT') }] })
+    const row = (await screen.findByText('Frankfurt')).closest('tr')!
+    fireEvent.click(within(row).getByRole('button', { name: 'Actions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete from Panel' }))
+    expect(calls.some(c => c.method === 'POST' && c.url.endsWith('/actions'))).toBe(false)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(/container, certificates and firewall/)).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }))
+    await within(dialog).findByText(/The response was lost/)
+    const first = calls.find(c => c.method === 'POST' && c.url.endsWith('/actions'))!
+    expect(first.body?.confirmDelete).toBe(true)
+    const pending = window.sessionStorage.getItem('integration-action-request:org:one:obj-a')
+    expect(JSON.parse(pending!).requestId).toBe(first.body?.requestId)
+    cleanup()
+    const restored = setup('/organizations/org/integrations/one?tab=nodes', 'OWNER', { hideActionHistory: true })
+    const retry = await screen.findByRole('button', { name: 'Check request' })
+    fireEvent.click(retry)
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    const second = restored.calls.find(c => c.method === 'POST' && c.url.endsWith('/actions'))!
+    expect(second.body?.requestId).toBe(first.body?.requestId)
+    expect(second.body?.action).toBe('NODE_DELETE')
+    expect(second.body?.confirmDelete).toBe(true)
+    expect(window.sessionStorage.getItem('integration-action-request:org:one:obj-a')).toBeNull()
+  })
+
+  it('removes an absent object from the list only after a separate confirmation', async () => {
+    const { calls } = setup('/organizations/org/integrations/one?tab=nodes')
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove from list: Idle' }))
+    expect(calls.some(c => c.url.endsWith('/archive'))).toBe(false)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(/preserving its operation history/)).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove from list' }))
+    await waitFor(() => expect(screen.queryByText('Idle')).toBeNull())
+    expect(calls.filter(c => c.method === 'POST' && c.url.endsWith('/archive'))).toHaveLength(1)
+    expect(calls.some(c => c.method === 'POST' && c.url.endsWith('/actions'))).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Remove from list: Frankfurt' })).toBeNull()
+  })
   it.each(['en', 'ru'] as const)('requires a second explicit abandonment confirmation in %s', async locale => {
     const { calls } = setup('/organizations/org/integrations/one', 'OWNER', { locale, unresolvedUnknown: true })
     await screen.findByRole('heading', { name: 'Main Remnawave' })

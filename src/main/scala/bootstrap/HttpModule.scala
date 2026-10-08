@@ -173,7 +173,7 @@ object HttpModule {
         new IntegrationRoutes(application.integrationManagement, application.testIntegration,
           application.integrationProviderRegistry, transactionRunner, authorization, application.integrationSync,
           application.integrationBindings, persistence.integrationInventoryQuery,
-          persistence.integrationSyncSessionRepository).routes <+>
+          persistence.integrationSyncSessionRepository, application.integrationInventoryMaintenance).routes <+>
         new IntegrationActionRoutes(application.integrationActions, application.integrationManagement,
           persistence.integrationActionRepository,
           transactionRunner, authorization, application.integrationActionsEnabled, loggers.integration).routes <+>

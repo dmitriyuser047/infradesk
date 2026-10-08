@@ -416,4 +416,32 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
     assert(!result.nodeApi.get.provisioningReady)
     assert(provider.nodeProvisioning.nonEmpty)
   }
+
+  test("manual Panel delete sends one DELETE and succeeds only after exact typed absence") {
+    val absent = Response[IO](Status.NotFound).withEntity(Json.obj(
+      "errorCode" -> Json.fromString("A011"), "message" -> Json.fromString("Node not found"),
+      "path" -> Json.fromString(s"/api/nodes/$nodeId"), "timestamp" -> Json.fromString("2026-10-08T00:00:00Z")).noSpaces)
+    List(false, true).foreach { lostResponse =>
+      val deleted = Ref.of[IO, Boolean](false).unsafeRunSync()
+      val (_, provider, seen) = setup(items=List(node()), write = _ => deleted.set(true) *>
+        (if (lostResponse) IO.never else IO.pure(Response[IO](Status.NoContent))),
+        readNode = _ => deleted.get.map(done => if (done) absent else envelope(node())), timeout=100.millis)
+      assertEquals(provider.executeAction(context, nodeId.toString, IntegrationActionCode.NodeDelete).unsafeRunSync(),
+        IntegrationActionRemoteOutcome.Succeeded)
+      assertEquals(seen.get.unsafeRunSync().count(_._1=="DELETE"),1)
+      assertEquals(seen.get.unsafeRunSync().filter(_._1=="DELETE").head._2,s"/prefix/api/nodes/$nodeId")
+    }
+    val (_, stillPresent, seen) = setup(items=List(node()), write = _ => IO.pure(Response[IO](Status.Ok).withEntity("{\"response\":false}")))
+    assertEquals(stillPresent.executeAction(context,nodeId.toString,IntegrationActionCode.NodeDelete).unsafeRunSync(),
+      IntegrationActionRemoteOutcome.OutcomeUnknown("INTEGRATION_NODE_DELETE_RESULT_UNKNOWN"))
+    assertEquals(seen.get.unsafeRunSync().count(_._1=="DELETE"),1)
+    val (_, unreviewed, noWrites) = setup(version="3.4.6",items=List(node()))
+    assert(unreviewed.executeAction(context,nodeId.toString,IntegrationActionCode.NodeDelete).unsafeRunSync()
+      .isInstanceOf[IntegrationActionRemoteOutcome.DefinitelyFailed])
+    assert(!noWrites.get.unsafeRunSync().exists(_._1=="DELETE"))
+    val (_, malformed404, noDeletes) = setup(items=List(node()), readNode = _ => IO.pure(Response[IO](Status.NotFound).withEntity("proxy not found")))
+    assertEquals(malformed404.executeAction(context,nodeId.toString,IntegrationActionCode.NodeDelete).unsafeRunSync(),
+      IntegrationActionRemoteOutcome.OutcomeUnknown("INTEGRATION_NODE_DELETE_RESULT_UNKNOWN"))
+    assert(!noDeletes.get.unsafeRunSync().exists(_._1=="DELETE"))
+  }
 }

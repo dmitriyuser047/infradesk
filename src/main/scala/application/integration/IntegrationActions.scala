@@ -23,7 +23,9 @@ final class IntegrationActions[Tx[_]: MonadThrow](integrations: IntegrationRepos
   desired: IntegrationDesiredStateRepository[Tx]) {
 
   def request(actor: ActorContext, integrationId: UUID, objectId: UUID, requestId: UUID,
-    action: IntegrationActionCode): Tx[IntegrationActionExecution] =
+    action: IntegrationActionCode, confirmDelete: Boolean = false): Tx[IntegrationActionExecution] =
+    MonadThrow[Tx].raiseUnless(action != IntegrationActionCode.NodeDelete || confirmDelete)(
+      IntegrationError("INTEGRATION_NODE_DELETE_CONFIRMATION_REQUIRED", "Confirm deletion of this Panel node")) *>
     actions.findByRequest(actor.organizationId, requestId).flatMap {
       case Some(existing) => samePayload(existing, integrationId, objectId, action).pure[Tx]
       case None => create(actor, integrationId, objectId, requestId, action)
@@ -38,49 +40,72 @@ final class IntegrationActions[Tx[_]: MonadThrow](integrations: IntegrationRepos
   }
 
   private def create(actor: ActorContext, integrationId: UUID, objectId: UUID, requestId: UUID,
-    action: IntegrationActionCode): Tx[IntegrationActionExecution] = for {
-    integration <- integrations.findByIdForUpdate(actor.organizationId, integrationId).flatMap(_.liftTo[Tx](
-      IntegrationError("INTEGRATION_NOT_FOUND", "Integration was not found")))
-    _ <- Either.cond(integration.providerType == IntegrationProviderType.Remnawave &&
-      providers.find(integration.providerType).exists(_.capabilities.contains(IntegrationCapability.SafeActions)),
-      (), IntegrationError("INTEGRATION_ACTION_UNSUPPORTED", "Action is unsupported")).liftTo[Tx]
-    obj <- inventory.findObject(actor.organizationId, integrationId, objectId, forUpdate = true)
-      .flatMap(_.liftTo[Tx](IntegrationError("INTEGRATION_OBJECT_NOT_FOUND", "Integration object was not found")))
-    _ <- Either.cond(obj.objectType == IntegrationObjectType.Node, (),
-      IntegrationError("INTEGRATION_ACTION_UNSUPPORTED", "Only node actions are supported")).liftTo[Tx]
-    _ <- Either.cond(obj.isActive, (),
-      IntegrationError("INTEGRATION_OBJECT_INACTIVE", "Node is inactive")).liftTo[Tx]
-    disabled <- obj.summary match {
-      case node: RemnawaveNodeSummary => node.isDisabled.pure[Tx]
-      case _ => IntegrationError("INTEGRATION_ACTION_UNSUPPORTED", "Node observation is invalid")
-        .raiseError[Tx, Boolean]
+    action: IntegrationActionCode): Tx[IntegrationActionExecution] =
+    integrations.findByIdForUpdate(actor.organizationId, integrationId).flatMap(_.liftTo[Tx](
+      IntegrationError("INTEGRATION_NOT_FOUND", "Integration was not found"))).flatMap { integration =>
+      // A concurrent submission may have committed while this request waited for the row lock.
+      actions.findByRequest(actor.organizationId, requestId).flatMap {
+        case Some(existing) => samePayload(existing, integrationId, objectId, action).pure[Tx]
+        case None => createLocked(actor, integration, objectId, requestId, action)
+      }
     }
-    _ <- Either.cond(if (action == IntegrationActionCode.NodeEnable) disabled else !disabled, (),
-      IntegrationError("INTEGRATION_ACTION_UNSUPPORTED", "Action is unavailable for observed state")).liftTo[Tx]
-    // A one-shot request never works against a persistent intent; restart contradicts neither state.
-    intent <- desired.find(actor.organizationId, integrationId, objectId)
-    _ <- Either.cond(!intent.exists(value => IntegrationDesiredNodeState.contradicts(value.state, action)), (),
-      IntegrationError(IntegrationDesiredStates.ActionConflict, "Action conflicts with the node's desired state"))
-      .liftTo[Tx]
-    _ <- secrets.find(actor.organizationId, integration.secretId).flatMap(_.liftTo[Tx](
-      IntegrationError("INTEGRATION_CREDENTIAL_MISSING", "Integration credential is missing"))).void
-    unknown <- actions.latestUnknownFinishedAt(actor.organizationId, integrationId, objectId)
-    _ <- Either.cond(unknown.forall(obj.lastSeenAt.isAfter), (),
-      IntegrationError("INTEGRATION_ACTION_REQUIRES_REFRESH", "Synchronize before another action")).liftTo[Tx]
-    id <- ids.nextId
-    now <- time.now
-    target = IntegrationActionTarget(objectId, obj.objectType, obj.externalId, obj.displayName)
-    value = IntegrationActionExecution(id, actor.organizationId, integrationId, target, requestId, action,
-      actor.userId, IntegrationActionStatus.Queued, now, None, None, None, None, None, None, None, now)
-    result <- actions.insertOrFind(value)
-    (stored, created) = result
-    _ <- Either.cond(created || (stored.integrationId == integrationId &&
-      stored.target.inventoryObjectId == objectId && stored.action == action), (),
-      IntegrationError("INTEGRATION_ACTION_REQUEST_ID_CONFLICT", "Request ID was already used"))
-      .liftTo[Tx]
-    _ <- if (created) audit.record(actor, AuditAction.IntegrationActionRequested,
-      AuditTargetType.Integration, Some(integrationId)) else ().pure[Tx]
-  } yield stored
+
+  private def createLocked(actor: ActorContext, integration: Integration, objectId: UUID, requestId: UUID,
+    action: IntegrationActionCode): Tx[IntegrationActionExecution] = {
+    val integrationId = integration.id
+    for {
+      _ <- Either.cond(integration.providerType == IntegrationProviderType.Remnawave &&
+        providers.find(integration.providerType).exists(_.capabilities.contains(IntegrationCapability.SafeActions)),
+        (), IntegrationError("INTEGRATION_ACTION_UNSUPPORTED", "Action is unsupported")).liftTo[Tx]
+      obj <- inventory.findObject(actor.organizationId, integrationId, objectId, forUpdate = true)
+        .flatMap(_.liftTo[Tx](IntegrationError("INTEGRATION_OBJECT_NOT_FOUND", "Integration object was not found")))
+      _ <- Either.cond(obj.objectType == IntegrationObjectType.Node, (),
+        IntegrationError("INTEGRATION_ACTION_UNSUPPORTED", "Only node actions are supported")).liftTo[Tx]
+      _ <- Either.cond(obj.isActive, (),
+        IntegrationError("INTEGRATION_OBJECT_INACTIVE", "Node is inactive")).liftTo[Tx]
+      disabled <- obj.summary match {
+        case node: RemnawaveNodeSummary => node.isDisabled.pure[Tx]
+        case _ => IntegrationError("INTEGRATION_ACTION_UNSUPPORTED", "Node observation is invalid")
+          .raiseError[Tx, Boolean]
+      }
+      _ <- Either.cond(action == IntegrationActionCode.NodeDelete ||
+        (if (action == IntegrationActionCode.NodeEnable) disabled else !disabled), (),
+        IntegrationError("INTEGRATION_ACTION_UNSUPPORTED", "Action is unavailable for observed state")).liftTo[Tx]
+      // A one-shot request never works against a persistent intent; restart contradicts neither state.
+      intent <- desired.find(actor.organizationId, integrationId, objectId)
+      _ <- Either.cond(!intent.exists(value => IntegrationDesiredNodeState.contradicts(value.state, action)), (),
+        IntegrationError(IntegrationDesiredStates.ActionConflict, "Action conflicts with the node's desired state"))
+        .liftTo[Tx]
+      _ <- secrets.find(actor.organizationId, integration.secretId).flatMap(_.liftTo[Tx](
+        IntegrationError("INTEGRATION_CREDENTIAL_MISSING", "Integration credential is missing"))).void
+      unknown <- actions.latestUnknownFinishedAt(actor.organizationId, integrationId, objectId)
+      _ <- Either.cond(unknown.forall(obj.lastSeenAt.isAfter), (),
+        IntegrationError("INTEGRATION_ACTION_REQUIRES_REFRESH", "Synchronize before another action")).liftTo[Tx]
+      // Explicit deletion stops persistent management atomically with recording its durable intent.
+      // Other workflows must finish first; never cancel an in-flight operation to make room.
+      _ <- if (action == IntegrationActionCode.NodeDelete) for {
+        busy <- actions.hasActive(actor.organizationId, integrationId)
+        _ <- MonadThrow[Tx].raiseWhen(busy)(IntegrationError("INTEGRATION_ACTION_ALREADY_RUNNING", "An operation is active"))
+        member <- inventory.hasFleetMembership(actor.organizationId, integrationId, objectId)
+        _ <- MonadThrow[Tx].raiseWhen(member)(IntegrationError("INTEGRATION_NODE_FLEET_MEMBERSHIP_REQUIRED_REMOVAL", "Remove the node from its fleet first"))
+        _ <- intent.traverse_(_ => desired.delete(actor.organizationId, integrationId, objectId) *>
+          audit.record(actor, AuditAction.IntegrationDesiredStateRemoved, AuditTargetType.Integration, Some(integrationId)))
+      } yield () else ().pure[Tx]
+      id <- ids.nextId
+      now <- time.now
+      target = IntegrationActionTarget(objectId, obj.objectType, obj.externalId, obj.displayName)
+      value = IntegrationActionExecution(id, actor.organizationId, integrationId, target, requestId, action,
+        actor.userId, IntegrationActionStatus.Queued, now, None, None, None, None, None, None, None, now)
+      result <- actions.insertOrFind(value)
+      (stored, created) = result
+      _ <- Either.cond(created || (stored.integrationId == integrationId &&
+        stored.target.inventoryObjectId == objectId && stored.action == action), (),
+        IntegrationError("INTEGRATION_ACTION_REQUEST_ID_CONFLICT", "Request ID was already used"))
+        .liftTo[Tx]
+      _ <- if (created) audit.record(actor, AuditAction.IntegrationActionRequested,
+        AuditTargetType.Integration, Some(integrationId)) else ().pure[Tx]
+    } yield stored
+  }
 }
 
 final class IntegrationActionWorker[Tx[_]](actions: IntegrationActionRepository[Tx],
@@ -117,7 +142,7 @@ final class IntegrationActionWorker[Tx[_]](actions: IntegrationActionRepository[
   private def execute(value: IntegrationActionExecution): IO[Unit] = {
     val context = s"organizationId=${value.organizationId} integrationId=${value.integrationId} " +
       s"inventoryObjectId=${value.target.inventoryObjectId} executionId=${value.id} actionCode=${value.action.code}"
-    val remote = runner.run(integrations.findById(value.organizationId, value.integrationId)).flatMap {
+    val invoke = runner.run(integrations.findById(value.organizationId, value.integrationId)).flatMap {
       case None => IO.pure(IntegrationActionRemoteOutcome.DefinitelyFailed("INTEGRATION_NOT_FOUND"))
       case Some(integration) => runner.run(secrets.find(value.organizationId, integration.secretId)).flatMap {
         case None => IO.pure(IntegrationActionRemoteOutcome.DefinitelyFailed("INTEGRATION_CREDENTIAL_MISSING"))
@@ -130,7 +155,13 @@ final class IntegrationActionWorker[Tx[_]](actions: IntegrationActionRepository[
           }
         }
       }
-    }.timeoutTo(requestTimeout + scala.concurrent.duration.DurationInt(30).seconds,
+    }
+    val admitted = if (value.action == IntegrationActionCode.NodeDelete)
+      time.now.flatMap(at => runner.run(actions.deletionPermitted(value, value.claimToken.get, at))).flatMap {
+        case true => invoke
+        case false => IO.pure[IntegrationActionRemoteOutcome](IntegrationActionRemoteOutcome.DefinitelyFailed("INTEGRATION_NODE_DELETE_PRECONDITIONS_CHANGED"))
+      } else invoke
+    val remote = admitted.timeoutTo(requestTimeout + scala.concurrent.duration.DurationInt(30).seconds,
       IO.pure(IntegrationActionRemoteOutcome.OutcomeUnknown("INTEGRATION_ACTION_RESULT_UNKNOWN")))
       .handleError(_ => IntegrationActionRemoteOutcome.OutcomeUnknown("INTEGRATION_ACTION_RESULT_UNKNOWN"))
     log(s"integration.action.started $context") *> remote.flatMap { result =>

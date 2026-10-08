@@ -8,7 +8,7 @@ import { useNodeOnboardingHistory, useNodeOnboardingOptions, useNodeOnboardingRu
 import { useResource } from '../../api/resources'
 import { useOrganizationPermissions } from '../auth/authorization'
 import { useI18n } from '../../i18n'
-import { InlineAlert, PendingButton, WorkspaceSection } from '../layout/WorkspacePrimitives'
+import { InlineAlert, PendingButton, StatusIndicator, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { IntegrationDialog } from './IntegrationDialog'
 import { PanelNetworkAccess } from './PanelNetworkAccess'
 import { NodeCertificateImport } from './NodeCertificateImport'
@@ -82,6 +82,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const canManageIntegrations = permissions.can('manageIntegrations')
   const options = useNodeOnboardingOptions(organizationId, integrationId, canManageIntegrations)
   const history = useNodeOnboardingHistory(organizationId, integrationId, canRead)
+  const [expandedHistory, setExpandedHistory] = useState(false)
   const previewRequest = usePreviewNodeOnboarding(organizationId, integrationId)
   const start = useStartNodeOnboarding(organizationId, integrationId)
   const reconcile = useReconcileNodeOnboarding(organizationId, integrationId)
@@ -183,8 +184,20 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
     {options.isError ? <InlineAlert tone="danger" title={copy.apiUnavailable} /> : null}
     {history.isError ? <p role="alert">{i18n.locale === 'ru' ? 'Не удалось загрузить историю запусков.' : 'Could not load onboarding history.'}</p> : null}
     {history.data?.items.length === 0 ? <p className="muted-copy">{copy.noHistory}</p> : null}
-    {history.data?.items.map(item => <button key={item.id} className="secondary-button" type="button" onClick={() => openExisting(item.id)}>
-      {item.nodeName} · {item.address} · {item.state}</button>)}
+    <p className="muted-copy">{i18n.t.integrationInventory.onboardingHint}</p>
+    {history.data?.items.length ? <div className="onboarding-run-history" aria-label={copy.history}>
+      {history.data.items.filter((item, index) => expandedHistory || index < 3 || item.state === 'QUEUED' || item.state === 'RUNNING').map(item => <button key={item.id}
+        className="onboarding-run-row" type="button" onClick={() => openExisting(item.id)}>
+        <span className="onboarding-run-target"><strong>{item.nodeName}</strong><small>{item.address}:{item.nodePort}</small></span>
+        <time dateTime={item.createdAt}>{i18n.format.dateTime(item.createdAt)}</time>
+        <StatusIndicator label={i18n.t.integrationInventory.runStates[item.state]}
+          tone={item.state === 'SUCCEEDED' ? 'success' : item.state === 'FAILED' ? 'danger' : item.state === 'UNKNOWN' ? 'warning' : 'info'} />
+      </button>)}
+      {history.data.items.length > 3 ? <button className="onboarding-history-toggle" type="button" aria-expanded={expandedHistory}
+        onClick={() => setExpandedHistory(value => !value)}>
+        {expandedHistory ? i18n.t.integrationInventory.collapseRuns : `${i18n.t.integrationInventory.allRuns} (${history.data.items.length})`}
+      </button> : null}
+    </div> : null}
     {hasRun && runQuery.isPending ? <p role="status">{copy.loading}</p> : null}
     {hasRun && runQuery.isError ? <InlineAlert tone="danger" title={i18n.locale === 'ru' ? 'Не удалось загрузить запуск' : 'Could not load onboarding run'} /> : null}
     {unresolved && !open ? <InlineAlert tone="warning" title={i18n.t.common.unresolvedSubmission} action={<PendingButton pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || !runQuery.isSuccess} onClick={()=>void apply(unresolved, requiresRecreateApproval(runQuery.data?.run.recovery?.action))}>{i18n.t.common.recoverSubmission}</PendingButton>} /> : null}

@@ -6,6 +6,8 @@ import java.time.Instant
 import java.util.UUID
 
 trait IntegrationActionRepository[F[_]] {
+  /** Immediately before a destructive Panel call: current permissions, exact target and live claim. */
+  def deletionPermitted(value: IntegrationActionExecution, token: UUID, at: Instant): F[Boolean]
   /** Uses database uniqueness for both request idempotency and the active object slot. */
   def insertOrFind(value: IntegrationActionExecution): F[(IntegrationActionExecution, Boolean)]
   def findByRequest(organizationId: UUID, requestId: UUID): F[Option[IntegrationActionExecution]]

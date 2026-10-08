@@ -23,6 +23,12 @@ trait IntegrationSyncSessionRepository[F[_]] {
 }
 
 trait IntegrationInventoryRepository[F[_]] {
+  /** Hides an absent object, preserving its identity and all execution history. Caller locks
+    * the integration and object and checks active work before removing manual relationships.
+    */
+  def archiveAbsent(organizationId: UUID, integrationId: UUID, objectId: UUID, at: Instant): F[Boolean]
+  /** Retained fleet membership requires an explicit removal from that fleet first. */
+  def hasFleetMembership(organizationId: UUID, integrationId: UUID, objectId: UUID): F[Boolean]
   /** Writes one complete snapshot in a fixed number of statements: every observed object is
     * inserted or updated (and reactivated), every stored object of a complete type that the
     * snapshot does not contain becomes inactive. Returns how many objects became inactive.

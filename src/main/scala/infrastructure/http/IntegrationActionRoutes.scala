@@ -42,11 +42,15 @@ final class IntegrationActionRoutes(actions: IntegrationActions[ConnectionIO],
             } yield (requestId, action)
             decoded match {
               case None => BadRequest(ApiErrorResponse("INVALID_REQUEST", "Invalid integration action request"))
-              case Some((requestId, action)) => respond(runner.run(actions.request(context.actor,
-                integrationId, objectId, requestId, action)).flatMap(value =>
+              case Some((requestId, action)) =>
+                val submit = respond(runner.run(actions.request(context.actor,
+                integrationId, objectId, requestId, action, body.hcursor.get[Boolean]("confirmDelete").toOption.contains(true))).flatMap(value =>
                   logger.info(s"integration.action.requested organizationId=$organizationId integrationId=$integrationId " +
                     s"inventoryObjectId=$objectId executionId=${value.id} actionCode=${action.code}")
                     .handleErrorWith(_ => IO.unit) *> Accepted(json(value))))
+                if (action == IntegrationActionCode.NodeDelete)
+                  authorization.require(request, OrganizationPermission.ManageIntegrations)(_ => submit)
+                else submit
             }
           case (Some((organizationId, _, _)), _) if organizationId != context.organizationId =>
             NotFound(ApiErrorResponse("INTEGRATION_NOT_FOUND", "Integration was not found"))

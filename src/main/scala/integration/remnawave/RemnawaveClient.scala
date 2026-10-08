@@ -200,6 +200,7 @@ final class RemnawaveClient(client: Client[IO], requestTimeout: FiniteDuration,
       case IntegrationActionCode.NodeEnable => "enable"
       case IntegrationActionCode.NodeDisable => "disable"
       case IntegrationActionCode.NodeRestart => "restart"
+      case IntegrationActionCode.NodeDelete => return IO.pure(IntegrationActionRemoteOutcome.DefinitelyFailed("INTEGRATION_ACTION_UNSUPPORTED"))
     }
     val expected = Try(java.util.UUID.fromString(externalId)).toOption
     if (!credential.valid) IO.pure(DefinitelyFailed("INTEGRATION_CREDENTIAL_INVALID"))
