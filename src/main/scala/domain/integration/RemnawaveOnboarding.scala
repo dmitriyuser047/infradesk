@@ -16,6 +16,11 @@ object OnboardingPhase {
   case object RetireNodeFirewall extends OnboardingPhase("RETIRE_NODE_FIREWALL", true)
   case object RetireLocalNode extends OnboardingPhase("RETIRE_LOCAL_NODE", true)
   case object CreateNode extends OnboardingPhase("CREATE_NODE", true)
+  case object CreateProtocolProfile extends OnboardingPhase("CREATE_PROTOCOL_PROFILE", true)
+  case object IssueTls extends OnboardingPhase("ISSUE_TLS", true)
+  case object InstallTls extends OnboardingPhase("INSTALL_TLS", true)
+  case object ConfigureClientFirewall extends OnboardingPhase("CONFIGURE_CLIENT_FIREWALL", true)
+  case object VerifyProtocol extends OnboardingPhase("VERIFY_PROTOCOL")
   case object GetInstallationData extends OnboardingPhase("GET_INSTALLATION_DATA")
   case object ResolvePanelSource extends OnboardingPhase("RESOLVE_PANEL_SOURCE")
   case object UpdateNodeAddress extends OnboardingPhase("UPDATE_NODE_ADDRESS", true)
@@ -48,11 +53,18 @@ object OnboardingPhase {
     }
     val network=if(s.passivePanelDiscovery) prior.flatMap(p => if(p==FinalizePanelSources)
       List(ObservePanelSource,AddObservedPanelSource,VerifyObservedPanel,p) else List(p)) else prior
-    if(s.lifecycleVersion>=5 && s.recovery.exists(r => r.reusesNode && r.previousNodeAddress.nonEmpty))
+    val addressed = if(s.lifecycleVersion>=5 && s.recovery.exists(r => r.reusesNode && r.previousNodeAddress.nonEmpty))
       network.flatMap(p => if(p==ResolvePanelSource) List(UpdateNodeAddress,p) else List(p)) else network
+    if(s.input.protocol.nonEmpty) addressed.flatMap {
+      case CreateNode => (if(s.input.tlsHttp01.nonEmpty) List(IssueTls) else Nil) ++ List(CreateProtocolProfile, CreateNode)
+      case InstallNode => (if(s.input.certificateId.nonEmpty) List(InstallTls) else Nil) ++ List(ConfigureClientFirewall, InstallNode)
+      case FinalVerify => List(VerifyProtocol, FinalVerify)
+      case p => List(p)
+    } else addressed
   }
   def fromCode(code: String): OnboardingPhase = (all ++ List(DeleteNode,ConfirmNodeDeleted,RetireNodeFirewall,RetireLocalNode,
-    ResolvePanelSource,UpdateNodeAddress,AddPanelSources,FinalizePanelSources,ObservePanelSource,AddObservedPanelSource,VerifyObservedPanel)).find(_.code == code).getOrElse(
+    ResolvePanelSource,UpdateNodeAddress,AddPanelSources,FinalizePanelSources,ObservePanelSource,AddObservedPanelSource,VerifyObservedPanel,
+    CreateProtocolProfile,IssueTls,InstallTls,ConfigureClientFirewall,VerifyProtocol)).find(_.code == code).getOrElse(
     throw new IllegalArgumentException("Invalid onboarding phase"))
   def next(phase: OnboardingPhase): Option[OnboardingPhase] = all.lift(all.indexOf(phase) + 1)
   def next(phase: OnboardingPhase,snapshot: OnboardingSnapshot): Option[OnboardingPhase] = {
@@ -85,16 +97,26 @@ object OnboardingRecovery {
 
 final case class OnboardingInput(resourceId: UUID, nodeName: String, address: String, nodePort: Int,
   configProfileId: UUID, activeInboundIds: List[UUID], panelCidrs: List[String], desiredState: String = "ENABLED",
-  panelSourceMode: PanelSourceMode = PanelSourceMode.Manual, nodeAddressMode: NodeAddressMode = NodeAddressMode.Legacy) {
+  panelSourceMode: PanelSourceMode = PanelSourceMode.Manual, nodeAddressMode: NodeAddressMode = NodeAddressMode.Legacy,
+  protocol: Option[RemnawaveProtocol] = None, tlsCertificateId: Option[UUID] = None, tlsHttp01: Option[NodeTlsHttp01] = None) {
+  def certificateId: Option[UUID] = tlsCertificateId.orElse(tlsHttp01.map(_.certificateId))
   def normalized: Either[String, OnboardingInput] = for {
     cidrs <- if(panelSourceMode == PanelSourceMode.Auto && panelCidrs.isEmpty) Right(Nil) else OnboardingInput.canonicalCidrs(panelCidrs)
     _ <- Either.cond(nodeName == nodeName.trim && nodeName.length >= 3 && nodeName.length <= 30 &&
       !nodeName.exists(_.isControl) && (OnboardingInput.validAddress(address) || nodeAddressMode==NodeAddressMode.PublicIp && address.isEmpty) && nodePort > 0 && nodePort <= 65535 &&
-      activeInboundIds.nonEmpty && activeInboundIds.size <= 256 && activeInboundIds.distinct == activeInboundIds &&
+      (if(protocol.nonEmpty) configProfileId == OnboardingInput.GeneratedProfileId && activeInboundIds.isEmpty
+        else activeInboundIds.nonEmpty && configProfileId != OnboardingInput.GeneratedProfileId) &&
+      activeInboundIds.size <= 256 && activeInboundIds.distinct == activeInboundIds &&
       desiredState == "ENABLED", (), "REMNAWAVE_ONBOARDING_INVALID_INPUT")
+    _ <- protocol.fold[Either[String, Unit]](Right(()))(p => RemnawaveProtocol.validate(p, nodePort).map(_ => ()))
+    _ <- Either.cond(tlsCertificateId.isEmpty || protocol.exists(_.isInstanceOf[RemnawaveProtocol.Hysteria2]),
+      (),"REMNAWAVE_PROTOCOL_INVALID")
+    _ <- Either.cond(tlsHttp01.forall(_.valid) && (tlsHttp01.isEmpty || tlsCertificateId.isEmpty &&
+      protocol.exists(_.isInstanceOf[RemnawaveProtocol.Hysteria2]) && nodePort != 80), (), "REMNAWAVE_TLS_HTTP01_INVALID")
   } yield copy(panelCidrs = cidrs, activeInboundIds = activeInboundIds.sortBy(_.toString))
 }
 object OnboardingInput {
+  val GeneratedProfileId: UUID = new UUID(0, 0)
   def validAddress(value: String): Boolean = value.length >= 2 && value.length <= 253 &&
     (value.matches("[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*") ||
       (value.contains(":") && value.matches("[0-9a-fA-F:]+") &&
@@ -119,7 +141,8 @@ final case class OnboardingSnapshot(input: OnboardingInput, integrationUpdatedAt
   inboundNames: List[String], changes: List[String], warnings: List[String], blockers: List[String],
   recovery: Option[OnboardingRecovery] = None, lifecycleVersion: Int = 1,
   panelSource: Option[PanelSourceEvidence] = None, nodeAddress: Option[NodeAddressEvidence] = None) {
-  require(Set(1,2,3,4,5)(lifecycleVersion))
+  require(Set(1,2,3,4,5,6)(lifecycleVersion))
+  require(input.protocol.isEmpty || lifecycleVersion >= 6)
   require(lifecycleVersion < 4 || panelSource.exists(e => e.mode == input.panelSourceMode && e.sources == input.panelCidrs))
   require(input.nodeAddressMode==NodeAddressMode.Legacy || nodeAddress.exists(e => e.mode==input.nodeAddressMode && e.address==input.address))
   def connectivityRepair: Boolean = lifecycleVersion >= 4 && recovery.exists(_.action == "REPAIR_PANEL_CONNECTIVITY")
@@ -142,10 +165,16 @@ final case class RemnawaveNodeOnboardingRun(id: UUID, organizationId: UUID, inte
   claimToken: Option[UUID] = None, claimDeadline: Option[Instant] = None,
   connectivityFinding: Option[PanelConnectivityFinding] = None,
   observedPanelSource: Option[PanelSourceObservation] = None,
-  connectivityCompletion: Option[PanelConnectivityCompletion] = None) {
+  connectivityCompletion: Option[PanelConnectivityCompletion] = None,
+  protocolBinding: Option[NodeProtocolBinding] = None) {
+  require(protocolBinding.isEmpty || snapshot.input.protocol.nonEmpty)
   require(observedPanelSource.isEmpty || snapshot.passivePanelDiscovery)
   def effectivePanelSources: List[String] = observedPanelSource.filter(_.status==PanelSourceObservationStatus.Observed)
     .fold(snapshot.input.panelCidrs)(_.sources)
+  def effectiveInput: OnboardingInput = protocolBinding.fold(snapshot.input)(binding =>
+    snapshot.input.copy(configProfileId=binding.profileId, activeInboundIds=binding.inboundIds))
+  def intent: NodeCreateIntent = snapshot.intent.copy(configProfileId=effectiveInput.configProfileId,
+    activeInboundIds=effectiveInput.activeInboundIds)
 }
 object RemnawaveNodeOnboardingRun {
   /** Ownership follows the node/correlation chain, regardless of the latest terminal phase. */
@@ -209,7 +238,11 @@ object OnboardingSnapshotCodec {
       if(s.lifecycleVersion==1) Json.obj() else Json.obj("lifecycleVersion" -> Json.fromInt(s.lifecycleVersion))).deepMerge(
       s.panelSource.fold(Json.obj())(e => Json.obj("panelSource" -> PanelSourceEvidence.encode(e),
         "panelSourceMode" -> str(s.input.panelSourceMode.code)))).deepMerge(
-      s.nodeAddress.fold(Json.obj())(e => Json.obj("nodeAddress" -> NodeAddressEvidence.encode(e),"nodeAddressMode" -> str(s.input.nodeAddressMode.code))))
+      s.nodeAddress.fold(Json.obj())(e => Json.obj("nodeAddress" -> NodeAddressEvidence.encode(e),"nodeAddressMode" -> str(s.input.nodeAddressMode.code)))).deepMerge(
+      s.input.protocol.fold(Json.obj())(p => Json.obj("protocol" -> RemnawaveProtocol.encode(p)))).deepMerge(
+      s.input.tlsCertificateId.fold(Json.obj())(value => Json.obj("tlsCertificateId" -> id(value)))).deepMerge(
+      s.input.tlsHttp01.fold(Json.obj())(value => Json.obj("tlsHttp01" -> Json.obj("certificateId" -> id(value.certificateId),
+        "email" -> str(value.email), "agreeTerms" -> Json.True))))
   def encodeRecovery(r: OnboardingRecovery): Json = Json.obj("sourceRunId" -> id(r.sourceRunId),
     "previousExternalNodeId" -> r.previousExternalNodeId.fold(Json.Null)(id),"previousCorrelationId" -> id(r.previousCorrelationId),
     "installationOwnerId" -> id(r.installationOwnerId),"state" -> str(r.state),"action" -> str(r.action)).deepMerge(
@@ -238,7 +271,7 @@ object OnboardingSnapshotCodec {
       "revisionId", "revisionNumber", "assignmentId", "assignmentVersion", "revisionHash", "baselinePlanId", "baselineNeeded",
       "serverVersion", "apiGeneration", "sourceCommit", "capabilities", "compatibilityBlocker", "imageReference", "correlationId",
       "serverName", "serverProfileName", "configProfileName", "inboundNames", "changes", "warnings", "blockers")
-    require(json.asObject.exists(o => (o.keys.toSet -- Set("recovery","lifecycleVersion","panelSource","panelSourceMode","nodeAddress","nodeAddressMode")) == expectedKeys), "Invalid onboarding snapshot")
+    require(json.asObject.exists(o => (o.keys.toSet -- Set("recovery","lifecycleVersion","panelSource","panelSourceMode","nodeAddress","nodeAddressMode","protocol","tlsCertificateId","tlsHttp01")) == expectedKeys), "Invalid onboarding snapshot")
     val c = json.hcursor
     def s(k: String): String = c.get[String](k).fold(_ => throw new IllegalArgumentException("Invalid onboarding snapshot"), identity)
     def u(k: String) = UUID.fromString(s(k))
@@ -248,11 +281,18 @@ object OnboardingSnapshotCodec {
       value.asNumber.flatMap(_.toInt).getOrElse(throw new IllegalArgumentException("Invalid onboarding snapshot")))
     val capabilities = List(NodeProvisioningCapability.Inventory, NodeProvisioningCapability.Status,
       NodeProvisioningCapability.Create, NodeProvisioningCapability.InstallationData, NodeProvisioningCapability.ConfigProfile,
-      NodeProvisioningCapability.CreateReconciliation, NodeProvisioningCapability.CreateIdempotency,NodeProvisioningCapability.AddressUpdate)
+      NodeProvisioningCapability.CreateReconciliation, NodeProvisioningCapability.CreateIdempotency,NodeProvisioningCapability.AddressUpdate,
+      NodeProvisioningCapability.ProtocolProfileCreate)
     val input = OnboardingInput(u("resourceId"),s("nodeName"),s("address"),c.get[Int]("nodePort").toOption.get,
       u("configProfileId"),list("activeInboundIds").map(UUID.fromString),list("panelCidrs"),s("desiredState"),
       c.downField("panelSourceMode").focus.fold[PanelSourceMode](PanelSourceMode.Manual)(v => PanelSourceMode.fromCode(v.asString.get).get),
-      c.downField("nodeAddressMode").focus.fold[NodeAddressMode](NodeAddressMode.Legacy)(v => NodeAddressMode.fromCode(v.asString.get).get))
+      c.downField("nodeAddressMode").focus.fold[NodeAddressMode](NodeAddressMode.Legacy)(v => NodeAddressMode.fromCode(v.asString.get).get),
+      c.downField("protocol").focus.map(j => RemnawaveProtocol.decode(j,c.get[Int]("nodePort").toOption.get)
+        .fold(code => throw new IllegalArgumentException(code),identity)),c.get[Option[String]]("tlsCertificateId").toOption.get.map(UUID.fromString),
+      c.downField("tlsHttp01").focus.map { j =>
+        require(j.asObject.exists(_.keys.toSet==Set("certificateId","email","agreeTerms")) && j.hcursor.get[Boolean]("agreeTerms").contains(true))
+        NodeTlsHttp01(UUID.fromString(j.hcursor.get[String]("certificateId").toOption.get),j.hcursor.get[String]("email").toOption.get)
+      })
       .normalized.fold(code => throw new IllegalArgumentException(code),identity)
     OnboardingSnapshot(input,Instant.parse(s("integrationUpdatedAt")),u("integrationSecretId"),u("connectionId"),
       Instant.parse(s("connectionUpdatedAt")),u("profileId"),u("revisionId"),c.get[Int]("revisionNumber").toOption.get,

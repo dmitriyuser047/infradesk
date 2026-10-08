@@ -18,6 +18,159 @@ final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO], 
   with application.port.RemnawaveNodeImageRemote[IO] {
   import SshRemnawaveNodeRemote._
   private lazy val images = new SshManagedNodeImages(transport)
+  override def cleanupCertificateProbe(connection: Connection, resourceId: UUID, request: domain.integration.NodeTlsHttp01): IO[Unit] =
+    withSession(connection) { (_,c,_) => c.capture("/usr/bin/python3",NodeHttp01Probe.args("cleanup",resourceId,"cleanup.invalid",request,
+      java.time.Instant.EPOCH,false),30.seconds).flatMap(out => IO.raiseUnless(out.exitCode==0 && out.stdout.trim=="CLEANED")(
+        ProfileRemoteFailure("REMNAWAVE_TLS_CLEANUP_UNKNOWN",uncertain=true))) }
+  override def issueCertificate(connection: Connection, resourceId: UUID, serverName: String,
+    request: domain.integration.NodeTlsHttp01, deadline: java.time.Instant, fresh: Boolean): IO[domain.integration.NodeTlsMaterial] =
+    withSession(connection) { (_,c,_) => for {
+      _ <- IO.raiseUnless(request.valid && domain.integration.RemnawaveProtocol.domain(serverName).contains(serverName))(
+        ProfileRemoteFailure("REMNAWAVE_TLS_HTTP01_INVALID"))
+      ssh <- c.shell("printf '%s' \"$SSH_CONNECTION\"",privileged=false)
+      endpoint <- parseSsh(ssh.stdout).liftTo[IO]
+      _ <- IO.raiseUnless(endpoint._2!=80)(ProfileRemoteFailure("REMNAWAVE_TLS_HTTP01_PORT_OCCUPIED"))
+      rules <- c.capture("ufw",List("show","added"),10.seconds)
+      parsed <- ProfileFirewall.parseOwned(rules.stdout,"infradesk:acme:").leftMap(ProfileRemoteFailure(_)).liftTo[IO]
+      _ <- IO.raiseUnless(rules.exitCode==0 && !parsed.exists(r => r.rule.port==80 && r.rule.protocol=="tcp" && r.action!="allow"))(
+        ProfileRemoteFailure("REMNAWAVE_TLS_HTTP01_FIREWALL_CONFLICT"))
+      out <- c.capture("/usr/bin/python3",NodeHttp01Probe.args("issue",resourceId,serverName,request,deadline,fresh),240.seconds)
+      _ <- IO.raiseUnless(out.exitCode==0)(ProfileRemoteFailure(out.stdout.trim match {
+        case "PORT_OCCUPIED" => "REMNAWAVE_TLS_HTTP01_PORT_OCCUPIED"
+        case "UNAVAILABLE" | "IMAGE_UNAVAILABLE" => "REMNAWAVE_TLS_HTTP01_UNAVAILABLE"
+        case "ISSUANCE_FAILED" => "REMNAWAVE_TLS_HTTP01_FAILED"
+        case _ => "REMNAWAVE_TLS_HTTP01_UNKNOWN"
+      },uncertain=out.stdout.trim!="PORT_OCCUPIED" && out.stdout.trim!="UNAVAILABLE" && out.stdout.trim!="IMAGE_UNAVAILABLE" && out.stdout.trim!="ISSUANCE_FAILED"))
+      json <- io.circe.parser.parse(out.stdout).leftMap(_ => ProfileRemoteFailure("REMNAWAVE_TLS_HTTP01_UNKNOWN",uncertain=true)).liftTo[IO]
+      material <- (for {
+        cert <- json.hcursor.get[String]("certificatePem").toOption
+        key <- json.hcursor.get[String]("privateKeyPem").toOption
+      } yield new domain.integration.NodeTlsMaterial(cert,key)).liftTo[IO](ProfileRemoteFailure("REMNAWAVE_TLS_HTTP01_UNKNOWN",uncertain=true))
+    } yield material }.handleErrorWith {
+      case e: ProfileRemoteFailure => IO.raiseError(application.integration.IntegrationError(e.code,"HTTP-01 certificate issuance could not proceed"))
+      case _: RemoteConfigurationFailure => IO.raiseError(application.integration.IntegrationError("REMNAWAVE_TLS_HTTP01_UNKNOWN","Certificate issuance outcome is unknown"))
+    }
+  override def installCertificate(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    certificate: domain.integration.NodeTlsCertificate, material: domain.integration.NodeTlsMaterial): IO[ProvisioningStepResult] =
+    Ref.of[IO,Boolean](false).flatMap { changed => stepTracked(changed)(withSession(connection) { (session,c,sshUid) =>
+      val dir=tlsDirectory(certificate.id)
+      val marker=s"infradesk:remnawave-tls:${certificate.resourceId}:${certificate.id}"
+      val files=new ProfileManagedFiles(session,c,sshUid,spec.onboardingId)
+      for {
+        _ <- IO.raiseUnless(spec.tlsCertificateId.contains(certificate.id) && certificate.resourceId==spec.resourceId &&
+          domain.integration.RemnawaveProtocol.domain(certificate.domain).contains(certificate.domain))(
+          ProfileRemoteFailure("REMNAWAVE_TLS_REFERENCE_INVALID"))
+        _ <- checked(c,"sh",List("-c",PrepareTlsDirectory,"infradesk",dir,marker,certificate.domain))
+        _ <- List("pem" -> material.certificatePem,"key" -> material.privateKeyPem).traverse_ { case(extension,value) =>
+          val path=s"$dir/${certificate.domain}.$extension"
+          val bytes=value.getBytes(StandardCharsets.UTF_8)
+          val desired=ProfileManagedFiles.sha256(bytes)
+          c.capture("sh",List("-c",
+            "if [ -L \"$1\" ]; then exit 1; elif [ -e \"$1\" ]; then [ -f \"$1\" ] && [ \"$(stat -c '%u:%g:%a:%h' \"$1\")\" = '0:0:600:1' ] || exit 1; sha256sum \"$1\" | cut -d' ' -f1; else printf MISSING; fi",
+            "infradesk",path),10.seconds).flatMap { current =>
+            IO.raiseUnless(current.exitCode==0 && (current.stdout.trim=="MISSING" || current.stdout.trim==desired))(
+              ProfileRemoteFailure("REMNAWAVE_TLS_ARTIFACT_CONFLICT")) *>
+              (if(current.stdout.trim==desired) IO.unit else changed.set(true) *>
+                files.replace(path,marker,bytes,None,installOwned=true,targetMode=384))
+          }
+        }
+      } yield success("certificate" -> "installed")
+    })}
+  override def configureClientFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    protocol: domain.integration.RemnawaveProtocol): IO[ProvisioningStepResult] =
+    Ref.of[IO,Boolean](false).flatMap { changed => stepTracked(changed)(withSession(connection) { (_,c,_) =>
+      val prefix=s"infradesk:remnawave-client:${spec.resourceId}:${spec.externalNodeId}:"
+      val transports=if(protocol.transport=="UDP") List("udp") else List("tcp","udp")
+      def rules: IO[List[ProfileFirewallRule]] = c.capture("ufw",List("show","added"),15.seconds).flatMap { output =>
+        IO.raiseUnless(output.exitCode==0 && !output.stdoutTruncated && !output.stderrTruncated)(
+          ProfileRemoteFailure("PROVISIONING_FIREWALL_OBSERVATION_FAILED")) *>
+          ProfileFirewall.parseOwned(output.stdout,prefix).leftMap(ProfileRemoteFailure(_)).liftTo[IO]
+      }
+      for {
+        _ <- validate(spec)
+        _ <- domain.integration.RemnawaveProtocol.validate(protocol,spec.nodePort).leftMap(ProfileRemoteFailure(_)).liftTo[IO]
+        ssh <- c.shell("printf '%s' \"$SSH_CONNECTION\"",privileged=false)
+        endpoint <- parseSsh(ssh.stdout).liftTo[IO]
+        _ <- IO.raiseUnless(!transports.contains("tcp") || endpoint._2!=protocol.port)(ProfileRemoteFailure("REMNAWAVE_CLIENT_PORT_CONFLICT"))
+        status <- c.capture("ufw",List("status"),10.seconds)
+        _ <- IO.raiseUnless(status.exitCode==0 && !status.stdoutTruncated && status.stdout.linesIterator.exists(_.trim=="Status: active"))(
+          ProfileRemoteFailure("PROVISIONING_FIREWALL_SSH_ACCESS_UNPROVEN"))
+        _ <- transports.traverse_ { transport => rules.flatMap { current =>
+          val portRules=current.filter(r => r.rule.port==protocol.port && r.rule.protocol==transport)
+          val own=current.filter(_.owned)
+          IO.raiseWhen(own.exists(r => r.action!="allow" || r.rule.port!=protocol.port ||
+            !transports.contains(r.rule.protocol) || r.rule.sources!=List("ANY")) || portRules.exists(_.action!="allow"))(
+            ProfileRemoteFailure("REMNAWAVE_CLIENT_FIREWALL_CONFLICT")) *>
+            (if(portRules.exists(r => r.action=="allow" && r.rule.sources==List("ANY"))) IO.unit
+              else changed.set(true) *> checked(c,"ufw",List("allow","from","any","to","any","port",protocol.port.toString,
+                "proto",transport,"comment",prefix+transport)))
+        }}
+        _ <- canary(connection)
+        verified <- rules
+        _ <- IO.raiseUnless(transports.forall(t => verified.exists(r => r.action=="allow" && r.rule.port==protocol.port &&
+          r.rule.protocol==t && r.rule.sources==List("ANY"))))(ProfileRemoteFailure("PROVISIONING_FIREWALL_VERIFICATION_FAILED"))
+      } yield success("clientFirewall" -> "ready")
+    })}
+
+  override def retireClientFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    protocol: domain.integration.RemnawaveProtocol): IO[ProvisioningStepResult] =
+    Ref.of[IO,Boolean](false).flatMap { changed => stepTracked(changed)(withSession(connection) { (_,c,_) =>
+      val prefix=s"infradesk:remnawave-client:${spec.resourceId}:${spec.externalNodeId}:"
+      val transports=if(protocol.transport=="UDP") List("udp") else List("tcp","udp")
+      def own: IO[List[ProfileFirewallRule]]=c.capture("ufw",List("show","added"),10.seconds).flatMap { out =>
+        IO.raiseUnless(out.exitCode==0)(ProfileRemoteFailure("PROVISIONING_FIREWALL_OBSERVATION_FAILED")) *>
+          ProfileFirewall.parseOwned(out.stdout,prefix).leftMap(ProfileRemoteFailure(_)).liftTo[IO].flatMap { rules =>
+            val owned=rules.filter(_.owned)
+            IO.raiseUnless(owned.forall(r => r.action=="allow" && r.rule.port==protocol.port && transports.contains(r.rule.protocol) &&
+              r.rule.sources==List("ANY") && r.rule.id==r.rule.protocol) &&
+              !rules.exists(r => !r.owned && owned.exists(o => r.action==o.action && r.rule.port==o.rule.port &&
+                r.rule.protocol==o.rule.protocol && r.rule.sources==o.rule.sources)))(ProfileRemoteFailure("REMNAWAVE_CLIENT_FIREWALL_CONFLICT")).as(owned)
+          }
+      }
+      for {
+        _ <- validate(spec)
+        ssh <- c.shell("printf '%s' \"$SSH_CONNECTION\"",privileged=false)
+        endpoint <- parseSsh(ssh.stdout).liftTo[IO]
+        _ <- IO.raiseUnless(!transports.contains("tcp") || endpoint._2!=protocol.port)(ProfileRemoteFailure("REMNAWAVE_CLIENT_PORT_CONFLICT"))
+        initial <- own
+        _ <- initial.traverse_ { rule => for {
+          fresh <- own
+          _ <- if(!fresh.exists(_.rule==rule.rule)) IO.unit else canary(connection) *> changed.set(true) *>
+            checked(c,"ufw",List("--force","delete","allow","from","any","to","any","port",protocol.port.toString,
+              "proto",rule.rule.protocol,"comment",prefix+rule.rule.protocol))
+        } yield () }
+        _ <- canary(connection)
+        remaining <- own
+        _ <- IO.raiseUnless(remaining.isEmpty)(ProfileRemoteFailure("REMNAWAVE_CLIENT_FIREWALL_RETIRE_UNKNOWN",uncertain=true))
+      } yield success("clientFirewall" -> "retired")
+    })}
+
+  override def verifyProtocol(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    protocol: domain.integration.RemnawaveProtocol): IO[ProvisioningStepResult] = step(withSession(connection) { (_,c,_) =>
+    val transports=if(protocol.transport=="UDP") List("udp") else List("tcp","udp")
+    for {
+      _ <- validate(spec)
+      _ <- domain.integration.RemnawaveProtocol.validate(protocol,spec.nodePort).leftMap(ProfileRemoteFailure(_)).liftTo[IO]
+      running <- c.capture("docker",List("inspect","-f","{{.State.Running}}",containerName(spec)),10.seconds)
+      _ <- IO.raiseUnless(running.exitCode==0 && running.stdout.trim=="true")(ProfileRemoteFailure("REMNAWAVE_PROTOCOL_RUNTIME_FAILED"))
+      processes <- c.capture("docker",List("top",containerName(spec),"-eo","pid,comm"),10.seconds)
+      _ <- IO.raiseUnless(processes.exitCode==0 && !processes.stdoutTruncated)(ProfileRemoteFailure("REMNAWAVE_PROTOCOL_RUNTIME_UNKNOWN"))
+      xrayPids=processes.stdout.linesIterator.drop(1).toList.flatMap { line =>
+        line.trim.split("\\s+").toList match {
+          case pid :: "xray" :: Nil => pid.toLongOption.filter(_>0).toList
+          case _ => Nil
+        }
+      }
+      _ <- IO.raiseUnless(xrayPids.nonEmpty && xrayPids.size<=16)(ProfileRemoteFailure("REMNAWAVE_PROTOCOL_RUNTIME_UNKNOWN"))
+      _ <- transports.traverse_ { t =>
+        // host networking shares /proc/net: require the socket owner to be Xray in this container.
+        c.capture("ss",List("-H",if(t=="tcp") "-lntp" else "-lnup","sport", "=", ":"+protocol.port),10.seconds)
+          .flatMap(result => IO.raiseUnless(result.exitCode==0 && !result.stdoutTruncated &&
+            result.stdout.linesIterator.exists(line => xrayPids.exists(pid => line.contains(s"pid=$pid,"))))(
+              ProfileRemoteFailure("REMNAWAVE_PROTOCOL_LISTENER_MISSING")))
+      }
+    } yield success("protocolRuntime" -> "ready")
+  })
   override def publicNodeAddresses(connection: Connection): IO[List[String]] = withSession(connection) { (_,c,_) =>
     c.capture("ip",List("-j","address","show","scope","global"),10.seconds).flatMap { result =>
       IO.raiseUnless(result.exitCode==0 && !result.stdoutTruncated)(ProfileRemoteFailure("REMNAWAVE_NODE_PUBLIC_IP_UNCONFIRMED")) *>
@@ -639,7 +792,33 @@ private[ssh] object SshRemnawaveNodeRemote {
        |        hard: 1048576
        |    env_file: .env
        |    restart: unless-stopped
-       |""".stripMargin.replace("\r\n","\n")
+       |""".stripMargin.replace("\r\n","\n") + s.tlsCertificateId.fold("")(id =>
+      s"    volumes:\n      - type: bind\n        source: ${tlsDirectory(id)}\n        target: /var/lib/remnawave/configs/xray/ssl\n        read_only: true\n        bind:\n          create_host_path: false\n")
+  private[ssh] def tlsDirectory(id: UUID): String = s"/var/lib/infradesk/remnawave/tls/$id"
+  private[ssh] val PrepareTlsDirectory = """set -eu
+    |d=$1; marker=$2
+    |for parent in /var /var/lib /var/lib/infradesk /var/lib/infradesk/remnawave /var/lib/infradesk/remnawave/tls; do
+    | [ ! -L "$parent" ] || exit 42
+    | if [ ! -e "$parent" ]; then mkdir -m 0700 -- "$parent"; fi
+    | [ -d "$parent" ] && [ "$(stat -c '%u' "$parent")" = 0 ] || exit 42
+    | mode=$(stat -c '%a' "$parent"); [ $((0$mode & 022)) -eq 0 ] || exit 42
+    |done
+    |[ ! -L "$d" ] || exit 42
+    |if [ ! -e "$d" ]; then
+    | umask 077; stage=$(mktemp -d "${d}.publish-XXXXXXXX")
+    | trap 'if [ -n "${stage:-}" ]; then rm -f -- "$stage/.owner"; rmdir -- "$stage"; fi' EXIT HUP INT TERM
+    | printf '%s\n' "$marker" > "$stage/.owner"
+    | mv -T -n -- "$stage" "$d"
+    | if [ ! -e "$stage" ]; then stage=; fi
+    |fi
+    |[ -d "$d" ] && [ "$(stat -c '%u:%g:%a' "$d")" = '0:0:700' ] || exit 42
+    |[ ! -L "$d/.owner" ] && [ -f "$d/.owner" ] && [ "$(stat -c '%u:%g:%a:%h' "$d/.owner")" = '0:0:600:1' ] || exit 42
+    |[ "$(cat "$d/.owner")" = "$marker" ] || exit 43
+    |for entry in "$d"/.[!.]* "$d"/..?* "$d"/*; do
+    | [ -e "$entry" ] || [ -L "$entry" ] || continue
+    | case "$entry" in "$d/.owner"|"$d/$3.pem"|"$d/$3.key") [ ! -L "$entry" ] || exit 42 ;; *) exit 43 ;; esac
+    |done
+    |""".stripMargin
   private[ssh] def controlledComposeReference(s: RemnawaveNodeRemoteSpec, bytes: Array[Byte]): Option[String] = {
     val text = new String(bytes, StandardCharsets.UTF_8)
     val images = text.linesIterator.filter(_.startsWith("    image: ")).toList

@@ -1,0 +1,65 @@
+package ru.bitec.app.ops
+package integration.ssh
+
+import domain.integration.NodeTlsHttp01
+import java.time.Instant
+import java.util.UUID
+import java.nio.charset.StandardCharsets
+import scala.sys.process._
+import scala.concurrent.duration._
+import munit.FunSuite
+
+/** Real Ubuntu/netfilter verifies issuance, private exports, no repeated order and independent lease cleanup. */
+final class NodeHttp01ProbeShellSpec extends FunSuite {
+  override val munitTimeout: Duration=240.seconds
+  private val enabled=sys.env.get("INFRADESK_RUN_SHELL_INTEGRATION_TESTS").contains("true")
+  test(if(enabled) munit.TestOptions("production HTTP-01 exports the owned certificate, preserves management isolation and cleans after issuer crash")
+    else munit.TestOptions("Ubuntu HTTP-01 integration").ignore) {
+    assertEquals(Seq("docker","build","-q","-t","infradesk-syn-test:ubuntu24","src/test/resources/remnawave-syn").!,0)
+    val image="infradesk-http01-test:ubuntu24"
+    assertEquals(Seq("docker","build","-q","-t",image,"src/test/resources/remnawave-http01").!,0)
+    val host=Seq("docker","run","--rm","-d","--cap-add","NET_ADMIN",image).!!.trim
+    def command(args: List[String])=Process(Seq("docker","exec","-i",host,"sh")) #< new java.io.ByteArrayInputStream(
+      PosixArgv.encode(args.map(_.replace("\r\n","\n"))).getBytes(StandardCharsets.UTF_8))
+    def exec(args: String*)=command(args.toList).!!
+    def issue(resource: UUID, request: NodeTlsHttp01, fresh: Boolean, window: Long = 30)=command(List("/usr/bin/python3") ++
+      NodeHttp01Probe.args("issue",resource,"example.org",request,Instant.now().plusSeconds(window),fresh))
+    val resource=UUID.randomUUID(); val request=NodeTlsHttp01(UUID.randomUUID(),"operator@example.org")
+    try {
+      exec("sh","-c","for exe in iptables ip6tables; do $exe -N ufw-before-input; done; printf '#!/bin/sh\\nprintf \"Status: active\\n\"\\n' >/usr/local/bin/ufw; chmod 755 /usr/local/bin/ufw")
+      val result=issue(resource,request,true).!!
+      val material=io.circe.parser.parse(result).toOption.get
+      assert(material.hcursor.get[String]("privateKeyPem").toOption.get.startsWith("-----BEGIN PRIVATE KEY-----"))
+      assert(material.hcursor.get[String]("certificatePem").toOption.get.startsWith("-----BEGIN CERTIFICATE-----"))
+      val tls=new domain.integration.NodeTlsMaterial(material.hcursor.get[String]("certificatePem").toOption.get,
+        material.hcursor.get[String]("privateKeyPem").toOption.get)
+      assertEquals(integration.secret.NodeTlsValidation.validate("other.example.org",tls,Instant.now()),Left("REMNAWAVE_TLS_SAN_MISMATCH"))
+      assertEquals(integration.secret.NodeTlsValidation.validate("example.org",tls,Instant.now().plusSeconds(87*86400)),Left("REMNAWAVE_TLS_EXPIRY_TOO_CLOSE"))
+      val wrongKey=exec("openssl","genpkey","-algorithm","EC","-pkeyopt","ec_paramgen_curve:P-256")
+      assertEquals(integration.secret.NodeTlsValidation.validate("example.org",new domain.integration.NodeTlsMaterial(tls.certificatePem,wrongKey),Instant.now()),Left("REMNAWAVE_TLS_KEY_MISMATCH"))
+      // A matching key passes cryptographic proof but this fixture CA must still be rejected.
+      assertEquals(integration.secret.NodeTlsValidation.validate("example.org",tls,Instant.now()),Left("REMNAWAVE_TLS_CHAIN_UNTRUSTED"))
+      assert(!tls.toString.contains("PRIVATE KEY"))
+      assert(!exec("/usr/sbin/iptables","-S","ufw-before-input").contains("infradesk:acme:"))
+      val reused=issue(resource,request,false).!!
+      assertEquals(io.circe.parser.parse(reused).toOption.get,material)
+      exec("touch","/fixture/stall")
+      val crashed=NodeTlsHttp01(UUID.randomUUID(),"operator@example.org")
+      val process=issue(resource,crashed,true,15).run(ProcessLogger(_=>(),_=>()))
+      val timeout=System.nanoTime()+5.seconds.toNanos
+      while(!exec("/usr/sbin/iptables","-S","ufw-before-input").contains(crashed.certificateId.toString) && System.nanoTime()<timeout) Thread.sleep(50)
+      val attached=exec("/usr/sbin/iptables","-S","ufw-before-input")
+      assert(attached.contains("--dport 80")); assert(!attached.contains("2222"))
+      // Kill the remote issuer, independently from its detached host cleanup timer.
+      exec("/usr/bin/python3","-c", "import os,sys,signal; from pathlib import Path\nfor p in Path('/proc').iterdir():\n if p.name.isdigit():\n  try:\n   a=(p/'cmdline').read_bytes().split(b'\\0')\n   if len(a)>2 and a[1]==b'-c' and a[2]==sys.argv[1].encode(): os.kill(int(p.name),signal.SIGKILL)\n  except (FileNotFoundError,ProcessLookupError): pass",NodeHttp01Probe.Program)
+      process.exitValue()
+      val expires=System.nanoTime()+20.seconds.toNanos
+      while(exec("/usr/sbin/iptables","-S","ufw-before-input").contains(crashed.certificateId.toString) && System.nanoTime()<expires) Thread.sleep(100)
+      assert(!exec("/usr/sbin/iptables","-S","ufw-before-input").contains(crashed.certificateId.toString))
+      assert(!exec("/usr/sbin/ip6tables","-S","ufw-before-input").contains(crashed.certificateId.toString))
+      val output=new StringBuilder
+      val code=issue(resource,crashed,false).!(ProcessLogger(line=>output.append(line),_=>()))
+      assertEquals(code,45); assertEquals(output.toString,"UNKNOWN")
+    } finally { Seq("docker","stop",host).!; () }
+  }
+}

@@ -95,7 +95,8 @@ private[ssh] object ProfileManagedFiles {
     "/etc/apt/keyrings/infradesk-caddy.asc", "/etc/apt/sources.list.d/infradesk-caddy.list")(path) ||
     path.matches("/opt/infradesk/remnawave/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(compose\\.yml|\\.env|managed\\.json)") ||
     path.matches("/opt/infradesk/remnawave/\\.staging-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[0-9a-f]{64}/(compose\\.yml|\\.env|managed\\.json)") ||
-    path.matches("/var/www/infradesk/[a-z0-9][a-z0-9-]{0,62}/index.html")
+    path.matches("/var/www/infradesk/[a-z0-9][a-z0-9-]{0,62}/index.html") ||
+    path.matches("/var/lib/infradesk/remnawave/tls/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[a-z0-9][a-z0-9.-]{1,251}[a-z0-9]\\.(pem|key)")
   private val SafeParents = """
     safe_parents() {
       p=$(dirname "$1"); chain='';

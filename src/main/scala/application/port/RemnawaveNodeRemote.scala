@@ -15,7 +15,7 @@ object PanelSynProbeSpec { val WindowSeconds=60L }
 
 /** Backend-controlled values only. Credentials never enter this record. */
 final case class RemnawaveNodeRemoteSpec(onboardingId: UUID, resourceId: UUID, externalNodeId: UUID,
-  nodePort: Int, imageReference: String, panelCidrs: List[String])
+  nodePort: Int, imageReference: String, panelCidrs: List[String], tlsCertificateId: Option[UUID] = None)
 object PanelConnectivityFailure {
   case object ManualOnly extends RuntimeException("REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY")
 }
@@ -28,6 +28,23 @@ final case class RemnawaveNodeLocalEvidence(managedFiles: Boolean, imageMatches:
 
 /** Each mutation is one separately journalled onboarding phase. No generic shell input. */
 trait RemnawaveNodeRemote[F[_]] {
+  def issueCertificate(connection: Connection, resourceId: UUID, serverName: String,
+    request: domain.integration.NodeTlsHttp01, deadline: Instant, fresh: Boolean): F[domain.integration.NodeTlsMaterial] =
+    throw new UnsupportedOperationException("HTTP-01 issuance is unavailable")
+  def cleanupCertificateProbe(connection: Connection, resourceId: UUID, request: domain.integration.NodeTlsHttp01): F[Unit] =
+    throw new UnsupportedOperationException("HTTP-01 cleanup is unavailable")
+  def installCertificate(connection: Connection, spec: RemnawaveNodeRemoteSpec, certificate: domain.integration.NodeTlsCertificate,
+    material: domain.integration.NodeTlsMaterial): F[ProvisioningStepResult] =
+    throw new UnsupportedOperationException("Certificate installation is unavailable")
+  def configureClientFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    protocol: domain.integration.RemnawaveProtocol): F[ProvisioningStepResult] =
+    throw new UnsupportedOperationException("Client firewall configuration is unavailable")
+  def retireClientFirewall(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    protocol: domain.integration.RemnawaveProtocol): F[ProvisioningStepResult] =
+    throw new UnsupportedOperationException("Client firewall retirement is unavailable")
+  def verifyProtocol(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    protocol: domain.integration.RemnawaveProtocol): F[ProvisioningStepResult] =
+    throw new UnsupportedOperationException("Protocol verification is unavailable")
   /** Public interface addresses read through the authenticated, pinned SSH connection. */
   def publicNodeAddresses(connection: Connection): F[List[String]] =
     throw new UnsupportedOperationException("Public Node address observation is unavailable")

@@ -5,7 +5,7 @@ import application.integration.{IntegrationError,OnboardingJson,RemnawaveOnboard
 import cats.effect.IO
 import cats.syntax.all._
 import domain.auth.OrganizationPermission
-import domain.integration.{OnboardingInput,PanelSourceMode,NodeAddressMode}
+import domain.integration.{OnboardingInput,PanelSourceMode,NodeAddressMode,RemnawaveProtocol,NodeTlsMaterial,NodeTlsHttp01}
 import infrastructure.http.dto.{ApiErrorResponse,HttpJsonCodecs}
 import io.circe.Json
 import org.http4s.{HttpRoutes,Request,Response}
@@ -23,10 +23,23 @@ final class RemnawaveOnboardingRoutes[Tx[_]](service: RemnawaveOnboardingApi,aut
   private val invalid = ApiErrorResponse("INVALID_REQUEST","Invalid Remnawave onboarding request")
   private val MaxBytes = 16384
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
+    case req @ POST -> Root / "api" / "v1" / "organizations" / _ / "integrations" / integration / "remnawave-node-onboarding" / "certificates" =>
+      mutate(req)(ctx => withId(integration)(id => body(req,Set("resourceId","domain","certificatePem","privateKeyPem"),limit=65536) { json =>
+        val c=json.hcursor
+        val decoded=for {
+          resource <- c.get[String]("resourceId").toOption.flatMap(uuid)
+          domain <- c.get[String]("domain").toOption
+          certificate <- c.get[String]("certificatePem").toOption
+          key <- c.get[String]("privateKeyPem").toOption
+        } yield (resource,domain,new NodeTlsMaterial(certificate,key))
+        decoded.fold[IO[Response[IO]]](BadRequest(invalid)) { case(resource,domain,material) =>
+          respond(req,ctx)(service.importCertificate(ctx.actor,id,resource,domain,material).flatMap(Created(_)))
+        }
+      }))
     case req @ GET -> Root / "api" / "v1" / "organizations" / _ / "integrations" / integration / "remnawave-node-onboarding" / "options" =>
       authorization.require(req,OrganizationPermission.ManageIntegrations)(ctx => withId(integration)(id => respond(req,ctx)(service.options(ctx.organizationId,id).flatMap(Ok(_)))))
     case req @ POST -> Root / "api" / "v1" / "organizations" / _ / "integrations" / integration / "remnawave-node-onboarding" / "preview" =>
-      mutate(req)(ctx => withId(integration)(id => body(req,Set("resourceId","nodeName","address","nodePort","configProfileId","activeInboundIds","desiredState"),Set("panelCidrs","panelSourceMode","nodeAddressMode")) { json =>
+      mutate(req)(ctx => withId(integration)(id => body(req,Set("resourceId","nodeName","address","nodePort","desiredState"),Set("configProfileId","activeInboundIds","protocol","tlsCertificateId","tlsHttp01","panelCidrs","panelSourceMode","nodeAddressMode")) { json =>
         val c=json.hcursor
         val decoded=for {
           resource <- c.get[String]("resourceId").toOption.flatMap(uuid)
@@ -37,8 +50,12 @@ final class RemnawaveOnboardingRoutes[Tx[_]](service: RemnawaveOnboardingApi,aut
             case Some(value) => NodeAddressMode.fromCode(value).filter(_!=NodeAddressMode.Legacy)
           }
           port <- c.get[Int]("nodePort").toOption
-          profile <- c.get[String]("configProfileId").toOption.flatMap(uuid)
-          rawInbounds <- c.get[List[String]]("activeInboundIds").toOption.filter(_.size<=256)
+          protocol <- c.downField("protocol").focus.fold[Option[Option[RemnawaveProtocol]]](Some(None))(
+            j => RemnawaveProtocol.decode(j,port).toOption.map(Some(_)))
+          profile <- if(protocol.nonEmpty && !c.downField("configProfileId").succeeded) Some(OnboardingInput.GeneratedProfileId)
+            else c.get[String]("configProfileId").toOption.flatMap(uuid)
+          rawInbounds <- if(protocol.nonEmpty && !c.downField("activeInboundIds").succeeded) Some(List.empty[String])
+            else c.get[List[String]]("activeInboundIds").toOption.filter(_.size<=256)
           inbounds <- rawInbounds.traverse(uuid)
           cidrs <- c.get[Option[List[String]]]("panelCidrs").toOption.map(_.getOrElse(Nil)).filter(_.size<=32)
           mode <- c.get[Option[String]]("panelSourceMode").toOption.flatMap {
@@ -48,7 +65,18 @@ final class RemnawaveOnboardingRoutes[Tx[_]](service: RemnawaveOnboardingApi,aut
           _ <- Option.when(mode != PanelSourceMode.Auto || cidrs.isEmpty)(())
           _ <- Option.when(mode != PanelSourceMode.Manual || OnboardingInput.canonicalCidrs(cidrs).contains(cidrs.sorted))(())
           desired <- c.get[String]("desiredState").toOption.filter(_=="ENABLED")
-        } yield OnboardingInput(resource,name,address,port,profile,inbounds,cidrs,desired,mode,addressMode)
+          certificate <- c.get[Option[String]]("tlsCertificateId").toOption.flatMap(_.traverse(uuid))
+          http <- c.downField("tlsHttp01").focus.fold[Option[Option[NodeTlsHttp01]]](Some(None)) { j =>
+            for {
+              _ <- Option.when(j.asObject.exists(_.keys.toSet==Set("certificateId","email","agreeTerms")))(())
+              id <- j.hcursor.get[String]("certificateId").toOption.flatMap(uuid)
+              email <- j.hcursor.get[String]("email").toOption
+              _ <- Option.when(j.hcursor.get[Boolean]("agreeTerms").contains(true))(())
+              request=NodeTlsHttp01(id,email)
+              _ <- Option.when(request.valid)(())
+            } yield Some(request)
+          }
+        } yield OnboardingInput(resource,name,address,port,profile,inbounds,cidrs,desired,mode,addressMode,protocol,certificate,http)
         decoded.fold[IO[Response[IO]]](BadRequest(invalid))(input => respond(req,ctx)(service.preview(ctx.actor,id,input).flatMap(Ok(_))))
       }))
     case req @ POST -> Root / "api" / "v1" / "organizations" / _ / "integrations" / integration / "remnawave-node-onboarding" / "runs" =>
@@ -75,12 +103,12 @@ final class RemnawaveOnboardingRoutes[Tx[_]](service: RemnawaveOnboardingApi,aut
         authorization.require(req,OrganizationPermission.ExecuteOperations)(next)))
   private def uuid(s: String): Option[UUID] = Try(UUID.fromString(s)).toOption.filter(_.toString==s)
   private def withId(s: String)(f: UUID => IO[Response[IO]]): IO[Response[IO]] = uuid(s).fold[IO[Response[IO]]](BadRequest(invalid))(f)
-  private def body(req: Request[IO],keys: Set[String],optional: Set[String] = Set.empty)(f: Json => IO[Response[IO]]): IO[Response[IO]] =
-    req.body.take(MaxBytes+1L).compile.to(Array).flatMap { bytes =>
+  private def body(req: Request[IO],keys: Set[String],optional: Set[String] = Set.empty,limit: Int = MaxBytes)(f: Json => IO[Response[IO]]): IO[Response[IO]] =
+    req.body.take(limit+1L).compile.to(Array).flatMap { bytes =>
       val decoded=Try(StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
         .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString).toOption
       val json=decoded.flatMap(io.circe.parser.parse(_).toOption).filter(j => j.asObject.exists(o => keys.subsetOf(o.keys.toSet) && o.keys.toSet.subsetOf(keys++optional)))
-      if(bytes.length>MaxBytes || json.isEmpty) BadRequest(invalid) else f(json.get)
+      if(bytes.length>limit || json.isEmpty) BadRequest(invalid) else f(json.get)
     }
   private def respond(req: Request[IO],ctx: OrganizationAccessContext)(action: IO[Response[IO]]): IO[Response[IO]] = action.handleErrorWith {
     case e: IntegrationError if e.code=="INTEGRATION_NOT_FOUND" || e.code=="REMNAWAVE_ONBOARDING_NOT_FOUND" => NotFound(ApiErrorResponse(e.code,e.getMessage))

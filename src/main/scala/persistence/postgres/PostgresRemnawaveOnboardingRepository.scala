@@ -14,17 +14,31 @@ import java.time.Instant
 import java.util.UUID
 
 final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRepository[ConnectionIO] {
+  override def insertCertificate(c: NodeTlsCertificate, s: IntegrationSecret): ConnectionIO[Unit] =
+    sql"""insert into remnawave_node_tls_certificate(id,organization_id,resource_id,domain,fingerprint,expires_at,kind,nonce,ciphertext)
+      values(${c.id},${c.organizationId},${c.resourceId},${c.domain},${c.fingerprint},${c.expiresAt},${s.kind},${s.nonce},${s.ciphertext})""".update.run.void
+  override def certificate(org: UUID,resource: UUID,id: UUID): ConnectionIO[Option[(NodeTlsCertificate,IntegrationSecret)]] =
+    sql"""select id,organization_id,resource_id,domain,fingerprint,expires_at,kind,nonce,ciphertext
+      from remnawave_node_tls_certificate where organization_id=$org and resource_id=$resource and id=$id"""
+      .query[(UUID,UUID,UUID,String,String,Instant,String,Array[Byte],Array[Byte])].option.map(_.map {
+        case (i,o,r,d,f,e,k,n,c) => NodeTlsCertificate(i,o,r,d,f,e) -> IntegrationSecret(i,o,k,n,c)
+      })
+  override def certificateMetadata(org: UUID,resource: UUID,id: UUID): ConnectionIO[Option[NodeTlsCertificate]] =
+    sql"""select id,organization_id,resource_id,domain,fingerprint,expires_at
+      from remnawave_node_tls_certificate where organization_id=$org and resource_id=$resource and id=$id"""
+      .query[NodeTlsCertificate].option
   private case class Row(id: UUID, org: UUID, integration: UUID, resource: UUID, request: Option[UUID], actor: UUID,
     state: String, phase: String, snapshot: String, created: Instant, updated: Instant,
     node: Option[UUID], baseline: Option[UUID], sync: Option[UUID], failure: Option[String],
     started: Option[Instant], finished: Option[Instant], token: Option[UUID], deadline: Option[Instant], connectivity: Option[String],
-    observed: Option[String], completion: Option[String]) {
+    observed: Option[String], completion: Option[String], protocol: Option[String]) {
     def domain = RemnawaveNodeOnboardingRun(id,org,integration,resource,request,actor,ProvisioningRunState.fromCode(state),
       OnboardingPhase.fromCode(phase),OnboardingSnapshotCodec.decode(parse(snapshot).toOption.get),created,updated,
       node,baseline,sync,failure,started,finished,token,deadline,connectivity.map(j => PanelConnectivityFinding.decode(parse(j).toOption.get)),
-      observed.map(j => PanelSourceObservation.decode(parse(j).toOption.get)),completion.map(code => PanelConnectivityCompletion.all.find(_.code==code).get))
+      observed.map(j => PanelSourceObservation.decode(parse(j).toOption.get)),completion.map(code => PanelConnectivityCompletion.all.find(_.code==code).get),
+      protocol.map(j => NodeProtocolBinding.decode(parse(j).toOption.get)))
   }
-  private val columns = fr"id,organization_id,integration_id,resource_id,request_id,created_by,state,phase,input_snapshot::text,created_at,updated_at,external_node_id,baseline_run_id,sync_session_id,failure_code,started_at,finished_at,claim_token,claim_deadline,connectivity_finding::text,observed_panel_source::text,connectivity_completion"
+  private val columns = fr"id,organization_id,integration_id,resource_id,request_id,created_by,state,phase,input_snapshot::text,created_at,updated_at,external_node_id,baseline_run_id,sync_session_id,failure_code,started_at,finished_at,claim_token,claim_deadline,connectivity_finding::text,observed_panel_source::text,connectivity_completion,protocol_binding::text"
   private def selected(where: Fragment) = (fr"select" ++ columns ++ fr"from remnawave_node_onboarding where" ++ where).query[Row].map(_.domain)
   private def fail(code: String): ConnectionIO[Nothing] = IntegrationError(code,"Remnawave onboarding could not proceed").raiseError[ConnectionIO,Nothing]
   def lockResource(org: UUID, resourceId: UUID): ConnectionIO[Unit] = PostgresProvisioningLocks.lockResource(org,resourceId)
@@ -32,9 +46,10 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
     (fr"select" ++ RemnawaveOnboardingActivitySql.resource(org,fr"$resourceId")).query[Boolean].unique
 
   def insertPlan(r: RemnawaveNodeOnboardingRun): ConnectionIO[Unit] = for {
-    _ <- sql"""insert into remnawave_node_onboarding(id,organization_id,integration_id,resource_id,created_by,state,phase,input_snapshot,created_at,updated_at,external_node_id)
+    _ <- sql"""insert into remnawave_node_onboarding(id,organization_id,integration_id,resource_id,created_by,state,phase,input_snapshot,created_at,updated_at,external_node_id,protocol_binding)
       values(${r.id},${r.organizationId},${r.integrationId},${r.resourceId},${r.createdBy},'PLANNED','VALIDATE',
-      cast(${OnboardingSnapshotCodec.encode(r.snapshot).noSpaces} as jsonb),${r.createdAt},${r.updatedAt},${r.externalNodeId})""".update.run
+      cast(${OnboardingSnapshotCodec.encode(r.snapshot).noSpaces} as jsonb),${r.createdAt},${r.updatedAt},${r.externalNodeId},
+      cast(${r.protocolBinding.map(NodeProtocolBinding.encode(_).noSpaces)} as jsonb))""".update.run
     _ <- OnboardingPhase.forSnapshot(r.snapshot).zipWithIndex.traverse_ { case (p,i) => sql"""insert into remnawave_node_onboarding_phase(run_id,phase,position,state)
       values(${r.id},${p.code},$i,'PENDING')""".update.run }
   } yield ()
@@ -98,7 +113,7 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
     (fr"""with candidates as (select * from remnawave_node_onboarding
       where organization_id=$org and resource_id=$resource and state<>'PLANNED' and
         (external_node_id is not null or input_snapshot->'recovery' is not null and input_snapshot->'recovery'<>'null'::jsonb
-          or state='UNKNOWN' and phase='CREATE_NODE'))
+          or protocol_binding is not null or state='UNKNOWN' and phase IN ('CREATE_NODE','CREATE_PROTOCOL_PROFILE','ISSUE_TLS')))
       select""" ++ columns ++ fr"""from candidates r where not exists(select 1 from candidates child
         where child.input_snapshot->'recovery'->>'sourceRunId'=r.id::text)
       and not exists(select 1 from candidates later where later.external_node_id=r.external_node_id
@@ -136,6 +151,7 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
         connectivity_finding=cast(${n.connectivityFinding.map(f => PanelConnectivityFinding.storage(f).noSpaces)} as jsonb),
         observed_panel_source=cast(${n.observedPanelSource.map(o => PanelSourceObservation.encode(o).noSpaces)} as jsonb),
         connectivity_completion=${n.connectivityCompletion.map(_.code)},
+        protocol_binding=cast(${n.protocolBinding.map(NodeProtocolBinding.encode(_).noSpaces)} as jsonb),
         finished_at=${Option.when(n.state.terminal)(now)},
         claim_owner=case when ${n.state.terminal} then null else claim_owner end,
         claim_token=case when ${n.state.terminal} then null else claim_token end,
@@ -166,6 +182,15 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
     _ <- sql"""insert into remnawave_node_installation_secret(run_id,organization_id,kind,nonce,ciphertext)
       values(${r.id},${r.organizationId},${secret.kind},${secret.nonce},${secret.ciphertext})
       on conflict(run_id) do update set nonce=excluded.nonce,ciphertext=excluded.ciphertext""".update.run
+  } yield ()
+  override def saveIssuedCertificate(r: RemnawaveNodeOnboardingRun, token: UUID, c: NodeTlsCertificate,
+    secret: IntegrationSecret, now: Instant): ConnectionIO[Unit] = for {
+    valid <- fence(r,token,now)
+    _ <- if(!valid) fail("REMNAWAVE_ONBOARDING_LEASE_LOST") else ().pure[ConnectionIO]
+    _ <- if(r.phase!=OnboardingPhase.IssueTls || !r.snapshot.input.tlsHttp01.exists(_.certificateId==c.id) ||
+      c.organizationId!=r.organizationId || c.resourceId!=r.resourceId || secret.id!=c.id || secret.organizationId!=r.organizationId)
+      fail("REMNAWAVE_TLS_REFERENCE_INVALID") else ().pure[ConnectionIO]
+    _ <- insertCertificate(c,secret)
   } yield ()
   def secret(r: RemnawaveNodeOnboardingRun): ConnectionIO[Option[IntegrationSecret]] =
     sql"select run_id,organization_id,kind,nonce,ciphertext from remnawave_node_installation_secret where run_id=${r.id} and organization_id=${r.organizationId}"

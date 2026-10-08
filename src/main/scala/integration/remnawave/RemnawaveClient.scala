@@ -260,6 +260,60 @@ final class RemnawaveClient(client: Client[IO], requestTimeout: FiniteDuration,
 
   private def invalidResponse[A]: IO[A] = IO.raiseError(RemnawaveErrors.error("INTEGRATION_INVALID_RESPONSE"))
 
+  private[remnawave] def protocolProfileLookup(baseUrl: IntegrationBaseUrl, auth: RemnawaveCredential,
+    name: String, tag: String, config: Json): IO[Option[domain.integration.NodeProtocolBinding]] =
+    get(baseUrl.endpoint(ConfigProfilesPath),auth,DefaultInventoryMaxResponseBytes).flatMap { body =>
+      RemnawaveInventory.configProfiles(body).filter(_.size<=DefaultInventoryMaxObjects)
+        .liftTo[IO](RemnawaveErrors.error("INTEGRATION_INVALID_RESPONSE")).flatMap { profiles =>
+          val candidates=profiles.filter(p => p.displayName==name || (p.summary match {
+            case s: domain.integration.RemnawaveConfigProfileSummary => s.inbounds.exists(_.tag==tag)
+            case _ => false
+          }))
+          candidates match {
+            case Nil => IO.pure(None)
+            case List(p) => p.summary match {
+              case s: domain.integration.RemnawaveConfigProfileSummary if p.displayName==name &&
+                s.inbounds.size==1 && s.inbounds.head.tag==tag && s.configSha256.contains(CanonicalJson.sha256(config)) =>
+                IO.pure(Some(domain.integration.NodeProtocolBinding(java.util.UUID.fromString(p.externalId),
+                  s.inbounds.map(i => java.util.UUID.fromString(i.uuid)),CanonicalJson.sha256(config))))
+              case _ => IO.raiseError(RemnawaveErrors.error("REMNAWAVE_PROTOCOL_PROFILE_CONFLICT"))
+            }
+            case _ => IO.raiseError(RemnawaveErrors.error("REMNAWAVE_PROTOCOL_PROFILE_CONFLICT"))
+          }
+        }
+    }
+
+  /** One write only. Even validation errors can follow a committed provider-side write. */
+  private[remnawave] def createProtocolProfileWire(baseUrl: IntegrationBaseUrl, auth: RemnawaveCredential,
+    name: String, tag: String, config: Json): IO[domain.integration.ProtocolProfileOutcome] = {
+    import domain.integration.ProtocolProfileOutcome._
+    val unknown = Unknown("REMNAWAVE_PROTOCOL_PROFILE_CREATE_UNKNOWN")
+    IO.fromEither(Uri.fromString(baseUrl.endpoint(ConfigProfilesPath).toASCIIString)
+      .leftMap(_ => RemnawaveErrors.error("INTEGRATION_INVALID_REQUEST"))).flatMap { uri =>
+      val request=Request[IO](Method.POST,uri).withEntity(Json.obj("name"->Json.fromString(name),"config"->config).noSpaces)
+        .putHeaders(Header.Raw(CIString("Authorization"),s"Bearer ${auth.apiToken}"),Header.Raw(CIString("Content-Type"),"application/json"))
+      val authenticated=auth.caddyApiKey.fold(request)(key => request.putHeaders(Header.Raw(CIString("X-Api-Key"),key)))
+      client.run(authenticated).use { response =>
+        if(response.status.code==401) IO.pure[domain.integration.ProtocolProfileOutcome](Rejected("INTEGRATION_AUTH_FAILED"))
+        else if(response.status.code==403) IO.pure[domain.integration.ProtocolProfileOutcome](Rejected("INTEGRATION_FORBIDDEN"))
+        else if(!response.status.isSuccess) IO.pure[domain.integration.ProtocolProfileOutcome](unknown)
+        else boundedBody(response,ConfigProfileMaxResponseBytes).map { body =>
+          val binding=for {
+            json <- body.flatMap(parse(_).toOption)
+            c=json.hcursor.downField("response")
+            id <- c.get[String]("uuid").toOption.flatMap(s => Try(java.util.UUID.fromString(s)).toOption.filter(_.toString==s))
+            _ <- c.get[String]("name").toOption.filter(_==name)
+            actual <- c.downField("config").focus.filter(CanonicalJson.sha256(_)==CanonicalJson.sha256(config))
+            rows <- c.get[List[Json]]("inbounds").toOption.filter(_.size==1)
+            _ <- rows.head.hcursor.get[String]("tag").toOption.filter(_==tag)
+            inbound <- rows.head.hcursor.get[String]("uuid").toOption.flatMap(s => Try(java.util.UUID.fromString(s)).toOption.filter(_.toString==s))
+          } yield domain.integration.NodeProtocolBinding(id,List(inbound),CanonicalJson.sha256(actual))
+          binding.fold[domain.integration.ProtocolProfileOutcome](unknown)(Confirmed.apply)
+        }
+      }
+    }.timeout(requestTimeout).handleError(e => definiteBeforeWrite(e).map(Rejected.apply).getOrElse(unknown))
+  }
+
   /** Called only by the capability-gated adapter. One POST, never an automatic retry. */
   private[remnawave] def createNodeWire(baseUrl: IntegrationBaseUrl, credential: RemnawaveCredential,
     intent: domain.integration.NodeCreateIntent): IO[domain.integration.NodeCreateOutcome] = {

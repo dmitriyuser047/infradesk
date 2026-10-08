@@ -72,14 +72,14 @@ final class RemnawaveFleetObserver[Tx[_]: MonadThrow](
           local <- (connection, evidence.provenance) match {
             case (Some(value), Some(provenance)) => remote.observe(value,
               RemnawaveNodeRemoteSpec(provenance.onboardingId, member.resourceId, provenance.externalNodeId,
-                desired.content.nodePort, provenance.imageReference, desired.content.panelCidrs))
+                desired.content.nodePort, provenance.imageReference, desired.content.panelCidrs,provenance.tlsCertificateId))
               .timeout(settings.observationTimeout).attempt.map(_.toOption)
             case _ => IO.pure(None)
           }
           image <- (connection, evidence.provenance, imageLifecycle) match {
             case (Some(value), Some(provenance), Some((images, _))) => images.observeImage(value,
               RemnawaveNodeRemoteSpec(provenance.onboardingId, member.resourceId, provenance.externalNodeId,
-                desired.content.nodePort, provenance.imageReference, desired.content.panelCidrs))
+                desired.content.nodePort, provenance.imageReference, desired.content.panelCidrs,provenance.tlsCertificateId))
               .timeout(settings.observationTimeout).attempt.map(_.toOption)
             case _ => IO.pure(None)
           }

@@ -42,6 +42,8 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
       _ <- sql"delete from remnawave_node_installation_secret where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"update provisioning_run set onboarding_parent_id=null where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"delete from remnawave_node_onboarding where organization_id in (${w.org},${w.foreignOrg})".update.run
+      _ <- sql"delete from remnawave_node_tls_certificate where organization_id in (${w.org},${w.foreignOrg})".update.run
+      _ <- sql"delete from remnawave_tls_issuance_identity where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"delete from integration_action_execution where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"delete from integration_resource_binding where organization_id in (${w.org},${w.foreignOrg})".update.run
       _ <- sql"delete from integration_inventory_object where organization_id in (${w.org},${w.foreignOrg})".update.run
@@ -136,6 +138,109 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
     provisioningPlan(w, node, id, now).copy(input = input)
   }
 
+  test("V6 stores a fenced immutable protocol receipt before creating Node and keeps legacy phases intact") {
+    inWorld { w => for {
+      pair <- integration(w,w.org,"protocol-receipt")
+      target <- w.node("protocol-receipt")
+      at <- connectionUpdated(w,target.connectionId)
+      now <- IO.realTimeInstant
+      template <- plan(w,pair._1,pair._2,target.resourceId,target.connectionId,at,now)
+      input=template.snapshot.input.copy(configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+        protocol=Some(RemnawaveProtocol.Shadowsocks(443,"aes-256-gcm")))
+      evidence=PanelSourceEvidence(PanelSourceMode.Manual,input.panelCidrs,"MANUAL","MANUAL",
+        PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.org").toOption.get))
+      draft=template.copy(id=uid,snapshot=template.snapshot.copy(input=input,lifecycleVersion=6,panelSource=Some(evidence)))
+      _ <- w.run(repo.insertPlan(draft))
+      phases <- w.run(sql"select phase from remnawave_node_onboarding_phase where run_id=${draft.id} order by position".query[String].to[List])
+      _ = assertEquals(phases,OnboardingPhase.forSnapshot(draft.snapshot).map(_.code))
+      _ <- w.run(repo.start(w.org,pair._1,draft.id,uid,AuthorizationFixtures.ActorUserId,now))
+      token=uid
+      claimed <- w.run(repo.claim(uid,token,now,now.plusSeconds(300),1))
+      before <- w.run(OnboardingPhase.forSnapshot(draft.snapshot).takeWhile(_!=OnboardingPhase.CreateProtocolProfile)
+        .foldLeftM(claimed.head) { (r,p) =>
+          val next=r.copy(phase=OnboardingPhase.next(p,r.snapshot).get)
+          repo.beginPhase(r,token,now) *> repo.persist(r,token,next,now,true).as(next)
+        })
+      receipt=NodeProtocolBinding(uid,List(uid),"b"*64)
+      premature <- w.run(repo.persist(before,token,before.copy(externalNodeId=Some(uid)),now,false)).attempt
+      _ = assert(premature.isLeft)
+      _ <- w.run(repo.beginPhase(before,token,now))
+      next=before.copy(protocolBinding=Some(receipt),phase=OnboardingPhase.CreateNode)
+      stale <- w.run(repo.persist(before,uid,next,now,true))
+      _ = assertEquals(stale,false)
+      saved <- w.run(repo.persist(before,token,next,now,true))
+      _ = assertEquals(saved,true)
+      read <- w.run(repo.find(w.org,pair._1,draft.id))
+      _ = assertEquals(read.get._1.protocolBinding,Some(receipt))
+      _ = assertEquals(read.get._1.intent.configProfileId,receipt.profileId)
+      _ <- w.run(repo.beginPhase(next,token,now))
+      changed <- w.run(repo.persist(next,token,next.copy(protocolBinding=Some(receipt.copy(configSha256="c"*64))),now,false)).attempt
+      _ = assert(changed.isLeft)
+    } yield () }
+  }
+  test("TLS versions are encrypted, immutable and scoped to the exact resource; references prevent deletion") {
+    inWorld { w => for {
+      pair <- integration(w,w.org,"tls-reference")
+      target <- w.node("tls-reference"); other <- w.node("tls-other")
+      at <- connectionUpdated(w,target.connectionId); now <- IO.realTimeInstant
+      template <- plan(w,pair._1,pair._2,target.resourceId,target.connectionId,at,now)
+      id=uid
+      cert=NodeTlsCertificate(id,w.org,target.resourceId,"example.org","a"*64,now.plusSeconds(90*86400))
+      material=new NodeTlsMaterial("certificate-fixture","PRIVATE-KEY-FIXTURE")
+      secret=cipher.encryptTls(id,w.org,material)
+      _ <- w.run(repo.insertCertificate(cert,secret))
+      own <- w.run(repo.certificate(w.org,target.resourceId,id)); wrong <- w.run(repo.certificate(w.org,other.resourceId,id))
+      foreign <- w.run(repo.certificate(w.foreignOrg,target.resourceId,id))
+      _ = assertEquals(own.map(_._1),Some(cert)); _ = assertEquals(wrong,None); _ = assertEquals(foreign,None)
+      _ = assertEquals(cipher.decryptTls(own.get._2).privateKeyPem,material.privateKeyPem)
+      input=template.snapshot.input.copy(configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+        protocol=Some(RemnawaveProtocol.Hysteria2(443,"example.org")),tlsCertificateId=Some(id))
+      evidence=PanelSourceEvidence(PanelSourceMode.Manual,input.panelCidrs,"MANUAL","MANUAL",
+        PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.org").toOption.get))
+      draft=template.copy(id=uid,snapshot=template.snapshot.copy(input=input,lifecycleVersion=6,panelSource=Some(evidence)))
+      _ <- w.run(repo.insertPlan(draft))
+      mismatch <- w.run(repo.insertPlan(draft.copy(id=uid,resourceId=other.resourceId,snapshot=draft.snapshot.copy(input=input.copy(resourceId=other.resourceId))))).attempt
+      _ = assert(mismatch.isLeft)
+      update <- w.run(sql"update remnawave_node_tls_certificate set fingerprint=${"c"*64} where id=$id".update.run).attempt
+      deletion <- w.run(sql"delete from remnawave_node_tls_certificate where id=$id".update.run).attempt
+      _ = assert(update.isLeft); _ = assert(deletion.isLeft)
+    } yield () }
+  }
+  test("HTTP-01 reserves one resource identity and saves issued material only under the live phase lease") {
+    inWorld { w => for {
+      pair <- integration(w,w.org,"http01-identity")
+      target <- w.node("http01-target"); other <- w.node("http01-other")
+      at <- connectionUpdated(w,target.connectionId); now <- IO.realTimeInstant
+      template <- plan(w,pair._1,pair._2,target.resourceId,target.connectionId,at,now)
+      identity=uid
+      input=template.snapshot.input.copy(configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+        protocol=Some(RemnawaveProtocol.Hysteria2(443,"example.org")),tlsHttp01=Some(NodeTlsHttp01(identity,"operator@example.org")))
+      evidence=PanelSourceEvidence(PanelSourceMode.Manual,input.panelCidrs,"MANUAL","MANUAL",
+        PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.org").toOption.get))
+      draft=template.copy(id=uid,snapshot=template.snapshot.copy(input=input,lifecycleVersion=6,panelSource=Some(evidence)))
+      _ <- w.run(repo.insertPlan(draft))
+      conflict <- w.run(repo.insertPlan(draft.copy(id=uid,resourceId=other.resourceId,
+        snapshot=draft.snapshot.copy(input=input.copy(resourceId=other.resourceId))))).attempt
+      _ = assert(conflict.isLeft)
+      _ <- w.run(repo.start(w.org,pair._1,draft.id,uid,AuthorizationFixtures.ActorUserId,now))
+      token=uid
+      claimed <- w.run(repo.claim(uid,token,now,now.plusSeconds(300),1))
+      before <- w.run(OnboardingPhase.forSnapshot(draft.snapshot).takeWhile(_!=OnboardingPhase.IssueTls)
+        .foldLeftM(claimed.head) { (r,p) =>
+          val next=r.copy(phase=OnboardingPhase.next(p,r.snapshot).get)
+          repo.beginPhase(r,token,now) *> repo.persist(r,token,next,now,true).as(next)
+        })
+      _ <- w.run(repo.beginPhase(before,token,now))
+      cert=NodeTlsCertificate(identity,w.org,target.resourceId,"example.org","a"*64,now.plusSeconds(90*86400))
+      encrypted=cipher.encryptTls(identity,w.org,new NodeTlsMaterial("certificate-fixture","private-key-fixture"))
+      stale <- w.run(repo.saveIssuedCertificate(before,uid,cert,encrypted,now)).attempt
+      _ = assertEquals(errorCode(stale),Some("REMNAWAVE_ONBOARDING_LEASE_LOST"))
+      _ <- w.run(repo.saveIssuedCertificate(before,token,cert,encrypted,now))
+      public <- w.run(repo.certificateMetadata(w.org,target.resourceId,identity))
+      _ = assertEquals(public,Some(cert))
+      _ <- w.run(repo.persist(before,token,before.copy(phase=OnboardingPhase.CreateProtocolProfile),now,true))
+    } yield () }
+  }
   test("managed Panel source requires the matching tenant HOST binding and active SSH connection") {
     inWorld { w =>
       def bind(org: UUID, integrationId: UUID, target: ConfigurationDeploymentWorld.Node, kind: String): IO[Unit] = {

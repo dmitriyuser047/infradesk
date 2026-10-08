@@ -138,6 +138,6 @@ final class ExistingRemnawaveOnboardingOperations[Tx[_]: MonadThrow](
     d <- node.traverse(n => desired.find(r.organizationId,r.integrationId,n.id)).map(_.flatten)
   } yield node.exists(n => n.isActive && n.summary.isInstanceOf[RemnawaveNodeSummary] && n.summary.asInstanceOf[RemnawaveNodeSummary].isConnected &&
     !n.summary.asInstanceOf[RemnawaveNodeSummary].isDisabled &&
-    n.summary.asInstanceOf[RemnawaveNodeSummary].activeConfigProfileUuid.contains(r.snapshot.input.configProfileId.toString)) &&
+    n.summary.asInstanceOf[RemnawaveNodeSummary].activeConfigProfileUuid.contains(r.effectiveInput.configProfileId.toString)) &&
     b.exists(_.resourceId==r.resourceId) && d.exists(_.state==IntegrationDesiredNodeState.Enabled))
 }

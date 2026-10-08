@@ -1,5 +1,7 @@
 import type { PackageProbeFinding } from './serverProfile'
 import type { NodeApiCompatibility } from './integration'
+export type NodeProtocolSettings = { version: 1; kind: 'HYSTERIA2'; port: number; serverName: string } |
+  { version: 1; kind: 'SHADOWSOCKS'; port: number; method: 'chacha20-ietf-poly1305' | 'aes-128-gcm' | 'aes-256-gcm' }
 
 export interface NodeOnboardingServer {
   id: string; name: string; address: string; environmentName: string; sshStatus: string
@@ -22,6 +24,9 @@ export interface NodeOnboardingRun {
   connectivityFinding?: { component: 'PANEL_CONNECTIVITY'; localNode: 'HEALTHY'; panelNode: 'CONNECTED' | 'DISCONNECTED'; firewall: 'CONFIGURED'; panelSources: string[]; sourceEvidence: string } | null
   observedPanelSource?: { status: 'AUTO_OBSERVED' | 'NOT_REQUIRED' | 'NO_TRAFFIC' | 'AMBIGUOUS' | 'UNAVAILABLE'; sources: string[] } | null
   connectivityCompletion?: 'PROMOTED' | 'ROLLED_BACK' | null
+  protocol?: NodeProtocolSettings | null
+  protocolBinding?: { profileId: string; inboundIds: string[]; configSha256: string } | null
+  clientTrafficVerification?: 'NOT_RUN' | null
 }
 export interface PanelSourceEvidence {
   mode: 'AUTO' | 'MANUAL'; sources: string[]; method: 'DNS_BASE_URL' | 'MANAGED_PANEL_RESOURCE' | 'MANUAL'
@@ -51,9 +56,12 @@ export interface NodeOnboardingPreview {
 }
 export interface NodeOnboardingRunDetail {
   run: NodeOnboardingRun
+  certificate?: { domain: string; expiresAt: string; automaticRenewal: false } | null
   phases: { phase: string; state: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'; outcome?: string | null; startedAt: string | null; finishedAt: string | null; failureCode: string | null }[]
 }
 export interface NodeOnboardingPreviewRequest {
-  resourceId: string; nodeName: string; address: string; nodePort: number; configProfileId: string
-  activeInboundIds: string[]; panelCidrs?: string[]; panelSourceMode?: 'AUTO' | 'MANUAL'; nodeAddressMode?: 'PUBLIC_IP' | 'DOMAIN'; desiredState: 'ENABLED'
+  resourceId: string; nodeName: string; address: string; nodePort: number; configProfileId?: string
+  activeInboundIds?: string[]; protocol?: NodeProtocolSettings; tlsCertificateId?: string
+  tlsHttp01?: { certificateId: string; email: string; agreeTerms: true }
+  panelCidrs?: string[]; panelSourceMode?: 'AUTO' | 'MANUAL'; nodeAddressMode?: 'PUBLIC_IP' | 'DOMAIN'; desiredState: 'ENABLED'
 }

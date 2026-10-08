@@ -28,10 +28,40 @@ final class RemnawaveNodeProvisioning(client: RemnawaveClient) extends NodeProvi
         val confirmed = release.nonEmpty && inventory.isRight
         NodeApiCompatibility(version, release.map(_.adapter.code), release.map(_.commit),
           readCapabilities ++ (if (confirmed) RemnawaveNodeApi.writeCapabilities ++
-            Option.when(release.exists(_.addressUpdate))(NodeProvisioningCapability.AddressUpdate) else Set.empty[NodeProvisioningCapability]),
+            Option.when(release.exists(_.addressUpdate))(NodeProvisioningCapability.AddressUpdate) ++
+            Option.when(release.exists(_.protocolProfileCreate))(NodeProvisioningCapability.ProtocolProfileCreate) else Set.empty[NodeProvisioningCapability]),
           if (confirmed) None else Some(result.left.toOption.collect { case e: IntegrationError => e.code }
             .orElse(inventory.left.toOption.collect { case e: IntegrationError => e.code }).getOrElse(unconfirmed)))
       }
+    }
+  }
+
+  override def ensureProtocolProfile(context: IntegrationRuntimeContext, name: String, tag: String,
+    config: io.circe.Json, reviewed: NodeApiCompatibility, fresh: Boolean): IO[ProtocolProfileOutcome] = {
+    import ProtocolProfileOutcome._
+    (for {
+      actual <- requireReviewed(context, reviewed)
+      _ <- IO.raiseUnless(actual.capabilities(NodeProvisioningCapability.ProtocolProfileCreate) &&
+        reviewed.capabilities(NodeProvisioningCapability.ProtocolProfileCreate))(
+        RemnawaveErrors.error(unconfirmed))
+      _ <- IO.raiseUnless(name.matches("ID_[0-9a-f]{24}") && tag.matches("(HY2|SS)_[0-9a-f]{32}") && config.isObject)(
+        RemnawaveErrors.error("REMNAWAVE_PROTOCOL_INVALID"))
+      auth <- credential(context)
+      existing <- client.protocolProfileLookup(context.baseUrl, auth, name, tag, config)
+      result <- existing match {
+        case Some(binding) if !fresh => IO.pure[ProtocolProfileOutcome](Confirmed(binding))
+        case Some(_) => IO.pure[ProtocolProfileOutcome](Rejected("REMNAWAVE_PROTOCOL_PROFILE_CONFLICT"))
+        case None if !fresh => IO.pure[ProtocolProfileOutcome](Unknown("REMNAWAVE_PROTOCOL_PROFILE_CREATE_UNKNOWN"))
+        case None => client.createProtocolProfileWire(context.baseUrl, auth, name, tag, config).flatMap {
+          case _: Unknown => client.protocolProfileLookup(context.baseUrl, auth, name, tag, config).map(
+            _.fold[ProtocolProfileOutcome](Unknown("REMNAWAVE_PROTOCOL_PROFILE_CREATE_UNKNOWN"))(Confirmed.apply))
+            .handleError(_ => Unknown("REMNAWAVE_PROTOCOL_PROFILE_CREATE_UNKNOWN"))
+          case outcome => IO.pure(outcome)
+        }
+      }
+    } yield result).handleError {
+      case e: IntegrationError => if(fresh) Rejected(e.code) else Unknown(e.code)
+      case _ => Unknown("REMNAWAVE_PROTOCOL_PROFILE_CREATE_UNKNOWN")
     }
   }
 

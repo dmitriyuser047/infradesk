@@ -114,7 +114,7 @@ final class LiveFleetRolloutChildren[Tx[_]: MonadThrow](
 
   private def spec(provenance: FleetLocalProvenance, resourceId: UUID, nodePort: Int, cidrs: List[String]) =
     RemnawaveNodeRemoteSpec(provenance.onboardingId, resourceId, provenance.externalNodeId, nodePort,
-      provenance.imageReference, cidrs)
+      provenance.imageReference, cidrs,provenance.tlsCertificateId)
 
   private def context(org: UUID, integrationId: UUID, resourceId: UUID, node: UUID) = runner.run(for {
     provenance <- fleetQuery.provenance(org, integrationId, resourceId, node)

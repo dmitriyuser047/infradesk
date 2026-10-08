@@ -20,7 +20,7 @@ final case class FleetCandidate(inventoryNodeId: UUID, externalId: String, nodeN
 
 /** Proof that Stage25C installed and still owns this node's local installation. */
 final case class FleetLocalProvenance(onboardingId: UUID, externalNodeId: UUID, imageReference: String,
-  provisioningReady: Boolean, succeededAt: Instant)
+  provisioningReady: Boolean, succeededAt: Instant, tlsCertificateId: Option[UUID] = None)
 
 /** Everything one member's assessment needs that lives in the database. Remote reads are separate. */
 final case class FleetStoredEvidence(membership: RemnawaveFleetMembership, bindingPresent: Boolean,

@@ -71,6 +71,7 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
     write: Request[IO] => IO[Response[IO]] = _ => IO.pure(envelope(node())),
     keyField: String = "secretKey", metadataBody: Option[String] = None,
     readNode: Request[IO] => IO[Response[IO]] = _ => IO.pure(envelope(node())),
+    profiles: () => IO[Response[IO]] = () => IO.pure(envelope(Json.obj("configProfiles" -> Json.arr()))),
     timeout: FiniteDuration = 2.seconds):
       (RemnawaveNodeProvisioning, RemnawaveProvider, Ref[IO, List[(String, String, String)]]) = {
     val seen = Ref.of[IO, List[(String, String, String)]](Nil).unsafeRunSync()
@@ -87,7 +88,7 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
           case "/prefix/api/nodes" if request.method == Method.GET => IO.pure(listing(items))
           case "/prefix/api/hosts" => IO.pure(listing(Nil))
           case "/prefix/api/config-profiles" if request.method == Method.GET =>
-            IO.pure(envelope(Json.obj("configProfiles" -> Json.arr())))
+            profiles()
           case path if path == s"/prefix/api/nodes/$nodeId" && request.method == Method.GET => readNode(request)
           case "/prefix/api/keygen" => IO.pure(envelope(Json.obj(keyField -> Json.fromString(registrationSecret))))
           case _ => write(request)
@@ -96,6 +97,43 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
     }
     val client = new RemnawaveClient(Client.fromHttpApp(app), timeout)
     (new RemnawaveNodeProvisioning(client), new RemnawaveProvider(client), seen)
+  }
+
+  test("protocol profile POST uses the reviewed contract once; lost responses reconcile exact content without reissuing") {
+    val name="ID_"+"a"*24; val tag="SS_"+"b"*32; val profile=UUID.randomUUID(); val inbound=UUID.randomUUID()
+    val config=application.integration.RemnawaveProtocolPreset.render(RemnawaveProtocol.Shadowsocks(443,"aes-256-gcm"),tag)
+    val item=Json.obj("uuid"->Json.fromString(profile.toString),"name"->Json.fromString(name),"viewPosition"->Json.fromInt(0),
+      "createdAt"->Json.fromString("2026-01-01T00:00:00Z"),"updatedAt"->Json.fromString("2026-01-01T00:00:00Z"),
+      "nodes"->Json.arr(),"config"->config,"inbounds"->Json.arr(Json.obj("uuid"->Json.fromString(inbound.toString),
+        "tag"->Json.fromString(tag),"type"->Json.fromString("shadowsocks"),"network"->Json.fromString("tcp,udp"),
+        "security"->Json.Null,"port"->Json.fromInt(443))))
+    val created=Ref.of[IO,Boolean](false).unsafeRunSync()
+    def listingProfile=created.get.map(exists => envelope(Json.obj("configProfiles" -> Json.arr((if(exists) List(item) else Nil):_*))))
+    val (adapter,_,seen)=setup(write=_ => created.set(true) *> IO.never,profiles=() => listingProfile,timeout=50.millis)
+    val reviewed=adapter.inspect(context).unsafeRunSync()
+    val expected=ProtocolProfileOutcome.Confirmed(NodeProtocolBinding(profile,List(inbound),CanonicalJson.sha256(config)))
+    assertEquals(adapter.ensureProtocolProfile(context,name,tag,config,reviewed,true).unsafeRunSync(),expected)
+    assertEquals(adapter.ensureProtocolProfile(context,name,tag,config,reviewed,false).unsafeRunSync(),expected)
+    val writes=seen.get.unsafeRunSync().filter(_._1=="POST")
+    assertEquals(writes.size,1)
+    assertEquals(writes.head._2,"/prefix/api/config-profiles")
+    assertEquals(parse(writes.head._3).toOption.get,Json.obj("name"->Json.fromString(name),"config"->config))
+    assertEquals(adapter.ensureProtocolProfile(context,name,tag,config,reviewed,true).unsafeRunSync(),
+      ProtocolProfileOutcome.Rejected("REMNAWAVE_PROTOCOL_PROFILE_CONFLICT"))
+    assertEquals(seen.get.unsafeRunSync().count(_._1=="POST"),1)
+  }
+  test("absent uncertain profile and unsupported provider never permit another POST") {
+    val tag="SS_"+"b"*32; val name="ID_"+"a"*24
+    val config=application.integration.RemnawaveProtocolPreset.render(RemnawaveProtocol.Shadowsocks(443,"aes-256-gcm"),tag)
+    val (adapter,_,seen)=setup()
+    val reviewed=adapter.inspect(context).unsafeRunSync()
+    assertEquals(adapter.ensureProtocolProfile(context,name,tag,config,reviewed,false).unsafeRunSync(),
+      ProtocolProfileOutcome.Unknown("REMNAWAVE_PROTOCOL_PROFILE_CREATE_UNKNOWN"))
+    assert(!seen.get.unsafeRunSync().exists(_._1=="POST"))
+    val (old,_,calls)=setup(version="2.8.0")
+    assertEquals(old.ensureProtocolProfile(context,name,tag,config,old.inspect(context).unsafeRunSync(),true).unsafeRunSync(),
+      ProtocolProfileOutcome.Rejected("INTEGRATION_API_CONTRACT_UNCONFIRMED"))
+    assert(!calls.get.unsafeRunSync().exists(_._1=="POST"))
   }
 
   test("lookup distinguishes a typed node 404 at the exact path from other missing responses") {

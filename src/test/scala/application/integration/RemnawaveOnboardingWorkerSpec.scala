@@ -150,6 +150,10 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     var bindConflict = false
     var failPanelApi = false
     var inspectedApi = api
+    var generatedProfile: Option[NodeProtocolBinding] = None
+    var presetConfig = io.circe.Json.obj()
+    var protocolOutcome: Option[ProtocolProfileOutcome] = None
+    var protocolRuntime = ProvisioningStepResult(Map.empty,None,Some(true))
     var enableOutcome: IntegrationActionRemoteOutcome = IntegrationActionRemoteOutcome.Succeeded
     var childStartCount = 0
     var validateCompliant = true
@@ -171,6 +175,10 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
         Option.when(status != IntegrationSyncStatus.Running)(now), status,
         Option.when(status == IntegrationSyncStatus.Failed)("INTEGRATION_TIMEOUT"), None, None)
     val remote = new RemnawaveNodeRemote[IO] {
+      override def configureClientFirewall(c: Connection,s: RemnawaveNodeRemoteSpec,p: RemnawaveProtocol)=IO {
+        events += "client-firewall"; assert(generatedProfile.nonEmpty); ProvisioningStepResult(Map.empty,None,Some(true))
+      }
+      override def verifyProtocol(c: Connection,s: RemnawaveNodeRemoteSpec,p: RemnawaveProtocol)=IO { events += "verify-protocol"; protocolRuntime }
       override def publicNodeAddresses(c: Connection)=IO.pure(List("185.10.20.20"))
       override def observePanelSynSource(c: Connection,p: PanelSynProbeSpec)=IO {
         events += "passive-syn"
@@ -269,6 +277,11 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       override def verifyInventoryBindingDesired(r: RemnawaveNodeOnboardingRun) = IO { events += "verify-binding"; bindingVerified }
     }
     val provisioning = new NodeProvisioningTransport[IO] {
+      override def ensureProtocolProfile(c: IntegrationRuntimeContext,name: String,tag: String,config: io.circe.Json,
+        reviewed: NodeApiCompatibility,fresh: Boolean)=IO {
+        events += "create-profile"; assertEquals(config,presetConfig)
+        protocolOutcome.getOrElse(ProtocolProfileOutcome.Confirmed(generatedProfile.get))
+      }
       override def updateNodeAddress(c: IntegrationRuntimeContext,id: UUID,old: NodeCreateIntent,desired: NodeCreateIntent,reviewed: NodeApiCompatibility)=IO {
         events += "update-address"; assertEquals(id,nodeId); assertEquals(panel.address,old.address)
         if(addressUpdateOutcome==IntegrationActionRemoteOutcome.Succeeded) panel=panel.copy(address=desired.address)
@@ -282,6 +295,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       override def lookupNode(c: IntegrationRuntimeContext,id: UUID) = IO { events += "lookup"; lookup.getOrElse(if(failPanelApi) NodeLookupOutcome.Unknown("INTEGRATION_REMOTE_UNAVAILABLE") else NodeLookupOutcome.Found(panel)) }
       override def deleteNode(c: IntegrationRuntimeContext,id: UUID,reviewed: NodeApiCompatibility) = IO { events += "delete"; if(deletion==NodeDeleteOutcome.Deleted) { lookup=Some(NodeLookupOutcome.ConfirmedNotFound); candidateNodes=Some(Nil) }; deletion }
       override def createNode(c: IntegrationRuntimeContext, i: NodeCreateIntent, reviewed: NodeApiCompatibility) = IO { events += "create"
+        if(generatedProfile.nonEmpty) { assertEquals(repo.record.protocolBinding,generatedProfile); assertEquals(i.configProfileId,generatedProfile.get.profileId) }
         create match { case NodeCreateOutcome.Created(n) if OnboardingRecovery.matches(n,i,None) => panel=n; candidateNodes=Some(List(n)); case _ => () }
         create }
       override def installationData(c: IntegrationRuntimeContext, reviewed: NodeApiCompatibility) = IO {
@@ -297,12 +311,18 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       override def observe(c: IntegrationRuntimeContext) = IO {
         events += "inventory-observe"
         IntegrationObservation(List(ObservedIntegrationObject(IntegrationObjectType.ConfigProfile,
-          input.configProfileId.toString, "profile", RemnawaveConfigProfileSummary(0, now, now, Nil,
-            List(RemnawaveInboundSummary(inbound.toString, "in", "VLESS", None, None, None))))), Set(IntegrationObjectType.ConfigProfile))
+          generatedProfile.fold(input.configProfileId)(_.profileId).toString, "profile", RemnawaveConfigProfileSummary(0, now, now, Nil,
+            List(RemnawaveInboundSummary(generatedProfile.fold(inbound)(_.inboundIds.head).toString, "in", "VLESS", None, None, None)),
+            generatedProfile.map(_.configSha256)))), Set(IntegrationObjectType.ConfigProfile))
       }
       override def executeAction(c: IntegrationRuntimeContext, externalId: String, action: IntegrationActionCode) =
         IO { events += "enable"; if(enableOutcome==IntegrationActionRemoteOutcome.Succeeded) panel=panel.copy(disabled=false); enableOutcome }
       override def nodeProvisioning = Some(provisioning)
+      override def configProfiles = Some(new IntegrationConfigProfileTransport[IO] {
+        def fetchConfigProfile(c: IntegrationRuntimeContext,id: String)=IO.pure(IntegrationConfigProfileDocument(id,presetConfig,None))
+        def updateConfigProfile(c: IntegrationRuntimeContext,id: String,config: io.circe.Json,sha: String)=
+          IO.raiseError[IntegrationActionRemoteOutcome](new AssertionError("Existing profiles must never be patched by onboarding"))
+      })
     }
     val runner = new TransactionRunner[IO, IO] { override def run[A](program: IO[A]) = program }
     val auditPair: (RecordingAuditEventRepository, AuditRecorder[IO]) = TestAuditRecorder.recording
@@ -319,6 +339,31 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
             if(mode==PanelSourceMode.Auto) "DNS_BASE_URL" else "MANUAL",if(mode==PanelSourceMode.Auto) "AUTO_CANDIDATE" else "MANUAL",
             PanelSourceEvidence.fingerprint(endpoint)))
       })
+  }
+
+  test("generated protocol persists its profile receipt before Node creation and cannot succeed without its runtime probe") {
+    for(healthy <- List(true,false)) {
+      val h=new Harness(OnboardingPhase.CreateProtocolProfile)
+      val protocol=RemnawaveProtocol.Shadowsocks(443,"chacha20-ietf-poly1305")
+      val config=RemnawaveProtocolPreset.render(protocol,RemnawaveProtocol.inboundTag(org,resource,protocol))
+      val receipt=NodeProtocolBinding(uid,List(uid),domain.configuration.CanonicalJson.sha256(config))
+      h.generatedProfile=Some(receipt); h.presetConfig=config
+      val evidence=PanelSourceEvidence(PanelSourceMode.Manual,input.panelCidrs,"MANUAL","MANUAL",
+        PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.test").toOption.get))
+      h.repo.record=h.repo.record.copy(snapshot=snap.copy(input=input.copy(configProfileId=OnboardingInput.GeneratedProfileId,
+        activeInboundIds=Nil,protocol=Some(protocol)),lifecycleVersion=6,panelSource=Some(evidence)))
+      h.repo.inFlight=false
+      h.panel=node().copy(configProfileId=Some(receipt.profileId),activeInboundIds=receipt.inboundIds)
+      h.create=NodeCreateOutcome.Created(h.panel)
+      if(!healthy) h.protocolRuntime=ProvisioningStepResult(Map.empty,Some("REMNAWAVE_PROTOCOL_LISTENER_MISSING"),Some(false))
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record.protocolBinding,Some(receipt))
+      assert(h.events.indexOf("create-profile")<h.events.indexOf("create"))
+      assert(h.events.indexOf("client-firewall")<h.events.indexOf("install"))
+      assertEquals(h.repo.record.state,if(healthy) ProvisioningRunState.Succeeded else ProvisioningRunState.Failed)
+      assertEquals(h.repo.completed.contains(OnboardingPhase.FinalVerify),healthy)
+      assertEquals(h.events.count(_=="create-profile"),1)
+    }
   }
 
   private def connectivityHarness(phase: OnboardingPhase = OnboardingPhase.Validate): Harness = {

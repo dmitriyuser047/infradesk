@@ -279,34 +279,34 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
     */
   def provenance(org: UUID, integrationId: UUID, resourceId: UUID,
     inventoryNodeId: UUID): ConnectionIO[Option[FleetLocalProvenance]] = sql"""
-    select case when ob.input_snapshot->'recovery'->>'action'='RECOVER'
+    select case when ob.input_snapshot->'recovery'->>'action' IN ('RECOVER','REPAIR_PANEL_CONNECTIVITY')
       then (ob.input_snapshot->'recovery'->>'installationOwnerId')::uuid else ob.id end,
-      ob.external_node_id, case when ob.input_snapshot->'recovery'->>'action'='RECOVER'
+      ob.external_node_id, case when ob.input_snapshot->'recovery'->>'action' IN ('RECOVER','REPAIR_PANEL_CONNECTIVITY')
         then coalesce(ob.input_snapshot->'recovery'->>'previousImageReference',ob.input_snapshot->>'imageReference')
         else ob.input_snapshot->>'imageReference' end,
       coalesce(ob.input_snapshot->>'apiGeneration','') <> '' and ob.input_snapshot->>'compatibilityBlocker' is null,
-      ob.finished_at
+      ob.finished_at,coalesce(ob.input_snapshot->>'tlsCertificateId',ob.input_snapshot->'tlsHttp01'->>'certificateId')::uuid
     from remnawave_node_onboarding ob
     join integration_inventory_object o on o.organization_id=ob.organization_id
       and o.integration_id=ob.integration_id and o.external_id=ob.external_node_id::text
     where ob.organization_id=$org and ob.integration_id=$integrationId and ob.resource_id=$resourceId
       and ob.state='SUCCEEDED' and ob.external_node_id is not null and o.id=$inventoryNodeId
     order by ob.finished_at desc nulls last, ob.id desc limit 1"""
-    .query[(UUID, UUID, Option[String], Boolean, Option[Instant])].option.map(_.flatMap {
-      case (id, externalId, Some(image), ready, Some(at)) if image.nonEmpty =>
-        Some(FleetLocalProvenance(id, externalId, image, ready, at))
+    .query[(UUID, UUID, Option[String], Boolean, Option[Instant],Option[UUID])].option.map(_.flatMap {
+      case (id, externalId, Some(image), ready, Some(at),tls) if image.nonEmpty =>
+        Some(FleetLocalProvenance(id, externalId, image, ready, at,tls))
       case _ => None
     })
 
   private def provenanceBatch(org: UUID, ids: List[UUID]): ConnectionIO[Map[UUID, FleetLocalProvenance]] =
     sql"""select distinct on (m.id) m.id,
-      case when ob.input_snapshot->'recovery'->>'action'='RECOVER'
+      case when ob.input_snapshot->'recovery'->>'action' IN ('RECOVER','REPAIR_PANEL_CONNECTIVITY')
         then (ob.input_snapshot->'recovery'->>'installationOwnerId')::uuid else ob.id end,
-      ob.external_node_id,case when ob.input_snapshot->'recovery'->>'action'='RECOVER'
+      ob.external_node_id,case when ob.input_snapshot->'recovery'->>'action' IN ('RECOVER','REPAIR_PANEL_CONNECTIVITY')
         then coalesce(ob.input_snapshot->'recovery'->>'previousImageReference',ob.input_snapshot->>'imageReference')
         else ob.input_snapshot->>'imageReference' end,
       coalesce(ob.input_snapshot->>'apiGeneration','') <> '' and ob.input_snapshot->>'compatibilityBlocker' is null,
-      ob.finished_at
+      ob.finished_at,coalesce(ob.input_snapshot->>'tlsCertificateId',ob.input_snapshot->'tlsHttp01'->>'certificateId')::uuid
       from remnawave_fleet_membership m
       join integration_inventory_object o on o.organization_id=m.organization_id and o.id=m.inventory_node_id
       join remnawave_node_onboarding ob on ob.organization_id=m.organization_id and ob.integration_id=m.integration_id
@@ -314,9 +314,9 @@ final class PostgresRemnawaveFleetQuery extends RemnawaveFleetQuery[ConnectionIO
       where m.organization_id=$org and m.id=any(${ids.toArray[UUID]}) and m.removed_at is null
         and ob.state='SUCCEEDED' and ob.external_node_id is not null
       order by m.id,ob.finished_at desc nulls last,ob.id desc"""
-      .query[(UUID,UUID,UUID,Option[String],Boolean,Option[Instant])].to[List].map(_.flatMap {
-        case (member,id,external,Some(image),ready,Some(at)) if image.nonEmpty =>
-          Some(member -> FleetLocalProvenance(id,external,image,ready,at))
+      .query[(UUID,UUID,UUID,Option[String],Boolean,Option[Instant],Option[UUID])].to[List].map(_.flatMap {
+        case (member,id,external,Some(image),ready,Some(at),tls) if image.nonEmpty =>
+          Some(member -> FleetLocalProvenance(id,external,image,ready,at,tls))
         case _ => None
       }.toMap)
 

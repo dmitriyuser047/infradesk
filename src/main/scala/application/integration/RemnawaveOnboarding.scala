@@ -16,6 +16,8 @@ import java.time.Instant
 import java.util.UUID
 
 trait RemnawaveOnboardingApi {
+  def importCertificate(actor: ActorContext, integration: UUID, resourceId: UUID, domain: String,
+    material: NodeTlsMaterial): IO[Json] = IO.raiseError(IntegrationError("REMNAWAVE_TLS_UNAVAILABLE","TLS import is unavailable"))
   def options(org: UUID, integration: UUID): IO[Json]
   def preview(actor: ActorContext, integration: UUID, input: OnboardingInput): IO[Json]
   def reconcile(actor: ActorContext, integration: UUID, run: UUID, action: String): IO[Json]
@@ -31,7 +33,23 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
   remote: RemnawaveNodeRemote[IO], audit: AuditRecorder[Tx], settings: ProvisioningSettings,
   provisioningPlans: ProvisioningRunRepository[Tx],
   panelSources: RemnawavePanelSourceResolver[IO] = integration.remnawave.RemnawavePanelDnsResolver.production(false),
-  nodeAddresses: RemnawaveNodeAddressResolver[IO] = integration.remnawave.RemnawaveNodeAddressDnsResolver.production()) extends RemnawaveOnboardingApi {
+  nodeAddresses: RemnawaveNodeAddressResolver[IO] = integration.remnawave.RemnawaveNodeAddressDnsResolver.production(),
+  nodeCipher: Option[NodeInstallationCryptography] = None) extends RemnawaveOnboardingApi {
+  override def importCertificate(actor: ActorContext, integration: UUID, resource: UUID, domain: String,
+    material: NodeTlsMaterial): IO[Json] = for {
+    _ <- context(actor.organizationId,integration)
+    _ <- runner.run(targets.eligible(actor.organizationId,resource)).flatMap(_.leftMap(error).liftTo[IO])
+    now <- IO.realTimeInstant
+    metadata <- IO.delay(ru.bitec.app.ops.integration.secret.NodeTlsValidation.validate(domain,material,now))
+      .flatMap(_.leftMap(error).liftTo[IO])
+    cipher <- nodeCipher.liftTo[IO](error("REMNAWAVE_TLS_UNAVAILABLE"))
+    id <- IO(UUID.randomUUID())
+    certificate=NodeTlsCertificate(id,actor.organizationId,resource,domain,metadata.fingerprint,metadata.expiresAt)
+    encrypted <- IO.delay(cipher.encryptTls(id,actor.organizationId,material))
+    _ <- runner.run(repo.insertCertificate(certificate,encrypted) *>
+      audit.record(actor,AuditAction.RemnawaveNodeCertificateImported,AuditTargetType.Integration,Some(integration)))
+  } yield Json.obj("id"->str(id.toString),"domain"->str(domain),"fingerprint"->str(metadata.fingerprint),
+    "expiresAt"->str(metadata.expiresAt.toString))
   private val sourcePolicy = new OnboardingPanelSources(query,runner,panelSources)
   private def error(code: String) = IntegrationError(code,"Remnawave onboarding could not proceed")
   private def context(org: UUID, integration: UUID): IO[(Integration,IntegrationRuntimeContext,IntegrationProvider[IO])] =
@@ -91,6 +109,15 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       evidence <- OnboardingNodeAddresses.resolve(normalized,connection,remote,nodeAddresses)
     } yield Some(evidence)
     input = normalized.copy(panelCidrs=source.sources,address=addressEvidence.fold(normalized.address)(_.address))
+    certificate <- input.tlsCertificateId.traverse(id => runner.run(repo.certificate(actor.organizationId,input.resourceId,id)))
+    certificateProblems = input.protocol.toList.collect { case h: RemnawaveProtocol.Hysteria2 =>
+      if(input.tlsHttp01.isEmpty && !certificate.flatten.exists { case (c,_) => c.domain==h.serverName && c.expiresAt.isAfter(java.time.Instant.now().plusSeconds(7*86400)) })
+        "REMNAWAVE_PROTOCOL_TLS_REQUIRED" else ""
+    }.filter(_.nonEmpty)
+    httpDns <- input.tlsHttp01.traverse(_ => target.toOption.traverse { t =>
+      remote.publicNodeAddresses(t.connection).flatMap(ips => nodeAddresses.verifyDomain(
+        input.protocol.get.asInstanceOf[RemnawaveProtocol.Hysteria2].serverName,ips)).attempt
+    })
     api <- c._3.nodeProvisioning.get.inspect(c._2)
     candidates <- runner.run(query.candidates(actor.organizationId,500))
     items <- profileInventory(actor.organizationId,integration)
@@ -111,7 +138,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     connectivityFirewall <- recovery.filter(_.action=="REPAIR_PANEL_CONNECTIVITY").traverse(r =>
       target.toOption.traverse(t => remote.connectivitySources(t.connection,
         RemnawaveNodeRemoteSpec(r.installationOwnerId,input.resourceId,r.previousExternalNodeId.get,input.nodePort,
-          r.previousImageReference.getOrElse(image.getOrElse("")),if(r.previousPanelCidrs.exists(_.nonEmpty)) r.previousPanelCidrs.get else input.panelCidrs),
+          r.previousImageReference.getOrElse(image.getOrElse("")),if(r.previousPanelCidrs.exists(_.nonEmpty)) r.previousPanelCidrs.get else input.panelCidrs,input.certificateId),
         r.previousPanelCidrs.getOrElse(Nil))).attempt)
     conflict <- runner.run(query.bindingConflict(actor.organizationId,input.resourceId,
       recovery.flatMap(_.previousExternalNodeId)))
@@ -125,8 +152,11 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       target.left.toOption.toList ++ api.blocker.toList ++ Option.when(!api.provisioningReady)("INTEGRATION_API_CONTRACT_UNCONFIRMED") ++
       Option.when(image.isEmpty)("REMNAWAVE_ONBOARDING_IMAGE_UNCONFIRMED") ++ Option.when(!c._1.enabled)("INTEGRATION_MANAGEMENT_REQUIRES_SYNC") ++
       Option.when(c._1.managementMode!=IntegrationManagementMode.ManagedSelected)("INTEGRATION_MANAGEMENT_MODE_REQUIRED") ++
-      Option.when(profile.isEmpty || liveProfile.isEmpty)("REMNAWAVE_ONBOARDING_CONFIG_PROFILE_MISSING") ++
-      Option.when(!input.activeInboundIds.forall(id => inbounds.exists(_.uuid==id.toString) && liveInboundIds(id.toString)))("REMNAWAVE_ONBOARDING_INBOUND_INVALID") ++
+      Option.when(input.protocol.nonEmpty && !api.capabilities(NodeProvisioningCapability.ProtocolProfileCreate))("INTEGRATION_API_CONTRACT_UNCONFIRMED") ++
+      certificateProblems ++
+      Option.when(httpDns.flatten.exists(_.isLeft))("REMNAWAVE_TLS_HTTP01_DNS_UNCONFIRMED") ++
+      Option.when(input.protocol.isEmpty && (profile.isEmpty || liveProfile.isEmpty))("REMNAWAVE_ONBOARDING_CONFIG_PROFILE_MISSING") ++
+      Option.when(input.protocol.isEmpty && !input.activeInboundIds.forall(id => inbounds.exists(_.uuid==id.toString) && liveInboundIds(id.toString)))("REMNAWAVE_ONBOARDING_INBOUND_INVALID") ++
       Option.when(busy)("REMNAWAVE_ONBOARDING_RESOURCE_BUSY") ++ Option.when(conflict)("REMNAWAVE_ONBOARDING_BINDING_CONFLICT") ++
       baseline.left.toOption.map(safeCode).toList ++ baseline.toOption.toList.flatMap(_.blockingProblems) ++
       local.toList.flatMap(_.fold(e => List(safeCode(e)),r => r.failureCode.toList ++ Option.when(r.uncertain)("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN"))) ++
@@ -145,7 +175,10 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       pinned.fold(0)(_.revisionNumber),pinned.fold(zero)(_.assignmentId),pinned.fold(0L)(_.assignmentVersion),
       pinned.fold("")(_.revisionHash),baseline.toOption.fold(zero)(_.run.id),baseline.toOption.exists(!_.assessment.compliant),api,
       image.getOrElse(""),planCorrelation,candidates.find(_.id==input.resourceId).fold("")(_.name),
-      baseline.toOption.fold("")(_.profileName),profile.fold("")(_.obj.displayName),
+      baseline.toOption.fold("")(_.profileName),input.protocol.fold(profile.fold("")(_.obj.displayName)) {
+        case _: RemnawaveProtocol.Hysteria2 => "Hysteria2"
+        case _: RemnawaveProtocol.Shadowsocks => "Shadowsocks"
+      },
       input.activeInboundIds.flatMap(id => inbounds.find(_.uuid==id.toString).map(_.tag)),
       if(proof.localInstallation.exists(!_.state.repairable) || recovery.exists(r => Set("UNKNOWN","PRESENT_CONFLICT")(r.state))) Nil else
       if(recovery.exists(_.action=="REPAIR_PANEL_CONNECTIVITY")) List("RESOLVE_PANEL_SOURCE","ADD_PANEL_SOURCES","WAIT_FOR_PANEL",
@@ -156,12 +189,15 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
         (if(recovery.exists(r => !r.reusesNode && !r.localInstallation.exists(_.state==LocalInstallationState.Absent))) List("RETIRE_NODE_FIREWALL","RETIRE_LOCAL_NODE") else Nil) ++
         (if(recovery.exists(_.reusesNode)) Nil else List("CREATE_NODE")) ++
         List("CONFIGURE_NODE_FIREWALL", "INSTALL_NODE", "START_NODE", "WAIT_FOR_PANEL", "FINALIZE_PANEL_SOURCES", "SYNC_INVENTORY", "BIND_RESOURCE", "SET_DESIRED_STATE", "FINAL_VERIFY"),
-      baseline.toOption.toList.flatMap(_.warnings) ++ Option.when(recovery.exists(_.reusesNode))("REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE"),blocks,recovery,lifecycleVersion=5,panelSource=Some(source),nodeAddress=addressEvidence)
+      baseline.toOption.toList.flatMap(_.warnings) ++ Option.when(recovery.exists(_.reusesNode))("REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE") ++
+        Option.when(input.tlsHttp01.nonEmpty)("REMNAWAVE_TLS_HTTP01_TEMPORARY_PORT_80"),blocks,recovery,
+      lifecycleVersion=if(input.protocol.nonEmpty) 6 else 5,panelSource=Some(source),nodeAddress=addressEvidence)
     snapshot=snapshotDraft.copy(changes=if(blocks.nonEmpty) snapshotDraft.changes else
       baseline.toOption.toList.flatMap(_.assessment.modules.filterNot(_._2).map(_._1)) ++
         OnboardingPhase.forSnapshot(snapshotDraft).filterNot(p => p==OnboardingPhase.Validate || p==OnboardingPhase.PrepareServer).map(_.code))
     run = RemnawaveNodeOnboardingRun(UUID.randomUUID(),actor.organizationId,integration,input.resourceId,None,actor.userId,
-      ProvisioningRunState.Planned,OnboardingPhase.Validate,snapshot,now,now,externalNodeId=proof.node)
+      ProvisioningRunState.Planned,OnboardingPhase.Validate,snapshot,now,now,externalNodeId=proof.node,
+      protocolBinding=if(recovery.nonEmpty) candidate.toOption.flatten.flatMap(_.protocolBinding) else None)
     _ <- if (blocks.nonEmpty) IO.unit else runner.run(for {
       current <- integrations.findByIdForUpdate(actor.organizationId,integration)
       _ <- repo.lockResource(actor.organizationId,input.resourceId)
@@ -183,7 +219,10 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     "input" -> Json.obj("resourceId" -> str(input.resourceId.toString),"nodeName" -> str(input.nodeName),"address" -> str(input.address),
       "nodePort" -> Json.fromInt(input.nodePort),"configProfileId" -> str(input.configProfileId.toString),
       "activeInboundIds" -> strings(input.activeInboundIds.map(_.toString)),"desiredState" -> str(input.desiredState),
-      "nodeAddressMode" -> str(input.nodeAddressMode.code)),
+      "nodeAddressMode" -> str(input.nodeAddressMode.code)).deepMerge(input.protocol.fold(Json.obj())(p => Json.obj("protocol" -> RemnawaveProtocol.encode(p))))
+      .deepMerge(input.tlsCertificateId.fold(Json.obj())(id => Json.obj("tlsCertificateId"->str(id.toString))))
+      .deepMerge(input.tlsHttp01.fold(Json.obj())(h => Json.obj("tlsHttp01" -> Json.obj("certificateId" -> str(h.certificateId.toString),
+        "email" -> str(h.email), "agreeTerms" -> Json.True)))),
     "changes" -> strings(snapshot.changes),"warnings" -> strings(snapshot.warnings),
     "packageFindings" -> Json.fromValues(baseline.toOption.toList.flatMap(_.packageFindings).map(_.json)),
     "blockingProblems" -> strings(blocks),"localInstallationState" -> proof.localState.fold(Json.Null)(s => str(s.code)),
@@ -226,7 +265,12 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     } yield started)
   } yield result
   def detail(org: UUID,integration: UUID,id: UUID): IO[Json] = runner.run(repo.find(org,integration,id)).flatMap(
-    _.liftTo[IO](error("REMNAWAVE_ONBOARDING_NOT_FOUND"))).map { case(r,p) => OnboardingJson.detail(r,p) }
+    _.liftTo[IO](error("REMNAWAVE_ONBOARDING_NOT_FOUND"))).flatMap { case(r,p) =>
+      r.snapshot.input.certificateId.traverse(cert => runner.run(repo.certificateMetadata(org,r.resourceId,cert))).map { metadata =>
+        OnboardingJson.detail(r,p).deepMerge(Json.obj("certificate" -> metadata.flatten.fold(Json.Null)(c =>
+          Json.obj("domain" -> str(c.domain),"expiresAt" -> str(c.expiresAt.toString),"automaticRenewal" -> Json.False))))
+      }
+    }
   def history(org: UUID,integration: UUID): IO[Json] = runner.run(repo.history(org,integration,50)).map(rows => Json.obj("items" -> Json.arr(rows.map(OnboardingJson.run): _*)))
   private def safeCode(e: Throwable): String = e match {
     case p: ProvisioningError => p.code
@@ -256,6 +300,9 @@ object OnboardingJson {
     "panelSource" -> r.snapshot.panelSource.fold(Json.Null)(PanelSourceEvidence.encode),
     "observedPanelSource" -> r.observedPanelSource.fold(Json.Null)(PanelSourceObservation.encode),
     "connectivityCompletion" -> r.connectivityCompletion.fold(Json.Null)(c => str(c.code)),
+    "protocol" -> r.snapshot.input.protocol.fold(Json.Null)(RemnawaveProtocol.encode),
+    "protocolBinding" -> r.protocolBinding.fold(Json.Null)(NodeProtocolBinding.encode),
+    "clientTrafficVerification" -> (if(r.snapshot.input.protocol.nonEmpty) str("NOT_RUN") else Json.Null),
     "connectivityFinding" -> r.connectivityFinding.fold(Json.Null)(PanelConnectivityFinding.encode),
     "syncSessionId" -> r.syncSessionId.fold(Json.Null)(id),"failureCode" -> r.failureCode.fold(Json.Null)(str),
     "safeMessage" -> r.failureCode.fold(Json.Null)(_ => str("The onboarding did not complete. Review the recorded phase and existing node before creating a new preview.")),

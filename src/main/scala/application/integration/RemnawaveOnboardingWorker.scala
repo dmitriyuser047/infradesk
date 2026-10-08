@@ -93,10 +93,10 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
     started = stored.toList.flatMap(_._2).find(_.phase==r.phase).flatMap(_.startedAt).getOrElse(r.createdAt)
   } yield !now.isBefore(started.plusMillis(timeout.toMillis))
   private def spec(r: RemnawaveNodeOnboardingRun) = RemnawaveNodeRemoteSpec(RemnawaveNodeOnboardingRun.installationOwner(r),r.resourceId,r.externalNodeId.get,
-    r.snapshot.input.nodePort,r.snapshot.installationImageReference,r.effectivePanelSources)
+    r.snapshot.input.nodePort,r.snapshot.installationImageReference,r.effectivePanelSources,r.snapshot.input.certificateId)
   private def provider = providers.find(IntegrationProviderType.Remnawave).get
   private def matches(r: RemnawaveNodeOnboardingRun,n: ProvisionedNode): Boolean = {
-    val i = r.snapshot.intent
+    val i = r.intent
     n.name==i.name && n.address==i.address && n.port.contains(i.port) && n.configProfileId.contains(i.configProfileId) &&
       n.activeInboundIds.toSet==i.activeInboundIds.toSet &&
       n.correlationTags.contains("ID:"+i.correlationId.toString.replace("-","").toUpperCase(java.util.Locale.ROOT)) &&
@@ -175,9 +175,9 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
             case NodeLookupOutcome.ConfirmedNotFound => IO.pure(Left(Stop("REMNAWAVE_ONBOARDING_NODE_NOT_FOUND",false)))
             case _ => IO.pure(Left(Stop("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN",true)))
           }.handleError(_ => Left(Stop("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN",true)))
-        def existing: IO[Decision] = exactNode(r.externalNodeId.get,r.snapshot.intent).map(_.fold(identity,_ => Advance(r)))
+        def existing: IO[Decision] = exactNode(r.externalNodeId.get,r.intent).map(_.fold(identity,_ => Advance(r)))
         def enableExisting: IO[Decision] = if(!r.snapshot.recovery.exists(_.reusesNode)) advance else
-          exactNode(r.externalNodeId.get,r.snapshot.intent).flatMap {
+          exactNode(r.externalNodeId.get,r.intent).flatMap {
             case Right(n) if n.disabled =>
               provider.executeAction(context,n.externalId.toString,IntegrationActionCode.NodeEnable).flatMap {
                 case IntegrationActionRemoteOutcome.Succeeded => advance
@@ -191,7 +191,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
             case Left(stop) => IO.pure(stop)
           }
         def oldSpec(proof: OnboardingRecovery) = RemnawaveNodeRemoteSpec(proof.installationOwnerId,r.resourceId,
-          proof.previousExternalNodeId.get,r.snapshot.input.nodePort,proof.previousImageReference.getOrElse(r.snapshot.imageReference),proof.previousPanelCidrs.getOrElse(r.snapshot.input.panelCidrs))
+          proof.previousExternalNodeId.get,r.snapshot.input.nodePort,proof.previousImageReference.getOrElse(r.snapshot.imageReference),proof.previousPanelCidrs.getOrElse(r.snapshot.input.panelCidrs),r.snapshot.input.certificateId)
         def previousSources = r.snapshot.recovery.flatMap(_.previousPanelCidrs).getOrElse(r.snapshot.input.panelCidrs)
         def unionSources = (previousSources ++ r.snapshot.input.panelCidrs ++ r.effectivePanelSources).distinct.sorted
         def currentSpec = if(r.snapshot.connectivityRepair || r.observedPanelSource.exists(_.status==PanelSourceObservationStatus.Observed))
@@ -210,7 +210,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
         def oldAbsent: IO[Unit] = r.snapshot.recovery.filter(!_.reusesNode).traverse_ { proof =>
           nodes.lookupNode(context,proof.previousExternalNodeId.get).flatMap {
             case NodeLookupOutcome.ConfirmedNotFound => nodes.findNodes(context).flatMap(candidates => IO.raiseWhen(
-              candidates.exists(OnboardingRecovery.candidate(_,r.snapshot.intent.copy(correlationId=proof.previousCorrelationId))))(
+              candidates.exists(OnboardingRecovery.candidate(_,r.intent.copy(correlationId=proof.previousCorrelationId))))(
                 IntegrationError("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW","Conflicting candidate exists")))
             case NodeLookupOutcome.Found(_) => IO.raiseError(IntegrationError("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW","Previous node still exists"))
             case _ => IO.raiseError(IntegrationError("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN","Previous node absence is unproven"))
@@ -227,7 +227,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
               }
             }
           }
-        def reconciliation: IO[Decision] = nodes.reconcileCreate(context,r.snapshot.intent,r.snapshot.compatibility).map {
+        def reconciliation: IO[Decision] = nodes.reconcileCreate(context,r.intent,r.snapshot.compatibility).map {
           case NodeCreateReconciliation.Confirmed(n) if matches(r,n) => Advance(r.copy(externalNodeId=Some(n.externalId)))
           case _ => Stop("INTEGRATION_NODE_CREATE_RESULT_UNKNOWN",true)
         }
@@ -242,6 +242,71 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           } else mutationResult(io)
         }
         r.phase match {
+          case IssueTls => for {
+            _ <- operations.validate(r,true)
+            request=r.snapshot.input.tlsHttp01.get
+            serverName=r.snapshot.input.protocol.get.asInstanceOf[RemnawaveProtocol.Hysteria2].serverName
+            stored <- runner.run(repo.certificate(r.organizationId,r.resourceId,request.certificateId))
+            _ <- stored match {
+              case Some((cert,_)) => clock.flatMap { now =>
+                IO.raiseUnless(cert.domain==serverName)(IntegrationError("REMNAWAVE_TLS_REFERENCE_INVALID","Certificate scope changed")) *>
+                  IO.raiseUnless(now.plusSeconds(7*86400).isBefore(cert.expiresAt))(
+                    IntegrationError("REMNAWAVE_TLS_EXPIRY_TOO_CLOSE","Certificate expires too soon"))
+              }
+              case None => for {
+                _ <- remote.publicNodeAddresses(connection).flatMap(ips => nodeAddresses.verifyDomain(serverName,ips)).void
+                phase <- runner.run(repo.find(r.organizationId,r.integrationId,r.id))
+                at <- phase.toList.flatMap(_._2).find(_.phase==IssueTls).flatMap(_.startedAt)
+                  .liftTo[IO](IntegrationError("REMNAWAVE_TLS_HTTP01_UNKNOWN","Missing durable issuance lease"))
+                material <- remote.issueCertificate(connection,r.resourceId,serverName,request,at.plusSeconds(210),fresh)
+                  .guarantee(remote.cleanupCertificateProbe(connection,r.resourceId,request))
+                now <- clock
+                metadata <- IO.delay(integration.secret.NodeTlsValidation.validate(serverName,material,now))
+                  .flatMap(_.leftMap(code => IntegrationError(code,"Issued certificate is invalid")).liftTo[IO])
+                cert=NodeTlsCertificate(request.certificateId,r.organizationId,r.resourceId,serverName,metadata.fingerprint,metadata.expiresAt)
+                encrypted <- IO.delay(cipher.encryptTls(cert.id,r.organizationId,material))
+                _ <- runner.run(repo.saveIssuedCertificate(r,token,cert,encrypted,now))
+              } yield ()
+            }
+          } yield Advance(r)
+          case CreateProtocolProfile if r.protocolBinding.nonEmpty => provider.configProfiles.get.fetchConfigProfile(context,
+            r.protocolBinding.get.profileId.toString).flatMap { actual =>
+            IO.raiseUnless(domain.configuration.CanonicalJson.sha256(actual.config)==r.protocolBinding.get.configSha256)(
+              IntegrationError("REMNAWAVE_PROTOCOL_PROFILE_CHANGED","The reviewed profile changed")) *> advance
+          }
+          case CreateProtocolProfile => for {
+            _ <- operations.validate(r,true)
+            protocol <- r.snapshot.input.protocol.liftTo[IO](IntegrationError("REMNAWAVE_PROTOCOL_INVALID","Protocol intent is unavailable"))
+            tag=RemnawaveProtocol.inboundTag(r.organizationId,r.resourceId,protocol)
+            config=RemnawaveProtocolPreset.render(protocol,tag)
+            correlation=if(r.protocolBinding.nonEmpty) r.snapshot.recovery.fold(r.snapshot.correlationId)(_.previousCorrelationId) else r.snapshot.correlationId
+            name="ID_"+correlation.toString.replace("-","").take(24)
+            outcome <- nodes.ensureProtocolProfile(context,name,tag,config,r.snapshot.compatibility,fresh && r.protocolBinding.isEmpty)
+          } yield outcome match {
+            case ProtocolProfileOutcome.Confirmed(binding) if r.protocolBinding.forall(_==binding) => Advance(r.copy(protocolBinding=Some(binding)))
+            case ProtocolProfileOutcome.Confirmed(_) => Stop("REMNAWAVE_PROTOCOL_PROFILE_CONFLICT",false)
+            case ProtocolProfileOutcome.Rejected(code) => Stop(code,false)
+            case ProtocolProfileOutcome.Unknown(code) => Stop(code,true)
+          }
+          case InstallTls => operations.validate(r,true) *> {
+              val id=r.snapshot.input.certificateId.get
+              runner.run(repo.certificate(r.organizationId,r.resourceId,id)).flatMap(
+                _.liftTo[IO](IntegrationError("REMNAWAVE_TLS_REFERENCE_INVALID","Certificate is unavailable"))).flatMap { case(cert,secret) =>
+                IO.delay(cipher.decryptTls(secret)).flatMap { material =>
+                  IO.delay(integration.secret.NodeTlsValidation.validate(cert.domain,material,java.time.Instant.now()))
+                    .flatMap(_.leftMap(code => IntegrationError(code,"Certificate is invalid")).liftTo[IO]) *>
+                  mutationResult(remote.installCertificate(connection,spec(r),cert,material))
+                }
+              }
+            }
+          case ConfigureClientFirewall => operations.validate(r,true) *>
+            result(remote.configureClientFirewall(connection,spec(r),r.snapshot.input.protocol.get))
+          case VerifyProtocol => operations.validate(r,true) *> provider.configProfiles.get.fetchConfigProfile(context,
+            r.effectiveInput.configProfileId.toString).flatMap { actual =>
+            IO.raiseUnless(r.protocolBinding.exists(_.configSha256==domain.configuration.CanonicalJson.sha256(actual.config)))(
+              IntegrationError("REMNAWAVE_PROTOCOL_PROFILE_CHANGED","The reviewed protocol configuration changed")) *>
+              result(remote.verifyProtocol(connection,spec(r),r.snapshot.input.protocol.get))
+          }
           case Validate => operations.validate(r,false) *> validateSources *> r.snapshot.nodeAddress.traverse_ { reviewed =>
             remote.publicNodeAddresses(connection).flatMap { ips =>
               IO.raiseUnless(ips==reviewed.publicAddresses)(IntegrationError("REMNAWAVE_ONBOARDING_SOURCE_CHANGED","Managed Node address changed")) *>
@@ -255,11 +320,11 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           case PrepareServer => operations.validate(r,true) *> advance
           case UpdateNodeAddress =>
             val previous=r.snapshot.recovery.flatMap(_.previousNodeAddress).get
-            val expected=r.snapshot.intent.copy(address=previous)
+            val expected=r.intent.copy(address=previous)
             nodes.lookupNode(context,r.externalNodeId.get).flatMap {
               case NodeLookupOutcome.Found(n) if matches(r,n) => existing
               case NodeLookupOutcome.Found(n) if OnboardingRecovery.matches(n,expected,r.externalNodeId) && fresh =>
-                nodes.updateNodeAddress(context,n.externalId,expected,r.snapshot.intent,r.snapshot.compatibility).flatMap {
+                nodes.updateNodeAddress(context,n.externalId,expected,r.intent,r.snapshot.compatibility).flatMap {
                   case IntegrationActionRemoteOutcome.DefinitelyFailed(code) => IO.pure(Stop(code,false))
                   case outcome => nodes.lookupNode(context,n.externalId).map {
                     case NodeLookupOutcome.Found(current) if matches(r,current) => Advance(r)
@@ -349,7 +414,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
               }
           case DeleteNode =>
             val proof=r.snapshot.recovery.get
-            val oldIntent=r.snapshot.intent.copy(correlationId=proof.previousCorrelationId,address=proof.previousNodeAddress.getOrElse(r.snapshot.input.address))
+            val oldIntent=r.intent.copy(correlationId=proof.previousCorrelationId,address=proof.previousNodeAddress.getOrElse(r.snapshot.input.address))
             exactNode(proof.previousExternalNodeId.get,oldIntent).flatMap {
               case Left(stop) if stop.code=="REMNAWAVE_ONBOARDING_NODE_NOT_FOUND" => oldAbsent *> advance
               case Right(n) if fresh =>
@@ -363,7 +428,11 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
               case Left(stop) => IO.pure(stop)
             }
           case ConfirmNodeDeleted => oldAbsent *> advance
-          case RetireNodeFirewall => oldAbsent *> result(remote.retireFirewall(connection,oldSpec(r.snapshot.recovery.get)))
+          case RetireNodeFirewall => oldAbsent *> result(remote.retireFirewall(connection,oldSpec(r.snapshot.recovery.get))).flatMap {
+            case _: Advance if r.snapshot.input.protocol.nonEmpty => result(remote.retireClientFirewall(connection,
+              oldSpec(r.snapshot.recovery.get),r.snapshot.input.protocol.get))
+            case decision => IO.pure(decision)
+          }
           case RetireLocalNode => oldAbsent *> result(remote.retireInstallation(connection,oldSpec(r.snapshot.recovery.get)))
           case CreateNode if r.snapshot.recovery.exists(_.reusesNode) => operations.validate(r,true) *> existing
           case CreateNode if !fresh || r.externalNodeId.nonEmpty => operations.validate(r,true) *> reconciliation
@@ -372,11 +441,15 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
             IO.raiseUnless(prerequisites.failureCode.isEmpty && !prerequisites.uncertain && !prerequisites.outputTruncated)(
               IntegrationError(prerequisites.failureCode.getOrElse("REMNAWAVE_ONBOARDING_PREREQUISITES_UNKNOWN"),"Installation prerequisites are unavailable"))
           } *> provider.observe(context).flatMap { observation =>
-            val profile = observation.objects.find(o => o.objectType==IntegrationObjectType.ConfigProfile && o.externalId==r.snapshot.input.configProfileId.toString)
+            val profile = observation.objects.find(o => o.objectType==IntegrationObjectType.ConfigProfile && o.externalId==r.effectiveInput.configProfileId.toString)
             val ids = profile.toList.flatMap(_.summary match {case p: RemnawaveConfigProfileSummary => p.inbounds.map(_.uuid); case _ => Nil}).toSet
-            IO.raiseUnless(profile.nonEmpty && r.snapshot.input.activeInboundIds.forall(id => ids(id.toString)))(
+            IO.raiseUnless(profile.nonEmpty && r.effectiveInput.activeInboundIds.forall(id => ids(id.toString)))(
               IntegrationError("REMNAWAVE_ONBOARDING_INBOUND_INVALID","The selected inbounds changed")) *>
-              nodes.createNode(context,r.snapshot.intent,r.snapshot.compatibility).flatMap {
+              IO.raiseUnless(r.protocolBinding.forall(binding => profile.exists(_.summary match {
+                case p: RemnawaveConfigProfileSummary => p.configSha256.contains(binding.configSha256)
+                case _ => false
+              })))(IntegrationError("REMNAWAVE_PROTOCOL_PROFILE_CHANGED","Protocol configuration changed before Node creation")) *>
+              nodes.createNode(context,r.intent,r.snapshot.compatibility).flatMap {
                 case NodeCreateOutcome.Created(n) if matches(r,n) => IO.pure[Decision](Advance(r.copy(externalNodeId=Some(n.externalId))))
                 case NodeCreateOutcome.Created(_) => reconciliation
                 case NodeCreateOutcome.Rejected(code) => IO.pure[Decision](Stop(code,false))

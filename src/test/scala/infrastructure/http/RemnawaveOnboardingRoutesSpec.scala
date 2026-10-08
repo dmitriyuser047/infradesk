@@ -22,6 +22,9 @@ final class RemnawaveOnboardingRoutesSpec extends FunSuite {
     var calls = 0
     var received: Option[OnboardingInput] = None
     var confirmed: Option[Boolean] = None
+    override def importCertificate(a: ActorContext,i: UUID,r: UUID,d: String,m: domain.integration.NodeTlsMaterial) = IO {
+      calls+=1; Json.obj("id"->Json.fromString(UUID.randomUUID().toString),"domain"->Json.fromString(d))
+    }
     def options(o: UUID,i: UUID) = IO { calls += 1; Json.obj() }
     def preview(a: ActorContext,i: UUID,input: OnboardingInput) = IO { calls += 1; received=Some(input); Json.obj() }
     def reconcile(a: ActorContext,i: UUID,r: UUID,action: String) = IO { calls += 1; Json.obj() }
@@ -47,6 +50,29 @@ final class RemnawaveOnboardingRoutesSpec extends FunSuite {
     assertEquals(api.received.map(_.nodePort),Some(2222))
     assertEquals(api.received.map(_.desiredState),Some("ENABLED"))
     assertEquals(api.received.map(_.nodeAddressMode),Some(domain.integration.NodeAddressMode.PublicIp))
+  }
+  test("generated protocol and HTTP-01 decode closed intent; imports are permission protected and never echo material") {
+    val protocol=Json.obj("version"->Json.fromInt(1),"kind"->Json.fromString("HYSTERIA2"),"port"->Json.fromInt(443),"serverName"->Json.fromString("example.org"))
+    val request=Json.obj("certificateId"->Json.fromString(UUID.randomUUID().toString),"email"->Json.fromString("operator@example.org"),"agreeTerms"->Json.True)
+    val body=input.mapObject(_.remove("configProfileId").remove("activeInboundIds").add("protocol",protocol).add("tlsHttp01",request))
+    val api=new Api
+    assertEquals(response(api,"/preview",body.noSpaces).status,Status.Ok)
+    assertEquals(api.received.map(_.configProfileId),Some(OnboardingInput.GeneratedProfileId))
+    assertEquals(api.received.flatMap(_.tlsHttp01).map(_.email),Some("operator@example.org"))
+    for(bad <- List(request.mapObject(_.add("agreeTerms",Json.False)),request.mapObject(_.add("privateKey",Json.fromString("secret"))))) {
+      val rejected=new Api
+      assertEquals(response(rejected,"/preview",body.mapObject(_.add("tlsHttp01",bad)).noSpaces).status,Status.BadRequest)
+      assertEquals(rejected.calls,0)
+    }
+    val certificate=Json.obj("resourceId"->input.hcursor.downField("resourceId").focus.get,"domain"->Json.fromString("example.org"),
+      "certificatePem"->Json.fromString("CERTIFICATE-FIXTURE"),"privateKeyPem"->Json.fromString("PRIVATE-KEY-FIXTURE"))
+    val imported=new Api
+    val out=response(imported,"/certificates",certificate.noSpaces)
+    assertEquals(out.status,Status.Created)
+    assert(!out.as[String].unsafeRunSync().contains("FIXTURE"))
+    val forbidden=new Api
+    assertEquals(response(forbidden,"/certificates",certificate.noSpaces,OrganizationRole.Member).status,Status.Forbidden)
+    assertEquals(forbidden.calls,0)
   }
   test("a domain address requires an explicit mode; public IP mode permits an empty suggestion and rejects legacy bypass") {
     val domainBody=input.mapObject(_.add("address",Json.fromString("node.example.test")).add("nodeAddressMode",Json.fromString("DOMAIN")))

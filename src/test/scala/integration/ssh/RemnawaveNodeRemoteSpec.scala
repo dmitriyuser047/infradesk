@@ -119,6 +119,30 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     assertEquals(broad.toOption.flatMap(_.failureCode), Some("PROVISIONING_NODE_INVALID_CIDR"))
     assertEquals(s.calls.map(_._1).toList, List("id", "id"))
   }
+  test("TLS mount is immutable, read-only and changes the controlled compose proof") {
+    val tls=spec.copy(tlsCertificateId=Some(UUID.randomUUID()))
+    val compose=SshRemnawaveNodeRemote.renderCompose(tls)
+    assert(compose.contains("read_only: true"))
+    assert(compose.contains("create_host_path: false"))
+    assert(compose.contains(SshRemnawaveNodeRemote.tlsDirectory(tls.tlsCertificateId.get)))
+    assertEquals(SshRemnawaveNodeRemote.controlledComposeReference(tls,compose.getBytes(StandardCharsets.UTF_8)),Some(image))
+    assertEquals(SshRemnawaveNodeRemote.controlledComposeReference(spec,compose.getBytes(StandardCharsets.UTF_8)),None)
+    assertEquals(SshRemnawaveNodeRemote.controlledComposeReference(tls,compose.replace("read_only: true","read_only: false").getBytes(StandardCharsets.UTF_8)),None)
+  }
+  test("protocol listener proof rejects a different process in the shared host network") {
+    val s=new Session; idResponse(s)
+    val base=s.respond
+    s.respond=(ex,args) => if(ex=="docker" && args.headOption.contains("inspect")) IO.pure(ok.copy(stdout="true"))
+      else if(ex=="docker" && args.headOption.contains("top")) IO.pure(ok.copy(stdout="PID COMMAND\n123 xray\n124 node\n"))
+      else if(ex=="ss") IO.pure(ok.copy(stdout="UNCONN 0 0 *:443 *:* users:((\"other\",pid=999,fd=3))"))
+      else base(ex,args)
+    val protocol=domain.integration.RemnawaveProtocol.Hysteria2(443,"example.org")
+    val rejected=remote(s).verifyProtocol(connection,spec,protocol).unsafeRunSync()
+    assertEquals(rejected.failureCode,Some("REMNAWAVE_PROTOCOL_LISTENER_MISSING"))
+    val foreign=s.respond
+    s.respond=(ex,args) => if(ex=="ss") IO.pure(ok.copy(stdout="UNCONN 0 0 *:443 *:* users:((\"xray\",pid=123,fd=3))")) else foreign(ex,args)
+    assertEquals(remote(s).verifyProtocol(connection,spec,protocol).unsafeRunSync().failureCode,None)
+  }
 
   test("local installation classifier returns typed state from its exact recovery probe") {
     val absent = new Session; idResponse(absent)

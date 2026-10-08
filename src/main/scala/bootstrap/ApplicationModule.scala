@@ -447,7 +447,8 @@ object ApplicationModule {
     val remnawaveOnboarding = new application.integration.RemnawaveOnboarding[ConnectionIO](onboardingRepository,onboardingQuery,
       integrationRepository,integrationSecretRepository,integrations.integrationCredentialCipher,integrations.integrationProviderRegistry,
       provisioningTargetQuery,serverProfiles,integrationInventoryQuery,transactionRunner,onboardingRemote,auditRecorder,
-      config.provisioning,provisioningRunRepository,panelSourceResolver)
+      config.provisioning,provisioningRunRepository,panelSourceResolver,
+      nodeCipher=Some(integration.secret.NodeInstallationCipher.fromConfig(config.secretEncryption)))
     val fleetRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetRepository
     val fleetQuery = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetQuery
     val upgradeRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveFleetUpgradeRepository

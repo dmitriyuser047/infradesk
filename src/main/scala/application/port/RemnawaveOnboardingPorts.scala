@@ -8,6 +8,15 @@ import java.time.Instant
 import java.util.UUID
 
 trait RemnawaveOnboardingRepository[F[_]] {
+  def insertCertificate(certificate: NodeTlsCertificate, secret: IntegrationSecret): F[Unit] =
+    throw new UnsupportedOperationException("Certificate storage is unavailable")
+  def certificate(org: UUID, resourceId: UUID, id: UUID): F[Option[(NodeTlsCertificate,IntegrationSecret)]] =
+    throw new UnsupportedOperationException("Certificate storage is unavailable")
+  def certificateMetadata(org: UUID, resourceId: UUID, id: UUID): F[Option[NodeTlsCertificate]] =
+    throw new UnsupportedOperationException("Certificate metadata is unavailable")
+  def saveIssuedCertificate(run: RemnawaveNodeOnboardingRun, token: UUID, certificate: NodeTlsCertificate,
+    secret: IntegrationSecret, now: Instant): F[Unit] =
+    throw new UnsupportedOperationException("Certificate storage is unavailable")
   def insertPlan(run: RemnawaveNodeOnboardingRun): F[Unit]
   def lockResource(org: UUID, resourceId: UUID): F[Unit]
   def active(org: UUID, resourceId: UUID): F[Boolean]
@@ -56,6 +65,10 @@ trait RemnawaveOnboardingQuery[F[_]] {
 
 /** Purpose-specific authenticated envelope; implementation reuses InfraDesk AES-GCM infrastructure. */
 trait NodeInstallationCryptography {
+  def encryptTls(id: UUID, org: UUID, material: NodeTlsMaterial): IntegrationSecret =
+    throw new UnsupportedOperationException("Certificate encryption is unavailable")
+  def decryptTls(secret: IntegrationSecret): NodeTlsMaterial =
+    throw new UnsupportedOperationException("Certificate encryption is unavailable")
   def encrypt(runId: UUID, org: UUID, data: NodeInstallationData): IntegrationSecret
   def decrypt(secret: IntegrationSecret): NodeInstallationData
 }

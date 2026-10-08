@@ -13,6 +13,9 @@ object NodeProvisioningCapability {
   case object ConfigProfile extends NodeProvisioningCapability("NODE_CONFIG_PROFILE")
   case object CreateReconciliation extends NodeProvisioningCapability("NODE_CREATE_RECONCILIATION")
   case object AddressUpdate extends NodeProvisioningCapability("NODE_ADDRESS_UPDATE")
+  case object ProtocolProfileCreate extends NodeProvisioningCapability("PROTOCOL_PROFILE_CREATE")
+  val all: List[NodeProvisioningCapability] = List(Inventory, Create, InstallationData, Status,
+    CreateIdempotency, ConfigProfile, CreateReconciliation, AddressUpdate, ProtocolProfileCreate)
 }
 
 /** Runtime evidence for node provisioning only, not permission for actions or config deployment.

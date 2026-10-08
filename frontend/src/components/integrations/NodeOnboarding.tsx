@@ -11,6 +11,7 @@ import { useI18n } from '../../i18n'
 import { InlineAlert, PendingButton, WorkspaceSection } from '../layout/WorkspacePrimitives'
 import { IntegrationDialog } from './IntegrationDialog'
 import { PanelNetworkAccess } from './PanelNetworkAccess'
+import { NodeCertificateImport } from './NodeCertificateImport'
 import type { NodeOnboardingPreview, NodeOnboardingPreviewRequest, NodeOnboardingRecoveryAction, NodeOnboardingRecoverySummary, NodeOnboardingRun } from '../../types/nodeOnboarding'
 
 const phases = ['VALIDATE', 'PREPARE_SERVER', 'CREATE_NODE', 'GET_INSTALLATION_DATA', 'CONFIGURE_NODE_FIREWALL', 'INSTALL_NODE', 'START_NODE', 'VERIFY_LOCAL_NODE', 'WAIT_FOR_PANEL', 'SYNC_INVENTORY', 'BIND_RESOURCE', 'SET_DESIRED_STATE', 'FINAL_VERIFY'] as const
@@ -86,6 +87,15 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const [address, setAddress] = useState(''); const [port, setPort] = useState('2222')
   const [addressMode, setAddressMode] = useState<'PUBLIC_IP' | 'DOMAIN'>('PUBLIC_IP')
   const [configProfileId, setConfigProfileId] = useState(''); const [activeInboundIds, setActiveInboundIds] = useState<string[]>([])
+  const [protocolMode, setProtocolMode] = useState<'SHADOWSOCKS' | 'HYSTERIA2' | 'EXISTING'>('SHADOWSOCKS')
+  const [clientPort, setClientPort] = useState('443'); const [tlsDomain, setTlsDomain] = useState('')
+  const [tlsCertificateId, setTlsCertificateId] = useState<string | undefined>()
+  const [tlsMode, setTlsMode] = useState<'HTTP01' | 'IMPORT'>('HTTP01')
+  const [tlsEmail, setTlsEmail] = useState(''); const [tlsTerms, setTlsTerms] = useState(false)
+  const [httpCertificateId, setHttpCertificateId] = useState(createRequestId)
+  const tlsReady = tlsMode === 'IMPORT' ? Boolean(tlsCertificateId) : tlsTerms && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(tlsEmail)
+  const generatedAvailable = options.data?.nodeApi?.capabilities.includes('PROTOCOL_PROFILE_CREATE') ?? false
+  const protocol = generatedAvailable ? protocolMode : 'EXISTING'
   const [cidrs, setCidrs] = useState(''); const [reviewed, setReviewed] = useState<{plan:NodeOnboardingPreview;requestId:string}|null>(null)
   const [sourceMode, setSourceMode] = useState<'AUTO' | 'MANUAL'>('AUTO')
   const preview = reviewed?.plan
@@ -101,14 +111,25 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const selectedResource = useResource(organizationId, resourceId || undefined)
   const server = options.data?.servers.find(value => value.id === resourceId)
   const profile = options.data?.profiles.find(value => value.id === configProfileId)
+  const protocolValid = protocol === 'EXISTING' ? Boolean(profile && activeInboundIds.length > 0) :
+    Number.isInteger(Number(clientPort)) && Number(clientPort) > 0 && Number(clientPort) <= 65535 && Number(clientPort) !== Number(port) &&
+    (protocol !== 'HYSTERIA2' || /^[a-z0-9][a-z0-9.-]*\.[a-z0-9.-]+$/.test(tlsDomain))
   const cidrValues = useMemo(() => cidrs.split(/[\s,]+/).filter(Boolean), [cidrs])
   const run = runQuery.data?.run
   const hasRun = Boolean(runId)
   const setRunInUrl = (id: string | null) => setParams(previous => { const next = new URLSearchParams(previous); if (id) next.set('onboardingRun', id); else next.delete('onboardingRun'); return next }, { replace: true })
-  const closeWizard = () => { setOpen(false); setStep(0); setReviewed(null); setRunInUrl(null) }
-  const selectServer = (id: string) => { setResourceId(id); const value = options.data?.servers.find(item => item.id === id); if (value) { setAddress(value.address); if (!nodeName) setNodeName(value.name) } }
-  const exactBody = (): NodeOnboardingPreviewRequest => ({ ...(preview?.recovery && preview.input ? preview.input : { resourceId, nodeName: nodeName.trim(), address: addressMode === 'PUBLIC_IP' ? '' : address.trim(), nodeAddressMode: addressMode, nodePort: Number(port), configProfileId, activeInboundIds, desiredState: 'ENABLED' as const }), panelSourceMode: sourceMode, ...(sourceMode === 'MANUAL' ? { panelCidrs: cidrValues } : {}) })
-  const formValid = Boolean(((preview?.recovery && preview.input) || (server && nodeName.trim().length >= 3 && nodeName.trim().length <= 30 && !/[\x00-\x1f\x7f]/.test(nodeName) && (addressMode === 'PUBLIC_IP' || address.trim()) && Number.isInteger(Number(port)) && Number(port) >= 1 && Number(port) <= 65535 && profile && activeInboundIds.length > 0)) && (sourceMode === 'AUTO' || (cidrValues.length > 0 && cidrValues.length <= 32 && new Set(cidrValues).size === cidrValues.length && cidrValues.every(validCidr))))
+  const closeWizard = () => { setOpen(false); setStep(0); setReviewed(null); setRunInUrl(null); setHttpCertificateId(createRequestId()) }
+  const selectServer = (id: string) => { setResourceId(id); setTlsCertificateId(undefined); setHttpCertificateId(createRequestId()); const value = options.data?.servers.find(item => item.id === id); if (value) { setAddress(value.address); if (!nodeName) setNodeName(value.name) } }
+  const exactBody = (): NodeOnboardingPreviewRequest => ({ ...(preview?.recovery && preview.input ? preview.input : {
+    resourceId, nodeName: nodeName.trim(), address: addressMode === 'PUBLIC_IP' ? '' : address.trim(), nodeAddressMode: addressMode, nodePort: Number(port),
+    ...(protocol === 'EXISTING' ? { configProfileId, activeInboundIds } : {
+      protocol: protocol === 'HYSTERIA2' ? { version: 1 as const, kind: 'HYSTERIA2' as const, port: Number(clientPort), serverName: tlsDomain } :
+        { version: 1 as const, kind: 'SHADOWSOCKS' as const, port: Number(clientPort), method: 'chacha20-ietf-poly1305' as const },
+      ...(protocol === 'HYSTERIA2' ? tlsMode === 'IMPORT' ? { tlsCertificateId } :
+        { tlsHttp01: { certificateId: httpCertificateId, email: tlsEmail, agreeTerms: true as const } } : {}),
+    }), desiredState: 'ENABLED' as const,
+  }), panelSourceMode: sourceMode, ...(sourceMode === 'MANUAL' ? { panelCidrs: cidrValues } : {}) })
+  const formValid = Boolean(((preview?.recovery && preview.input) || (server && nodeName.trim().length >= 3 && nodeName.trim().length <= 30 && !/[\x00-\x1f\x7f]/.test(nodeName) && (addressMode === 'PUBLIC_IP' || address.trim()) && Number.isInteger(Number(port)) && Number(port) >= 1 && Number(port) <= 65535 && protocolValid && (protocol !== 'HYSTERIA2' || tlsReady))) && (sourceMode === 'AUTO' || (cidrValues.length > 0 && cidrValues.length <= 32 && new Set(cidrValues).size === cidrValues.length && cidrValues.every(validCidr))))
   const makePreview = async () => { setWorkflowError(false); try { const value = await previewRequest.mutateAsync(exactBody()); start.reset(); setReviewed({plan:value,requestId:createRequestId()}); setStep(3) } catch { setWorkflowError(true) } }
   const reconcileRun = async (sourceRunId: string, action: NodeOnboardingRecoveryAction, manualFallback = false) => {
     if (!canConfigure || activeRun(run?.state ?? 'PLANNED') || reconcile.isPending) return
@@ -166,7 +187,7 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
       actionFeedback={previewRequest.isError || start.isError || workflowError ? <InlineAlert tone="danger" title={start.isError ? copy.requestError : addressError ?? i18n.t.common.operationBlocked} /> : undefined}
       actions={<>
         {step > 0 && step < 4 && !preview?.recovery ? <button className="secondary-button" type="button" disabled={!!unresolved || start.isPending || previewRequest.isPending} onClick={() => { setReviewed(null); setStep((step - 1) as Step) }}>{copy.back}</button> : null}
-        {step < 3 ? <button className="primary-button" type="button" disabled={!canConfigure || unsupported || options.isPending || previewRequest.isPending || (step === 0 && (!resourceId || !server?.serverProfileName || server.blockingProblems.length > 0)) || (step === 1 && (!nodeName.trim() || (addressMode === 'DOMAIN' && !address.trim()) || !Number(port) || !profile || activeInboundIds.length === 0)) || (step === 2 && !formValid)} onClick={() => step === 2 && preview?.recovery ? void makePreview() : setStep((step + 1) as Step)}>{copy.next}</button> : null}
+        {step < 3 ? <button className="primary-button" type="button" disabled={!canConfigure || unsupported || options.isPending || previewRequest.isPending || (step === 0 && (!resourceId || !server?.serverProfileName || server.blockingProblems.length > 0)) || (step === 1 && (!nodeName.trim() || (addressMode === 'DOMAIN' && !address.trim()) || !Number(port) || !protocolValid)) || (step === 2 && !formValid)} onClick={() => step === 2 && preview?.recovery ? void makePreview() : setStep((step + 1) as Step)}>{copy.next}</button> : null}
         {step === 3 && !preview?.recovery ? <PendingButton className={preview ? 'secondary-button' : 'primary-button'} type="button" pending={previewRequest.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!!unresolved || !canConfigure || !formValid} onClick={() => void makePreview().catch(() => setWorkflowError(true))}>{copy.preview}</PendingButton> : null}
         {step === 3 && reviewed?.plan.recovery ? <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure} onClick={() => void reconcileRun(reviewed.plan.recovery!.sourceRunId, reviewed.plan.recovery!.action === 'DELETE_RECREATE' ? 'DELETE_RECREATE' : 'RECOVER')}>{i18n.locale === 'ru' ? 'Проверить локальную установку' : 'Check local installation'}</PendingButton> : null}
         {step === 3 && reviewed && !recoveryBlocked ? <PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || reviewed.plan.blockingProblems.length > 0 || (needsRecreateApproval && !recoveryConfirmed)} onClick={() => void apply({planId:reviewed.plan.run.id,requestId:reviewed.requestId})}>{recovery?.action === 'REPAIR_PANEL_CONNECTIVITY' ? i18n.locale === 'ru' ? 'Исправить доступ' : 'Repair Panel access' : recovery?.action === 'RECOVER' ? copy.restore : recovery?.action === 'RECREATE' ? copy.recreate : recovery?.action === 'DELETE_RECREATE' ? copy.deleteRecreate : copy.apply}</PendingButton> : null}
@@ -183,7 +204,21 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
           <label className="field">{copy.server}<select value={resourceId} onChange={event => selectServer(event.target.value)}><option value="">—</option>{options.data.servers.map(value => <option key={value.id} value={value.id}>{value.name} · {value.address} · {value.environmentName}</option>)}</select></label>
           {server ? <dl><dt>{copy.environment}</dt><dd>{server.environmentName}</dd><dt>{copy.ssh}</dt><dd>{server.sshStatus}</dd><dt>{copy.serverProfile}</dt><dd>{server.serverProfileName ?? server.serverProfileStatus}</dd></dl> : null}
           {server && (!server.serverProfileName || server.blockingProblems.length) ? <InlineAlert tone="danger" title={copy.missingProfile}>{server.blockingProblems.map(value => <p key={value}>{value}</p>)}{selectedResource.data ? <Link to={`/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(selectedResource.data.environmentId)}/resources/${encodeURIComponent(server.id)}`}>{copy.automation}</Link> : null}</InlineAlert> : null}</section> : null}
-        {step === 1 ? <section><h3>Remnawave</h3>
+        {step === 1 ? <section><h3>{generatedAvailable ? i18n.locale === 'ru' ? 'Выберите протокол' : 'Choose a protocol' : 'Remnawave'}</h3>
+          {generatedAvailable ? <fieldset className="onboarding-protocol-options"><legend>{i18n.locale === 'ru' ? 'Протокол подключения' : 'Connection protocol'}</legend>
+            {(['SHADOWSOCKS', 'HYSTERIA2', 'EXISTING'] as const).map(mode => <label key={mode}>
+              <input type="radio" name="protocol" checked={protocol === mode} onChange={() => { setProtocolMode(mode); setReviewed(null) }} />
+              <strong>{mode === 'EXISTING' ? i18n.locale === 'ru' ? 'Существующий профиль' : 'Existing profile' : mode === 'HYSTERIA2' ? 'Hysteria2' : 'Shadowsocks'}</strong>
+              <span>{mode === 'SHADOWSOCKS' ? i18n.locale === 'ru' ? 'TCP и UDP, сертификат не нужен' : 'TCP and UDP, no certificate required' :
+                mode === 'HYSTERIA2' ? i18n.locale === 'ru' ? 'QUIC / UDP, требуется домен и TLS' : 'QUIC / UDP, requires a domain and TLS' :
+                i18n.locale === 'ru' ? 'Расширенная настройка через Panel' : 'Advanced Panel configuration'}</span>
+            </label>)}
+          </fieldset> : null}
+          {protocol !== 'EXISTING' ? <>
+            <label className="field">{i18n.locale === 'ru' ? 'Порт для клиентов' : 'Client port'}<input type="number" min="1" max="65535" value={clientPort} onChange={event => setClientPort(event.target.value)} /></label>
+            <p className="muted-copy">{i18n.locale === 'ru' ? 'InfraDesk создаст отдельный профиль для этого сервера и настроит доступ на выбранный порт.' : 'InfraDesk will create a separate profile for this server and configure access to this port.'}</p>
+            {protocol === 'HYSTERIA2' ? <label className="field">{i18n.locale === 'ru' ? 'Домен TLS (SNI)' : 'TLS domain (SNI)'}<input value={tlsDomain} placeholder="vpn.example.com" autoComplete="off" onChange={event => { setTlsDomain(event.target.value.trim().toLowerCase()); setTlsCertificateId(undefined); setHttpCertificateId(createRequestId()) }} /></label> : null}
+          </> : null}
           <label className="field">{copy.name}<input value={nodeName} onChange={event => setNodeName(event.target.value)} /></label>
           <fieldset><legend>{copy.address}</legend>
             <label><input type="radio" name="nodeAddressMode" checked={addressMode === 'PUBLIC_IP'} onChange={() => setAddressMode('PUBLIC_IP')} />{i18n.locale === 'ru' ? 'Публичный IP сервера (автоматически)' : 'Server public IP (automatic)'}</label>
@@ -191,9 +226,19 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
             {addressMode === 'DOMAIN' ? <label className="field">{copy.address}<input value={address} onChange={event => setAddress(event.target.value)} /></label> : <p>{i18n.locale === 'ru' ? 'Адрес будет подтверждён на выбранном сервере. DNS не требуется.' : 'The address will be confirmed on the selected server. DNS is not required.'}</p>}
           </fieldset>
           <label className="field">{copy.port}<input type="number" min="1" max="65535" value={port} onChange={event => setPort(event.target.value)} /></label>
-          <label className="field">{copy.profile}<select value={configProfileId} onChange={event => { setConfigProfileId(event.target.value); setActiveInboundIds([]) }}><option value="">—</option>{options.data.profiles.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}</select></label>
-          {profile ? <fieldset><legend>{copy.inbounds}</legend>{profile.inbounds.map(value => <label key={value.id}><input type="checkbox" checked={activeInboundIds.includes(value.id)} onChange={event => setActiveInboundIds(current => event.target.checked ? [...current, value.id] : current.filter(id => id !== value.id))} />{value.name}</label>)}</fieldset> : null}</section> : null}
+          {protocol === 'EXISTING' ? <label className="field">{copy.profile}<select value={configProfileId} onChange={event => { setConfigProfileId(event.target.value); setActiveInboundIds([]) }}><option value="">—</option>{options.data.profiles.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}</select></label> : null}
+          {protocol === 'EXISTING' && profile ? <fieldset><legend>{copy.inbounds}</legend>{profile.inbounds.map(value => <label key={value.id}><input type="checkbox" checked={activeInboundIds.includes(value.id)} onChange={event => setActiveInboundIds(current => event.target.checked ? [...current, value.id] : current.filter(id => id !== value.id))} />{value.name}</label>)}</fieldset> : null}</section> : null}
         {step === 2 ? <section><h3>{copy.steps[2]}</h3><p>{i18n.locale === 'ru' ? 'Remnawave Panel → Node: сетевой доступ настраивается автоматически.' : 'Remnawave Panel → Node: network access is configured automatically.'}</p>
+          {protocol === 'HYSTERIA2' && !preview?.recovery ? <fieldset><legend>{i18n.locale === 'ru' ? 'TLS для Hysteria2' : 'TLS for Hysteria2'}</legend>
+            <label><input type="radio" name="tlsMode" checked={tlsMode === 'HTTP01'} onChange={() => setTlsMode('HTTP01')} />{i18n.locale === 'ru' ? 'Выпустить автоматически (HTTP-01)' : 'Issue automatically (HTTP-01)'}</label>
+            <label><input type="radio" name="tlsMode" checked={tlsMode === 'IMPORT'} onChange={() => setTlsMode('IMPORT')} />{i18n.locale === 'ru' ? 'Импортировать сертификат' : 'Import certificate'}</label>
+            {tlsMode === 'IMPORT' ? <NodeCertificateImport key={`${resourceId}:${tlsDomain}`} organizationId={organizationId} integrationId={integrationId}
+              resourceId={resourceId} domain={tlsDomain} onImported={setTlsCertificateId} /> : <>
+              <p>{i18n.locale === 'ru' ? 'Домен должен указывать напрямую на этот сервер. InfraDesk временно откроет TCP/80 для проверки Let’s Encrypt и удалит временный доступ после выпуска. Если порт занят или домен за прокси, используйте импорт.' : 'The domain must point directly to this server. InfraDesk temporarily opens TCP/80 for Let’s Encrypt validation and removes the temporary access afterwards. Use import if the port is occupied or the domain is proxied.'}</p>
+              <label className="field">Email<input type="email" value={tlsEmail} onChange={event => setTlsEmail(event.target.value)} /></label>
+              <label><input type="checkbox" checked={tlsTerms} onChange={event => setTlsTerms(event.target.checked)} />{i18n.locale === 'ru' ? 'Принимаю условия Let’s Encrypt и разрешаю временную проверку на TCP/80.' : 'I agree to the Let’s Encrypt terms and temporary TCP/80 validation.'} <a href="https://letsencrypt.org/repository/" target="_blank" rel="noreferrer">{i18n.locale === 'ru' ? 'Условия' : 'Terms'}</a></label>
+            </>}
+          </fieldset> : null}
           <details open={sourceMode === 'MANUAL' || undefined}><summary>{i18n.locale === 'ru' ? 'Расширенные настройки сети' : 'Advanced network settings'}</summary>
             <label><input type="radio" name="panelSourceMode" checked={sourceMode === 'AUTO'} onChange={() => setSourceMode('AUTO')} />{i18n.locale === 'ru' ? 'Автоматически' : 'Automatic'}</label>
             <label><input type="radio" name="panelSourceMode" checked={sourceMode === 'MANUAL'} onChange={() => setSourceMode('MANUAL')} />{i18n.locale === 'ru' ? 'Указать вручную' : 'Manual'}</label>
@@ -275,7 +320,28 @@ function networkPhaseNames(locale: string): Record<string, string> {
   const discovery = locale === 'ru' ? { UPDATE_NODE_ADDRESS: 'Обновление адреса существующего узла', WAIT_FOR_PANEL: 'Наблюдение подключения Panel', OBSERVE_PANEL_SOURCE: 'Наблюдение исходящего адреса Panel', ADD_OBSERVED_PANEL_SOURCE: 'Проверка обнаруженного источника', VERIFY_OBSERVED_PANEL: 'Наблюдение подключения с обнаруженным IP', FINALIZE_PANEL_SOURCES: 'Сетевая проверка завершена' }
     : { UPDATE_NODE_ADDRESS: 'Update existing node address', WAIT_FOR_PANEL: 'Observe Panel connection', OBSERVE_PANEL_SOURCE: 'Observe actual Panel source', ADD_OBSERVED_PANEL_SOURCE: 'Test observed source', VERIFY_OBSERVED_PANEL: 'Observe connection with discovered IP', FINALIZE_PANEL_SOURCES: 'Network verification completed' }
   const base = locale === 'ru' ? { RESOLVE_PANEL_SOURCE: 'Определение сетевых источников Panel', ADD_PANEL_SOURCES: 'Добавление проверенных источников Panel', FINALIZE_PANEL_SOURCES: 'Подтверждение или откат сетевого доступа', REMNAWAVE_PANEL_SOURCE_UNRESOLVED: 'Не удалось определить адреса Panel. Повторите проверку или укажите источники в расширенных настройках.', REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED: 'Слишком много сетевых источников. Требуется ручная проверка.', REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY: 'Правила доступа конфликтуют с управляемой политикой. Требуется ручная проверка.' } : { RESOLVE_PANEL_SOURCE: 'Resolve Panel network sources', ADD_PANEL_SOURCES: 'Add reviewed Panel sources', FINALIZE_PANEL_SOURCES: 'Confirm or roll back Panel access', REMNAWAVE_PANEL_SOURCE_UNRESOLVED: 'Could not resolve Panel addresses. Check again or enter sources in advanced settings.', REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED: 'Too many network sources. Manual review is required.', REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY: 'Firewall rules conflict with the managed policy. Manual review is required.' }
-  return { ...base, ...discovery }
+  const protocol: Record<string, string> = locale === 'ru' ? {
+    CREATE_PROTOCOL_PROFILE: 'Создание отдельного профиля протокола', ISSUE_TLS: 'Выпуск TLS-сертификата', INSTALL_TLS: 'Установка TLS-сертификата',
+    CONFIGURE_CLIENT_FIREWALL: 'Открытие клиентского порта', VERIFY_PROTOCOL: 'Проверка профиля и сокета Xray',
+    REMNAWAVE_TLS_HTTP01_TEMPORARY_PORT_80: 'Для HTTP-01 будет временно открыт TCP/80 с автоматической очисткой.',
+    REMNAWAVE_TLS_HTTP01_DNS_UNCONFIRMED: 'Домен TLS не указывает напрямую на этот сервер. Исправьте DNS или импортируйте сертификат.',
+    REMNAWAVE_PROTOCOL_TLS_REQUIRED: 'Для Hysteria2 нужен проверенный сертификат или автоматический выпуск HTTP-01.',
+    REMNAWAVE_TLS_HTTP01_PORT_OCCUPIED: 'TCP/80 занят. Используйте импорт сертификата.',
+    REMNAWAVE_TLS_HTTP01_UNAVAILABLE: 'HTTP-01 недоступен на этом сервере. Используйте импорт сертификата.',
+    REMNAWAVE_TLS_HTTP01_FAILED: 'Центр сертификации не подтвердил домен. Проверьте DNS и доступность TCP/80.',
+    REMNAWAVE_TLS_HTTP01_UNKNOWN: 'Результат выпуска неизвестен. Повторный заказ сертификата заблокирован до проверки.',
+  } : {
+    CREATE_PROTOCOL_PROFILE: 'Create isolated protocol profile', ISSUE_TLS: 'Issue TLS certificate', INSTALL_TLS: 'Install TLS certificate',
+    CONFIGURE_CLIENT_FIREWALL: 'Open client port', VERIFY_PROTOCOL: 'Verify profile and Xray socket',
+    REMNAWAVE_TLS_HTTP01_TEMPORARY_PORT_80: 'HTTP-01 temporarily opens TCP/80 with automatic cleanup.',
+    REMNAWAVE_TLS_HTTP01_DNS_UNCONFIRMED: 'TLS domain does not point directly to this server. Fix DNS or import a certificate.',
+    REMNAWAVE_PROTOCOL_TLS_REQUIRED: 'Hysteria2 requires a validated certificate or automatic HTTP-01 issuance.',
+    REMNAWAVE_TLS_HTTP01_PORT_OCCUPIED: 'TCP/80 is occupied. Import a certificate instead.',
+    REMNAWAVE_TLS_HTTP01_UNAVAILABLE: 'HTTP-01 is unavailable on this server. Import a certificate instead.',
+    REMNAWAVE_TLS_HTTP01_FAILED: 'The CA could not validate this domain. Check DNS and TCP/80 connectivity.',
+    REMNAWAVE_TLS_HTTP01_UNKNOWN: 'Issuance outcome is unknown. Another order is blocked pending observation.',
+  }
+  return { ...base, ...discovery, ...protocol }
 }
 function RecoveryReview({ recovery, newCorrelation, confirmed, onConfirm, copy }: { recovery: NodeOnboardingRecoverySummary; newCorrelation?: string; confirmed: boolean; onConfirm: (value: boolean) => void; copy: typeof texts[keyof typeof texts] }) {
   const i18n = useI18n()
@@ -323,7 +389,25 @@ function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: Retu
   const additionalNames = networkPhaseNames(i18n.locale)
   return <section><InlineAlert tone={tone} title={`${copy.run}: ${run.state}`}>{message}{run.failureCode ? <><br />{failure(run.failureCode)}</> : null}</InlineAlert>
     {run.connectivityFinding ? <section><h4>{i18n.locale === 'ru' ? 'Сетевой доступ Panel' : 'Panel connectivity'}</h4><p>{i18n.locale === 'ru' ? 'Локальная Node исправна. Правила доступа настроены.' : 'The local Node is healthy. Firewall rules are configured.'}</p><p>{run.connectivityFinding.panelSources.join(', ')} · {run.connectivityFinding.sourceEvidence}</p></section> : null}
-    <p>{run.nodeName} · {run.address}:{run.nodePort}</p><h3>{copy.phases}</h3><ol>{runPhases.map(phase => {
+    <p>{run.nodeName} · {run.address}:{run.nodePort}</p>
+    {detail?.certificate ? <p>{i18n.locale === 'ru' ? 'TLS для' : 'TLS for'} {detail.certificate.domain} · {i18n.locale === 'ru' ? 'действует до' : 'expires'} {i18n.format.dateTime(detail.certificate.expiresAt)}.
+      {' '}{i18n.locale === 'ru' ? 'Автоматическое продление пока не настроено.' : 'Automatic renewal is not configured.'}</p> : null}
+    {run.protocol ? <ol className="onboarding-progress-groups">{[
+      { label: i18n.locale === 'ru' ? 'Сервер' : 'Server', codes: ['VALIDATE', 'PREPARE_SERVER'] },
+      { label: i18n.locale === 'ru' ? 'Протокол и TLS' : 'Protocol and TLS', codes: ['ISSUE_TLS', 'CREATE_PROTOCOL_PROFILE', 'CREATE_NODE', 'INSTALL_TLS', 'CONFIGURE_CLIENT_FIREWALL'] },
+      { label: i18n.locale === 'ru' ? 'Установка' : 'Installation', codes: ['GET_INSTALLATION_DATA', 'CONFIGURE_NODE_FIREWALL', 'INSTALL_NODE', 'START_NODE', 'VERIFY_LOCAL_NODE'] },
+      { label: i18n.locale === 'ru' ? 'Связь с Panel' : 'Panel connection', codes: ['WAIT_FOR_PANEL', 'OBSERVE_PANEL_SOURCE', 'ADD_OBSERVED_PANEL_SOURCE', 'VERIFY_OBSERVED_PANEL', 'FINALIZE_PANEL_SOURCES'] },
+      { label: i18n.locale === 'ru' ? 'Проверка результата' : 'Deployment verification', codes: ['SYNC_INVENTORY', 'BIND_RESOURCE', 'SET_DESIRED_STATE', 'VERIFY_PROTOCOL', 'FINAL_VERIFY'] },
+    ].map(group => {
+      const records = group.codes.flatMap(code => byPhase.get(code) ? [byPhase.get(code)!] : [])
+      const state = records.some(record => record.state === 'FAILED') ? 'FAILED' : records.some(record => record.state === 'UNKNOWN') ? 'UNKNOWN' :
+        records.some(record => record.state === 'RUNNING') ? 'RUNNING' : records.length && records.every(record => record.state === 'SUCCEEDED') &&
+        (!records.some(record => record.outcome === 'NOT_CONNECTED') || run.connectivityCompletion === 'PROMOTED') ? 'SUCCEEDED' : 'PENDING'
+      const labels = i18n.locale === 'ru' ? { FAILED: 'Ошибка', UNKNOWN: 'Нужна проверка', RUNNING: 'Выполняется', SUCCEEDED: 'Проверено', PENDING: 'Ожидает' } :
+        { FAILED: 'Failed', UNKNOWN: 'Needs observation', RUNNING: 'In progress', SUCCEEDED: 'Verified', PENDING: 'Waiting' }
+      return <li key={group.label} data-state={state}><strong>{group.label}</strong><span>{labels[state]}</span></li>
+    })}</ol> : null}
+    <details open={!run.protocol || run.state === 'FAILED' || run.state === 'UNKNOWN'}><summary>{copy.phases}</summary><ol>{runPhases.map(phase => {
       const record = byPhase.get(phase)
       const code = record?.failureCode ?? (run.phase === phase ? run.failureCode : null)
       const name = additionalNames[phase] ?? copy.phaseNames[phase as keyof typeof copy.phaseNames] ?? phase
@@ -333,7 +417,10 @@ function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: Retu
       if(record?.outcome === 'ROLLED_BACK' || record?.outcome === 'ROLLED_BACK_UNKNOWN') return <li key={phase}><InlineAlert tone="success" title={name}>{record.outcome === 'ROLLED_BACK' ? outcomes.ROLLED_BACK : i18n.locale === 'ru' ? '✓ временные изменения отменены; подключение Panel не удалось проверить' : '✓ temporary changes rolled back; Panel connectivity could not be verified'}</InlineAlert></li>
       return <li key={phase}>{code ? <InlineAlert tone={record?.state === 'UNKNOWN' || run.state === 'UNKNOWN' ? 'warning' : 'danger'} title={`${name} — ${record?.state ?? run.state}`}>{failure(code)}</InlineAlert>
         : <><span>{name}</span> — {record?.outcome ? outcomes[record.outcome] ?? record.outcome : record?.state ?? 'PENDING'}</>}</li>
-    })}</ol>
+    })}</ol></details>
+    {run.protocol && run.state === 'SUCCEEDED' ? <InlineAlert tone="info" title={i18n.locale === 'ru' ? 'Нода настроена и подключена к Panel' : 'Node configured and connected to Panel'}>
+      {i18n.locale === 'ru' ? 'Профиль и клиентский сокет Xray проверены. Подключение пользователя и передача VPN-трафика ещё не проверялись. Для выдачи доступа привяжите inbound к нужной группе пользователей в Remnawave.' : 'The profile and Xray client socket are verified. User connection and VPN traffic have not been tested. Assign the inbound to the intended user group in Remnawave to publish access.'}
+    </InlineAlert> : null}
     {(run.externalNodeId || run.baselineRunId || run.syncSessionId) ? <><h3>{copy.partial}</h3><dl>
       {run.externalNodeId ? <><dt>{copy.externalId}</dt><dd>{run.externalNodeId}</dd></> : null}
       {run.baselineRunId ? <><dt>{copy.baseline}</dt><dd>{run.baselineRunId}</dd></> : null}

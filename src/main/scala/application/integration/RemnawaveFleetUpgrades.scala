@@ -106,7 +106,7 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
       .map(_.connection).liftTo[IO](error(PlanChanged)))
   private[integration] def spec(s: NodeUpgradeSnapshot, m: NodeUpgradeMemberPlan): RemnawaveNodeRemoteSpec =
     RemnawaveNodeRemoteSpec(m.onboardingId, m.resourceId, m.externalNodeId,
-      s.configuration.nodePort, m.originalImageReference, s.configuration.panelCidrs)
+      s.configuration.nodePort, m.originalImageReference, s.configuration.panelCidrs,m.tlsCertificateId)
   private def record(actor: ActorContext, integration: UUID, action: AuditAction): Tx[Unit] =
     audit.record(actor, action, AuditTargetType.Integration, Some(integration))
   private[integration] def recordOutcome(run: RemnawaveFleetUpgradeRun): Tx[Unit] =
@@ -261,7 +261,7 @@ final class RemnawaveFleetUpgrades[Tx[_]: MonadThrow](fleets: RemnawaveFleetRepo
             row.membership.resourceId, row.nodeName, proof.onboardingId, proof.imageReference, source.connectionId, source.connectionUpdatedAt,
             0, 0, image.matches(release.release), image, rollback.map(_.releaseId),
             rollback.map(r => s"${r.imageRepository}@${r.forPlatform(image.platform.get).get.manifestDigest}"),
-            evidence.get(row.membership.id).flatMap(_.node).flatMap(_.nodeVersion))
+            evidence.get(row.membership.id).flatMap(_.node).flatMap(_.nodeVersion),proof.tlsCertificateId)
         }
         val pending = facts.filterNot(_.skipped)
         val canary = input.canaryMemberIds.toSet

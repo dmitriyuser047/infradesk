@@ -53,6 +53,45 @@ function mount(entry = '/', locale: 'en' | 'ru' = 'en', configure: (url: string,
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
 
 describe('NodeOnboarding', () => {
+  it('generates Shadowsocks without selecting an existing JSON profile', async () => {
+    const { calls } = mount('/', 'en', url => url.endsWith('/options') ? json({ ...options,
+      nodeApi: { ...options.nodeApi!, capabilities: ['PROTOCOL_PROFILE_CREATE'] } }) : undefined)
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Add node' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Add node' }))
+    fireEvent.change(await screen.findByLabelText('Server'), { target: { value: 'resource-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(screen.queryByLabelText('Configuration profile')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+    await waitFor(() => expect(calls.some(call => call.url.endsWith('/preview'))).toBe(true))
+    expect(calls.find(call => call.url.endsWith('/preview'))?.body).toMatchObject({
+      protocol: { version: 1, kind: 'SHADOWSOCKS', port: 443, method: 'chacha20-ietf-poly1305' }, nodeAddressMode: 'PUBLIC_IP', address: '',
+    })
+    expect(calls.find(call => call.url.endsWith('/preview'))?.body).not.toHaveProperty('configProfileId')
+  })
+  it('requires explicit HTTP-01 terms and email and submits a stable public certificate identity', async () => {
+    const { calls } = mount('/', 'en', url => url.endsWith('/options') ? json({ ...options,
+      nodeApi: { ...options.nodeApi!, capabilities: ['PROTOCOL_PROFILE_CREATE'] } }) : undefined)
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Add node' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Add node' }))
+    fireEvent.change(await screen.findByLabelText('Server'), { target: { value: 'resource-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByLabelText(/Hysteria2/))
+    fireEvent.change(screen.getByLabelText('TLS domain (SNI)'), { target: { value: 'vpn.example.org' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'operator@example.org' } })
+    fireEvent.click(screen.getByLabelText(/I agree to the Let’s Encrypt terms/))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+    await waitFor(() => expect(calls.some(call => call.url.endsWith('/preview'))).toBe(true))
+    expect(calls.find(call => call.url.endsWith('/preview'))?.body).toMatchObject({
+      protocol: { version: 1, kind: 'HYSTERIA2', port: 443, serverName: 'vpn.example.org' },
+      tlsHttp01: { certificateId: expect.stringMatching(/^[0-9a-f-]{36}$/), email: 'operator@example.org', agreeTerms: true },
+    })
+    expect(calls.some(call => call.url.endsWith('/certificates'))).toBe(false)
+  })
   it.each(['UNAVAILABLE', 'NO_TRAFFIC'] as const)('offers automatic-discovery manual fallback only when the host probe is unavailable: %s', async status => {
     const code = status === 'UNAVAILABLE' ? 'REMNAWAVE_PANEL_SOURCE_OBSERVATION_UNAVAILABLE' : 'REMNAWAVE_PANEL_SOURCE_NO_TRAFFIC'
     const { calls } = mount('/?onboardingRun=run-1', 'en', (url, method) => {

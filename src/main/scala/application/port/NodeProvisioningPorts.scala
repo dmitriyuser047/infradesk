@@ -10,6 +10,9 @@ import java.util.UUID
   * cannot gain write capabilities merely by returning a recognizable inventory response.
   */
 trait NodeProvisioningTransport[F[_]] {
+  def ensureProtocolProfile(context: IntegrationRuntimeContext, name: String, tag: String,
+    config: io.circe.Json, reviewed: NodeApiCompatibility, fresh: Boolean): F[ProtocolProfileOutcome] =
+    throw new UnsupportedOperationException("Reviewed protocol profile creation is unavailable")
   def updateNodeAddress(context: IntegrationRuntimeContext,externalId: UUID,expected: NodeCreateIntent,
     desired: NodeCreateIntent,reviewed: NodeApiCompatibility): F[IntegrationActionRemoteOutcome] =
     throw new UnsupportedOperationException("Reviewed Node address updates are unavailable")

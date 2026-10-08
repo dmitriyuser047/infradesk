@@ -25,7 +25,9 @@ object OnboardingRecoveryObservation {
       val known=r.externalNodeId.orElse(if(unknownCreate) None else r.snapshot.recovery.flatMap(_.previousExternalNodeId))
       val correlation=if(r.externalNodeId.nonEmpty || unknownCreate) r.snapshot.correlationId
         else r.snapshot.recovery.fold(r.snapshot.correlationId)(_.previousCorrelationId)
-      val intent=NodeCreateIntent(input.nodeName,input.address,input.nodePort,input.configProfileId,input.activeInboundIds,correlation)
+      val selected=if(input.protocol.nonEmpty && r.snapshot.input.protocol==input.protocol && r.protocolBinding.nonEmpty)
+        input.copy(configProfileId=r.effectiveInput.configProfileId,activeInboundIds=r.effectiveInput.activeInboundIds) else input
+      val intent=NodeCreateIntent(input.nodeName,input.address,input.nodePort,selected.configProfileId,selected.activeInboundIds,correlation)
       val owner=if(r.externalNodeId.isEmpty && !unknownCreate) r.snapshot.recovery.fold(r.id)(_.installationOwnerId)
         else RemnawaveNodeOnboardingRun.installationOwner(r)
       val previousCidrs = if(r.externalNodeId.isEmpty && !unknownCreate)
@@ -57,11 +59,11 @@ object OnboardingRecoveryObservation {
             OnboardingRecovery.matches(n,intent.copy(address=n.address),known)) || candidates.exists(_.externalId!=n.externalId) =>
             IO.pure(result("PRESENT_CONFLICT",known))
           case NodeLookupOutcome.Found(n) => connection.liftTo[IO](IntegrationError("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN","SSH connection is unavailable")).flatMap { conn =>
-            remote.observe(conn,RemnawaveNodeRemoteSpec(owner,input.resourceId,n.externalId,input.nodePort,previousImage,previousCidrs)).timeout(35.seconds)
+            remote.observe(conn,RemnawaveNodeRemoteSpec(owner,input.resourceId,n.externalId,input.nodePort,previousImage,previousCidrs,r.snapshot.input.certificateId)).timeout(35.seconds)
               .flatMap { local =>
                 val reviewed = (previousCidrs ++ r.snapshot.input.panelCidrs ++ r.snapshot.recovery.toList.flatMap(_.previousPanelCidrs.toList.flatten)).distinct.sorted
                 val baseline = if(local.verified) IO.pure(Some(previousCidrs)) else if(r.snapshot.lifecycleVersion>=4 && local.locallyHealthy)
-                  remote.connectivitySources(conn,RemnawaveNodeRemoteSpec(owner,input.resourceId,n.externalId,input.nodePort,previousImage,previousCidrs),reviewed).map(Some(_))
+                  remote.connectivitySources(conn,RemnawaveNodeRemoteSpec(owner,input.resourceId,n.externalId,input.nodePort,previousImage,previousCidrs,r.snapshot.input.certificateId),reviewed).map(Some(_))
                   else IO.pure(None)
                 baseline.map { sources =>
                   val healthy = local.locallyHealthy && sources.nonEmpty
@@ -79,7 +81,7 @@ object OnboardingRecoveryObservation {
           case NodeLookupOutcome.ConfirmedNotFound if known.nonEmpty && candidates.isEmpty =>
             connection.fold(IO.pure(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.SshUnavailable)))(conn =>
               remote.localInstallationObservation(conn,
-                RemnawaveNodeRemoteSpec(owner,input.resourceId,known.get,input.nodePort,previousImage,previousCidrs)))
+                RemnawaveNodeRemoteSpec(owner,input.resourceId,known.get,input.nodePort,previousImage,previousCidrs,r.snapshot.input.certificateId)))
               .timeoutTo(35.seconds,IO.pure(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ObservationTimeout)))
               .handleError {
                 case _: java.util.concurrent.TimeoutException => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ObservationTimeout)

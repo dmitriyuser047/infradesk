@@ -30,6 +30,28 @@ final class RemnawaveOnboardingSpec extends FunSuite {
     assert(input.copy(activeInboundIds = List(inbound, inbound)).normalized.isLeft)
     assert(input.copy(nodePort = 0).normalized.isLeft)
   }
+  test("protocol plans journal issuance and installation separately and preserve immutable TLS identity") {
+    val http=NodeTlsHttp01(id,"operator@example.org")
+    val generated=input.copy(configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+      protocol=Some(RemnawaveProtocol.Hysteria2(443,"example.org")),tlsHttp01=Some(http)).normalized.toOption.get
+    val evidence=PanelSourceEvidence(PanelSourceMode.Manual,generated.panelCidrs,"MANUAL","MANUAL",
+      PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.org").toOption.get))
+    val plan=snapshot.copy(input=generated,lifecycleVersion=6,panelSource=Some(evidence))
+    assertEquals(OnboardingSnapshotCodec.decode(OnboardingSnapshotCodec.encode(plan)),plan)
+    assertEquals(plan.input.certificateId,Some(http.certificateId))
+    val phases=OnboardingPhase.forSnapshot(plan)
+    assert(phases.indexOf(OnboardingPhase.IssueTls)<phases.indexOf(OnboardingPhase.CreateProtocolProfile))
+    assert(phases.indexOf(OnboardingPhase.InstallTls)<phases.indexOf(OnboardingPhase.ConfigureClientFirewall))
+    assert(phases.indexOf(OnboardingPhase.VerifyProtocol)<phases.indexOf(OnboardingPhase.FinalVerify))
+    assert(generated.copy(tlsCertificateId=Some(id)).normalized.isLeft)
+    assert(generated.copy(nodePort=80).normalized.isLeft)
+    assert(generated.copy(tlsHttp01=Some(http.copy(email="operator@example.org\ncommand"))).normalized.isLeft)
+    val imported=plan.copy(input=generated.copy(tlsHttp01=None,tlsCertificateId=Some(id)))
+    assert(!OnboardingPhase.forSnapshot(imported).contains(OnboardingPhase.IssueTls))
+    assert(OnboardingPhase.forSnapshot(imported).contains(OnboardingPhase.InstallTls))
+    val shadow=plan.copy(input=generated.copy(protocol=Some(RemnawaveProtocol.Shadowsocks(443,"aes-256-gcm")),tlsHttp01=None))
+    assert(!OnboardingPhase.forSnapshot(shadow).contains(OnboardingPhase.InstallTls))
+  }
 
   test("inbound set order produces canonical equality and identical snapshot bytes") {
     val second = id

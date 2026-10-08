@@ -54,6 +54,17 @@ final class NodeReleaseSpec extends FunSuite {
     assert(NodeUpgradeAdmission.fresh(Some(now.minusSeconds(1)), now, 15.minutes))
     List(None, Some(now.minusSeconds(901)), Some(now.plusSeconds(1))).foreach(t => assert(!NodeUpgradeAdmission.fresh(t, now, 15.minutes)))
   }
+  test("upgrade snapshots retain the owned TLS mount while legacy members keep their original shape") {
+    val legacy = NodeUpgradeFixtures.run().snapshot
+    val id = java.util.UUID.randomUUID()
+    val member = legacy.members.head.copy(tlsCertificateId = Some(id))
+    val upgraded = legacy.copy(members = member :: legacy.members.tail)
+    assertEquals(snapshotEncoder(upgraded).as[NodeUpgradeSnapshot], Right(upgraded))
+    assertEquals(memberPlanEncoder(member).hcursor.get[String]("tlsCertificateId"), Right(id.toString))
+    assert(!memberPlanEncoder(legacy.members.head).hcursor.downField("tlsCertificateId").succeeded)
+    assertEquals(snapshotEncoder(legacy).as[NodeUpgradeSnapshot], Right(legacy))
+    assert(memberPlanEncoder(member).mapObject(_.add("privateKey", Json.fromString("secret"))).as[NodeUpgradeMemberPlan].isLeft)
+  }
   test("release content hash is stable across PostgreSQL timestamp precision and changes with digest") {
     val run = NodeUpgradeFixtures.run()
     val revision = FleetNodeReleaseRevision(run.releaseRevisionId, run.organizationId, run.integrationId, run.fleetId,
