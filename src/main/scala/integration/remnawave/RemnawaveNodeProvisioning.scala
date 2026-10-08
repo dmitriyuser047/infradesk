@@ -27,10 +27,31 @@ final class RemnawaveNodeProvisioning(client: RemnawaveClient) extends NodeProvi
           Set(NodeProvisioningCapability.Inventory, NodeProvisioningCapability.Status) else Set.empty
         val confirmed = release.nonEmpty && inventory.isRight
         NodeApiCompatibility(version, release.map(_.adapter.code), release.map(_.commit),
-          readCapabilities ++ (if (confirmed) RemnawaveNodeApi.writeCapabilities else Set.empty[NodeProvisioningCapability]),
+          readCapabilities ++ (if (confirmed) RemnawaveNodeApi.writeCapabilities ++
+            Option.when(release.exists(_.addressUpdate))(NodeProvisioningCapability.AddressUpdate) else Set.empty[NodeProvisioningCapability]),
           if (confirmed) None else Some(result.left.toOption.collect { case e: IntegrationError => e.code }
             .orElse(inventory.left.toOption.collect { case e: IntegrationError => e.code }).getOrElse(unconfirmed)))
       }
+    }
+  }
+
+  override def updateNodeAddress(context: IntegrationRuntimeContext,externalId: UUID,expected: NodeCreateIntent,
+    desired: NodeCreateIntent,reviewed: NodeApiCompatibility): IO[IntegrationActionRemoteOutcome] = {
+    import IntegrationActionRemoteOutcome._
+    (for {
+      actual <- requireReviewed(context,reviewed)
+      _ <- IO.raiseUnless(actual.capabilities(NodeProvisioningCapability.AddressUpdate) && reviewed.capabilities(NodeProvisioningCapability.AddressUpdate) &&
+        expected.copy(address=desired.address)==desired && RemnawaveNodeApi.validIntent(desired))(
+        RemnawaveErrors.error("INTEGRATION_API_CONTRACT_UNCONFIRMED"))
+      current <- getNode(context,externalId)
+      _ <- IO.raiseUnless(RemnawaveNodeApi.matches(current,expected))(RemnawaveErrors.error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
+      others <- findNodes(context)
+      _ <- IO.raiseWhen(others.exists(n => n.externalId!=externalId && OnboardingRecovery.candidate(n,desired)))(RemnawaveErrors.error("INTEGRATION_NODE_CONFLICT"))
+      auth <- credential(context)
+      outcome <- client.updateNodeAddressWire(context.baseUrl,auth,externalId,desired)
+    } yield outcome).handleError {
+      case e: IntegrationError => DefinitelyFailed(e.code)
+      case _ => DefinitelyFailed("INTEGRATION_UNREACHABLE")
     }
   }
 

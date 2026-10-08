@@ -436,7 +436,7 @@ object ApplicationModule {
       transactionIdGenerator,transactionTimeProvider,auditRecorder,config.integrations.desiredStateOperational)
     val onboardingRepository = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveOnboardingRepository
     val onboardingQuery = new ru.bitec.app.ops.persistence.postgres.PostgresRemnawaveOnboardingQuery
-    val onboardingRemote = new integration.ssh.SshRemnawaveNodeRemote(integrations.configurationTransport)
+    val onboardingRemote = new integration.ssh.SshRemnawaveNodeRemote(integrations.configurationTransport,config.integrations.allowPrivateDestinations)
     val onboardingOperations = new application.integration.ExistingRemnawaveOnboardingOperations[ConnectionIO](
       onboardingRepository,onboardingQuery,integrationRepository,integrationSecretRepository,integrations.integrationCredentialCipher,
       provisioningTargetQuery,serverProfileRepository,provisioningRunRepository,integrations.serverProfileRemote,

@@ -177,8 +177,8 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
     }
   }
 
-  test("V3 terminal connectivity failure builds a V4 reuse plan with fenced findings and no create/install phases") {
-    inWorld { w => for {
+  test("V3 terminal connectivity failure builds V4/V5 reuse plans with immutable observed candidates, fenced findings and no create/install phases") {
+    for(version <- List(4,5)) inWorld { w => for {
       pair <- integration(w,w.org,"panel-connectivity-v4")
       (integrationId,secretId)=pair
       target <- w.node("panel-connectivity-v4")
@@ -203,10 +203,13 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
         PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.test").toOption.get))
       proof=OnboardingRecovery(original.id,Some(external),original.snapshot.correlationId,original.id,
         "PRESENT_UNHEALTHY","REPAIR_PANEL_CONNECTIVITY",Some(original.snapshot.input.panelCidrs),
-        localInstallation=Some(LocalInstallationObservation.fromState(LocalInstallationState.OwnedComplete)),localVerified=true)
+        localInstallation=Some(LocalInstallationObservation.fromState(LocalInstallationState.OwnedComplete)),localVerified=true,
+        previousNodeAddress=Option.when(version==5)(original.snapshot.input.address))
+      address=Option.when(version==5)(NodeAddressEvidence(NodeAddressMode.PublicIp,"185.10.20.20",List("185.10.20.20")))
       draft=original.copy(id=uid,externalNodeId=Some(external),createdAt=now.plusMillis(1),snapshot=original.snapshot.copy(
-        lifecycleVersion=4,recovery=Some(proof),input=original.snapshot.input.copy(panelCidrs=evidence.sources,
-          panelSourceMode=PanelSourceMode.Auto),panelSource=Some(evidence)))
+        lifecycleVersion=version,recovery=Some(proof),input=original.snapshot.input.copy(panelCidrs=evidence.sources,
+          panelSourceMode=PanelSourceMode.Auto,address=address.fold(original.snapshot.input.address)(_.address),
+          nodeAddressMode=address.fold[NodeAddressMode](NodeAddressMode.Legacy)(_.mode)),panelSource=Some(evidence),nodeAddress=address))
       _ <- w.run(repo.insertPlan(draft))
       rows <- w.run(repo.find(w.org,integrationId,draft.id))
       request=uid
@@ -215,12 +218,18 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
       token=uid
       active <- w.run(repo.claim(uid,token,now,now.plusSeconds(300),1))
       stale <- w.run(repo.persist(active.head,uid,active.head.copy(connectivityFinding=Some(PanelConnectivityFinding(evidence.sources,"AUTO_CANDIDATE",false))),now,false))
-      _ <- w.run(OnboardingPhase.forSnapshot(draft.snapshot).foldLeftM(active.head) { (r,phase) =>
+      _ <- OnboardingPhase.forSnapshot(draft.snapshot).foldLeftM(active.head) { (r,phase) =>
         val next=OnboardingPhase.next(phase,draft.snapshot)
         val updated=r.copy(phase=next.getOrElse(phase),state=if(next.isEmpty) ProvisioningRunState.Succeeded else ProvisioningRunState.Running,
-          connectivityFinding=if(phase==OnboardingPhase.WaitForPanel) Some(PanelConnectivityFinding(evidence.sources,"AUTO_CANDIDATE",true)) else r.connectivityFinding)
-        repo.beginPhase(r,token,now) *> repo.persist(r,token,updated,now,true).as(updated)
-      })
+          connectivityFinding=if(phase==OnboardingPhase.WaitForPanel) Some(PanelConnectivityFinding(evidence.sources,"AUTO_CANDIDATE",version==4))
+            else if(phase==OnboardingPhase.VerifyObservedPanel) Some(PanelConnectivityFinding(List("185.10.20.41/32"),"AUTO_OBSERVED",true)) else r.connectivityFinding,
+          observedPanelSource=if(phase==OnboardingPhase.ObservePanelSource) Some(PanelSourceObservation(PanelSourceObservationStatus.Observed,List("185.10.20.41/32"))) else r.observedPanelSource,
+          connectivityCompletion=if(version==5 && phase==OnboardingPhase.FinalizePanelSources) Some(PanelConnectivityCompletion.Promoted) else r.connectivityCompletion)
+        w.run(repo.beginPhase(r,token,now) *> repo.persist(r,token,updated,now,true)) *>
+          (if(phase==OnboardingPhase.AddObservedPanelSource) w.run(sql"""update remnawave_node_onboarding
+            set observed_panel_source='{"status":"AUTO_OBSERVED","sources":["185.10.20.42/32"]}'::jsonb where id=${draft.id}""".update.run).attempt
+            .map(result => assert(result.isLeft)) else IO.unit).as(updated)
+      }
       after <- w.run(repo.find(w.org,integrationId,original.id))
       complete <- w.run(repo.find(w.org,integrationId,draft.id))
       hidden <- w.run(repo.find(w.foreignOrg,integrationId,draft.id))

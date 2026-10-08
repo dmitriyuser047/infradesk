@@ -47,7 +47,7 @@ object PanelSourceEvidence {
 /** Durable, sanitized proof collected at the connectivity boundary; no stderr or credentials. */
 final case class PanelConnectivityFinding(panelSources: List[String], sourceEvidence: String, connected: Boolean) {
   require(OnboardingInput.canonicalCidrs(panelSources).contains(panelSources))
-  require(Set("AUTO_CANDIDATE", "MANUAL", "LEGACY_MANUAL")(sourceEvidence))
+  require(Set("AUTO_CANDIDATE", "AUTO_OBSERVED", "MANUAL", "LEGACY_MANUAL")(sourceEvidence))
 }
 object PanelConnectivityFinding {
   def storage(f: PanelConnectivityFinding): Json = Json.obj("panelSources" -> Json.arr(f.panelSources.map(Json.fromString): _*),

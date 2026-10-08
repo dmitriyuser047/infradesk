@@ -13,7 +13,8 @@ import scala.concurrent.duration._
 
 final class RemnawavePanelDnsResolverSpec extends FunSuite {
   private val endpoint=IntegrationBaseUrl.parse("https://panel.example.test").toOption.get
-  private def fixture(a: => List[String],aaaa: List[String],privateAllowed: Boolean = false)(f: RemnawavePanelDnsResolver => Unit): Unit = {
+  private def fixture(a: => List[String],aaaa: List[String],privateAllowed: Boolean = false)(f: RemnawavePanelDnsResolver => Unit,
+    nodeDns: RemnawaveNodeAddressDnsResolver => Unit = _ => ()): Unit = {
     val socket=new DatagramSocket(0,InetAddress.getLoopbackAddress)
     val executor=Executors.newSingleThreadExecutor()
     executor.submit(new Runnable { def run(): Unit = try {
@@ -34,7 +35,20 @@ final class RemnawavePanelDnsResolverSpec extends FunSuite {
     try {
       val resolver=new SimpleResolver("127.0.0.1"); resolver.setPort(socket.getLocalPort); resolver.setTimeout(Duration.ofMillis(250))
       f(new RemnawavePanelDnsResolver(RemnawavePanelDnsResolver.freshLookup(resolver),privateAllowed))
+      nodeDns(new RemnawaveNodeAddressDnsResolver(RemnawavePanelDnsResolver.freshLookup(resolver)))
     } finally { socket.close(); executor.shutdownNow() }
+  }
+  test("explicit Node domain must resolve exclusively to the authenticated server; NXDOMAIN and unrelated addresses fail closed") {
+    fixture(List("185.10.20.20"),Nil)(_ => (),dns => {
+      val evidence=dns.verifyDomain("node.example.test",List("185.10.20.20")).unsafeRunSync()
+      assertEquals(evidence.mode,NodeAddressMode.Domain)
+      assertEquals(evidence.address,"node.example.test")
+      assert(dns.verifyDomain("node.example.test",List("185.10.20.21")).attempt.unsafeRunSync().isLeft)
+      assert(dns.verifyDomain("185.10.20.20",List("185.10.20.20")).attempt.unsafeRunSync().isLeft)
+    })
+    fixture(Nil,Nil)(_ => (),dns => assert(dns.verifyDomain("missing.example.test",List("185.10.20.20")).attempt.unsafeRunSync().isLeft))
+    fixture(List("185.10.20.20","185.10.20.21"),Nil)(_ => (),dns =>
+      assert(dns.verifyDomain("node.example.test",List("185.10.20.20")).attempt.unsafeRunSync().isLeft))
   }
   test("production AUTO resolves A and AAAA as exact canonical candidates") {
     fixture(List("185.10.20.30"),List("2001:4860:4860::8888")) { resolver =>

@@ -6,7 +6,7 @@ import cats.syntax.all._
 import application.integration.IntegrationConfigProfileDocument
 import domain.configuration.CanonicalJson
 import domain.integration.{IntegrationActionCode, IntegrationActionRemoteOutcome, IntegrationBaseUrl,
-  IntegrationObjectType, IntegrationObservation, RemnawaveCredential}
+  IntegrationObjectType, IntegrationObservation, RemnawaveCredential,NodeCreateIntent}
 import org.http4s.{Header, Method, Request, Response, Uri}
 import org.http4s.client.Client
 import org.typelevel.ci.CIString
@@ -122,6 +122,27 @@ final class RemnawaveClient(client: Client[IO], requestTimeout: FiniteDuration,
       } yield errorCode == "A011" && message == "Node not found" &&
         path.stripPrefix("/") == requestedPath
     }.contains(true)
+
+  /** One PATCH. Anything ambiguous after the request may have left this process is UNKNOWN. */
+  def updateNodeAddressWire(baseUrl: IntegrationBaseUrl,credential: RemnawaveCredential,id: java.util.UUID,
+    desired: NodeCreateIntent): IO[IntegrationActionRemoteOutcome] = {
+    import IntegrationActionRemoteOutcome._
+    IO.fromEither(Uri.fromString(baseUrl.endpoint(NodesPath).toASCIIString).leftMap(_ => RemnawaveErrors.error("INTEGRATION_NODE_INVALID_REQUEST"))).flatMap { uri =>
+      val request=Request[IO](Method.PATCH,uri).withEntity(Json.obj("uuid"->Json.fromString(id.toString),"address"->Json.fromString(desired.address)).noSpaces)
+        .putHeaders(Header.Raw(CIString("Authorization"),s"Bearer ${credential.apiToken}"),Header.Raw(CIString("Content-Type"),"application/json"))
+      val authenticated=credential.caddyApiKey.fold(request)(key => request.putHeaders(Header.Raw(CIString("X-Api-Key"),key)))
+      client.run(authenticated).use { response =>
+        if(Set(400,401,403,404).contains(response.status.code)) IO.pure(DefinitelyFailed("INTEGRATION_NODE_ADDRESS_REJECTED"))
+        else if(!response.status.isSuccess) IO.pure(OutcomeUnknown("INTEGRATION_NODE_ADDRESS_RESULT_UNKNOWN"))
+        else boundedBody(response,ConfigProfileMaxResponseBytes).map { body =>
+          val node=body.flatMap(parse(_).toOption).flatMap(_.hcursor.downField("response").success).flatMap(RemnawaveNodeApi.node)
+          if(node.exists(n => n.externalId==id && RemnawaveNodeApi.matches(n,desired))) Succeeded
+          else OutcomeUnknown("INTEGRATION_NODE_ADDRESS_RESULT_UNKNOWN")
+        }
+      }
+    }.timeout(requestTimeout).handleError(e => definiteBeforeWrite(e).map(DefinitelyFailed.apply)
+      .getOrElse(OutcomeUnknown("INTEGRATION_NODE_ADDRESS_RESULT_UNKNOWN")))
+  }
 
   /** One PATCH. Anything ambiguous after the request may have left this process is UNKNOWN. */
   def updateConfigProfile(baseUrl: IntegrationBaseUrl, credential: RemnawaveCredential,

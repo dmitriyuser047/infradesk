@@ -43,6 +43,30 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
   private def listing(items: List[Json]): Response[IO] = response(Json.obj("response" -> Json.arr(items: _*)))
   private def envelope(item: Json): Response[IO] = response(Json.obj("response" -> item))
 
+  test("reviewed address PATCH changes only uuid/address, preserves Node identity and cannot write with an unreviewed update contract") {
+    val desired=intent.copy(address="185.10.20.20")
+    val (adapter,_,seen)=setup(version="2.8.0",items=List(node()),write=_ => IO.pure(envelope(node(desired))))
+    val reviewed=adapter.inspect(context).unsafeRunSync()
+    assert(reviewed.capabilities(NodeProvisioningCapability.AddressUpdate))
+    assertEquals(adapter.updateNodeAddress(context,nodeId,intent,desired,reviewed).unsafeRunSync(),IntegrationActionRemoteOutcome.Succeeded)
+    val writes=seen.get.unsafeRunSync().filter(_._1=="PATCH")
+    assertEquals(writes.size,1)
+    assertEquals(writes.head._2,"/prefix/api/nodes")
+    assertEquals(parse(writes.head._3).toOption.get,Json.obj("uuid"->Json.fromString(nodeId.toString),"address"->Json.fromString(desired.address)))
+    val (unknown,_,requests)=setup(version="3.4.3",items=List(node()))
+    val api=unknown.inspect(context).unsafeRunSync()
+    assert(!api.capabilities(NodeProvisioningCapability.AddressUpdate))
+    assertEquals(unknown.updateNodeAddress(context,nodeId,intent,desired,api).unsafeRunSync(),
+      IntegrationActionRemoteOutcome.DefinitelyFailed("INTEGRATION_API_CONTRACT_UNCONFIRMED"))
+    assert(!requests.get.unsafeRunSync().exists(_._1=="PATCH"))
+  }
+  test("address PATCH timeout remains unknown and cannot repeat a request in the adapter") {
+    val (adapter,_,seen)=setup(version="2.8.0",items=List(node()),write=_ => IO.never,timeout=50.millis)
+    val reviewed=adapter.inspect(context).unsafeRunSync()
+    val result=adapter.updateNodeAddress(context,nodeId,intent,intent.copy(address="185.10.20.20"),reviewed).unsafeRunSync()
+    assertEquals(result,IntegrationActionRemoteOutcome.OutcomeUnknown("INTEGRATION_NODE_ADDRESS_RESULT_UNKNOWN"))
+    assertEquals(seen.get.unsafeRunSync().count(_._1=="PATCH"),1)
+  }
   private def setup(version: String = "3.4.4", items: List[Json] = Nil,
     write: Request[IO] => IO[Response[IO]] = _ => IO.pure(envelope(node())),
     keyField: String = "secretKey", metadataBody: Option[String] = None,

@@ -34,11 +34,7 @@ final class RemnawavePanelDnsResolver(lookup: LookupSession, allowPrivate: Boole
       query.timeoutTo(5.seconds,IO.pure(Nil)).map { values =>
         val unique = values.distinct
         // Reserved addresses never create rules. Private sources require the existing explicit deployment policy.
-        val forbidden = unique.exists(a => a.isAnyLocalAddress || a.isLoopbackAddress || a.isLinkLocalAddress ||
-          a.isMulticastAddress || (a.getAddress.length == 4 && ((a.getAddress()(0) & 0xff) == 0 || (a.getAddress()(0) & 0xff) >= 240)) ||
-          List("100.64.0.0/10","192.0.0.0/24","192.0.2.0/24","198.18.0.0/15","198.51.100.0/24","203.0.113.0/24","2001:db8::/32")
-            .exists(domain.provisioning.ServerProfileContent.sourceCovers(_,a.getHostAddress)) ||
-          (!allowPrivate && (a.isSiteLocalAddress || (a.getAddress.length == 16 && (a.getAddress()(0) & 0xfe) == 0xfc))))
+        val forbidden = unique.exists(a => !PanelSourceAddresses.allowed(a,allowPrivate))
         if(unique.isEmpty || unique.size > 32 || forbidden) unresolved
         else OnboardingInput.canonicalCidrs(unique.map(a => a.getHostAddress + (if(a.getAddress.length == 4) "/32" else "/128")))
           .toOption.fold(unresolved)(s => PanelSourceEvidence(mode,s,method,"AUTO_CANDIDATE",fingerprint))

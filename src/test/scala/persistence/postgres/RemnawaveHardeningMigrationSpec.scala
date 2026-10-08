@@ -16,7 +16,7 @@ import org.typelevel.log4cats.noop.NoOpLogger
 import support.{AuthorizationFixtures,RemoteConfigurationServer}
 
 final class RemnawaveHardeningMigrationSpec extends FunSuite {
-  test("production CI V29 and V41 backup fixtures upgrade cleanly through V59") {
+  test("production CI V29 and V41 backup fixtures upgrade cleanly through V60") {
     assume(ConfigurationDeploymentWorld.enabled,"PostgreSQL integration tests are opt-in")
     val config = PostgresTestDatabase.config
     val workflow = java.nio.file.Files.readString(java.nio.file.Paths.get(".github/workflows/ci.yml"))
@@ -43,8 +43,8 @@ final class RemnawaveHardeningMigrationSpec extends FunSuite {
           version <- runner.run(sql"select version from flyway_schema_history where success order by installed_rank desc limit 1".query[String].unique)
           _ = assertEquals(version,target)
           migrated <- DatabaseMigrator.migrate(isolated,NoOpLogger[IO])
-          _ = assertEquals(migrated.currentVersion,"59")
-          _ = assertEquals(migrated.migrationsApplied,59-target.toInt)
+          _ = assertEquals(migrated.currentVersion,"60")
+          _ = assertEquals(migrated.migrationsApplied,60-target.toInt)
           retained <- runner.run(sql"select count(*) from organization where id=$org and name='Backup marker'".query[Long].unique)
           _ = assertEquals(retained,1L)
         } yield ()
@@ -97,8 +97,8 @@ final class RemnawaveHardeningMigrationSpec extends FunSuite {
           .query[(String,String,String,Option[UUID],Option[UUID])].unique))
         fleetBefore <- w.run(fleets.fleet(w.org,integration,fleet))
         result <- DatabaseMigrator.migrate(config.copy(url=xa.kernel.getJdbcUrl),NoOpLogger[IO])
-        _ = assertEquals(result.migrationsApplied,59-version.toInt)
-        _ = assertEquals(result.currentVersion,"59")
+        _ = assertEquals(result.migrationsApplied,60-version.toInt)
+        _ = assertEquals(result.currentVersion,"60")
         after <- w.run(ids.traverse(id => sql"select input_snapshot::text,state,phase,external_node_id,request_id from remnawave_node_onboarding where id=$id"
           .query[(String,String,String,Option[UUID],Option[UUID])].unique))
         decoded <- w.run(ids.traverse(repo.find(w.org,integration,_)))

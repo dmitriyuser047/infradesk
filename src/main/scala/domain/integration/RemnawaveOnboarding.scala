@@ -18,8 +18,12 @@ object OnboardingPhase {
   case object CreateNode extends OnboardingPhase("CREATE_NODE", true)
   case object GetInstallationData extends OnboardingPhase("GET_INSTALLATION_DATA")
   case object ResolvePanelSource extends OnboardingPhase("RESOLVE_PANEL_SOURCE")
+  case object UpdateNodeAddress extends OnboardingPhase("UPDATE_NODE_ADDRESS", true)
   case object AddPanelSources extends OnboardingPhase("ADD_PANEL_SOURCES", true)
   case object FinalizePanelSources extends OnboardingPhase("FINALIZE_PANEL_SOURCES", true)
+  case object ObservePanelSource extends OnboardingPhase("OBSERVE_PANEL_SOURCE", true)
+  case object AddObservedPanelSource extends OnboardingPhase("ADD_OBSERVED_PANEL_SOURCE", true)
+  case object VerifyObservedPanel extends OnboardingPhase("VERIFY_OBSERVED_PANEL")
   case object ConfigureFirewall extends OnboardingPhase("CONFIGURE_NODE_FIREWALL", true)
   case object InstallNode extends OnboardingPhase("INSTALL_NODE", true)
   case object StartNode extends OnboardingPhase("START_NODE", true)
@@ -33,7 +37,7 @@ object OnboardingPhase {
     ConfigureFirewall, InstallNode, StartNode, VerifyLocalNode, WaitForPanel, SyncInventory,
     BindResource, SetDesiredState, FinalVerify)
   def forSnapshot(s: OnboardingSnapshot): List[OnboardingPhase] = {
-    if(s.connectivityRepair) List(Validate,PrepareServer,ResolvePanelSource,AddPanelSources,WaitForPanel,
+    val prior = if(s.connectivityRepair) List(Validate,PrepareServer,ResolvePanelSource,AddPanelSources,WaitForPanel,
       FinalizePanelSources,SyncInventory,BindResource,SetDesiredState,FinalVerify)
     else {
       val base = if(s.lifecycleVersion >= 4) all.take(2) ++ List(ResolvePanelSource) ++
@@ -42,9 +46,13 @@ object OnboardingPhase {
         base.take(2) ++ (if(proof.action=="DELETE_RECREATE") List(DeleteNode,ConfirmNodeDeleted) else Nil) ++
           (if(s.needsRetirement) (if(s.lifecycleVersion>=2) List(RetireNodeFirewall) else Nil) ++ List(RetireLocalNode) else Nil) ++ base.drop(2))
     }
+    val network=if(s.passivePanelDiscovery) prior.flatMap(p => if(p==FinalizePanelSources)
+      List(ObservePanelSource,AddObservedPanelSource,VerifyObservedPanel,p) else List(p)) else prior
+    if(s.lifecycleVersion>=5 && s.recovery.exists(r => r.reusesNode && r.previousNodeAddress.nonEmpty))
+      network.flatMap(p => if(p==ResolvePanelSource) List(UpdateNodeAddress,p) else List(p)) else network
   }
   def fromCode(code: String): OnboardingPhase = (all ++ List(DeleteNode,ConfirmNodeDeleted,RetireNodeFirewall,RetireLocalNode,
-    ResolvePanelSource,AddPanelSources,FinalizePanelSources)).find(_.code == code).getOrElse(
+    ResolvePanelSource,UpdateNodeAddress,AddPanelSources,FinalizePanelSources,ObservePanelSource,AddObservedPanelSource,VerifyObservedPanel)).find(_.code == code).getOrElse(
     throw new IllegalArgumentException("Invalid onboarding phase"))
   def next(phase: OnboardingPhase): Option[OnboardingPhase] = all.lift(all.indexOf(phase) + 1)
   def next(phase: OnboardingPhase,snapshot: OnboardingSnapshot): Option[OnboardingPhase] = {
@@ -56,10 +64,11 @@ object OnboardingPhase {
 final case class OnboardingRecovery(sourceRunId: UUID, previousExternalNodeId: Option[UUID],
   previousCorrelationId: UUID, installationOwnerId: UUID, state: String, action: String, previousPanelCidrs: Option[List[String]] = None,
   previousImageReference: Option[String] = None, localInstallation: Option[LocalInstallationObservation] = None,
-  localVerified: Boolean = false, connectivityProblem: Option[PanelConnectivityProblem] = None) {
+  localVerified: Boolean = false, connectivityProblem: Option[PanelConnectivityProblem] = None,previousNodeAddress: Option[String] = None) {
   require(OnboardingRecovery.States(state) && OnboardingRecovery.Actions(action))
   require(previousPanelCidrs.forall(values => (action=="REPAIR_PANEL_CONNECTIVITY" && values.isEmpty) || OnboardingInput.canonicalCidrs(values).contains(values)))
   require(previousImageReference.forall(RemnawaveNodeReleaseCatalog.managedReferences.contains))
+  require(previousNodeAddress.forall(OnboardingInput.validAddress))
   def reusesNode: Boolean = action=="RECOVER" || action=="REPAIR_PANEL_CONNECTIVITY"
 }
 object OnboardingRecovery {
@@ -76,11 +85,11 @@ object OnboardingRecovery {
 
 final case class OnboardingInput(resourceId: UUID, nodeName: String, address: String, nodePort: Int,
   configProfileId: UUID, activeInboundIds: List[UUID], panelCidrs: List[String], desiredState: String = "ENABLED",
-  panelSourceMode: PanelSourceMode = PanelSourceMode.Manual) {
+  panelSourceMode: PanelSourceMode = PanelSourceMode.Manual, nodeAddressMode: NodeAddressMode = NodeAddressMode.Legacy) {
   def normalized: Either[String, OnboardingInput] = for {
     cidrs <- if(panelSourceMode == PanelSourceMode.Auto && panelCidrs.isEmpty) Right(Nil) else OnboardingInput.canonicalCidrs(panelCidrs)
     _ <- Either.cond(nodeName == nodeName.trim && nodeName.length >= 3 && nodeName.length <= 30 &&
-      !nodeName.exists(_.isControl) && OnboardingInput.validAddress(address) && nodePort > 0 && nodePort <= 65535 &&
+      !nodeName.exists(_.isControl) && (OnboardingInput.validAddress(address) || nodeAddressMode==NodeAddressMode.PublicIp && address.isEmpty) && nodePort > 0 && nodePort <= 65535 &&
       activeInboundIds.nonEmpty && activeInboundIds.size <= 256 && activeInboundIds.distinct == activeInboundIds &&
       desiredState == "ENABLED", (), "REMNAWAVE_ONBOARDING_INVALID_INPUT")
   } yield copy(panelCidrs = cidrs, activeInboundIds = activeInboundIds.sortBy(_.toString))
@@ -109,10 +118,12 @@ final case class OnboardingSnapshot(input: OnboardingInput, integrationUpdatedAt
   correlationId: UUID, serverName: String, serverProfileName: String, configProfileName: String,
   inboundNames: List[String], changes: List[String], warnings: List[String], blockers: List[String],
   recovery: Option[OnboardingRecovery] = None, lifecycleVersion: Int = 1,
-  panelSource: Option[PanelSourceEvidence] = None) {
-  require(Set(1,2,3,4)(lifecycleVersion))
+  panelSource: Option[PanelSourceEvidence] = None, nodeAddress: Option[NodeAddressEvidence] = None) {
+  require(Set(1,2,3,4,5)(lifecycleVersion))
   require(lifecycleVersion < 4 || panelSource.exists(e => e.mode == input.panelSourceMode && e.sources == input.panelCidrs))
+  require(input.nodeAddressMode==NodeAddressMode.Legacy || nodeAddress.exists(e => e.mode==input.nodeAddressMode && e.address==input.address))
   def connectivityRepair: Boolean = lifecycleVersion >= 4 && recovery.exists(_.action == "REPAIR_PANEL_CONNECTIVITY")
+  def passivePanelDiscovery: Boolean = lifecycleVersion>=5 && input.panelSourceMode==PanelSourceMode.Auto
   require(!connectivityRepair || recovery.exists(r => r.localVerified && r.previousExternalNodeId.nonEmpty &&
     r.previousPanelCidrs.nonEmpty && Set("PRESENT_EXACT","PRESENT_UNHEALTHY")(r.state) &&
     r.localInstallation.exists(_.state==LocalInstallationState.OwnedComplete)))
@@ -129,15 +140,23 @@ final case class RemnawaveNodeOnboardingRun(id: UUID, organizationId: UUID, inte
   externalNodeId: Option[UUID] = None, baselineRunId: Option[UUID] = None, syncSessionId: Option[UUID] = None,
   failureCode: Option[String] = None, startedAt: Option[Instant] = None, finishedAt: Option[Instant] = None,
   claimToken: Option[UUID] = None, claimDeadline: Option[Instant] = None,
-  connectivityFinding: Option[PanelConnectivityFinding] = None)
+  connectivityFinding: Option[PanelConnectivityFinding] = None,
+  observedPanelSource: Option[PanelSourceObservation] = None,
+  connectivityCompletion: Option[PanelConnectivityCompletion] = None) {
+  require(observedPanelSource.isEmpty || snapshot.passivePanelDiscovery)
+  def effectivePanelSources: List[String] = observedPanelSource.filter(_.status==PanelSourceObservationStatus.Observed)
+    .fold(snapshot.input.panelCidrs)(_.sources)
+}
 object RemnawaveNodeOnboardingRun {
   /** Ownership follows the node/correlation chain, regardless of the latest terminal phase. */
   def recoveryCandidate(previous: List[RemnawaveNodeOnboardingRun], integration: UUID,
-    input: OnboardingInput, image: String, connection: UUID): Either[String,Option[RemnawaveNodeOnboardingRun]] =
+    input: OnboardingInput, image: String, connection: UUID,reviewedAddressChange: Boolean = false): Either[String,Option[RemnawaveNodeOnboardingRun]] =
     previous match {
       case Nil => Right(None)
       case r :: Nil if r.integrationId==integration && r.state.terminal &&
-        r.snapshot.input.copy(panelCidrs=input.panelCidrs,panelSourceMode=input.panelSourceMode).normalized.toOption.zip(input.normalized.toOption)
+        r.snapshot.input.copy(panelCidrs=input.panelCidrs,panelSourceMode=input.panelSourceMode,
+          address=if(reviewedAddressChange) input.address else r.snapshot.input.address,
+          nodeAddressMode=if(reviewedAddressChange) input.nodeAddressMode else r.snapshot.input.nodeAddressMode).normalized.toOption.zip(input.normalized.toOption)
           .exists { case (previous,current) => previous==current } &&
         RemnawaveNodeReleaseCatalog.forReference(r.snapshot.installationImageReference).exists(original =>
           original.status!="BLOCKED" && RemnawaveNodeReleaseCatalog.forReference(image).exists(target =>
@@ -189,7 +208,8 @@ object OnboardingSnapshotCodec {
     "recovery" -> s.recovery.fold(Json.Null)(encodeRecovery)).deepMerge(
       if(s.lifecycleVersion==1) Json.obj() else Json.obj("lifecycleVersion" -> Json.fromInt(s.lifecycleVersion))).deepMerge(
       s.panelSource.fold(Json.obj())(e => Json.obj("panelSource" -> PanelSourceEvidence.encode(e),
-        "panelSourceMode" -> str(s.input.panelSourceMode.code))))
+        "panelSourceMode" -> str(s.input.panelSourceMode.code)))).deepMerge(
+      s.nodeAddress.fold(Json.obj())(e => Json.obj("nodeAddress" -> NodeAddressEvidence.encode(e),"nodeAddressMode" -> str(s.input.nodeAddressMode.code))))
   def encodeRecovery(r: OnboardingRecovery): Json = Json.obj("sourceRunId" -> id(r.sourceRunId),
     "previousExternalNodeId" -> r.previousExternalNodeId.fold(Json.Null)(id),"previousCorrelationId" -> id(r.previousCorrelationId),
     "installationOwnerId" -> id(r.installationOwnerId),"state" -> str(r.state),"action" -> str(r.action)).deepMerge(
@@ -197,7 +217,8 @@ object OnboardingSnapshotCodec {
       r.previousImageReference.fold(Json.obj())(value => Json.obj("previousImageReference" -> str(value)))).deepMerge(
       r.localInstallation.fold(Json.obj())(value => Json.obj("localInstallation" -> encodeLocalInstallation(value)))).deepMerge(
       if(r.localVerified) Json.obj("localVerified" -> Json.fromBoolean(true)) else Json.obj()).deepMerge(
-      r.connectivityProblem.fold(Json.obj())(p => Json.obj("connectivityProblem" -> str(p.code))))
+      r.connectivityProblem.fold(Json.obj())(p => Json.obj("connectivityProblem" -> str(p.code)))).deepMerge(
+      r.previousNodeAddress.fold(Json.obj())(a => Json.obj("previousNodeAddress"->str(a))))
   def encodeLocalInstallation(value: LocalInstallationObservation): Json = Json.obj(
     "state" -> str(value.state.code),"diagnosis" -> value.diagnosis.fold(Json.Null)(d => str(d.code)),"remediation" -> str(value.remediation))
   private def decodeLocalInstallation(j: Json): LocalInstallationObservation = {
@@ -217,7 +238,7 @@ object OnboardingSnapshotCodec {
       "revisionId", "revisionNumber", "assignmentId", "assignmentVersion", "revisionHash", "baselinePlanId", "baselineNeeded",
       "serverVersion", "apiGeneration", "sourceCommit", "capabilities", "compatibilityBlocker", "imageReference", "correlationId",
       "serverName", "serverProfileName", "configProfileName", "inboundNames", "changes", "warnings", "blockers")
-    require(json.asObject.exists(o => (o.keys.toSet -- Set("recovery","lifecycleVersion","panelSource","panelSourceMode")) == expectedKeys), "Invalid onboarding snapshot")
+    require(json.asObject.exists(o => (o.keys.toSet -- Set("recovery","lifecycleVersion","panelSource","panelSourceMode","nodeAddress","nodeAddressMode")) == expectedKeys), "Invalid onboarding snapshot")
     val c = json.hcursor
     def s(k: String): String = c.get[String](k).fold(_ => throw new IllegalArgumentException("Invalid onboarding snapshot"), identity)
     def u(k: String) = UUID.fromString(s(k))
@@ -227,10 +248,11 @@ object OnboardingSnapshotCodec {
       value.asNumber.flatMap(_.toInt).getOrElse(throw new IllegalArgumentException("Invalid onboarding snapshot")))
     val capabilities = List(NodeProvisioningCapability.Inventory, NodeProvisioningCapability.Status,
       NodeProvisioningCapability.Create, NodeProvisioningCapability.InstallationData, NodeProvisioningCapability.ConfigProfile,
-      NodeProvisioningCapability.CreateReconciliation, NodeProvisioningCapability.CreateIdempotency)
+      NodeProvisioningCapability.CreateReconciliation, NodeProvisioningCapability.CreateIdempotency,NodeProvisioningCapability.AddressUpdate)
     val input = OnboardingInput(u("resourceId"),s("nodeName"),s("address"),c.get[Int]("nodePort").toOption.get,
       u("configProfileId"),list("activeInboundIds").map(UUID.fromString),list("panelCidrs"),s("desiredState"),
-      c.downField("panelSourceMode").focus.fold[PanelSourceMode](PanelSourceMode.Manual)(v => PanelSourceMode.fromCode(v.asString.get).get))
+      c.downField("panelSourceMode").focus.fold[PanelSourceMode](PanelSourceMode.Manual)(v => PanelSourceMode.fromCode(v.asString.get).get),
+      c.downField("nodeAddressMode").focus.fold[NodeAddressMode](NodeAddressMode.Legacy)(v => NodeAddressMode.fromCode(v.asString.get).get))
       .normalized.fold(code => throw new IllegalArgumentException(code),identity)
     OnboardingSnapshot(input,Instant.parse(s("integrationUpdatedAt")),u("integrationSecretId"),u("connectionId"),
       Instant.parse(s("connectionUpdatedAt")),u("profileId"),u("revisionId"),c.get[Int]("revisionNumber").toOption.get,
@@ -240,7 +262,7 @@ object OnboardingSnapshotCodec {
       s("imageReference"),u("correlationId"),s("serverName"),s("serverProfileName"),s("configProfileName"),
       list("inboundNames"),list("changes"),list("warnings"),list("blockers"),
       c.downField("recovery").focus.filterNot(_.isNull).map { j =>
-        require(j.asObject.exists(o => (o.keys.toSet -- Set("previousPanelCidrs","previousImageReference","localInstallation","localVerified","connectivityProblem"))==Set("sourceRunId","previousExternalNodeId","previousCorrelationId","installationOwnerId","state","action")),"Invalid recovery snapshot")
+        require(j.asObject.exists(o => (o.keys.toSet -- Set("previousPanelCidrs","previousImageReference","localInstallation","localVerified","connectivityProblem","previousNodeAddress"))==Set("sourceRunId","previousExternalNodeId","previousCorrelationId","installationOwnerId","state","action")),"Invalid recovery snapshot")
         val r=j.hcursor
         OnboardingRecovery(UUID.fromString(r.get[String]("sourceRunId").toOption.get),
           r.get[Option[String]]("previousExternalNodeId").toOption.get.map(UUID.fromString),
@@ -252,7 +274,7 @@ object OnboardingSnapshotCodec {
           r.get[Option[Boolean]]("localVerified").toOption.get.getOrElse(false),
           r.get[Option[String]]("connectivityProblem").toOption.get.map { code =>
             require(code==PanelConnectivityProblem.ManualOnly.code); PanelConnectivityProblem.ManualOnly
-          })
-      },lifecycleVersion,c.downField("panelSource").focus.map(PanelSourceEvidence.decode))
+          },r.get[Option[String]]("previousNodeAddress").toOption.get)
+      },lifecycleVersion,c.downField("panelSource").focus.map(PanelSourceEvidence.decode),c.downField("nodeAddress").focus.map(NodeAddressEvidence.decode))
   }
 }

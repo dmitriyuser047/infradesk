@@ -30,7 +30,7 @@ private[remnawave] object RemnawaveNodeApi {
   case object ProfileSecretKey extends RemnawaveNodeApi("PROFILE_SECRET_KEY", "secretKey")
   val all: List[RemnawaveNodeApi] = List(ProfilePubKey, ProfileSecretKey)
 
-  final case class Release(version: String, commit: String, adapter: RemnawaveNodeApi)
+  final case class Release(version: String, commit: String, adapter: RemnawaveNodeApi,addressUpdate: Boolean = false)
   // This catalog is release evidence, not branching on every patch. Unreviewed releases are absent.
   lazy val releases: Map[String, Release] = {
     val stream = Option(getClass.getResourceAsStream("/integration/remnawave/node-api-releases.json"))
@@ -45,7 +45,8 @@ private[remnawave] object RemnawaveNodeApi {
         commit <- c.get[String]("commit").toOption.filter(_.matches("[0-9a-f]{40}"))
         generation <- c.get[String]("generation").toOption
         adapter <- all.find(_.code == generation)
-      } yield Release(version, commit, adapter)
+      } yield Release(version, commit, adapter,c.downField("sourceSha256").get[String]("libs/contract/commands/nodes/update.command.ts").toOption
+        .exists(Set("09f076b8c88521153c43fa5d8a040baa22e693e1761d4df33619ecc2cc8c090c","d14b0e6a45bb74d330e60a3d5a075f11f9479b8bb589f0c452c4a1d3ff1e2c60")))
       val r = release.getOrElse(throw new IllegalStateException("Remnawave compatibility catalog is invalid"))
       r.version -> r
     }.toMap

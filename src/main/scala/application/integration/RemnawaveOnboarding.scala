@@ -30,7 +30,8 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
   profiles: ServerProfiles[IO,Tx], inventory: IntegrationInventoryQuery[Tx], runner: TransactionRunner[IO,Tx],
   remote: RemnawaveNodeRemote[IO], audit: AuditRecorder[Tx], settings: ProvisioningSettings,
   provisioningPlans: ProvisioningRunRepository[Tx],
-  panelSources: RemnawavePanelSourceResolver[IO] = integration.remnawave.RemnawavePanelDnsResolver.production(false)) extends RemnawaveOnboardingApi {
+  panelSources: RemnawavePanelSourceResolver[IO] = integration.remnawave.RemnawavePanelDnsResolver.production(false),
+  nodeAddresses: RemnawaveNodeAddressResolver[IO] = integration.remnawave.RemnawaveNodeAddressDnsResolver.production()) extends RemnawaveOnboardingApi {
   private val sourcePolicy = new OnboardingPanelSources(query,runner,panelSources)
   private def error(code: String) = IntegrationError(code,"Remnawave onboarding could not proceed")
   private def context(org: UUID, integration: UUID): IO[(Integration,IntegrationRuntimeContext,IntegrationProvider[IO])] =
@@ -54,7 +55,8 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       val blocks = target.left.toOption.toList ++ Option.when(status.busy)("REMNAWAVE_ONBOARDING_RESOURCE_BUSY") ++
         Option.when(status.bindingConflict)("REMNAWAVE_ONBOARDING_BINDING_CONFLICT") ++
         Option.when(!status.profileAssigned)("REMNAWAVE_ONBOARDING_PROFILE_REQUIRED")
-      Json.obj("id" -> str(candidate.id.toString),"name" -> str(candidate.name),"address" -> str(candidate.address),
+      val ip=target.toOption.flatMap(_.connection.config.get("host")).flatMap(NodeAddress.publicLiteral).getOrElse("")
+      Json.obj("id" -> str(candidate.id.toString),"name" -> str(candidate.name),"address" -> str(ip),
         "environmentName" -> str(candidate.environmentName),"sshStatus" -> str(if(target.isRight) "TRUSTED" else "UNAVAILABLE"),
         "serverProfileName" -> status.profileName.fold(Json.Null)(str),
         "revisionNumber" -> status.revisionNumber.fold(Json.Null)(Json.fromInt),"serverProfileStatus" -> str(status.profileState),
@@ -71,8 +73,9 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     _ <- IO.raiseUnless(Set("RECOVER","DELETE_RECREATE")(action))(error("REMNAWAVE_ONBOARDING_INVALID_INPUT"))
     stored <- runner.run(repo.find(actor.organizationId,integration,id))
     r <- stored.map(_._1).filter(_.state.terminal).liftTo[IO](error("REMNAWAVE_ONBOARDING_NOT_FOUND"))
-    result <- preview(actor,integration,if(action=="RECOVER") r.snapshot.input.copy(panelSourceMode=PanelSourceMode.Auto,panelCidrs=Nil)
-      else r.snapshot.input,action)
+    selected=r.snapshot.input.copy(nodeAddressMode=if(r.snapshot.input.nodeAddressMode==NodeAddressMode.Domain) NodeAddressMode.Domain else NodeAddressMode.PublicIp)
+    result <- preview(actor,integration,if(action=="RECOVER") selected.copy(panelSourceMode=PanelSourceMode.Auto,panelCidrs=Nil)
+      else selected,action)
   } yield result
 
   def preview(actor: ActorContext,integration: UUID,raw: OnboardingInput): IO[Json] = preview(actor,integration,raw,"RECOVER")
@@ -82,8 +85,12 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     normalized <- raw.normalized.leftMap(error).liftTo[IO]
     c <- context(actor.organizationId,integration)
     source <- sourcePolicy.resolve(c._2,normalized.panelSourceMode,normalized.panelCidrs)
-    input = normalized.copy(panelCidrs=source.sources)
-    target <- runner.run(targets.eligible(actor.organizationId,input.resourceId))
+    target <- runner.run(targets.eligible(actor.organizationId,normalized.resourceId))
+    addressEvidence <- if(normalized.nodeAddressMode==NodeAddressMode.Legacy) IO.pure(Option.empty[NodeAddressEvidence]) else for {
+      connection <- target.leftMap(error).liftTo[IO].map(_.connection)
+      evidence <- OnboardingNodeAddresses.resolve(normalized,connection,remote,nodeAddresses)
+    } yield Some(evidence)
+    input = normalized.copy(panelCidrs=source.sources,address=addressEvidence.fold(normalized.address)(_.address))
     api <- c._3.nodeProvisioning.get.inspect(c._2)
     candidates <- runner.run(query.candidates(actor.organizationId,500))
     items <- profileInventory(actor.organizationId,integration)
@@ -97,8 +104,9 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     image = RemnawaveNodeImagePolicy.select(api)
     previous <- runner.run(repo.createdNodes(actor.organizationId,input.resourceId))
     candidate = RemnawaveNodeOnboardingRun.recoveryCandidate(previous,integration,input,image.getOrElse(""),
-      target.toOption.fold(new UUID(0,0))(_.connectionId))
-    proof <- OnboardingRecoveryObservation.inspect(candidate.toOption.flatten,input,c._2,c._3.nodeProvisioning.get,remote,target.toOption.map(_.connection),action)
+      target.toOption.fold(new UUID(0,0))(_.connectionId),reviewedAddressChange=addressEvidence.nonEmpty)
+    proof <- OnboardingRecoveryObservation.inspect(candidate.toOption.flatten,input,c._2,c._3.nodeProvisioning.get,remote,target.toOption.map(_.connection),action,
+      reviewedAddressChange=addressEvidence.nonEmpty)
     recovery=proof.recovery.map(r => if(r.action=="RECOVER" && r.localVerified) r.copy(action="REPAIR_PANEL_CONNECTIVITY") else r)
     connectivityFirewall <- recovery.filter(_.action=="REPAIR_PANEL_CONNECTIVITY").traverse(r =>
       target.toOption.traverse(t => remote.connectivitySources(t.connection,
@@ -110,6 +118,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     local <- if(previous.nonEmpty) IO.pure(List.empty[Either[Throwable,ProvisioningStepResult]]) else
       target.toOption.toList.traverse(t => remote.preflight(t.connection,input.resourceId,input.nodePort).attempt)
     blocks = (Option.when(!source.resolved)("REMNAWAVE_PANEL_SOURCE_UNRESOLVED").toList ++
+      Option.when(recovery.exists(r => r.reusesNode && r.previousNodeAddress.nonEmpty) && !api.capabilities(NodeProvisioningCapability.AddressUpdate))("INTEGRATION_API_CONTRACT_UNCONFIRMED") ++
       Option.when(recovery.exists(r => (r.previousPanelCidrs.toList.flatten ++ input.panelCidrs).distinct.size>32))("REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED") ++
       Option.when(connectivityFirewall.exists(_.isLeft))("REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY") ++
       recovery.toList.flatMap(_.connectivityProblem.map(_.code)) ++
@@ -131,7 +140,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     zero = new UUID(0,0)
     planCorrelation = if(blocks.isEmpty && recovery.exists(!_.reusesNode)) UUID.randomUUID() else proof.correlation
     now <- IO.realTimeInstant
-    snapshot = OnboardingSnapshot(input,c._1.updatedAt,c._1.secretId,target.toOption.fold(zero)(_.connectionId),
+    snapshotDraft = OnboardingSnapshot(input,c._1.updatedAt,c._1.secretId,target.toOption.fold(zero)(_.connectionId),
       target.toOption.fold(now)(_.connectionUpdatedAt),pinned.fold(zero)(_.profileId),pinned.fold(zero)(_.revisionId),
       pinned.fold(0)(_.revisionNumber),pinned.fold(zero)(_.assignmentId),pinned.fold(0L)(_.assignmentVersion),
       pinned.fold("")(_.revisionHash),baseline.toOption.fold(zero)(_.run.id),baseline.toOption.exists(!_.assessment.compliant),api,
@@ -147,7 +156,10 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
         (if(recovery.exists(r => !r.reusesNode && !r.localInstallation.exists(_.state==LocalInstallationState.Absent))) List("RETIRE_NODE_FIREWALL","RETIRE_LOCAL_NODE") else Nil) ++
         (if(recovery.exists(_.reusesNode)) Nil else List("CREATE_NODE")) ++
         List("CONFIGURE_NODE_FIREWALL", "INSTALL_NODE", "START_NODE", "WAIT_FOR_PANEL", "FINALIZE_PANEL_SOURCES", "SYNC_INVENTORY", "BIND_RESOURCE", "SET_DESIRED_STATE", "FINAL_VERIFY"),
-      baseline.toOption.toList.flatMap(_.warnings) ++ Option.when(recovery.exists(_.reusesNode))("REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE"),blocks,recovery,lifecycleVersion=4,panelSource=Some(source))
+      baseline.toOption.toList.flatMap(_.warnings) ++ Option.when(recovery.exists(_.reusesNode))("REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE"),blocks,recovery,lifecycleVersion=5,panelSource=Some(source),nodeAddress=addressEvidence)
+    snapshot=snapshotDraft.copy(changes=if(blocks.nonEmpty) snapshotDraft.changes else
+      baseline.toOption.toList.flatMap(_.assessment.modules.filterNot(_._2).map(_._1)) ++
+        OnboardingPhase.forSnapshot(snapshotDraft).filterNot(p => p==OnboardingPhase.Validate || p==OnboardingPhase.PrepareServer).map(_.code))
     run = RemnawaveNodeOnboardingRun(UUID.randomUUID(),actor.organizationId,integration,input.resourceId,None,actor.userId,
       ProvisioningRunState.Planned,OnboardingPhase.Validate,snapshot,now,now,externalNodeId=proof.node)
     _ <- if (blocks.nonEmpty) IO.unit else runner.run(for {
@@ -170,7 +182,8 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     "panelCidrs" -> strings(input.panelCidrs),"panelSource" -> PanelSourceEvidence.encode(source),
     "input" -> Json.obj("resourceId" -> str(input.resourceId.toString),"nodeName" -> str(input.nodeName),"address" -> str(input.address),
       "nodePort" -> Json.fromInt(input.nodePort),"configProfileId" -> str(input.configProfileId.toString),
-      "activeInboundIds" -> strings(input.activeInboundIds.map(_.toString)),"desiredState" -> str(input.desiredState)),
+      "activeInboundIds" -> strings(input.activeInboundIds.map(_.toString)),"desiredState" -> str(input.desiredState),
+      "nodeAddressMode" -> str(input.nodeAddressMode.code)),
     "changes" -> strings(snapshot.changes),"warnings" -> strings(snapshot.warnings),
     "packageFindings" -> Json.fromValues(baseline.toOption.toList.flatMap(_.packageFindings).map(_.json)),
     "blockingProblems" -> strings(blocks),"localInstallationState" -> proof.localState.fold(Json.Null)(s => str(s.code)),
@@ -186,6 +199,14 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
         sourcePolicy.resolve(runtime,draft.snapshot.input.panelSourceMode,draft.snapshot.input.panelCidrs).flatMap(current =>
           IO.raiseUnless(current.resolved && draft.snapshot.panelSource.contains(current))(error("REMNAWAVE_ONBOARDING_SOURCE_CHANGED")))
       }
+    _ <- if(draft.state != ProvisioningRunState.Planned) IO.unit else draft.snapshot.nodeAddress.traverse_ { reviewed =>
+      runner.run(targets.eligible(actor.organizationId,draft.resourceId)).flatMap(_.leftMap(error).liftTo[IO]).flatMap { target =>
+        remote.publicNodeAddresses(target.connection).flatMap { ips =>
+          IO.raiseUnless(ips==reviewed.publicAddresses)(error("REMNAWAVE_ONBOARDING_SOURCE_CHANGED")) *>
+            (if(reviewed.mode==NodeAddressMode.Domain) nodeAddresses.verifyDomain(reviewed.address,ips).void else IO.unit)
+        }
+      }
+    }
     now <- IO.realTimeInstant
     result <- runner.run(for {
       outcome <- repo.startResult(actor.organizationId,integration,plan,request,actor.userId,now,confirmRecreate)
@@ -233,11 +254,34 @@ object OnboardingJson {
     "externalNodeId" -> r.externalNodeId.fold(Json.Null)(id),"baselineRunId" -> r.baselineRunId.fold(Json.Null)(id),
     "recovery" -> r.snapshot.recovery.fold(Json.Null)(OnboardingSnapshotCodec.encodeRecovery),
     "panelSource" -> r.snapshot.panelSource.fold(Json.Null)(PanelSourceEvidence.encode),
+    "observedPanelSource" -> r.observedPanelSource.fold(Json.Null)(PanelSourceObservation.encode),
+    "connectivityCompletion" -> r.connectivityCompletion.fold(Json.Null)(c => str(c.code)),
     "connectivityFinding" -> r.connectivityFinding.fold(Json.Null)(PanelConnectivityFinding.encode),
     "syncSessionId" -> r.syncSessionId.fold(Json.Null)(id),"failureCode" -> r.failureCode.fold(Json.Null)(str),
     "safeMessage" -> r.failureCode.fold(Json.Null)(_ => str("The onboarding did not complete. Review the recorded phase and existing node before creating a new preview.")),
     "createdAt" -> str(r.createdAt.toString),"updatedAt" -> str(r.updatedAt.toString),"startedAt" -> time(r.startedAt),"finishedAt" -> time(r.finishedAt))
   def detail(r: RemnawaveNodeOnboardingRun,p: List[OnboardingPhaseRecord]): Json = Json.obj("run" -> run(r),
     "phases" -> Json.arr(p.map(s => Json.obj("phase" -> str(s.phase.code),"state" -> str(s.state),
+      "outcome" -> phaseOutcome(r,s).fold(Json.Null)(str),
       "startedAt" -> time(s.startedAt),"finishedAt" -> time(s.finishedAt),"failureCode" -> s.failureCode.fold(Json.Null)(str))): _*))
+  private def phaseOutcome(r: RemnawaveNodeOnboardingRun,s: OnboardingPhaseRecord): Option[String] = {
+    import OnboardingPhase._
+    val compensated=r.connectivityCompletion.contains(PanelConnectivityCompletion.RolledBack) ||
+      r.snapshot.lifecycleVersion==4 && r.failureCode.contains("REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT") && r.phase==FinalizePanelSources
+    s.phase match {
+      case FinalizePanelSources if compensated => Some(if(r.connectivityFinding.nonEmpty) "ROLLED_BACK" else "ROLLED_BACK_UNKNOWN")
+      case FinalizePanelSources if r.connectivityCompletion.contains(PanelConnectivityCompletion.Promoted) => Some("CONNECTED")
+      case WaitForPanel if s.state=="SUCCEEDED" =>
+        if(r.observedPanelSource.exists(_.status!=PanelSourceObservationStatus.NotRequired)) Some("NOT_CONNECTED")
+        else if(compensated && r.connectivityFinding.isEmpty) Some("NOT_CONFIRMED")
+        else r.connectivityFinding.map(f => if(f.connected) "CONNECTED" else "NOT_CONNECTED")
+          .orElse(Option.when(r.snapshot.lifecycleVersion>=4)("NOT_CONFIRMED"))
+      case VerifyObservedPanel if s.state=="SUCCEEDED" =>
+        if(!r.observedPanelSource.exists(_.status==PanelSourceObservationStatus.Observed)) Some("NOT_REQUIRED")
+        else r.connectivityFinding.map(f => if(f.connected) "CONNECTED" else "NOT_CONNECTED")
+      case ObservePanelSource if s.state=="SUCCEEDED" => r.observedPanelSource.map(_.status.code)
+      case AddObservedPanelSource if s.state=="SUCCEEDED" && !r.observedPanelSource.exists(_.status==PanelSourceObservationStatus.Observed) => Some("NOT_REQUIRED")
+      case _ => None
+    }
+  }
 }

@@ -12,6 +12,7 @@ object NodeProvisioningCapability {
   case object CreateIdempotency extends NodeProvisioningCapability("NODE_CREATE_IDEMPOTENCY")
   case object ConfigProfile extends NodeProvisioningCapability("NODE_CONFIG_PROFILE")
   case object CreateReconciliation extends NodeProvisioningCapability("NODE_CREATE_RECONCILIATION")
+  case object AddressUpdate extends NodeProvisioningCapability("NODE_ADDRESS_UPDATE")
 }
 
 /** Runtime evidence for node provisioning only, not permission for actions or config deployment.

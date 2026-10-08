@@ -139,6 +139,9 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     var connectOnAdd = true
     var connectivityMode = false
     var connectivityChanges = List.empty[List[String]]
+    var observedSource=PanelSourceObservation(PanelSourceObservationStatus.Observed,List("185.10.20.41/32"))
+    var connectOnObserved=true
+    var addressUpdateOutcome: IntegrationActionRemoteOutcome=IntegrationActionRemoteOutcome.Succeeded
     var retiredFirewallResult = ProvisioningStepResult(Map.empty,None,Some(true))
     var retiredCidrs = List.empty[String]
     var firewallResult = ProvisioningStepResult(Map.empty, None, Some(true))
@@ -168,6 +171,13 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
         Option.when(status != IntegrationSyncStatus.Running)(now), status,
         Option.when(status == IntegrationSyncStatus.Failed)("INTEGRATION_TIMEOUT"), None, None)
     val remote = new RemnawaveNodeRemote[IO] {
+      override def publicNodeAddresses(c: Connection)=IO.pure(List("185.10.20.20"))
+      override def observePanelSynSource(c: Connection,p: PanelSynProbeSpec)=IO {
+        events += "passive-syn"
+        assertEquals(p.runId,repo.record.id)
+        assertEquals(p.deadline,repo.phases.find(_.phase==OnboardingPhase.ObservePanelSource).get.startedAt.get.plusSeconds(60))
+        observedSource
+      }
       override def localInstallationState(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "installation-state"; installationState.getOrElse(if(repo.record.snapshot.recovery.exists(_.reusesNode) && installationExists) LocalInstallationState.OwnedComplete else LocalInstallationState.Absent) }
       override def recoveryPreflight(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "recovery-preflight"; observedOwner=Some(s.onboardingId); ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def repair(c: Connection,s: RemnawaveNodeRemoteSpec,d: NodeInstallationData) = IO { events += "repair"; observedOwner=Some(s.onboardingId); observedImage=Some(s.imageReference); if(repairResult.failureCode.isEmpty) local=localGood; repairResult }
@@ -194,6 +204,10 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       override def connectivitySources(c: Connection,s: RemnawaveNodeRemoteSpec,reviewed: List[String]) = IO.pure(Harness.this.connectivitySources)
       override def reconcilePanelSources(c: Connection,s: RemnawaveNodeRemoteSpec,previous: List[String],target: List[String]) = IO {
         events += "connectivity-firewall"; connectivityChanges :+= target; Harness.this.connectivitySources=target
+        if(target.contains("185.10.20.41/32")) {
+          assert(repo.record.observedPanelSource.contains(observedSource),"Observed candidate must commit before its firewall allow")
+          if(connectOnObserved) panel=panel.copy(connected=true,connecting=false)
+        }
         if(connectOnAdd) panel=panel.copy(connected=true,connecting=false)
         ProvisioningStepResult(Map.empty,None,Some(true))
       }
@@ -255,6 +269,11 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       override def verifyInventoryBindingDesired(r: RemnawaveNodeOnboardingRun) = IO { events += "verify-binding"; bindingVerified }
     }
     val provisioning = new NodeProvisioningTransport[IO] {
+      override def updateNodeAddress(c: IntegrationRuntimeContext,id: UUID,old: NodeCreateIntent,desired: NodeCreateIntent,reviewed: NodeApiCompatibility)=IO {
+        events += "update-address"; assertEquals(id,nodeId); assertEquals(panel.address,old.address)
+        if(addressUpdateOutcome==IntegrationActionRemoteOutcome.Succeeded) panel=panel.copy(address=desired.address)
+        addressUpdateOutcome
+      }
       override def inspect(c: IntegrationRuntimeContext) = IO.pure(inspectedApi)
       override def findNodes(c: IntegrationRuntimeContext) = IO.pure(candidateNodes.getOrElse(List(panel)))
       override def getNode(c: IntegrationRuntimeContext, id: UUID) = IO {
@@ -314,6 +333,70 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     h.connectivityMode=true; h.connectivitySources=previous; h.repo.inFlight=false; h
   }
 
+  test("standard onboarding ignores a missing resource hostname and selects authenticated public IP without DNS") {
+    val h=new Harness(OnboardingPhase.Validate)
+    val dns=new RemnawaveNodeAddressResolver[IO] {
+      def verifyDomain(domain: String,ips: List[String])=IO.raiseError[NodeAddressEvidence](new AssertionError("IP mode must not query resource DNS"))
+    }
+    val evidence=OnboardingNodeAddresses.resolve(input.copy(address="no-dns.example.test",nodeAddressMode=NodeAddressMode.PublicIp),connection,h.remote,dns).unsafeRunSync()
+    assertEquals(evidence.address,"185.10.20.20")
+    assertEquals(evidence.mode,NodeAddressMode.PublicIp)
+  }
+  test("V5 observes actual source after DNS timeout, commits exact candidate before allow and promotes only connected enabled UUID") {
+    val h=connectivityHarness(); h.connectOnAdd=false; h.clockNow=now.plusSeconds(100)
+    h.repo.record=h.repo.record.copy(snapshot=h.repo.record.snapshot.copy(lifecycleVersion=5))
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded)
+    assertEquals(h.events.count(_=="passive-syn"),1)
+    assertEquals(h.connectivityChanges.last,List("185.10.20.41/32"))
+    assertEquals(h.repo.record.connectivityFinding.map(_.sourceEvidence),Some("AUTO_OBSERVED"))
+    assertEquals(h.repo.record.connectivityCompletion,Some(PanelConnectivityCompletion.Promoted))
+    assert(!h.events.exists(Set("create","delete","install","repair","start")))
+    val detail=OnboardingJson.detail(h.repo.record,h.repo.phases)
+    val wait=detail.hcursor.get[List[io.circe.Json]]("phases").toOption.get.find(_.hcursor.get[String]("phase").contains("WAIT_FOR_PANEL")).get
+    assertEquals(wait.hcursor.get[String]("outcome"),Right("NOT_CONNECTED"))
+  }
+  test("V5 unavailable, ambiguous and silent passive windows compensate without allowing a source or requesting a broad rule") {
+    for(status <- List(PanelSourceObservationStatus.Unavailable,PanelSourceObservationStatus.Ambiguous,PanelSourceObservationStatus.NoTraffic)) {
+      val h=connectivityHarness(); h.connectOnAdd=false; h.clockNow=now.plusSeconds(100)
+      h.observedSource=PanelSourceObservation(status,Nil)
+      h.repo.record=h.repo.record.copy(snapshot=h.repo.record.snapshot.copy(lifecycleVersion=5))
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record.state,ProvisioningRunState.Failed)
+      assertEquals(h.connectivityChanges.last,List("2.27.26.18/32"))
+      assertEquals(h.repo.record.connectivityCompletion,Some(PanelConnectivityCompletion.RolledBack))
+      assert(!h.connectivityChanges.flatten.contains("185.10.20.41/32"))
+      val phases=OnboardingJson.detail(h.repo.record,h.repo.phases).hcursor.get[List[io.circe.Json]]("phases").toOption.get
+      assertEquals(phases.find(_.hcursor.get[String]("phase").contains("FINALIZE_PANEL_SOURCES")).get.hcursor.get[String]("outcome"),Right("ROLLED_BACK"))
+    }
+  }
+  test("V5 failed observed candidate retains previous sources; a healthy DNS candidate avoids passive instrumentation") {
+    val failed=connectivityHarness(); failed.connectOnAdd=false; failed.connectOnObserved=false; failed.clockNow=now.plusSeconds(100)
+    failed.repo.record=failed.repo.record.copy(snapshot=failed.repo.record.snapshot.copy(lifecycleVersion=5))
+    failed.worker.tick.unsafeRunSync()
+    assertEquals(failed.repo.record.state,ProvisioningRunState.Failed)
+    assertEquals(failed.connectivityChanges.last,List("2.27.26.18/32"))
+    val good=connectivityHarness(); good.repo.record=good.repo.record.copy(snapshot=good.repo.record.snapshot.copy(lifecycleVersion=5))
+    good.worker.tick.unsafeRunSync()
+    assertEquals(good.repo.record.state,ProvisioningRunState.Succeeded)
+    assert(!good.events.contains("passive-syn"))
+    assertEquals(good.repo.record.observedPanelSource.map(_.status),Some(PanelSourceObservationStatus.NotRequired))
+  }
+  test("V5 reviewed address update preserves UUID; an in-flight old address cannot repeat PATCH") {
+    for(fresh <- List(true,false)) {
+      val h=connectivityHarness(OnboardingPhase.UpdateNodeAddress)
+      val snapshot=h.repo.record.snapshot
+      val address=NodeAddressEvidence(NodeAddressMode.PublicIp,"185.10.20.20",List("185.10.20.20"))
+      h.repo.record=h.repo.record.copy(snapshot=snapshot.copy(lifecycleVersion=5,input=snapshot.input.copy(address=address.address,nodeAddressMode=address.mode),
+        nodeAddress=Some(address),recovery=snapshot.recovery.map(_.copy(previousNodeAddress=Some(h.panel.address)))))
+      h.repo.inFlight = !fresh
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.events.count(_=="update-address"),if(fresh) 1 else 0)
+      assertEquals(h.repo.record.state,if(fresh) ProvisioningRunState.Succeeded else ProvisioningRunState.Unknown)
+      assertEquals(h.repo.record.externalNodeId,Some(nodeId))
+      assert(!h.events.exists(Set("create","delete","install","repair","start")))
+    }
+  }
   test("V4 repairs the existing healthy UUID: add exact source, confirm Panel, then remove old source; no create/install") {
     val h=connectivityHarness(); h.worker.tick.unsafeRunSync()
     assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded)
@@ -845,6 +928,20 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     assertEquals(h.events.count(_=="create"),0)
     assertEquals(h.events.count(_=="retire"),0)
     assert(!h.repo.completed.contains(OnboardingPhase.ConfirmNodeDeleted))
+  }
+
+  test("delete-recreate verifies the previous address identity when the replacement uses a public IP") {
+    val h=new Harness(OnboardingPhase.DeleteNode)
+    reviewedRecovery(h,action="DELETE_RECREATE")
+    h.repo.record=h.repo.record.copy(snapshot=h.repo.record.snapshot.copy(
+      input=h.repo.record.snapshot.input.copy(address="185.10.20.20"),
+      recovery=h.repo.record.snapshot.recovery.map(_.copy(previousNodeAddress=Some(input.address)))))
+    h.deletion=NodeDeleteOutcome.Unknown("REMNAWAVE_ONBOARDING_DELETE_UNKNOWN")
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Unknown)
+    assertEquals(h.events.count(_=="delete"),1)
+    assertEquals(h.events.count(_=="create"),0)
+    assertEquals(h.events.count(_=="retire"),0)
   }
 
   test("confirmed deletion and fresh exact NOT_FOUND precede one recreate with a new durable identity") {

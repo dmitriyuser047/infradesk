@@ -20,6 +20,8 @@ export interface NodeOnboardingRun {
   recovery?: NodeOnboardingRecoverySummary
   panelSource?: PanelSourceEvidence | null
   connectivityFinding?: { component: 'PANEL_CONNECTIVITY'; localNode: 'HEALTHY'; panelNode: 'CONNECTED' | 'DISCONNECTED'; firewall: 'CONFIGURED'; panelSources: string[]; sourceEvidence: string } | null
+  observedPanelSource?: { status: 'AUTO_OBSERVED' | 'NOT_REQUIRED' | 'NO_TRAFFIC' | 'AMBIGUOUS' | 'UNAVAILABLE'; sources: string[] } | null
+  connectivityCompletion?: 'PROMOTED' | 'ROLLED_BACK' | null
 }
 export interface PanelSourceEvidence {
   mode: 'AUTO' | 'MANUAL'; sources: string[]; method: 'DNS_BASE_URL' | 'MANAGED_PANEL_RESOURCE' | 'MANUAL'
@@ -49,9 +51,9 @@ export interface NodeOnboardingPreview {
 }
 export interface NodeOnboardingRunDetail {
   run: NodeOnboardingRun
-  phases: { phase: string; state: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'; startedAt: string | null; finishedAt: string | null; failureCode: string | null }[]
+  phases: { phase: string; state: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'; outcome?: string | null; startedAt: string | null; finishedAt: string | null; failureCode: string | null }[]
 }
 export interface NodeOnboardingPreviewRequest {
   resourceId: string; nodeName: string; address: string; nodePort: number; configProfileId: string
-  activeInboundIds: string[]; panelCidrs?: string[]; panelSourceMode?: 'AUTO' | 'MANUAL'; desiredState: 'ENABLED'
+  activeInboundIds: string[]; panelCidrs?: string[]; panelSourceMode?: 'AUTO' | 'MANUAL'; nodeAddressMode?: 'PUBLIC_IP' | 'DOMAIN'; desiredState: 'ENABLED'
 }

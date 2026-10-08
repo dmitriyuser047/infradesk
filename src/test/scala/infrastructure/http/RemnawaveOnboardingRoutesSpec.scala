@@ -46,6 +46,15 @@ final class RemnawaveOnboardingRoutesSpec extends FunSuite {
     assertEquals(response(api,"/preview",input.noSpaces).status,Status.Ok)
     assertEquals(api.received.map(_.nodePort),Some(2222))
     assertEquals(api.received.map(_.desiredState),Some("ENABLED"))
+    assertEquals(api.received.map(_.nodeAddressMode),Some(domain.integration.NodeAddressMode.PublicIp))
+  }
+  test("a domain address requires an explicit mode; public IP mode permits an empty suggestion and rejects legacy bypass") {
+    val domainBody=input.mapObject(_.add("address",Json.fromString("node.example.test")).add("nodeAddressMode",Json.fromString("DOMAIN")))
+    val api=new Api
+    assertEquals(response(api,"/preview",domainBody.noSpaces).status,Status.Ok)
+    assertEquals(api.received.map(_.nodeAddressMode),Some(domain.integration.NodeAddressMode.Domain))
+    assertEquals(response(new Api,"/preview",input.mapObject(_.add("address",Json.fromString(""))).noSpaces).status,Status.Ok)
+    assertEquals(response(new Api,"/preview",input.mapObject(_.add("nodeAddressMode",Json.fromString("LEGACY"))).noSpaces).status,Status.BadRequest)
   }
   test("AUTO is the default without CIDRs; browser forwarding headers cannot supply Panel source") {
     val api=new Api

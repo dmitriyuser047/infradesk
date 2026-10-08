@@ -10,6 +10,9 @@ import java.util.UUID
   * cannot gain write capabilities merely by returning a recognizable inventory response.
   */
 trait NodeProvisioningTransport[F[_]] {
+  def updateNodeAddress(context: IntegrationRuntimeContext,externalId: UUID,expected: NodeCreateIntent,
+    desired: NodeCreateIntent,reviewed: NodeApiCompatibility): F[IntegrationActionRemoteOutcome] =
+    throw new UnsupportedOperationException("Reviewed Node address updates are unavailable")
   def inspect(context: IntegrationRuntimeContext): F[NodeApiCompatibility]
   def findNodes(context: IntegrationRuntimeContext): F[List[ProvisionedNode]]
   def getNode(context: IntegrationRuntimeContext, externalId: UUID): F[ProvisionedNode]

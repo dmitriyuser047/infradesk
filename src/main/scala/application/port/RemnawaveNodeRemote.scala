@@ -4,6 +4,14 @@ package application.port
 import domain.connection.Connection
 import domain.integration.{LocalInstallationState, LocalInstallationObservation, NodeInstallationData}
 import java.util.UUID
+import java.time.Instant
+import domain.integration.PanelSourceObservation
+
+/** The phase journal fixes this lease before any remote instrumentation is attached. */
+final case class PanelSynProbeSpec(runId: UUID, node: RemnawaveNodeRemoteSpec, deadline: Instant) {
+  require(node.nodePort>0 && node.nodePort<=65535)
+}
+object PanelSynProbeSpec { val WindowSeconds=60L }
 
 /** Backend-controlled values only. Credentials never enter this record. */
 final case class RemnawaveNodeRemoteSpec(onboardingId: UUID, resourceId: UUID, externalNodeId: UUID,
@@ -20,6 +28,15 @@ final case class RemnawaveNodeLocalEvidence(managedFiles: Boolean, imageMatches:
 
 /** Each mutation is one separately journalled onboarding phase. No generic shell input. */
 trait RemnawaveNodeRemote[F[_]] {
+  /** Public interface addresses read through the authenticated, pinned SSH connection. */
+  def publicNodeAddresses(connection: Connection): F[List[String]] =
+    throw new UnsupportedOperationException("Public Node address observation is unavailable")
+  /** Bounded passive instrumentation, including independent host cleanup after loss of the worker. */
+  def observePanelSynSource(connection: Connection, probe: PanelSynProbeSpec): F[PanelSourceObservation] =
+    throw new UnsupportedOperationException("Passive Panel source observation is unavailable")
+  /** Exact idempotent cleanup. Never deletes another probe's table or timer. */
+  def cleanupPanelSynProbe(connection: Connection, probe: PanelSynProbeSpec): F[Unit] =
+    throw new UnsupportedOperationException("Passive Panel source cleanup is unavailable")
   def localInstallationState(connection: Connection, spec: RemnawaveNodeRemoteSpec): F[LocalInstallationState]
   /** Read-only diagnosis, including proof that absent installations have no own firewall artifacts. */
   def localInstallationObservation(connection: Connection, spec: RemnawaveNodeRemoteSpec)(implicit F: cats.Functor[F]): F[LocalInstallationObservation] =

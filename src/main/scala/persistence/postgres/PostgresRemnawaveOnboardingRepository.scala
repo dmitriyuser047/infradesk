@@ -17,12 +17,14 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
   private case class Row(id: UUID, org: UUID, integration: UUID, resource: UUID, request: Option[UUID], actor: UUID,
     state: String, phase: String, snapshot: String, created: Instant, updated: Instant,
     node: Option[UUID], baseline: Option[UUID], sync: Option[UUID], failure: Option[String],
-    started: Option[Instant], finished: Option[Instant], token: Option[UUID], deadline: Option[Instant], connectivity: Option[String]) {
+    started: Option[Instant], finished: Option[Instant], token: Option[UUID], deadline: Option[Instant], connectivity: Option[String],
+    observed: Option[String], completion: Option[String]) {
     def domain = RemnawaveNodeOnboardingRun(id,org,integration,resource,request,actor,ProvisioningRunState.fromCode(state),
       OnboardingPhase.fromCode(phase),OnboardingSnapshotCodec.decode(parse(snapshot).toOption.get),created,updated,
-      node,baseline,sync,failure,started,finished,token,deadline,connectivity.map(j => PanelConnectivityFinding.decode(parse(j).toOption.get)))
+      node,baseline,sync,failure,started,finished,token,deadline,connectivity.map(j => PanelConnectivityFinding.decode(parse(j).toOption.get)),
+      observed.map(j => PanelSourceObservation.decode(parse(j).toOption.get)),completion.map(code => PanelConnectivityCompletion.all.find(_.code==code).get))
   }
-  private val columns = fr"id,organization_id,integration_id,resource_id,request_id,created_by,state,phase,input_snapshot::text,created_at,updated_at,external_node_id,baseline_run_id,sync_session_id,failure_code,started_at,finished_at,claim_token,claim_deadline,connectivity_finding::text"
+  private val columns = fr"id,organization_id,integration_id,resource_id,request_id,created_by,state,phase,input_snapshot::text,created_at,updated_at,external_node_id,baseline_run_id,sync_session_id,failure_code,started_at,finished_at,claim_token,claim_deadline,connectivity_finding::text,observed_panel_source::text,connectivity_completion"
   private def selected(where: Fragment) = (fr"select" ++ columns ++ fr"from remnawave_node_onboarding where" ++ where).query[Row].map(_.domain)
   private def fail(code: String): ConnectionIO[Nothing] = IntegrationError(code,"Remnawave onboarding could not proceed").raiseError[ConnectionIO,Nothing]
   def lockResource(org: UUID, resourceId: UUID): ConnectionIO[Unit] = PostgresProvisioningLocks.lockResource(org,resourceId)
@@ -61,7 +63,8 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
         _ <- if (busy) fail("REMNAWAVE_ONBOARDING_RESOURCE_BUSY") else ().pure[ConnectionIO]
         previous <- createdNodes(org,locked.resourceId)
         recovery <- RemnawaveNodeOnboardingRun.recoveryCandidate(previous,integration,locked.snapshot.input,
-          locked.snapshot.imageReference,locked.snapshot.connectionId).leftMap(code => IntegrationError(code,"Existing node requires review")).liftTo[ConnectionIO]
+          locked.snapshot.imageReference,locked.snapshot.connectionId,reviewedAddressChange=locked.snapshot.nodeAddress.nonEmpty)
+          .leftMap(code => IntegrationError(code,"Existing node requires review")).liftTo[ConnectionIO]
         chainValid=locked.snapshot.recovery match {
           case Some(proof) => recovery.exists(r => r.id==proof.sourceRunId &&
             proof.previousImageReference.getOrElse(locked.snapshot.imageReference) == (if(r.externalNodeId.isEmpty &&
@@ -131,6 +134,8 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
       changed <- sql"""update remnawave_node_onboarding set state=${n.state.code},phase=${n.phase.code},external_node_id=coalesce(${n.externalNodeId},external_node_id),
         baseline_run_id=coalesce(${n.baselineRunId},baseline_run_id),sync_session_id=coalesce(${n.syncSessionId},sync_session_id),failure_code=${n.failureCode},updated_at=$now,
         connectivity_finding=cast(${n.connectivityFinding.map(f => PanelConnectivityFinding.storage(f).noSpaces)} as jsonb),
+        observed_panel_source=cast(${n.observedPanelSource.map(o => PanelSourceObservation.encode(o).noSpaces)} as jsonb),
+        connectivity_completion=${n.connectivityCompletion.map(_.code)},
         finished_at=${Option.when(n.state.terminal)(now)},
         claim_owner=case when ${n.state.terminal} then null else claim_owner end,
         claim_token=case when ${n.state.terminal} then null else claim_token end,

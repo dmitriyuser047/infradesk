@@ -84,10 +84,17 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const [open, setOpen] = useState(false); const [step, setStep] = useState<Step>(0)
   const [resourceId, setResourceId] = useState(''); const [nodeName, setNodeName] = useState('')
   const [address, setAddress] = useState(''); const [port, setPort] = useState('2222')
+  const [addressMode, setAddressMode] = useState<'PUBLIC_IP' | 'DOMAIN'>('PUBLIC_IP')
   const [configProfileId, setConfigProfileId] = useState(''); const [activeInboundIds, setActiveInboundIds] = useState<string[]>([])
   const [cidrs, setCidrs] = useState(''); const [reviewed, setReviewed] = useState<{plan:NodeOnboardingPreview;requestId:string}|null>(null)
   const [sourceMode, setSourceMode] = useState<'AUTO' | 'MANUAL'>('AUTO')
   const preview = reviewed?.plan
+  const previewCode = previewRequest.error instanceof ApiError ? previewRequest.error.code : undefined
+  const addressError = previewCode === 'REMNAWAVE_NODE_ADDRESS_DNS_UNCONFIRMED'
+    ? i18n.locale === 'ru' ? 'DNS домена не подтверждён для выбранного сервера. Укажите его домен или выберите автоматический публичный IP.' : 'The domain DNS does not match the selected server. Enter its domain or choose the automatic public IP.'
+    : previewCode === 'REMNAWAVE_NODE_PUBLIC_IP_UNCONFIRMED' || previewCode === 'REMNAWAVE_NODE_PUBLIC_IP_AMBIGUOUS'
+    ? i18n.locale === 'ru' ? 'Не удалось однозначно подтвердить публичный IP сервера. Проверьте адреса сервера или явно выберите проверенный домен.' : 'A unique public server IP could not be confirmed. Review the server addresses or explicitly choose a verified domain.'
+    : undefined
   const [workflowError,setWorkflowError] = useState(false)
   const [recoveryConfirmed, setRecoveryConfirmed] = useState(false)
   const submitting=useRef(false)
@@ -100,15 +107,16 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
   const setRunInUrl = (id: string | null) => setParams(previous => { const next = new URLSearchParams(previous); if (id) next.set('onboardingRun', id); else next.delete('onboardingRun'); return next }, { replace: true })
   const closeWizard = () => { setOpen(false); setStep(0); setReviewed(null); setRunInUrl(null) }
   const selectServer = (id: string) => { setResourceId(id); const value = options.data?.servers.find(item => item.id === id); if (value) { setAddress(value.address); if (!nodeName) setNodeName(value.name) } }
-  const exactBody = (): NodeOnboardingPreviewRequest => ({ ...(preview?.recovery && preview.input ? preview.input : { resourceId, nodeName: nodeName.trim(), address: address.trim(), nodePort: Number(port), configProfileId, activeInboundIds, desiredState: 'ENABLED' as const }), panelSourceMode: sourceMode, ...(sourceMode === 'MANUAL' ? { panelCidrs: cidrValues } : {}) })
-  const formValid = Boolean(((preview?.recovery && preview.input) || (server && nodeName.trim().length >= 3 && nodeName.trim().length <= 30 && !/[\x00-\x1f\x7f]/.test(nodeName) && address.trim() && Number.isInteger(Number(port)) && Number(port) >= 1 && Number(port) <= 65535 && profile && activeInboundIds.length > 0)) && (sourceMode === 'AUTO' || (cidrValues.length > 0 && cidrValues.length <= 32 && new Set(cidrValues).size === cidrValues.length && cidrValues.every(validCidr))))
+  const exactBody = (): NodeOnboardingPreviewRequest => ({ ...(preview?.recovery && preview.input ? preview.input : { resourceId, nodeName: nodeName.trim(), address: addressMode === 'PUBLIC_IP' ? '' : address.trim(), nodeAddressMode: addressMode, nodePort: Number(port), configProfileId, activeInboundIds, desiredState: 'ENABLED' as const }), panelSourceMode: sourceMode, ...(sourceMode === 'MANUAL' ? { panelCidrs: cidrValues } : {}) })
+  const formValid = Boolean(((preview?.recovery && preview.input) || (server && nodeName.trim().length >= 3 && nodeName.trim().length <= 30 && !/[\x00-\x1f\x7f]/.test(nodeName) && (addressMode === 'PUBLIC_IP' || address.trim()) && Number.isInteger(Number(port)) && Number(port) >= 1 && Number(port) <= 65535 && profile && activeInboundIds.length > 0)) && (sourceMode === 'AUTO' || (cidrValues.length > 0 && cidrValues.length <= 32 && new Set(cidrValues).size === cidrValues.length && cidrValues.every(validCidr))))
   const makePreview = async () => { setWorkflowError(false); try { const value = await previewRequest.mutateAsync(exactBody()); start.reset(); setReviewed({plan:value,requestId:createRequestId()}); setStep(3) } catch { setWorkflowError(true) } }
-  const reconcileRun = async (sourceRunId: string, action: NodeOnboardingRecoveryAction) => {
+  const reconcileRun = async (sourceRunId: string, action: NodeOnboardingRecoveryAction, manualFallback = false) => {
     if (!canConfigure || activeRun(run?.state ?? 'PLANNED') || reconcile.isPending) return
     setWorkflowError(false); setRecoveryConfirmed(false)
     try {
       const value = await reconcile.mutateAsync({ runId: sourceRunId, action })
-      start.reset(); setReviewed({ plan: value, requestId: createRequestId() }); setStep(3); setOpen(true)
+      start.reset(); setReviewed({ plan: value, requestId: createRequestId() }); setStep(manualFallback ? 2 : 3); setOpen(true)
+      if (manualFallback) { setSourceMode('MANUAL'); setCidrs('') }
     } catch { setWorkflowError(true) }
   }
   const recovery = preview?.recovery
@@ -155,10 +163,10 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
     {!open && start.isError ? <InlineAlert tone="danger" title={copy.requestError} /> : null}
     {open || hasRun ? <IntegrationDialog title={copy.title} size="large" onClose={closeWizard} busy={start.isPending || previewRequest.isPending || reconcile.isPending}
       actionNote={step === 3 && preview?.blockingProblems.length ? i18n.t.common.blockedAction(preview.blockingProblems.length) : undefined}
-      actionFeedback={previewRequest.isError || start.isError || workflowError ? <InlineAlert tone="danger" title={start.isError ? copy.requestError : i18n.t.common.operationBlocked} /> : undefined}
+      actionFeedback={previewRequest.isError || start.isError || workflowError ? <InlineAlert tone="danger" title={start.isError ? copy.requestError : addressError ?? i18n.t.common.operationBlocked} /> : undefined}
       actions={<>
         {step > 0 && step < 4 && !preview?.recovery ? <button className="secondary-button" type="button" disabled={!!unresolved || start.isPending || previewRequest.isPending} onClick={() => { setReviewed(null); setStep((step - 1) as Step) }}>{copy.back}</button> : null}
-        {step < 3 ? <button className="primary-button" type="button" disabled={!canConfigure || unsupported || options.isPending || (step === 0 && (!resourceId || !server?.serverProfileName || server.blockingProblems.length > 0)) || (step === 1 && (!nodeName.trim() || !address.trim() || !Number(port) || !profile || activeInboundIds.length === 0)) || (step === 2 && !formValid)} onClick={() => setStep((step + 1) as Step)}>{copy.next}</button> : null}
+        {step < 3 ? <button className="primary-button" type="button" disabled={!canConfigure || unsupported || options.isPending || previewRequest.isPending || (step === 0 && (!resourceId || !server?.serverProfileName || server.blockingProblems.length > 0)) || (step === 1 && (!nodeName.trim() || (addressMode === 'DOMAIN' && !address.trim()) || !Number(port) || !profile || activeInboundIds.length === 0)) || (step === 2 && !formValid)} onClick={() => step === 2 && preview?.recovery ? void makePreview() : setStep((step + 1) as Step)}>{copy.next}</button> : null}
         {step === 3 && !preview?.recovery ? <PendingButton className={preview ? 'secondary-button' : 'primary-button'} type="button" pending={previewRequest.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!!unresolved || !canConfigure || !formValid} onClick={() => void makePreview().catch(() => setWorkflowError(true))}>{copy.preview}</PendingButton> : null}
         {step === 3 && reviewed?.plan.recovery ? <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure} onClick={() => void reconcileRun(reviewed.plan.recovery!.sourceRunId, reviewed.plan.recovery!.action === 'DELETE_RECREATE' ? 'DELETE_RECREATE' : 'RECOVER')}>{i18n.locale === 'ru' ? 'Проверить локальную установку' : 'Check local installation'}</PendingButton> : null}
         {step === 3 && reviewed && !recoveryBlocked ? <PendingButton className="primary-button" type="button" pending={start.isPending} pendingLabel={i18n.t.common.inProgress} disabled={!canConfigure || reviewed.plan.blockingProblems.length > 0 || (needsRecreateApproval && !recoveryConfirmed)} onClick={() => void apply({planId:reviewed.plan.run.id,requestId:reviewed.requestId})}>{recovery?.action === 'REPAIR_PANEL_CONNECTIVITY' ? i18n.locale === 'ru' ? 'Исправить доступ' : 'Repair Panel access' : recovery?.action === 'RECOVER' ? copy.restore : recovery?.action === 'RECREATE' ? copy.recreate : recovery?.action === 'DELETE_RECREATE' ? copy.deleteRecreate : copy.apply}</PendingButton> : null}
@@ -177,12 +185,16 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
           {server && (!server.serverProfileName || server.blockingProblems.length) ? <InlineAlert tone="danger" title={copy.missingProfile}>{server.blockingProblems.map(value => <p key={value}>{value}</p>)}{selectedResource.data ? <Link to={`/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(selectedResource.data.environmentId)}/resources/${encodeURIComponent(server.id)}`}>{copy.automation}</Link> : null}</InlineAlert> : null}</section> : null}
         {step === 1 ? <section><h3>Remnawave</h3>
           <label className="field">{copy.name}<input value={nodeName} onChange={event => setNodeName(event.target.value)} /></label>
-          <label className="field">{copy.address}<input value={address} onChange={event => setAddress(event.target.value)} /></label>
+          <fieldset><legend>{copy.address}</legend>
+            <label><input type="radio" name="nodeAddressMode" checked={addressMode === 'PUBLIC_IP'} onChange={() => setAddressMode('PUBLIC_IP')} />{i18n.locale === 'ru' ? 'Публичный IP сервера (автоматически)' : 'Server public IP (automatic)'}</label>
+            <label><input type="radio" name="nodeAddressMode" checked={addressMode === 'DOMAIN'} onChange={() => { setAddressMode('DOMAIN'); setAddress('') }} />{i18n.locale === 'ru' ? 'Домен с проверкой DNS' : 'Domain with DNS verification'}</label>
+            {addressMode === 'DOMAIN' ? <label className="field">{copy.address}<input value={address} onChange={event => setAddress(event.target.value)} /></label> : <p>{i18n.locale === 'ru' ? 'Адрес будет подтверждён на выбранном сервере. DNS не требуется.' : 'The address will be confirmed on the selected server. DNS is not required.'}</p>}
+          </fieldset>
           <label className="field">{copy.port}<input type="number" min="1" max="65535" value={port} onChange={event => setPort(event.target.value)} /></label>
           <label className="field">{copy.profile}<select value={configProfileId} onChange={event => { setConfigProfileId(event.target.value); setActiveInboundIds([]) }}><option value="">—</option>{options.data.profiles.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}</select></label>
           {profile ? <fieldset><legend>{copy.inbounds}</legend>{profile.inbounds.map(value => <label key={value.id}><input type="checkbox" checked={activeInboundIds.includes(value.id)} onChange={event => setActiveInboundIds(current => event.target.checked ? [...current, value.id] : current.filter(id => id !== value.id))} />{value.name}</label>)}</fieldset> : null}</section> : null}
         {step === 2 ? <section><h3>{copy.steps[2]}</h3><p>{i18n.locale === 'ru' ? 'Remnawave Panel → Node: сетевой доступ настраивается автоматически.' : 'Remnawave Panel → Node: network access is configured automatically.'}</p>
-          <details><summary>{i18n.locale === 'ru' ? 'Расширенные настройки сети' : 'Advanced network settings'}</summary>
+          <details open={sourceMode === 'MANUAL' || undefined}><summary>{i18n.locale === 'ru' ? 'Расширенные настройки сети' : 'Advanced network settings'}</summary>
             <label><input type="radio" name="panelSourceMode" checked={sourceMode === 'AUTO'} onChange={() => setSourceMode('AUTO')} />{i18n.locale === 'ru' ? 'Автоматически' : 'Automatic'}</label>
             <label><input type="radio" name="panelSourceMode" checked={sourceMode === 'MANUAL'} onChange={() => setSourceMode('MANUAL')} />{i18n.locale === 'ru' ? 'Указать вручную' : 'Manual'}</label>
             {sourceMode === 'MANUAL' ? <><label className="field">{i18n.locale === 'ru' ? 'Исходящие адреса Remnawave Panel' : 'Remnawave Panel outbound addresses'}<textarea value={cidrs} onChange={event => setCidrs(event.target.value)} /></label><p>{i18n.locale === 'ru'
@@ -204,8 +216,9 @@ export function NodeOnboarding({ organizationId, integrationId }: { organization
           </section> : null}
       </> : null}
       {step === 3 && preview?.recovery ? <RecoveryReview recovery={preview.recovery} newCorrelation={preview.blockingProblems.length ? undefined : preview.run.correlationId} confirmed={recoveryConfirmed} onConfirm={setRecoveryConfirmed} copy={copy} /> : null}
-      {(step === 4 || (hasRun && step !== 3)) && current ? <RunStatus run={current} detail={runQuery.data} copy={copy} /> : null}
-      {(step === 4 || (hasRun && step !== 3)) && current && ['FAILED', 'UNKNOWN', 'SUCCEEDED'].includes(current.state) && canConfigure ? <div className="integration-row-actions">
+      {(step === 4 || (hasRun && step !== 3 && !preview?.recovery)) && current ? <RunStatus run={current} detail={runQuery.data} copy={copy} /> : null}
+      {(step === 4 || (hasRun && step !== 3 && !preview?.recovery)) && current && ['FAILED', 'UNKNOWN', 'SUCCEEDED'].includes(current.state) && canConfigure ? <div className="integration-row-actions">
+        {current.failureCode === 'REMNAWAVE_PANEL_SOURCE_OBSERVATION_UNAVAILABLE' ? <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={reconcile.isPending || runQuery.isPending} onClick={() => void reconcileRun(current.id, 'RECOVER', true)}>{i18n.locale === 'ru' ? 'Расширенные ручные настройки' : 'Advanced manual settings'}</PendingButton> : null}
         {current.failureCode === 'REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT' || current.failureCode === 'REMNAWAVE_NODE_CONNECTION_TIMEOUT' ? <PendingButton className="primary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={reconcile.isPending || runQuery.isPending} onClick={() => void reconcileRun(current.id, 'RECOVER')}>{i18n.locale === 'ru' ? 'Исправить доступ' : 'Repair Panel access'}</PendingButton> : null}
         <PendingButton className="secondary-button" type="button" pending={reconcile.isPending} pendingLabel={i18n.t.common.inProgress} disabled={reconcile.isPending || runQuery.isPending} onClick={() => void reconcileRun(current.id, 'RECOVER')}>{copy.checkAgain}</PendingButton>
       </div> : null}
@@ -259,7 +272,10 @@ function ReviewList({ title, values, danger = false }: { title: string; values: 
   return <section><h4>{title}</h4>{values.length ? <ul>{values.map((value, index) => <li key={`${index}-${value}`}>{labels[value] ?? names[value as keyof typeof names] ?? value}</li>)}</ul> : <p>—</p>}{danger && values.length ? <p role="alert">{title}</p> : null}</section>
 }
 function networkPhaseNames(locale: string): Record<string, string> {
-  return locale === 'ru' ? { RESOLVE_PANEL_SOURCE: 'Определение сетевых источников Panel', ADD_PANEL_SOURCES: 'Добавление проверенных источников Panel', FINALIZE_PANEL_SOURCES: 'Подтверждение или откат сетевого доступа', REMNAWAVE_PANEL_SOURCE_UNRESOLVED: 'Не удалось определить адреса Panel. Повторите проверку или укажите источники в расширенных настройках.', REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED: 'Слишком много сетевых источников. Требуется ручная проверка.', REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY: 'Правила доступа конфликтуют с управляемой политикой. Требуется ручная проверка.' } : { RESOLVE_PANEL_SOURCE: 'Resolve Panel network sources', ADD_PANEL_SOURCES: 'Add reviewed Panel sources', FINALIZE_PANEL_SOURCES: 'Confirm or roll back Panel access', REMNAWAVE_PANEL_SOURCE_UNRESOLVED: 'Could not resolve Panel addresses. Check again or enter sources in advanced settings.', REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED: 'Too many network sources. Manual review is required.', REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY: 'Firewall rules conflict with the managed policy. Manual review is required.' }
+  const discovery = locale === 'ru' ? { UPDATE_NODE_ADDRESS: 'Обновление адреса существующего узла', WAIT_FOR_PANEL: 'Наблюдение подключения Panel', OBSERVE_PANEL_SOURCE: 'Наблюдение исходящего адреса Panel', ADD_OBSERVED_PANEL_SOURCE: 'Проверка обнаруженного источника', VERIFY_OBSERVED_PANEL: 'Наблюдение подключения с обнаруженным IP', FINALIZE_PANEL_SOURCES: 'Сетевая проверка завершена' }
+    : { UPDATE_NODE_ADDRESS: 'Update existing node address', WAIT_FOR_PANEL: 'Observe Panel connection', OBSERVE_PANEL_SOURCE: 'Observe actual Panel source', ADD_OBSERVED_PANEL_SOURCE: 'Test observed source', VERIFY_OBSERVED_PANEL: 'Observe connection with discovered IP', FINALIZE_PANEL_SOURCES: 'Network verification completed' }
+  const base = locale === 'ru' ? { RESOLVE_PANEL_SOURCE: 'Определение сетевых источников Panel', ADD_PANEL_SOURCES: 'Добавление проверенных источников Panel', FINALIZE_PANEL_SOURCES: 'Подтверждение или откат сетевого доступа', REMNAWAVE_PANEL_SOURCE_UNRESOLVED: 'Не удалось определить адреса Panel. Повторите проверку или укажите источники в расширенных настройках.', REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED: 'Слишком много сетевых источников. Требуется ручная проверка.', REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY: 'Правила доступа конфликтуют с управляемой политикой. Требуется ручная проверка.' } : { RESOLVE_PANEL_SOURCE: 'Resolve Panel network sources', ADD_PANEL_SOURCES: 'Add reviewed Panel sources', FINALIZE_PANEL_SOURCES: 'Confirm or roll back Panel access', REMNAWAVE_PANEL_SOURCE_UNRESOLVED: 'Could not resolve Panel addresses. Check again or enter sources in advanced settings.', REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED: 'Too many network sources. Manual review is required.', REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY: 'Firewall rules conflict with the managed policy. Manual review is required.' }
+  return { ...base, ...discovery }
 }
 function RecoveryReview({ recovery, newCorrelation, confirmed, onConfirm, copy }: { recovery: NodeOnboardingRecoverySummary; newCorrelation?: string; confirmed: boolean; onConfirm: (value: boolean) => void; copy: typeof texts[keyof typeof texts] }) {
   const i18n = useI18n()
@@ -282,7 +298,10 @@ function RecoveryReview({ recovery, newCorrelation, confirmed, onConfirm, copy }
 }
 function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: ReturnType<typeof useNodeOnboardingRun>['data']; copy: typeof texts[keyof typeof texts] }) {
   const i18n = useI18n()
-  const failureReason = (code: string) => code === 'REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY' ? i18n.locale === 'ru' ? 'Правила доступа конфликтуют с управляемой политикой. Требуется ручная проверка; чужие правила не изменялись.' : 'Firewall rules conflict with the managed policy. Manual review is required; foreign rules were not changed.'
+  const failureReason = (code: string) => code === 'REMNAWAVE_PANEL_SOURCE_OBSERVATION_UNAVAILABLE' ? i18n.locale === 'ru' ? 'На сервере недоступна безопасная пассивная проверка источника Panel. Временный доступ отменён. Доступны расширенные ручные настройки.' : 'Safe passive Panel source observation is unavailable on this host. Temporary access was rolled back. Advanced manual settings are available.'
+    : code === 'REMNAWAVE_PANEL_SOURCE_NO_TRAFFIC' ? i18n.locale === 'ru' ? 'Входящие SYN на порт Node не обнаружены за время проверки. Panel не подключилась; временный доступ отменён. Проверьте доступность Node со стороны Panel и повторите проверку.' : 'No inbound SYN reached the Node port during observation. Panel did not connect; temporary access was rolled back. Check reachability from Panel and retry observation.'
+    : code === 'REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY' && run.observedPanelSource?.status === 'AMBIGUOUS' ? i18n.locale === 'ru' ? 'Пассивная проверка обнаружила несколько источников или превышение лимита пакетов. Источник Panel неоднозначен; временный доступ отменён. Требуется ручная проверка.' : 'Passive observation found multiple sources or exceeded the packet limit. The Panel source is ambiguous; temporary access was rolled back. Manual review is required.'
+    : code === 'REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY' ? i18n.locale === 'ru' ? 'Правила доступа конфликтуют с управляемой политикой. Требуется ручная проверка; чужие правила не изменялись.' : 'Firewall rules conflict with the managed policy. Manual review is required; foreign rules were not changed.'
     : code === 'REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT' ? i18n.locale === 'ru'
     ? `Node работает на сервере и слушает порт ${run.nodePort}, но Remnawave Panel не смог подключиться. Вероятная причина: исходящий адрес Panel не входит в разрешённые источники. Также проверьте доступность адреса Node.`
     : `Node is healthy and listens on port ${run.nodePort}, but Remnawave Panel could not connect. The Panel outbound address may be outside the allowed sources. Also check the Node address.`
@@ -308,8 +327,12 @@ function RunStatus({ run, detail, copy }: { run: NodeOnboardingRun; detail: Retu
       const record = byPhase.get(phase)
       const code = record?.failureCode ?? (run.phase === phase ? run.failureCode : null)
       const name = additionalNames[phase] ?? copy.phaseNames[phase as keyof typeof copy.phaseNames] ?? phase
+      const outcomes: Record<string,string> = i18n.locale === 'ru'
+        ? { CONNECTED: 'Подключено', NOT_CONNECTED: 'Не подключено', NOT_CONFIRMED: 'Подключение не подтверждено', ROLLED_BACK: '✓ временные изменения отменены; ✗ Panel не подключилась', NOT_REQUIRED: 'Не требуется', AUTO_OBSERVED: 'Исходящий IP обнаружен', NO_TRAFFIC: 'Входящие SYN не обнаружены', AMBIGUOUS: 'Источники неоднозначны', UNAVAILABLE: 'Пассивная проверка недоступна' }
+        : { CONNECTED: 'Connected', NOT_CONNECTED: 'Not connected', NOT_CONFIRMED: 'Connectivity not confirmed', ROLLED_BACK: '✓ temporary changes rolled back; ✗ Panel did not connect', NOT_REQUIRED: 'Not required', AUTO_OBSERVED: 'Outbound IP observed', NO_TRAFFIC: 'No inbound SYN observed', AMBIGUOUS: 'Sources are ambiguous', UNAVAILABLE: 'Passive observation unavailable' }
+      if(record?.outcome === 'ROLLED_BACK' || record?.outcome === 'ROLLED_BACK_UNKNOWN') return <li key={phase}><InlineAlert tone="success" title={name}>{record.outcome === 'ROLLED_BACK' ? outcomes.ROLLED_BACK : i18n.locale === 'ru' ? '✓ временные изменения отменены; подключение Panel не удалось проверить' : '✓ temporary changes rolled back; Panel connectivity could not be verified'}</InlineAlert></li>
       return <li key={phase}>{code ? <InlineAlert tone={record?.state === 'UNKNOWN' || run.state === 'UNKNOWN' ? 'warning' : 'danger'} title={`${name} — ${record?.state ?? run.state}`}>{failure(code)}</InlineAlert>
-        : <><span>{name}</span> — {record?.state ?? 'PENDING'}</>}</li>
+        : <><span>{name}</span> — {record?.outcome ? outcomes[record.outcome] ?? record.outcome : record?.state ?? 'PENDING'}</>}</li>
     })}</ol>
     {(run.externalNodeId || run.baselineRunId || run.syncSessionId) ? <><h3>{copy.partial}</h3><dl>
       {run.externalNodeId ? <><dt>{copy.externalId}</dt><dd>{run.externalNodeId}</dd></> : null}

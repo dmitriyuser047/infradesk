@@ -95,6 +95,22 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
     else ok
   }
 
+  test("passive source parsing accepts exact IPv4/IPv6, canonicalizes /128 and rejects subnet, reserved or ambiguous output") {
+    import domain.integration.PanelSourceObservationStatus
+    for((value,status) <- List("SOURCE:185.10.20.41/32"->PanelSourceObservationStatus.Observed,
+      "SOURCE:2001:4860:4860::8888/128"->PanelSourceObservationStatus.Observed,
+      "SOURCE:185.10.20.41/24"->PanelSourceObservationStatus.Ambiguous,
+      "SOURCE:127.0.0.1/32"->PanelSourceObservationStatus.Ambiguous,
+      "SOURCE:185.10.20.41/128"->PanelSourceObservationStatus.Ambiguous,
+      "AMBIGUOUS"->PanelSourceObservationStatus.Ambiguous,"NO_TRAFFIC"->PanelSourceObservationStatus.NoTraffic)) {
+      val s=new Session
+      s.respond=(ex,args) => IO.pure(if(ex=="id") ok.copy(stdout="0")
+        else if(ex=="sh") ok.copy(stdout="AVAILABLE") else ok.copy(stdout=value))
+      val observed=remote(s).observePanelSynSource(connection,PanelSynProbeSpec(run,spec,Instant.now().plusSeconds(60))).unsafeRunSync()
+      assertEquals(observed.status,status)
+      if(status==PanelSourceObservationStatus.Observed) assertEquals(domain.integration.OnboardingInput.canonicalCidrs(observed.sources),Right(observed.sources))
+    }
+  }
   test("rejects floating images and broad CIDRs before remote mutation") {
     val s = new Session; idResponse(s)
     val floating = remote(s).install(connection, spec.copy(imageReference = "remnawave/node:latest"), NodeInstallationData.fromSecretKey("secret")).attempt.unsafeRunSync()

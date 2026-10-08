@@ -53,6 +53,56 @@ function mount(entry = '/', locale: 'en' | 'ru' = 'en', configure: (url: string,
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
 
 describe('NodeOnboarding', () => {
+  it.each(['UNAVAILABLE', 'NO_TRAFFIC'] as const)('offers automatic-discovery manual fallback only when the host probe is unavailable: %s', async status => {
+    const code = status === 'UNAVAILABLE' ? 'REMNAWAVE_PANEL_SOURCE_OBSERVATION_UNAVAILABLE' : 'REMNAWAVE_PANEL_SOURCE_NO_TRAFFIC'
+    const { calls } = mount('/?onboardingRun=run-1', 'en', (url, method) => {
+      if (url.endsWith('/runs/run-1') && method === 'GET') return json({ run: { ...run('FAILED'), failureCode: code, observedPanelSource: { status, sources: [] } }, phases: [] })
+      if (url.endsWith('/runs/run-1/reconcile')) return json({ ...recoveryPreview(recoverySummary('PRESENT_EXACT', 'REPAIR_PANEL_CONNECTIVITY')), input: { resourceId: 'resource-1', nodeName: 'Frankfurt edge', address: '185.10.20.11', nodePort: 443, configProfileId: 'profile-uuid', activeInboundIds: ['inbound-uuid'], desiredState: 'ENABLED', nodeAddressMode: 'PUBLIC_IP' } })
+      return undefined
+    })
+    await screen.findByRole('button', { name: 'Check again' })
+    if (status === 'NO_TRAFFIC') expect(screen.queryByRole('button', { name: 'Advanced manual settings' })).toBeNull()
+    else {
+      fireEvent.click(screen.getByRole('button', { name: 'Advanced manual settings' }))
+      await waitFor(() => expect((screen.getByLabelText('Manual') as HTMLInputElement).checked).toBe(true))
+      expect(calls.find(c => c.url.endsWith('/reconcile'))?.body).toEqual({ action: 'RECOVER' })
+      expect(calls.some(c => c.method === 'POST' && c.url.endsWith('/runs'))).toBe(false)
+      fireEvent.change(screen.getByLabelText('Remnawave Panel outbound addresses'), { target: { value: '185.10.20.30/32' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+      await waitFor(() => expect(calls.some(c => c.url.endsWith('/preview'))).toBe(true))
+      expect(calls.find(c => c.url.endsWith('/preview'))?.body).toMatchObject({ panelSourceMode: 'MANUAL', panelCidrs: ['185.10.20.30/32'], address: '185.10.20.11' })
+    }
+  })
+  it('uses a domain only after an explicit selection and submits its mode for server DNS verification', async () => {
+    const { calls }=mount()
+    await waitFor(() => expect((screen.getByRole('button',{name:'Add node'}) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button',{name:'Add node'}))
+    fireEvent.change(await screen.findByLabelText('Server'),{target:{value:'resource-1'}})
+    fireEvent.click(screen.getByRole('button',{name:'Continue'}))
+    expect(screen.queryByRole('textbox',{name:'Node address'})).toBeNull()
+    fireEvent.click(screen.getByLabelText('Domain with DNS verification'))
+    fireEvent.change(screen.getByLabelText('Node address'),{target:{value:'node.example.test'}})
+    fireEvent.change(screen.getByLabelText('Configuration profile'),{target:{value:'profile-uuid'}})
+    fireEvent.click(screen.getByLabelText('VLESS TLS'))
+    fireEvent.click(screen.getByRole('button',{name:'Continue'}))
+    fireEvent.click(screen.getByRole('button',{name:'Continue'}))
+    fireEvent.click(screen.getByRole('button',{name:'Review changes'}))
+    await waitFor(() => expect(calls.some(c => c.url.endsWith('/preview'))).toBe(true))
+    expect(calls.find(c => c.url.endsWith('/preview'))?.body).toMatchObject({nodeAddressMode:'DOMAIN',address:'node.example.test'})
+  })
+  it('displays disconnected observation and successful rollback separately from failed connectivity run', async () => {
+    mount('/?onboardingRun=run-1','ru',url => url.endsWith('/runs/run-1') ? json({
+      run:{...run('FAILED'),phase:'FINALIZE_PANEL_SOURCES',failureCode:'REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT',connectivityCompletion:'ROLLED_BACK'},
+      phases:[{phase:'WAIT_FOR_PANEL',state:'SUCCEEDED',outcome:'NOT_CONNECTED',startedAt:null,finishedAt:null,failureCode:null},
+        {phase:'FINALIZE_PANEL_SOURCES',state:'FAILED',outcome:'ROLLED_BACK',startedAt:null,finishedAt:null,failureCode:'REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT'}]
+    } satisfies NodeOnboardingRunDetail) : undefined)
+    expect(await screen.findByText('Наблюдение подключения Panel')).toBeTruthy()
+    expect(screen.getByText(/Не подключено/)).toBeTruthy()
+    expect(screen.getByText('Сетевая проверка завершена')).toBeTruthy()
+    expect(screen.getByText('✓ временные изменения отменены; ✗ Panel не подключилась')).toBeTruthy()
+    expect(screen.getByText('Запуск: FAILED')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('SUCCEEDED')
+  })
   it('ordinary onboarding defaults to AUTO and submits no operator CIDR', async () => {
     const {calls}=mount()
     await waitFor(() => expect((screen.getByRole('button',{name:'Add node'}) as HTMLButtonElement).disabled).toBe(false))
@@ -69,6 +119,7 @@ describe('NodeOnboarding', () => {
     await waitFor(() => expect(calls.some(c=>c.url.endsWith('/preview'))).toBe(true))
     const body=calls.find(c=>c.url.endsWith('/preview'))?.body as Record<string,unknown>
     expect(body.panelSourceMode).toBe('AUTO'); expect(body).not.toHaveProperty('panelCidrs')
+    expect(body.nodeAddressMode).toBe('PUBLIC_IP'); expect(body.address).toBe('')
   })
   it('offers repair access for a healthy existing Node and shows candidate evidence without recreate approval', async () => {
     const repair=recoveryPreview(recoverySummary('PRESENT_UNHEALTHY','REPAIR_PANEL_CONNECTIVITY'))
@@ -139,7 +190,6 @@ describe('NodeOnboarding', () => {
     fireEvent.change(await screen.findByLabelText('Server'), { target: { value: 'resource-1' } })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     fireEvent.change(screen.getByLabelText('Node name'), { target: { value: 'Frankfurt edge' } })
-    fireEvent.change(screen.getByLabelText('Node address'), { target: { value: '198.51.100.11' } })
     fireEvent.change(screen.getByLabelText('Configuration profile'), { target: { value: 'profile-uuid' } })
     fireEvent.click(screen.getByLabelText('VLESS TLS'))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
@@ -149,7 +199,7 @@ describe('NodeOnboarding', () => {
     expect(await screen.findByText('Create node')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Start onboarding' }))
     await waitFor(() => expect(calls.some(value => value.method === 'POST' && value.url.endsWith('/runs'))).toBe(true))
-    expect(calls.find(value => value.url.endsWith('/preview'))?.body).toEqual({ resourceId: 'resource-1', nodeName: 'Frankfurt edge', address: '198.51.100.11', nodePort: 2222, configProfileId: 'profile-uuid', activeInboundIds: ['inbound-uuid'], panelCidrs: ['203.0.113.0/24'], panelSourceMode: 'MANUAL', desiredState: 'ENABLED' })
+    expect(calls.find(value => value.url.endsWith('/preview'))?.body).toEqual({ resourceId: 'resource-1', nodeName: 'Frankfurt edge', address: '', nodeAddressMode: 'PUBLIC_IP', nodePort: 2222, configProfileId: 'profile-uuid', activeInboundIds: ['inbound-uuid'], panelCidrs: ['203.0.113.0/24'], panelSourceMode: 'MANUAL', desiredState: 'ENABLED' })
     expect(calls.find(value => value.method === 'POST' && value.url.endsWith('/runs'))?.body).toEqual({ planId: 'plan-1', requestId: expect.any(String) })
     await waitFor(() => expect(screen.getByTestId('search').textContent).toContain('onboardingRun=run-1'))
   })
@@ -165,7 +215,6 @@ describe('NodeOnboarding', () => {
     fireEvent.change(await screen.findByLabelText('Server'), { target: { value: 'resource-1' } })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     fireEvent.change(screen.getByLabelText('Node name'), { target: { value: 'Frankfurt edge' } })
-    fireEvent.change(screen.getByLabelText('Node address'), { target: { value: '198.51.100.11' } })
     fireEvent.change(screen.getByLabelText('Configuration profile'), { target: { value: 'profile-uuid' } })
     fireEvent.click(screen.getByLabelText('VLESS TLS'))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
@@ -188,7 +237,6 @@ describe('NodeOnboarding', () => {
     fireEvent.change(await screen.findByLabelText('Server'), { target: { value: 'resource-1' } })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     fireEvent.change(screen.getByLabelText('Node name'), { target: { value: 'Frankfurt edge' } })
-    fireEvent.change(screen.getByLabelText('Node address'), { target: { value: '198.51.100.11' } })
     fireEvent.change(screen.getByLabelText('Configuration profile'), { target: { value: 'profile-uuid' } })
     fireEvent.click(screen.getByLabelText('VLESS TLS'))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))

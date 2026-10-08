@@ -14,10 +14,52 @@ import scala.concurrent.duration._
 import scala.util.control.NonFatal
 
 /** Typed, pinned-SSH implementation of the per-node host installation contract. */
-final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO]) extends RemnawaveNodeRemote[IO]
+final class SshRemnawaveNodeRemote(transport: RemoteConfigurationTransport[IO], allowPrivatePanelSources: Boolean = false) extends RemnawaveNodeRemote[IO]
   with application.port.RemnawaveNodeImageRemote[IO] {
   import SshRemnawaveNodeRemote._
   private lazy val images = new SshManagedNodeImages(transport)
+  override def publicNodeAddresses(connection: Connection): IO[List[String]] = withSession(connection) { (_,c,_) =>
+    c.capture("ip",List("-j","address","show","scope","global"),10.seconds).flatMap { result =>
+      IO.raiseUnless(result.exitCode==0 && !result.stdoutTruncated)(ProfileRemoteFailure("REMNAWAVE_NODE_PUBLIC_IP_UNCONFIRMED")) *>
+        IO.fromEither(io.circe.parser.parse(result.stdout).leftMap(_ => ProfileRemoteFailure("REMNAWAVE_NODE_PUBLIC_IP_UNCONFIRMED"))).flatMap { json =>
+          val addresses=json.asArray.toList.flatten.toList.flatMap(_.hcursor.get[List[io.circe.Json]]("addr_info").toOption.toList.flatten)
+            .flatMap(_.hcursor.get[String]("local").toOption).flatMap(domain.integration.NodeAddress.publicLiteral).distinct.sorted
+          IO.raiseUnless(addresses.nonEmpty && addresses.size<=32)(ProfileRemoteFailure("REMNAWAVE_NODE_PUBLIC_IP_UNCONFIRMED")).as(addresses)
+        }
+    }
+  }
+  override def observePanelSynSource(connection: Connection,probe: application.port.PanelSynProbeSpec): IO[domain.integration.PanelSourceObservation] = {
+    import domain.integration.{PanelSourceObservation,PanelSourceObservationStatus => Status}
+    withSession(connection) { (_,c,_) => validate(probe.node) *>
+      c.capture("sh",List("-c","if [ -x /usr/bin/python3 ]; then printf AVAILABLE; else printf UNAVAILABLE; fi"),5.seconds).flatMap { capability =>
+      if(capability.exitCode==0 && capability.stdout=="UNAVAILABLE") IO.pure(PanelSourceObservation(Status.Unavailable,Nil))
+      else IO.raiseUnless(capability.exitCode==0 && capability.stdout=="AVAILABLE")(
+        ProfileRemoteFailure("REMNAWAVE_PANEL_SOURCE_PROBE_UNKNOWN",uncertain=true)) *>
+      c.capture("/usr/bin/python3",PanelSynProbe.args("observe",probe),85.seconds).flatMap { result =>
+        IO.raiseUnless(result.exitCode==0 && !result.stdoutTruncated && !result.stderrTruncated)(ProfileRemoteFailure("REMNAWAVE_PANEL_SOURCE_PROBE_UNKNOWN",uncertain=true)) *>
+        IO.delay(result.stdout.trim match {
+          case "NO_TRAFFIC" => PanelSourceObservation(Status.NoTraffic,Nil)
+          case "UNAVAILABLE" => PanelSourceObservation(Status.Unavailable,Nil)
+          case "AMBIGUOUS" => PanelSourceObservation(Status.Ambiguous,Nil)
+          case value if value.startsWith("SOURCE:") =>
+            val source=value.stripPrefix("SOURCE:")
+            val address=scala.util.Try(org.xbill.DNS.Address.getByAddress(source.takeWhile(_!='/'))).toOption
+            val canonical=domain.integration.OnboardingInput.canonicalCidrs(List(source)).toOption
+            if(address.exists(a => integration.remnawave.PanelSourceAddresses.allowed(a,allowPrivatePanelSources) &&
+              source.endsWith(if(a.getAddress.length==4) "/32" else "/128")) && canonical.exists(_.size==1))
+              PanelSourceObservation(Status.Observed,canonical.get)
+            else PanelSourceObservation(Status.Ambiguous,Nil)
+          case _ => throw ProfileRemoteFailure("REMNAWAVE_PANEL_SOURCE_PROBE_UNKNOWN",uncertain=true)
+        })
+      }
+      }
+    }.onCancel(cleanupPanelSynProbe(connection,probe).attempt.void)
+  }
+  override def cleanupPanelSynProbe(connection: Connection,probe: application.port.PanelSynProbeSpec): IO[Unit] =
+    withSession(connection) { (_,c,_) => validate(probe.node) *>
+      c.capture("python3",PanelSynProbe.args("cleanup",probe),20.seconds).flatMap(result =>
+        IO.raiseUnless(result.exitCode==0 && result.stdout.trim=="CLEANED")(
+          ProfileRemoteFailure("REMNAWAVE_PANEL_SOURCE_CLEANUP_UNKNOWN",uncertain=true))) }
   def observeImage(connection: Connection, spec: RemnawaveNodeRemoteSpec): IO[NodeImageObservation] = images.observeImage(connection, spec)
   def prefetchImage(connection: Connection, spec: RemnawaveNodeRemoteSpec, release: NodeRelease,
     platform: NodeReleasePlatform, baseline: NodeImageObservation, authorize: IO[Unit]): IO[Unit] =

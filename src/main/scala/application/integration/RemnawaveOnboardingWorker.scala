@@ -29,7 +29,8 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
   settings: ProvisioningSettings, logger: Logger[IO], polling: RemnawaveOnboardingSettings = RemnawaveOnboardingSettings(),
   owner: UUID = UUID.randomUUID(), clock: IO[Instant] = IO.realTimeInstant,
   panelSources: RemnawavePanelSourceResolver[IO] = integration.remnawave.RemnawavePanelDnsResolver.production(false),
-  panelSourcePolicy: Option[OnboardingPanelSources[Tx]] = None) {
+  panelSourcePolicy: Option[OnboardingPanelSources[Tx]] = None,
+  nodeAddresses: RemnawaveNodeAddressResolver[IO] = integration.remnawave.RemnawaveNodeAddressDnsResolver.production()) {
   private case object LostLease extends RuntimeException("Onboarding lease lost")
   private sealed trait Decision
   private case class Advance(run: RemnawaveNodeOnboardingRun) extends Decision
@@ -92,7 +93,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
     started = stored.toList.flatMap(_._2).find(_.phase==r.phase).flatMap(_.startedAt).getOrElse(r.createdAt)
   } yield !now.isBefore(started.plusMillis(timeout.toMillis))
   private def spec(r: RemnawaveNodeOnboardingRun) = RemnawaveNodeRemoteSpec(RemnawaveNodeOnboardingRun.installationOwner(r),r.resourceId,r.externalNodeId.get,
-    r.snapshot.input.nodePort,r.snapshot.installationImageReference,r.snapshot.input.panelCidrs)
+    r.snapshot.input.nodePort,r.snapshot.installationImageReference,r.effectivePanelSources)
   private def provider = providers.find(IntegrationProviderType.Remnawave).get
   private def matches(r: RemnawaveNodeOnboardingRun,n: ProvisionedNode): Boolean = {
     val i = r.snapshot.intent
@@ -192,14 +193,20 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
         def oldSpec(proof: OnboardingRecovery) = RemnawaveNodeRemoteSpec(proof.installationOwnerId,r.resourceId,
           proof.previousExternalNodeId.get,r.snapshot.input.nodePort,proof.previousImageReference.getOrElse(r.snapshot.imageReference),proof.previousPanelCidrs.getOrElse(r.snapshot.input.panelCidrs))
         def previousSources = r.snapshot.recovery.flatMap(_.previousPanelCidrs).getOrElse(r.snapshot.input.panelCidrs)
-        def unionSources = (previousSources ++ r.snapshot.input.panelCidrs).distinct.sorted
-        def currentSpec = if(r.snapshot.connectivityRepair) spec(r).copy(panelCidrs=unionSources) else spec(r)
+        def unionSources = (previousSources ++ r.snapshot.input.panelCidrs ++ r.effectivePanelSources).distinct.sorted
+        def currentSpec = if(r.snapshot.connectivityRepair || r.observedPanelSource.exists(_.status==PanelSourceObservationStatus.Observed))
+          spec(r).copy(panelCidrs=unionSources) else spec(r)
         def validateSources: IO[Unit] = r.snapshot.panelSource.traverse_(reviewed =>
           panelSourcePolicy.fold(panelSources.resolve(context.baseUrl,r.snapshot.input.panelSourceMode,r.snapshot.input.panelCidrs))(
             _.resolve(context,r.snapshot.input.panelSourceMode,r.snapshot.input.panelCidrs)).flatMap(current =>
             IO.raiseUnless(current.resolved && current==reviewed)(IntegrationError("REMNAWAVE_ONBOARDING_SOURCE_CHANGED","Review fresh Panel source evidence"))))
-        def finding(connected: Boolean) = PanelConnectivityFinding(r.snapshot.input.panelCidrs,
-          r.snapshot.panelSource.fold("LEGACY_MANUAL")(_.confidence),connected)
+        def finding(connected: Boolean) = PanelConnectivityFinding(r.effectivePanelSources,
+          if(r.observedPanelSource.exists(_.status==PanelSourceObservationStatus.Observed)) "AUTO_OBSERVED"
+          else r.snapshot.panelSource.fold("LEGACY_MANUAL")(_.confidence),connected)
+        def probeSpec: IO[PanelSynProbeSpec] = runner.run(repo.find(r.organizationId,r.integrationId,r.id)).flatMap(stored =>
+          stored.toList.flatMap(_._2).find(_.phase==ObservePanelSource).flatMap(_.startedAt)
+            .liftTo[IO](IntegrationError("REMNAWAVE_PANEL_SOURCE_PROBE_UNKNOWN","Missing durable probe lease"))
+            .map(at => PanelSynProbeSpec(r.id,currentSpec,at.plusSeconds(PanelSynProbeSpec.WindowSeconds))))
         def oldAbsent: IO[Unit] = r.snapshot.recovery.filter(!_.reusesNode).traverse_ { proof =>
           nodes.lookupNode(context,proof.previousExternalNodeId.get).flatMap {
             case NodeLookupOutcome.ConfirmedNotFound => nodes.findNodes(context).flatMap(candidates => IO.raiseWhen(
@@ -235,13 +242,72 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           } else mutationResult(io)
         }
         r.phase match {
-          case Validate => operations.validate(r,false) *> validateSources *> freshLocal(false) *> (r.snapshot.recovery match {
+          case Validate => operations.validate(r,false) *> validateSources *> r.snapshot.nodeAddress.traverse_ { reviewed =>
+            remote.publicNodeAddresses(connection).flatMap { ips =>
+              IO.raiseUnless(ips==reviewed.publicAddresses)(IntegrationError("REMNAWAVE_ONBOARDING_SOURCE_CHANGED","Managed Node address changed")) *>
+                (if(reviewed.mode==NodeAddressMode.Domain) nodeAddresses.verifyDomain(reviewed.address,ips).void else IO.unit)
+            }
+          } *> freshLocal(false) *> (r.snapshot.recovery match {
             case Some(proof) => remote.recoveryPreflight(connection,if(proof.reusesNode && (!r.snapshot.connectivityRepair || previousSources.isEmpty)) spec(r) else oldSpec(proof))
             case None => remote.preflight(connection,r.resourceId,r.snapshot.input.nodePort)
           }).flatMap(x =>
             if(x.failureCode.nonEmpty || x.uncertain) IO.pure(Stop(x.failureCode.getOrElse("REMNAWAVE_ONBOARDING_PREFLIGHT_UNKNOWN"),x.uncertain)) else advance)
           case PrepareServer => operations.validate(r,true) *> advance
+          case UpdateNodeAddress =>
+            val previous=r.snapshot.recovery.flatMap(_.previousNodeAddress).get
+            val expected=r.snapshot.intent.copy(address=previous)
+            nodes.lookupNode(context,r.externalNodeId.get).flatMap {
+              case NodeLookupOutcome.Found(n) if matches(r,n) => existing
+              case NodeLookupOutcome.Found(n) if OnboardingRecovery.matches(n,expected,r.externalNodeId) && fresh =>
+                nodes.updateNodeAddress(context,n.externalId,expected,r.snapshot.intent,r.snapshot.compatibility).flatMap {
+                  case IntegrationActionRemoteOutcome.DefinitelyFailed(code) => IO.pure(Stop(code,false))
+                  case outcome => nodes.lookupNode(context,n.externalId).map {
+                    case NodeLookupOutcome.Found(current) if matches(r,current) => Advance(r)
+                    case _ => Stop(outcome match {
+                      case IntegrationActionRemoteOutcome.OutcomeUnknown(code) => code
+                      case _ => "INTEGRATION_NODE_ADDRESS_RESULT_UNKNOWN"
+                    },true)
+                  }
+                }
+              case NodeLookupOutcome.Found(n) if OnboardingRecovery.matches(n,expected,r.externalNodeId) =>
+                IO.pure(Stop("INTEGRATION_NODE_ADDRESS_RESULT_UNKNOWN",true))
+              case NodeLookupOutcome.Found(_) => IO.pure(Stop("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW",false))
+              case _ => IO.pure(Stop("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN",true))
+            }
           case ResolvePanelSource => validateSources *> advance
+          case ObservePanelSource if r.connectivityFinding.exists(_.connected) =>
+            IO.pure(Advance(r.copy(observedPanelSource=Some(PanelSourceObservation(PanelSourceObservationStatus.NotRequired,Nil)))))
+          case ObservePanelSource => existing.flatMap {
+            case _: Advance => remote.observe(connection,currentSpec).flatMap(local => IO.raiseUnless(local.verified)(
+              IntegrationError("REMNAWAVE_ONBOARDING_LOCAL_VERIFICATION_FAILED","Owned local Node changed"))) *>
+              probeSpec.flatMap(p => remote.observePanelSynSource(connection,p)).map { observed =>
+                val bounded=if((unionSources++observed.sources).distinct.size>32)
+                  PanelSourceObservation(PanelSourceObservationStatus.Ambiguous,Nil) else observed
+                Advance(r.copy(observedPanelSource=Some(bounded)))
+              }
+            case other => IO.pure(other)
+          }
+          case AddObservedPanelSource if !r.observedPanelSource.exists(_.status==PanelSourceObservationStatus.Observed) => advance
+          case AddObservedPanelSource => existing.flatMap {
+            case _: Advance => remote.observe(connection,spec(r).copy(panelCidrs=(previousSources++r.snapshot.input.panelCidrs).distinct.sorted)).flatMap { local =>
+              (if(local.verified) IO.pure(true) else remote.observe(connection,currentSpec).map(_.verified)).flatMap(ok => IO.raiseUnless(ok)(
+                IntegrationError("REMNAWAVE_ONBOARDING_LOCAL_VERIFICATION_FAILED","Owned local Node changed")))
+            } *> result(remote.reconcilePanelSources(connection,spec(r).copy(panelCidrs=unionSources),previousSources,unionSources))
+            case other => IO.pure(other)
+          }
+          case VerifyObservedPanel if !r.observedPanelSource.exists(_.status==PanelSourceObservationStatus.Observed) => advance
+          case VerifyObservedPanel => nodes.getNode(context,r.externalNodeId.get).timeout(15.seconds).flatMap { n =>
+            if(!matches(r,n)) IO.pure(Advance(r.copy(connectivityFinding=None)))
+            else if(n.connected && !n.disabled) remote.observe(connection,currentSpec).map(local =>
+              if(local.verified) Advance(r.copy(connectivityFinding=Some(finding(true))))
+              else Stop("REMNAWAVE_ONBOARDING_LOCAL_VERIFICATION_FAILED",true))
+            else elapsed(r,polling.panelTimeout).flatMap(expired => if(!expired) IO.pure(Wait(r)) else
+              remote.observe(connection,currentSpec).map(local => if(local.verified)
+                Advance(r.copy(connectivityFinding=Option.when(!n.disabled)(finding(false))))
+                else Stop("REMNAWAVE_ONBOARDING_LOCAL_VERIFICATION_FAILED",true)))
+          }.handleErrorWith(e => elapsed(r,polling.panelTimeout).flatMap(expired => if(!expired) IO.pure(Wait(r)) else
+            remote.observe(connection,currentSpec).map(local => if(local.verified) Advance(r.copy(connectivityFinding=None))
+              else Stop("REMNAWAVE_ONBOARDING_LOCAL_VERIFICATION_FAILED",true))))
           case AddPanelSources => validateSources *> existing.flatMap {
             case _: Advance => remote.observe(connection,if(previousSources.isEmpty) spec(r) else oldSpec(r.snapshot.recovery.get)).flatMap { local =>
               // After a crash the reviewed union may already be present; prove it before continuation.
@@ -253,7 +319,7 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           }
           case FinalizePanelSources =>
               val confirmed = r.connectivityFinding.exists(_.connected)
-              val target = if(confirmed) r.snapshot.input.panelCidrs else if(r.snapshot.connectivityRepair) previousSources else Nil
+              val target = if(confirmed) r.effectivePanelSources else if(r.snapshot.connectivityRepair) previousSources else Nil
               val confirmation = if(!confirmed) IO.unit else existing.flatMap {
                 case _: Advance => nodes.getNode(context,r.externalNodeId.get).flatMap(n => IO.raiseUnless(
                   matches(r,n) && n.connected && !n.disabled)(IntegrationError("REMNAWAVE_PANEL_CONNECTIVITY_CONFIRMATION_LOST","Panel connectivity changed")))
@@ -265,18 +331,25 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
                 // A completed finalization can be observed after a crash without replaying removal.
                 (if(local.verified || (target.isEmpty && local.locallyHealthy)) IO.pure(true) else remote.observe(connection,spec(r).copy(panelCidrs=target)).map(_.verified)).flatMap(ok =>
                   IO.raiseUnless(ok)(IntegrationError("REMNAWAVE_ONBOARDING_LOCAL_VERIFICATION_FAILED","Owned local node changed"))) *>
-                  mutationResult(if(target.isEmpty) remote.retireFirewall(connection,spec(r)) else if(!r.snapshot.connectivityRepair)
+                  mutationResult(if(target.isEmpty) remote.retireFirewall(connection,currentSpec) else if(!r.snapshot.connectivityRepair && !r.observedPanelSource.exists(_.status==PanelSourceObservationStatus.Observed))
                     IO.pure(ProvisioningStepResult(Map.empty,None,Some(true))) else
-                    remote.reconcilePanelSources(connection,spec(r),previousSources,target)).map {
-                    case _: Advance if confirmed => Advance(r.copy(connectivityFinding=Some(finding(true))))
-                    case _: Advance if r.connectivityFinding.nonEmpty => Stop("REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT",false,Some(r))
-                    case _: Advance => Stop("REMNAWAVE_PANEL_OBSERVATION_UNKNOWN",true,Some(r))
+                    remote.reconcilePanelSources(connection,spec(r).copy(panelCidrs=unionSources),previousSources,target)).map {
+                    case _: Advance if confirmed => Advance(r.copy(connectivityFinding=Some(finding(true)),connectivityCompletion=Some(PanelConnectivityCompletion.Promoted)))
+                    case _: Advance =>
+                      val completed=r.copy(connectivityCompletion=Some(PanelConnectivityCompletion.RolledBack))
+                      r.observedPanelSource.map(_.status) match {
+                        case Some(PanelSourceObservationStatus.NoTraffic) => Stop("REMNAWAVE_PANEL_SOURCE_NO_TRAFFIC",false,Some(completed))
+                        case Some(PanelSourceObservationStatus.Ambiguous) => Stop("REMNAWAVE_PANEL_CONNECTIVITY_MANUAL_ONLY",false,Some(completed))
+                        case Some(PanelSourceObservationStatus.Unavailable) => Stop("REMNAWAVE_PANEL_SOURCE_OBSERVATION_UNAVAILABLE",false,Some(completed))
+                        case _ if r.connectivityFinding.nonEmpty => Stop("REMNAWAVE_PANEL_CONNECTIVITY_TIMEOUT",false,Some(completed))
+                        case _ => Stop("REMNAWAVE_PANEL_OBSERVATION_UNKNOWN",true,Some(completed))
+                      }
                     case other => other
                   }
               }
           case DeleteNode =>
             val proof=r.snapshot.recovery.get
-            val oldIntent=r.snapshot.intent.copy(correlationId=proof.previousCorrelationId)
+            val oldIntent=r.snapshot.intent.copy(correlationId=proof.previousCorrelationId,address=proof.previousNodeAddress.getOrElse(r.snapshot.input.address))
             exactNode(proof.previousExternalNodeId.get,oldIntent).flatMap {
               case Left(stop) if stop.code=="REMNAWAVE_ONBOARDING_NODE_NOT_FOUND" => oldAbsent *> advance
               case Right(n) if fresh =>
