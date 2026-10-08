@@ -24,11 +24,11 @@ def remove():
   if item.get('Config',{}).get('Labels',{}).get('infradesk.acme.owner')!=marker or item['Config'].get('Image')!=image: raise RuntimeError()
   if call(['docker','rm','-f',name]).returncode: raise RuntimeError()
  elif b'No such' not in r.stderr: raise RuntimeError()
- for exe in ['/usr/sbin/iptables','/usr/sbin/ip6tables']:
-  r=call([exe,'-S','ufw-before-input'])
+ for exe,chain in [('/usr/sbin/iptables','ufw-before-input'),('/usr/sbin/ip6tables','ufw6-before-input')]:
+  r=call([exe,'-S',chain])
   if r.returncode: raise RuntimeError()
   owned=[shlex.split(x) for x in r.stdout.decode().splitlines() if marker in x]
-  expected=['-A','ufw-before-input','-p','tcp','-m','tcp','--dport','80','-m','comment','--comment',marker,'-j','ACCEPT']
+  expected=['-A',chain,'-p','tcp','-m','tcp','--dport','80','-m','comment','--comment',marker,'-j','ACCEPT']
   if len(owned)>1 or any(x!=expected for x in owned): raise RuntimeError()
   if owned and call([exe,'-D']+expected[1:]).returncode: raise RuntimeError()
 remove()
@@ -84,8 +84,8 @@ try:
  if status.returncode or 'Status: active' not in status.stdout.decode(): print('UNAVAILABLE'); sys.exit(44)
  sockets=call(['ss','-H','-lnt','sport','=',':80'])
  if sockets.returncode or sockets.stdout.strip(): print('PORT_OCCUPIED'); sys.exit(44)
- for exe in ['/usr/sbin/iptables','/usr/sbin/ip6tables']:
-  if call([exe,'-S','ufw-before-input']).returncode: print('UNAVAILABLE'); sys.exit(44)
+ for exe,chain in [('/usr/sbin/iptables','ufw-before-input'),('/usr/sbin/ip6tables','ufw6-before-input')]:
+  if call([exe,'-S',chain]).returncode: print('UNAVAILABLE'); sys.exit(44)
  for parent in ['/var','/var/lib','/var/lib/infradesk','/var/lib/infradesk/remnawave',root]:
   if not os.path.lexists(parent): os.mkdir(parent,0o700)
   safe_dir(parent)
@@ -108,8 +108,8 @@ try:
  desc=call(['/usr/bin/systemctl','show',unit+'.timer','--property=Description','--value'])
  if desc.returncode or desc.stdout.decode().strip()!=marker: raise RuntimeError()
  try:
-  for exe in ['/usr/sbin/iptables','/usr/sbin/ip6tables']:
-   if call([exe,'-I','ufw-before-input','1','-p','tcp','--dport','80','-m','comment','--comment',marker,'-j','ACCEPT']).returncode: raise RuntimeError()
+  for exe,chain in [('/usr/sbin/iptables','ufw-before-input'),('/usr/sbin/ip6tables','ufw6-before-input')]:
+   if call([exe,'-I',chain,'1','-p','tcp','--dport','80','-m','comment','--comment',marker,'-j','ACCEPT']).returncode: raise RuntimeError()
   args=['docker','run','--rm','--name',name,'--label','infradesk.acme.owner='+marker,
    '--network','host','--cap-drop','ALL','--cap-add','NET_BIND_SERVICE','--security-opt','no-new-privileges',
    '--read-only','--tmpfs','/tmp:rw,noexec,nosuid,size=32m']

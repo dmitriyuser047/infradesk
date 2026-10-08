@@ -69,6 +69,9 @@ There is no reset, foreign rule deletion, subnet guessing or global logging.
 
 HTTP-01 preview and the durable preflight also check TCP/80 and relevant policy. The
 issuance-time port check, pinned Certbot image and independent cleanup lease remain.
+The HTTP-01 issuer uses UFW's IPv4 `ufw-before-input` and IPv6 `ufw6-before-input`
+chains for observation, temporary TCP/80 rules and exact-owned cleanup. The real-shell
+fixture keeps the IPv4 chain absent in ip6tables and proves IPv6 foreign-rule preservation.
 
 ## TLS identities and filesystem asset lifetime
 

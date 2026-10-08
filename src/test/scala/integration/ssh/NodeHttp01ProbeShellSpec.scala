@@ -26,7 +26,9 @@ final class NodeHttp01ProbeShellSpec extends FunSuite {
       NodeHttp01Probe.args("issue",resource,"example.org",request,Instant.now().plusSeconds(window),fresh))
     val resource=UUID.randomUUID(); val request=NodeTlsHttp01(UUID.randomUUID(),"operator@example.org")
     try {
-      exec("sh","-c","for exe in iptables ip6tables; do $exe -N ufw-before-input; done; printf '#!/bin/sh\\nprintf \"Status: active\\n\"\\n' >/usr/local/bin/ufw; chmod 755 /usr/local/bin/ufw")
+      exec("sh","-c","iptables -N ufw-before-input; ip6tables -N ufw6-before-input; printf '#!/bin/sh\\nprintf \"Status: active\\n\"\\n' >/usr/local/bin/ufw; chmod 755 /usr/local/bin/ufw")
+      assertNotEquals(command(List("/usr/sbin/ip6tables","-S","ufw-before-input")).!(ProcessLogger(_=>(),_=>())),0)
+      exec("/usr/sbin/ip6tables","-A","ufw6-before-input","-p","tcp","--dport","2222","-m","comment","--comment","foreign-management","-j","DROP")
       val result=issue(resource,request,true).!!
       val material=io.circe.parser.parse(result).toOption.get
       assert(material.hcursor.get[String]("privateKeyPem").toOption.get.startsWith("-----BEGIN PRIVATE KEY-----"))
@@ -50,6 +52,8 @@ final class NodeHttp01ProbeShellSpec extends FunSuite {
       assert(validated.isRight,validated.left.toOption.getOrElse(""))
       assert(!tls.toString.contains("PRIVATE KEY"))
       assert(!exec("/usr/sbin/iptables","-S","ufw-before-input").contains("infradesk:acme:"))
+      val ipv6AfterIssue=exec("/usr/sbin/ip6tables","-S","ufw6-before-input")
+      assert(!ipv6AfterIssue.contains("infradesk:acme:")); assert(ipv6AfterIssue.contains("foreign-management"))
       val reused=issue(resource,request,false).!!
       assertEquals(io.circe.parser.parse(reused).toOption.get,material)
       exec("touch","/fixture/stall")
@@ -59,13 +63,16 @@ final class NodeHttp01ProbeShellSpec extends FunSuite {
       while(!exec("/usr/sbin/iptables","-S","ufw-before-input").contains(crashed.certificateId.toString) && System.nanoTime()<timeout) Thread.sleep(50)
       val attached=exec("/usr/sbin/iptables","-S","ufw-before-input")
       assert(attached.contains("--dport 80")); assert(!attached.contains("2222"))
+      val attached6=exec("/usr/sbin/ip6tables","-S","ufw6-before-input")
+      assert(attached6.contains(crashed.certificateId.toString)); assert(attached6.contains("--dport 80"))
       // Kill the remote issuer, independently from its detached host cleanup timer.
       exec("/usr/bin/python3","-c", "import os,sys,signal; from pathlib import Path\nfor p in Path('/proc').iterdir():\n if p.name.isdigit():\n  try:\n   a=(p/'cmdline').read_bytes().split(b'\\0')\n   if len(a)>2 and a[1]==b'-c' and a[2]==sys.argv[1].encode(): os.kill(int(p.name),signal.SIGKILL)\n  except (FileNotFoundError,ProcessLookupError): pass",NodeHttp01Probe.Program)
       process.exitValue()
       val expires=System.nanoTime()+20.seconds.toNanos
       while(exec("/usr/sbin/iptables","-S","ufw-before-input").contains(crashed.certificateId.toString) && System.nanoTime()<expires) Thread.sleep(100)
       assert(!exec("/usr/sbin/iptables","-S","ufw-before-input").contains(crashed.certificateId.toString))
-      assert(!exec("/usr/sbin/ip6tables","-S","ufw-before-input").contains(crashed.certificateId.toString))
+      val ipv6AfterLease=exec("/usr/sbin/ip6tables","-S","ufw6-before-input")
+      assert(!ipv6AfterLease.contains(crashed.certificateId.toString)); assert(ipv6AfterLease.contains("foreign-management"))
       val output=new StringBuilder
       val code=issue(resource,crashed,false).!(ProcessLogger(line=>output.append(line),_=>()))
       assertEquals(code,45); assertEquals(output.toString,"UNKNOWN")
