@@ -39,6 +39,15 @@ final class NodeHttp01ProbeShellSpec extends FunSuite {
       assertEquals(integration.secret.NodeTlsValidation.validate("example.org",new domain.integration.NodeTlsMaterial(tls.certificatePem,wrongKey),Instant.now()),Left("REMNAWAVE_TLS_KEY_MISMATCH"))
       // A matching key passes cryptographic proof but this fixture CA must still be rejected.
       assertEquals(integration.secret.NodeTlsValidation.validate("example.org",tls,Instant.now()),Left("REMNAWAVE_TLS_CHAIN_UNTRUSTED"))
+      val certificates=java.security.cert.CertificateFactory.getInstance("X.509")
+      val ca=certificates.generateCertificate(new java.io.ByteArrayInputStream(exec("cat","/fixture/ca.pem").getBytes(StandardCharsets.US_ASCII)))
+      val store=java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType)
+      store.load(null,null); store.setCertificateEntry("fixture-ca",ca)
+      val managers=javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm)
+      managers.init(store)
+      val trusted=managers.getTrustManagers.collectFirst { case m: javax.net.ssl.X509TrustManager => m }.get
+      val validated=integration.secret.NodeTlsValidation.validateWithTrustManager("example.org",tls,Instant.now(),() => trusted)
+      assert(validated.isRight,validated.left.toOption.getOrElse(""))
       assert(!tls.toString.contains("PRIVATE KEY"))
       assert(!exec("/usr/sbin/iptables","-S","ufw-before-input").contains("infradesk:acme:"))
       val reused=issue(resource,request,false).!!

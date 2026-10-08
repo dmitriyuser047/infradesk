@@ -16,7 +16,14 @@ import scala.util.Try
 /** Cryptographic validation emits fixed diagnoses; ASN.1/PEM parser messages must never escape. */
 object NodeTlsValidation {
   final case class Metadata(fingerprint: String, expiresAt: Instant)
-  def validate(domain: String, material: NodeTlsMaterial, now: Instant): Either[String, Metadata] = {
+  def validate(domain: String, material: NodeTlsMaterial, now: Instant): Either[String, Metadata] =
+    validateWithTrustManager(domain,material,now,() => {
+      val managers=TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm)
+      managers.init(null.asInstanceOf[java.security.KeyStore])
+      managers.getTrustManagers.collectFirst { case m: X509TrustManager => m }.get
+    })
+  private[ops] def validateWithTrustManager(domain: String, material: NodeTlsMaterial, now: Instant,
+    trustManager: () => X509TrustManager): Either[String, Metadata] = {
     if(!RemnawaveProtocol.domain(domain).contains(domain)) Left("REMNAWAVE_TLS_DOMAIN_INVALID")
     else if(material.certificatePem.length>32768 || material.privateKeyPem.length>16384)
       Left("REMNAWAVE_TLS_MATERIAL_INVALID")
@@ -54,10 +61,13 @@ object NodeTlsValidation {
         require(verifier.verify(proof))
       }.toEither.left.map(_ => "REMNAWAVE_TLS_KEY_MISMATCH").flatMap { _ =>
         Try {
-          val managers=TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm)
-          managers.init(null.asInstanceOf[java.security.KeyStore])
-          val trust=managers.getTrustManagers.collectFirst { case m: X509TrustManager => m }.get
-          trust.checkServerTrusted(chain.toArray,leaf.getPublicKey.getAlgorithm)
+          // JSSE expects a TLS authentication type, not a public-key algorithm such as EC.
+          val authenticationType=leaf.getPublicKey.getAlgorithm match {
+            case "EC" => "ECDHE_ECDSA"
+            case "RSA" => "ECDHE_RSA"
+            case _ => "UNKNOWN" // TLS 1.3 signature algorithms, including Ed25519.
+          }
+          trustManager().checkServerTrusted(chain.toArray,authenticationType)
           val hash=MessageDigest.getInstance("SHA-256").digest(leaf.getEncoded).map(b => f"${b & 0xff}%02x").mkString
           Metadata(hash,leaf.getNotAfter.toInstant)
         }.toEither.left.map(_ => "REMNAWAVE_TLS_CHAIN_UNTRUSTED")
