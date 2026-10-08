@@ -6,10 +6,17 @@ args = sys.argv[1:]
 root = Path('/fixture/containers'); root.mkdir(exist_ok=True)
 if args[0] == 'pull':
     sys.exit(0)
+if args[:2] == ['container', 'ls']:
+    if Path('/fixture/daemon-unavailable').exists(): sys.exit(1)
+    name = args[args.index('--filter')+1].removeprefix('name=^/').removesuffix('$')
+    if (root/name).exists(): print(name)
+    sys.exit(0)
 if args[0] == 'inspect':
+    if Path('/fixture/daemon-unavailable').exists(): sys.exit(1)
     path = root / args[1]
     if not path.exists():
-        print('No such container', file=sys.stderr); sys.exit(1)
+        print('[]')
+        print('error: no such object: '+args[1], file=sys.stderr); sys.exit(1)
     print(json.dumps([json.loads(path.read_text())])); sys.exit(0)
 if args[0] == 'rm':
     path = root / args[-1]

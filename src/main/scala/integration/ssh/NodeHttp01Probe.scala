@@ -23,7 +23,11 @@ def remove():
   item=json.loads(r.stdout)[0]
   if item.get('Config',{}).get('Labels',{}).get('infradesk.acme.owner')!=marker or item['Config'].get('Image')!=image: raise RuntimeError()
   if call(['docker','rm','-f',name]).returncode: raise RuntimeError()
- elif b'No such' not in r.stderr: raise RuntimeError()
+ else:
+  # Docker 29 changed the missing-object message. Prove absence through a successful
+  # exact-name listing; an inspect/daemon failure alone is never absence evidence.
+  listed=call(['docker','container','ls','--all','--filter','name=^/'+name+'$','--format','{{.Names}}'])
+  if listed.returncode or listed.stdout.strip(): raise RuntimeError()
  for exe,chain in [('/usr/sbin/iptables','ufw-before-input'),('/usr/sbin/ip6tables','ufw6-before-input')]:
   r=call([exe,'-S',chain])
   if r.returncode: raise RuntimeError()

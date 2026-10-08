@@ -73,6 +73,8 @@ The HTTP-01 issuer uses UFW's IPv4 `ufw-before-input` and IPv6 `ufw6-before-inpu
 chains for observation, temporary TCP/80 rules and exact-owned cleanup. The real-shell
 fixture keeps the IPv4 chain absent in ip6tables and proves IPv6 foreign-rule preservation.
 
+HTTP-01 cleanup proves an absent ephemeral container through a successful exact-name Docker container listing after inspect fails. Docker 29's lowercase missing-object message does not block export of an already issued certificate. A daemon/listing failure or a remaining container still fails closed. The real-shell fixture covers the Docker 29 response, retained rules during daemon failure and reuse of the same certificate after cleanup recovers.
+
 ## TLS identities and filesystem asset lifetime
 
 Expired PLANNED cleanup locks the selected plans with FOR UPDATE SKIP LOCKED. In the
