@@ -55,6 +55,10 @@ OWNED_EXPECTED requires the production installation ownership probe, the exact m
 container's Compose label, pinned image and host network, and every observed socket PID
 in that container's Xray process list. A name, running container or listening socket alone
 does not establish ownership. The probe observes only; it never stops a listener.
+The pinned Remnawave image can launch Xray as `rw-core`. This alias is accepted only
+when its container-owned host PID resolves `/proc/<pid>/exe` to `/usr/local/bin/xray`;
+an unrelated executable with the same process name remains unknown. The real-shell
+fixture checks UDP ownership through this symlink and rejects a substituted executable.
 
 Port-scoped UFW parsing ignores foreign rules only if explicit destination ports or transport
 prove them unrelated. Unsupported policy which may affect the port fails closed. Relevant

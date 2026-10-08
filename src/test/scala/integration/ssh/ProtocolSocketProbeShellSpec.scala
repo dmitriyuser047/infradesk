@@ -26,10 +26,20 @@ final class ProtocolSocketProbeShellSpec extends FunSuite {
       assertEquals(probe("tcp"),"FOREIGN_LISTENER")
       // Hysteria2 queries UDP only: an unrelated TCP listener is permitted.
       assertEquals(probe("udp"),"FREE")
-      exec("sh","-c", """printf '%s\n' '#!/bin/sh' 'case "$1" in' 'inspect) printf '\''{"files":"/owned/compose.yml","image":"pinned-image","network":"host","running":true}\n'\'' ;;' 'top) printf "PID COMMAND\n%s xray\n" "$(cat /fixture/pid)" ;;' 'esac' >/usr/local/bin/docker; chmod 755 /usr/local/bin/docker""")
+      exec("sh","-c", """printf xray >/fixture/comm; printf '%s\n' '#!/bin/sh' 'case "$1" in' 'inspect) printf '\''{"files":"/owned/compose.yml","image":"pinned-image","network":"host","running":true}\n'\'' ;;' 'top) printf "PID COMMAND\n%s %s\n" "$(cat /fixture/pid)" "$(cat /fixture/comm)" ;;' 'esac' >/usr/local/bin/docker; chmod 755 /usr/local/bin/docker""")
       assertEquals(probe("tcp",true),"OWNED_EXPECTED")
       exec("sh","-c","printf 999999 >/fixture/pid")
       assertEquals(probe("tcp",true),"FOREIGN_LISTENER")
+      // Actual executable identity behind the same rw-core alias used by the pinned live image.
+      exec("sh","-c","cp /usr/bin/python3 /usr/local/bin/xray; ln -s /usr/local/bin/xray /usr/local/bin/rw-core; printf rw-core >/fixture/comm; rm /fixture/pid; printf '%s' 'import socket,time,os; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind((\"0.0.0.0\",18443)); open(\"/fixture/pid\",\"w\").write(str(os.getpid())); time.sleep(90)' >/fixture/listen-udp.py; /usr/local/bin/rw-core /fixture/listen-udp.py >/dev/null 2>&1 &")
+      exec("sh","-c","n=0; while [ ! -f /fixture/pid ] && [ $n -lt 50 ]; do n=$((n+1)); sleep 0.1; done; test -f /fixture/pid")
+      assertEquals(probe("udp",true),"OWNED_EXPECTED")
+      assertEquals(probe("tcp",true),"FOREIGN_LISTENER")
+      // A process merely named rw-core, executing another binary, cannot establish ownership.
+      exec("sh","-c","kill $(cat /fixture/pid); rm /fixture/pid; ln -sfn /usr/bin/python3 /usr/local/bin/rw-core; sleep 0.1; /usr/local/bin/rw-core /fixture/listen-udp.py >/dev/null 2>&1 &")
+      exec("sh","-c","n=0; while [ ! -f /fixture/pid ] && [ $n -lt 50 ]; do n=$((n+1)); sleep 0.1; done; test -f /fixture/pid")
+      assertEquals(probe("udp",true),"OBSERVATION_UNKNOWN")
+      exec("sh","-c","kill $(cat /fixture/pid)")
       exec("sh","-c","printf '%s\n' '#!/bin/sh' 'exit 1' >/usr/local/bin/docker")
       assertEquals(probe("tcp",true),"OBSERVATION_UNKNOWN")
       exec("sh","-c","python3 -c 'import socket,time; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind((\"0.0.0.0\",18443)); open(\"/fixture/udp\",\"w\").write(\"ready\"); time.sleep(90)' >/dev/null 2>&1 &")

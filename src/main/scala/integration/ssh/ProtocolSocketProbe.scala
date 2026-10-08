@@ -3,7 +3,7 @@ package integration.ssh
 
 /** Read-only bounded socket/container observation. Arguments contain only public identities. */
 private[ssh] object ProtocolSocketProbe {
-  val program: String = """import json, re, subprocess, sys
+  val program: String = """import json, os, re, subprocess, sys
 def run(args):
     p = subprocess.run(args, capture_output=True, timeout=4, text=True)
     if p.returncode != 0 or len(p.stdout) > 32768 or len(p.stderr) > 32768:
@@ -36,7 +36,10 @@ def observe():
         fields = row.split()
         if len(fields) != 2 or not fields[0].isdigit() or int(fields[0]) <= 0:
             return 'OBSERVATION_UNKNOWN'
-        if fields[1] == 'xray':
+        # Remnawave launches the pinned Xray binary through its rw-core symlink.
+        # The alias alone is insufficient: resolve the real executable of the
+        # host PID already proved to belong to this exact managed container.
+        if fields[1] == 'xray' or (fields[1] == 'rw-core' and os.readlink('/proc/'+fields[0]+'/exe') == '/usr/local/bin/xray'):
             pids.add(fields[0])
     if not pids or len(pids) > 16:
         return 'OBSERVATION_UNKNOWN'
