@@ -208,7 +208,7 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
   }
 
   test("reviewed released patches share generation adapters and never claim create idempotency") {
-    assertEquals(RemnawaveNodeApi.releases.size, 16)
+    assertEquals(RemnawaveNodeApi.releases.size, 17)
     RemnawaveNodeApi.releases.values.foreach { release =>
       val (transport, _, _) = setup(release.version)
       val actual = transport.inspect(context).unsafeRunSync()
@@ -222,7 +222,7 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
   }
 
   test("each supported generation sends the same typed create DTO exactly once") {
-    List("2.8.0", "2.8.1", "3.0.0", "3.4.4").foreach { version =>
+    List("2.8.0", "2.8.1", "3.0.0", "3.4.4", "3.4.5").foreach { version =>
       val (transport, _, seen) = setup(version)
       val reviewed = transport.inspect(context).unsafeRunSync()
       val result = transport.createNode(context, intent, reviewed).unsafeRunSync()
@@ -238,7 +238,7 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
   }
 
   test("unknown versions, future patches, prereleases, custom builds and malformed metadata fail closed") {
-    List("3.4.5", "3.5.0", "3.5-custom", "4.0.0", "3.4.4-beta.1", "2.7.4").foreach { version =>
+    List("3.4.6", "3.5.0", "3.5-custom", "4.0.0", "3.4.4-beta.1", "2.7.4").foreach { version =>
       val (transport, _, seen) = setup(version, List(node()))
       val api = transport.inspect(context).unsafeRunSync()
       assert(!api.provisioningReady)
@@ -253,7 +253,7 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
       assertEquals(transport.getNode(context, nodeId).unsafeRunSync().externalId, nodeId)
       assert(!seen.get.unsafeRunSync().exists(c => c._1 != "GET" || c._2.endsWith("/keygen")))
     }
-    List(metadata("3.4.4", Some("f" * 40)), "{}", "not json").foreach { raw =>
+    List(metadata("3.4.5", Some("f" * 40)), metadata("3.4.4", Some("f" * 40)), "{}", "not json").foreach { raw =>
       val (transport, _, seen) = setup(metadataBody = Some(raw))
       val api = transport.inspect(context).unsafeRunSync()
       assert(!api.provisioningReady)
@@ -410,7 +410,7 @@ final class RemnawaveNodeProvisioningSpec extends FunSuite {
   }
 
   test("connectivity reports compatibility separately from successful read-only probing") {
-    val (_, provider, _) = setup("3.4.5")
+    val (_, provider, _) = setup("3.4.6")
     val result = provider.testConnection(context).unsafeRunSync()
     assert(result.ok)
     assert(!result.nodeApi.get.provisioningReady)

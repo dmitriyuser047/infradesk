@@ -11,6 +11,11 @@ sealed abstract class OnboardingPhase(val code: String, val mutation: Boolean = 
 object OnboardingPhase {
   case object Validate extends OnboardingPhase("VALIDATE")
   case object PrepareServer extends OnboardingPhase("PREPARE_SERVER", true)
+  case object ProtocolPreflight extends OnboardingPhase("PROTOCOL_PREFLIGHT")
+  case object ConfirmPreviousAbsent extends OnboardingPhase("CONFIRM_PREVIOUS_NODE_ABSENT")
+  case object UnbindPreviousNode extends OnboardingPhase("UNBIND_PREVIOUS_NODE",true)
+  case object RetirePreviousClientFirewall extends OnboardingPhase("RETIRE_PREVIOUS_CLIENT_FIREWALL",true)
+  case object VerifyPreviousRetired extends OnboardingPhase("VERIFY_PREVIOUS_RETIRED")
   case object DeleteNode extends OnboardingPhase("DELETE_NODE", true)
   case object ConfirmNodeDeleted extends OnboardingPhase("CONFIRM_NODE_DELETED")
   case object RetireNodeFirewall extends OnboardingPhase("RETIRE_NODE_FIREWALL", true)
@@ -55,16 +60,26 @@ object OnboardingPhase {
       List(ObservePanelSource,AddObservedPanelSource,VerifyObservedPanel,p) else List(p)) else prior
     val addressed = if(s.lifecycleVersion>=5 && s.recovery.exists(r => r.reusesNode && r.previousNodeAddress.nonEmpty))
       network.flatMap(p => if(p==ResolvePanelSource) List(UpdateNodeAddress,p) else List(p)) else network
-    if(s.input.protocol.nonEmpty) addressed.flatMap {
-      case CreateNode => (if(s.input.tlsHttp01.nonEmpty) List(IssueTls) else Nil) ++ List(CreateProtocolProfile, CreateNode)
-      case InstallNode => (if(s.input.certificateId.nonEmpty) List(InstallTls) else Nil) ++ List(ConfigureClientFirewall, InstallNode)
-      case FinalVerify => List(VerifyProtocol, FinalVerify)
+    val replacement=if(s.replacement) addressed.flatMap {
+      case RetireNodeFirewall => List(ConfirmPreviousAbsent) ++
+        (if(s.recovery.flatMap(_.previousInstallation).flatMap(_.inventoryObjectId).nonEmpty) List(UnbindPreviousNode) else Nil) ++
+        (if(s.recovery.flatMap(_.previousInstallation).flatMap(_.protocol).nonEmpty) List(RetirePreviousClientFirewall) else Nil) ++ List(RetireNodeFirewall)
+      case RetireLocalNode => List(RetireLocalNode,VerifyPreviousRetired)
       case p => List(p)
     } else addressed
+    if(s.input.protocol.nonEmpty) replacement.flatMap {
+      case PrepareServer if s.lifecycleVersion>=7 => List(PrepareServer,ProtocolPreflight)
+      case CreateNode => (if(s.input.tlsHttp01.nonEmpty) List(IssueTls) else Nil) ++ List(CreateProtocolProfile, CreateNode)
+      case InstallNode => (if(s.input.certificateId.nonEmpty) List(InstallTls) else Nil) ++ List(ConfigureClientFirewall, InstallNode)
+      case SyncInventory if s.lifecycleVersion>=7 => List(VerifyProtocol,SyncInventory)
+      case FinalVerify if s.lifecycleVersion<7 => List(VerifyProtocol, FinalVerify)
+      case p => List(p)
+    } else replacement
   }
   def fromCode(code: String): OnboardingPhase = (all ++ List(DeleteNode,ConfirmNodeDeleted,RetireNodeFirewall,RetireLocalNode,
     ResolvePanelSource,UpdateNodeAddress,AddPanelSources,FinalizePanelSources,ObservePanelSource,AddObservedPanelSource,VerifyObservedPanel,
-    CreateProtocolProfile,IssueTls,InstallTls,ConfigureClientFirewall,VerifyProtocol)).find(_.code == code).getOrElse(
+    CreateProtocolProfile,IssueTls,InstallTls,ConfigureClientFirewall,VerifyProtocol,ProtocolPreflight,
+    ConfirmPreviousAbsent,UnbindPreviousNode,RetirePreviousClientFirewall,VerifyPreviousRetired)).find(_.code == code).getOrElse(
     throw new IllegalArgumentException("Invalid onboarding phase"))
   def next(phase: OnboardingPhase): Option[OnboardingPhase] = all.lift(all.indexOf(phase) + 1)
   def next(phase: OnboardingPhase,snapshot: OnboardingSnapshot): Option[OnboardingPhase] = {
@@ -76,7 +91,8 @@ object OnboardingPhase {
 final case class OnboardingRecovery(sourceRunId: UUID, previousExternalNodeId: Option[UUID],
   previousCorrelationId: UUID, installationOwnerId: UUID, state: String, action: String, previousPanelCidrs: Option[List[String]] = None,
   previousImageReference: Option[String] = None, localInstallation: Option[LocalInstallationObservation] = None,
-  localVerified: Boolean = false, connectivityProblem: Option[PanelConnectivityProblem] = None,previousNodeAddress: Option[String] = None) {
+  localVerified: Boolean = false, connectivityProblem: Option[PanelConnectivityProblem] = None,previousNodeAddress: Option[String] = None,
+  previousInstallation: Option[PreviousNodeInstallation] = None) {
   require(OnboardingRecovery.States(state) && OnboardingRecovery.Actions(action))
   require(previousPanelCidrs.forall(values => (action=="REPAIR_PANEL_CONNECTIVITY" && values.isEmpty) || OnboardingInput.canonicalCidrs(values).contains(values)))
   require(previousImageReference.forall(RemnawaveNodeReleaseCatalog.managedReferences.contains))
@@ -85,7 +101,7 @@ final case class OnboardingRecovery(sourceRunId: UUID, previousExternalNodeId: O
 }
 object OnboardingRecovery {
   val States=Set("PRESENT_EXACT","PRESENT_UNHEALTHY","CONFIRMED_NOT_FOUND","PRESENT_CONFLICT","UNKNOWN")
-  val Actions=Set("RECOVER","RECREATE","DELETE_RECREATE","REPAIR_PANEL_CONNECTIVITY")
+  val Actions=Set("RECOVER","RECREATE","DELETE_RECREATE","REPAIR_PANEL_CONNECTIVITY","RECREATE_WITH_NEW_CONFIG")
   def candidate(node: ProvisionedNode,intent: NodeCreateIntent): Boolean =
     node.name==intent.name || node.address==intent.address ||
       node.correlationTags.contains("ID:"+intent.correlationId.toString.replace("-","").toUpperCase(java.util.Locale.ROOT))
@@ -141,11 +157,13 @@ final case class OnboardingSnapshot(input: OnboardingInput, integrationUpdatedAt
   inboundNames: List[String], changes: List[String], warnings: List[String], blockers: List[String],
   recovery: Option[OnboardingRecovery] = None, lifecycleVersion: Int = 1,
   panelSource: Option[PanelSourceEvidence] = None, nodeAddress: Option[NodeAddressEvidence] = None) {
-  require(Set(1,2,3,4,5,6)(lifecycleVersion))
+  require(Set(1,2,3,4,5,6,7)(lifecycleVersion))
   require(input.protocol.isEmpty || lifecycleVersion >= 6)
   require(lifecycleVersion < 4 || panelSource.exists(e => e.mode == input.panelSourceMode && e.sources == input.panelCidrs))
   require(input.nodeAddressMode==NodeAddressMode.Legacy || nodeAddress.exists(e => e.mode==input.nodeAddressMode && e.address==input.address))
   def connectivityRepair: Boolean = lifecycleVersion >= 4 && recovery.exists(_.action == "REPAIR_PANEL_CONNECTIVITY")
+  def replacement: Boolean = recovery.exists(_.action=="RECREATE_WITH_NEW_CONFIG")
+  require(!replacement || lifecycleVersion>=7 && recovery.exists(r => r.previousExternalNodeId.nonEmpty && r.previousInstallation.nonEmpty))
   def passivePanelDiscovery: Boolean = lifecycleVersion>=5 && input.panelSourceMode==PanelSourceMode.Auto
   require(!connectivityRepair || recovery.exists(r => r.localVerified && r.previousExternalNodeId.nonEmpty &&
     r.previousPanelCidrs.nonEmpty && Set("PRESENT_EXACT","PRESENT_UNHEALTHY")(r.state) &&
@@ -177,6 +195,17 @@ final case class RemnawaveNodeOnboardingRun(id: UUID, organizationId: UUID, inte
     activeInboundIds=effectiveInput.activeInboundIds)
 }
 object RemnawaveNodeOnboardingRun {
+  /** Selects one persisted ownership chain; fresh remote proof remains mandatory. */
+  def replacementCandidate(previous: List[RemnawaveNodeOnboardingRun],org: UUID,integration: UUID,
+    resource: UUID,connection: UUID): Either[String,Option[RemnawaveNodeOnboardingRun]] = previous match {
+    case r :: Nil if r.organizationId==org && r.integrationId==integration && r.resourceId==resource && r.state.terminal &&
+      r.snapshot.connectionId==connection && r.externalNodeId.orElse(r.snapshot.recovery.flatMap(_.previousExternalNodeId)).nonEmpty &&
+      !(r.state==ProvisioningRunState.Unknown && r.externalNodeId.isEmpty && Set[OnboardingPhase](OnboardingPhase.CreateNode,
+        OnboardingPhase.CreateProtocolProfile,OnboardingPhase.IssueTls)(r.phase)) &&
+      RemnawaveNodeReleaseCatalog.managedReferences.contains(r.snapshot.installationImageReference) => Right(Some(r))
+    case Nil => Right(None)
+    case _ => Left("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW")
+  }
   /** Ownership follows the node/correlation chain, regardless of the latest terminal phase. */
   def recoveryCandidate(previous: List[RemnawaveNodeOnboardingRun], integration: UUID,
     input: OnboardingInput, image: String, connection: UUID,reviewedAddressChange: Boolean = false): Either[String,Option[RemnawaveNodeOnboardingRun]] =
@@ -251,7 +280,8 @@ object OnboardingSnapshotCodec {
       r.localInstallation.fold(Json.obj())(value => Json.obj("localInstallation" -> encodeLocalInstallation(value)))).deepMerge(
       if(r.localVerified) Json.obj("localVerified" -> Json.fromBoolean(true)) else Json.obj()).deepMerge(
       r.connectivityProblem.fold(Json.obj())(p => Json.obj("connectivityProblem" -> str(p.code)))).deepMerge(
-      r.previousNodeAddress.fold(Json.obj())(a => Json.obj("previousNodeAddress"->str(a))))
+      r.previousNodeAddress.fold(Json.obj())(a => Json.obj("previousNodeAddress"->str(a)))).deepMerge(
+      r.previousInstallation.fold(Json.obj())(v => Json.obj("previousInstallation" -> PreviousNodeInstallation.encode(v))))
   def encodeLocalInstallation(value: LocalInstallationObservation): Json = Json.obj(
     "state" -> str(value.state.code),"diagnosis" -> value.diagnosis.fold(Json.Null)(d => str(d.code)),"remediation" -> str(value.remediation))
   private def decodeLocalInstallation(j: Json): LocalInstallationObservation = {
@@ -302,7 +332,7 @@ object OnboardingSnapshotCodec {
       s("imageReference"),u("correlationId"),s("serverName"),s("serverProfileName"),s("configProfileName"),
       list("inboundNames"),list("changes"),list("warnings"),list("blockers"),
       c.downField("recovery").focus.filterNot(_.isNull).map { j =>
-        require(j.asObject.exists(o => (o.keys.toSet -- Set("previousPanelCidrs","previousImageReference","localInstallation","localVerified","connectivityProblem","previousNodeAddress"))==Set("sourceRunId","previousExternalNodeId","previousCorrelationId","installationOwnerId","state","action")),"Invalid recovery snapshot")
+        require(j.asObject.exists(o => (o.keys.toSet -- Set("previousPanelCidrs","previousImageReference","localInstallation","localVerified","connectivityProblem","previousNodeAddress","previousInstallation"))==Set("sourceRunId","previousExternalNodeId","previousCorrelationId","installationOwnerId","state","action")),"Invalid recovery snapshot")
         val r=j.hcursor
         OnboardingRecovery(UUID.fromString(r.get[String]("sourceRunId").toOption.get),
           r.get[Option[String]]("previousExternalNodeId").toOption.get.map(UUID.fromString),
@@ -314,7 +344,8 @@ object OnboardingSnapshotCodec {
           r.get[Option[Boolean]]("localVerified").toOption.get.getOrElse(false),
           r.get[Option[String]]("connectivityProblem").toOption.get.map { code =>
             require(code==PanelConnectivityProblem.ManualOnly.code); PanelConnectivityProblem.ManualOnly
-          },r.get[Option[String]]("previousNodeAddress").toOption.get)
+          },r.get[Option[String]]("previousNodeAddress").toOption.get,
+          r.downField("previousInstallation").focus.map(PreviousNodeInstallation.decode))
       },lifecycleVersion,c.downField("panelSource").focus.map(PanelSourceEvidence.decode),c.downField("nodeAddress").focus.map(NodeAddressEvidence.decode))
   }
 }

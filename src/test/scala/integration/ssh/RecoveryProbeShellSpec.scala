@@ -14,10 +14,11 @@ import munit.FunSuite
 
 /** Real Ubuntu shell/coreutils and the compiled production probe, through the SSH argv boundary. */
 final class RecoveryProbeShellSpec extends FunSuite {
+  override val munitTimeout: Duration = 120.seconds
   private val enabled=sys.env.get("INFRADESK_RUN_SHELL_INTEGRATION_TESTS").contains("true")
   test(if(enabled) munit.TestOptions("Ubuntu 24 owned env-only stage survives managed UFW observation; probe failures retain closed diagnoses") else munit.TestOptions("Ubuntu 24 shell integration").ignore) {
     val cid=Seq("docker","run","--rm","-d","--network","none","ubuntu:24.04","sleep","180").!!.trim
-    def shell(script:String):String=(Process(Seq("docker","exec","-i",cid,"sh")) #< new java.io.ByteArrayInputStream(script.getBytes(java.nio.charset.StandardCharsets.UTF_8))).!!
+    def shell(script:String):String=(Process(Seq("docker","exec","-i","-e","SSH_CONNECTION=192.0.2.2 45000 192.0.2.1 22",cid,"sh")) #< new java.io.ByteArrayInputStream(script.replace("\r\n","\n").getBytes(java.nio.charset.StandardCharsets.UTF_8))).!!
     val spec=RemnawaveNodeRemoteSpec(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),2222,
       "remnawave/node:2.8.0",List("192.0.2.1/32"))
     val conn=Connection(UUID.randomUUID(),UUID.randomUUID(),ConnectionScope.Organization,"SSH","server","ssh",
@@ -36,7 +37,7 @@ final class RecoveryProbeShellSpec extends FunSuite {
         val output=new StringBuilder; val errors=new StringBuilder
         val prefix=if(failExecution && a.contains(SshRemnawaveNodeRemote.RecoveryProbe.replace("\r\n","\n"))) "exit 23; " else ""
         val input=(prefix+PosixArgv.encode(e::a)).getBytes(java.nio.charset.StandardCharsets.UTF_8)
-        val exit=(Process(Seq("docker","exec","-i",cid,"sh")) #< new java.io.ByteArrayInputStream(input)).!(ProcessLogger(
+        val exit=(Process(Seq("docker","exec","-i","-e","SSH_CONNECTION=192.0.2.2 45000 192.0.2.1 22",cid,"sh")) #< new java.io.ByteArrayInputStream(input)).!(ProcessLogger(
           line=>output.append(line).append("\n"),line=>errors.append(line).append("\n")))
         RemoteCommandOutput(exit,output.toString,errors.toString)
       }
@@ -56,7 +57,7 @@ final class RecoveryProbeShellSpec extends FunSuite {
         printf '#!/bin/sh\n[ "$$1" = ps ] || exit 1\n' >/mocks/docker
         cat >/mocks/ufw <<'MOCK'
 #!/bin/sh
-printf "ufw allow from 192.0.2.1 to any port 2222 proto tcp comment 'infradesk:remnawave:${spec.resourceId}:${spec.externalNodeId}:node'\n"
+printf "Added user rules (see 'ufw status' for running firewall)\nufw allow from 192.0.2.1 to any port 2222 proto tcp comment 'infradesk:remnawave:${spec.resourceId}:${spec.externalNodeId}:node'\n"
 MOCK
         chmod 755 /mocks/*
         ln -s /mocks/ss /usr/local/bin/ss
@@ -91,6 +92,15 @@ chmod 755 /usr/local/bin/stat
       assertEquals(remote.localInstallationObservation(conn,spec).unsafeRunSync().diagnosis,Some(LocalInstallationDiagnosis.PortStateUnknown))
       failExecution=true
       assertEquals(remote.localInstallationObservation(conn,spec).unsafeRunSync().diagnosis,Some(LocalInstallationDiagnosis.ProbeExecutionFailed))
+      failExecution=false
+      shell("printf '#!/bin/sh\nexit 0\n' >/mocks/ss")
+      val retired=remote.retireInstallation(conn,spec).unsafeRunSync()
+      assertEquals(retired.failureCode,None)
+      assertEquals(retired.facts.get("retired"),Some("true"))
+      assertEquals(remote.localInstallationState(conn,spec).unsafeRunSync(),LocalInstallationState.Absent)
+      val replay=remote.retireInstallation(conn,spec).unsafeRunSync()
+      assertEquals(replay.failureCode,None)
+      assertEquals(replay.facts.get("retired"),Some("false"))
     } finally { Seq("docker","stop",cid).!; () }
   }
 }

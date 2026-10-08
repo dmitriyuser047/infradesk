@@ -34,6 +34,182 @@ final class RemnawaveOnboardingIntegrationSpec extends FunSuite {
   private val installationKey = "secret-installation-key-for-persistence-test"
 
   private def uid = UUID.randomUUID()
+  test("new-config replacement is immutable, confirmed, SQL-journaled and scoped to the exact old ownership chain") {
+    List(false,true).foreach { bound => inWorld { w => for {
+      pair <- integration(w,w.org,"new-config-replacement")
+      target <- w.node("new-config-replacement")
+      at <- connectionUpdated(w,target.connectionId); now <- IO.realTimeInstant
+      original <- plan(w,pair._1,pair._2,target.resourceId,target.connectionId,at,now)
+      _ <- w.run(repo.start(w.org,pair._1,original.id,uid,AuthorizationFixtures.ActorUserId,now))
+      token=uid
+      claimed <- w.run(repo.claim(uid,token,now,now.plusSeconds(300),1))
+      oldId=UUID.fromString("58065b61-0cd1-4312-92c8-e443cb739172")
+      _ <- w.run(repo.beginPhase(claimed.head,token,now))
+      _ <- w.run(repo.persist(claimed.head,token,claimed.head.copy(state=ProvisioningRunState.Failed,externalNodeId=Some(oldId),failureCode=Some("TEST_FAILURE")),now,false))
+      oldBefore <- w.run(repo.find(w.org,pair._1,original.id))
+      sessionId=uid; inventoryId=uid
+      _ <- w.run(for {
+        _ <- sql"""insert into integration_sync_session(id,organization_id,integration_id,trigger,started_at,recover_after_at,finished_at,status)
+          values($sessionId,${w.org},${pair._1},'MANUAL',$now,$now,$now,'COMPLETED')""".update.run
+        _ <- sql"""insert into integration_inventory_object(id,organization_id,integration_id,object_type,external_id,display_name,
+          summary_version,summary,is_active,first_seen_at,last_seen_at,last_seen_sync_session_id,created_at,updated_at)
+          values($inventoryId,${w.org},${pair._1},'NODE',${oldId.toString},'Previous node',1,'{}'::jsonb,false,$now,$now,$sessionId,$now,$now)""".update.run
+        _ <- if(bound) sql"""insert into integration_resource_binding(id,organization_id,integration_id,inventory_object_id,resource_id,
+          created_by_user_id,created_at,updated_at) values(${uid},${w.org},${pair._1},$inventoryId,${target.resourceId},
+          ${AuthorizationFixtures.ActorUserId},$now,$now)""".update.run.void else ().pure[ConnectionIO]
+      } yield ())
+      binding <- w.run(query.replacementBinding(w.org,pair._1,target.resourceId,oldId))
+      _ = assertEquals(binding,Right(Option.when(bound)(inventoryId)))
+      _ <- w.run(sql"update integration_inventory_object set is_active=true where id=$inventoryId".update.run)
+      active <- w.run(query.replacementBinding(w.org,pair._1,target.resourceId,oldId))
+      _ = assertEquals(active,Left("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
+      _ <- w.run(sql"update integration_inventory_object set is_active=false where id=$inventoryId".update.run)
+      old=PreviousNodeInstallation.fromRun(original).copy(inventoryObjectId=Option.when(bound)(inventoryId))
+      proof=OnboardingRecovery(original.id,Some(oldId),original.snapshot.correlationId,original.id,"CONFIRMED_NOT_FOUND","RECREATE_WITH_NEW_CONFIG",
+        Some(original.snapshot.input.panelCidrs),Some(original.snapshot.imageReference),Some(LocalInstallationObservation.fromState(LocalInstallationState.OwnedComplete)),
+        previousNodeAddress=Some(old.address),previousInstallation=Some(old))
+      desired=original.snapshot.input.copy(address="138.124.38.229",configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+        protocol=Some(RemnawaveProtocol.Hysteria2(443,"hy2.velesoracle.com")),tlsHttp01=Some(NodeTlsHttp01(uid,"operator@example.org")))
+      source=PanelSourceEvidence(PanelSourceMode.Manual,desired.panelCidrs,"MANUAL","MANUAL",PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.org").toOption.get))
+      draft=original.copy(id=uid,createdAt=now.plusSeconds(1),snapshot=original.snapshot.copy(input=desired,correlationId=uid,recovery=Some(proof),lifecycleVersion=7,panelSource=Some(source)))
+      _ <- w.run(repo.insertPlan(draft))
+      stored <- w.run(repo.find(w.org,pair._1,draft.id))
+      sqlPhases <- w.run(sql"select infradesk_onboarding_expected_phases(cast(${OnboardingSnapshotCodec.encode(draft.snapshot).noSpaces} as jsonb))".query[Array[String]].unique)
+      _ = assertEquals(sqlPhases.toList,OnboardingPhase.forSnapshot(draft.snapshot).map(_.code))
+      _ = assert(!sqlPhases.contains("DELETE_NODE"))
+      _ = assertEquals(stored.get._1.protocolBinding,None)
+      unconfirmed <- w.run(repo.start(w.org,pair._1,draft.id,uid,AuthorizationFixtures.ActorUserId,now,false)).attempt
+      _ = assertEquals(errorCode(unconfirmed),Some("REMNAWAVE_ONBOARDING_RECREATE_CONFIRMATION_REQUIRED"))
+      malformed=draft.copy(id=uid,snapshot=draft.snapshot.copy(recovery=Some(proof.copy(previousInstallation=Some(old.copy(nodePort=2222))))))
+      rejected <- w.run(repo.insertPlan(malformed)).attempt
+      _ = assert(rejected.isLeft)
+      _ <- List(proof.copy(previousExternalNodeId=Some(uid)),proof.copy(installationOwnerId=uid),
+        proof.copy(previousCorrelationId=uid),proof.copy(localInstallation=Some(LocalInstallationObservation.fromState(LocalInstallationState.Foreign))),
+        proof.copy(localInstallation=Some(LocalInstallationObservation.fromState(LocalInstallationState.Unknown))))
+        .traverse_ { invalid => w.run(repo.insertPlan(draft.copy(id=uid,snapshot=draft.snapshot.copy(recovery=Some(invalid)))))
+          .attempt.map(result => assert(result.isLeft)) }
+      started <- w.run(repo.start(w.org,pair._1,draft.id,uid,AuthorizationFixtures.ActorUserId,now,true))
+      _ = assertEquals(started.state,ProvisioningRunState.Queued)
+      _ <- if(!bound) IO.unit else for {
+        premature <- w.run(sql"delete from integration_resource_binding where inventory_object_id=$inventoryId".update.run).attempt
+        _ = assert(premature.isLeft)
+        newToken=uid
+        running <- w.run(repo.claim(uid,newToken,now,now.plusSeconds(300),1))
+        ready <- w.run(OnboardingPhase.forSnapshot(draft.snapshot).takeWhile(_!=OnboardingPhase.UnbindPreviousNode)
+          .foldLeftM(running.head) { (r,phase) =>
+            val next=r.copy(phase=OnboardingPhase.next(phase,draft.snapshot).get)
+            repo.beginPhase(r,newToken,now) *> repo.persist(r,newToken,next,now,true).as(next)
+          })
+        _ = assertEquals(ready.phase,OnboardingPhase.UnbindPreviousNode)
+        _ <- w.run(repo.beginPhase(ready,newToken,now))
+        removed <- w.run(sql"delete from integration_resource_binding where inventory_object_id=$inventoryId".update.run)
+        _ = assertEquals(removed,1)
+        retry <- w.run(sql"delete from integration_resource_binding where inventory_object_id=$inventoryId".update.run)
+        _ = assertEquals(retry,0)
+      } yield ()
+      oldAfter <- w.run(repo.find(w.org,pair._1,original.id))
+      _ = assertEquals(oldBefore,oldAfter)
+    } yield () } }
+  }
+  test("cleanup waiting for concurrent preview reservation keeps the newly referenced identity") {
+    inWorld { w => for {
+      pair <- integration(w,w.org,"tls-cleanup-preview")
+      target <- w.node("tls-preview-target")
+      at <- connectionUpdated(w,target.connectionId); now <- IO.realTimeInstant
+      template <- plan(w,pair._1,pair._2,target.resourceId,target.connectionId,at,now.minusSeconds(90000))
+      _ <- w.run(sql"delete from remnawave_node_onboarding where id=${template.id} and state='PLANNED'".update.run)
+      identity=uid
+      input=template.snapshot.input.copy(configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+        protocol=Some(RemnawaveProtocol.Hysteria2(443,"example.org")),tlsHttp01=Some(NodeTlsHttp01(identity,"operator@example.org")))
+      evidence=PanelSourceEvidence(PanelSourceMode.Manual,input.panelCidrs,"MANUAL","MANUAL",
+        PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.org").toOption.get))
+      draft=template.copy(id=uid,snapshot=template.snapshot.copy(input=input,lifecycleVersion=7,panelSource=Some(evidence)))
+      _ <- w.run(repo.insertPlan(draft))
+      reservation=new java.util.concurrent.CountDownLatch(1)
+      fresh=draft.copy(id=uid,createdAt=now,updatedAt=now)
+      preview <- w.run(for {
+        _ <- sql"select infradesk_tls_identity_lock($identity)".query[Unit].unique
+        _ <- org.typelevel.doobie.free.connection.delay(reservation.countDown())
+        _ <- sql"select pg_sleep(0.3)".query[Unit].unique
+        _ <- repo.insertPlan(fresh)
+      } yield ()).start
+      acquired <- IO.blocking(reservation.await(5,java.util.concurrent.TimeUnit.SECONDS))
+      _ = assert(acquired)
+      removed <- w.run(repo.cleanupPlans(now.minusSeconds(86400),100))
+      _ <- preview.joinWithNever
+      exists <- w.run(sql"select exists(select 1 from remnawave_tls_issuance_identity where id=$identity)".query[Boolean].unique)
+      retained <- w.run(repo.find(w.org,pair._1,fresh.id))
+      _ = assertEquals(removed,1)
+      _ = assert(exists && retained.nonEmpty)
+    } yield () }
+  }
+  test("concurrent start and cleanup keep the run and its issuance identity consistent") {
+    inWorld { w => for {
+      pair <- integration(w,w.org,"tls-cleanup-start")
+      target <- w.node("tls-start-target")
+      at <- connectionUpdated(w,target.connectionId); now <- IO.realTimeInstant
+      template <- plan(w,pair._1,pair._2,target.resourceId,target.connectionId,at,now)
+      _ <- w.run(sql"delete from remnawave_node_onboarding where id=${template.id} and state='PLANNED'".update.run)
+      identity=uid
+      input=template.snapshot.input.copy(configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+        protocol=Some(RemnawaveProtocol.Hysteria2(443,"example.org")),tlsHttp01=Some(NodeTlsHttp01(identity,"operator@example.org")))
+      evidence=PanelSourceEvidence(PanelSourceMode.Manual,input.panelCidrs,"MANUAL","MANUAL",
+        PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.org").toOption.get))
+      draft=template.copy(id=uid,snapshot=template.snapshot.copy(input=input,lifecycleVersion=7,panelSource=Some(evidence)))
+      _ <- w.run(repo.insertPlan(draft))
+      raced <- (w.run(repo.start(w.org,pair._1,draft.id,uid,AuthorizationFixtures.ActorUserId,now)).attempt,
+        w.run(repo.cleanupPlans(now,100))).parTupled
+      stored <- w.run(repo.find(w.org,pair._1,draft.id))
+      identityExists <- w.run(sql"select exists(select 1 from remnawave_tls_issuance_identity where id=$identity)".query[Boolean].unique)
+      _ = assertEquals(identityExists,stored.nonEmpty)
+      _ = stored match {
+        case Some((r,_)) => assertEquals(r.state,ProvisioningRunState.Queued); assert(raced._1.isRight); assertEquals(raced._2,0)
+        case None => assert(raced._1.isLeft); assertEquals(raced._2,1)
+      }
+    } yield () }
+  }
+  test("V7 SQL phase sequence matches Scala and expired plans collect only unreferenced unissued TLS identities") {
+    inWorld { w => for {
+      pair <- integration(w,w.org,"tls-cleanup")
+      target <- w.node("tls-cleanup-target")
+      at <- connectionUpdated(w,target.connectionId); now <- IO.realTimeInstant
+      template <- plan(w,pair._1,pair._2,target.resourceId,target.connectionId,at,now.minusSeconds(90000))
+      _ <- w.run(sql"delete from remnawave_node_onboarding where id=${template.id} and state='PLANNED'".update.run)
+      orphan=uid; shared=uid; issued=uid; terminal=uid
+      input=template.snapshot.input.copy(configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+        protocol=Some(RemnawaveProtocol.Hysteria2(443,"example.org")))
+      evidence=PanelSourceEvidence(PanelSourceMode.Manual,input.panelCidrs,"MANUAL","MANUAL",
+        PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.org").toOption.get))
+      draft=template.copy(id=uid,snapshot=template.snapshot.copy(input=input.copy(tlsHttp01=Some(NodeTlsHttp01(orphan,"operator@example.org"))),
+        lifecycleVersion=7,panelSource=Some(evidence)))
+      sqlPhases <- w.run(sql"select infradesk_onboarding_expected_phases(${OnboardingSnapshotCodec.encode(draft.snapshot).noSpaces}::jsonb)".query[List[String]].unique)
+      _ = assertEquals(sqlPhases,OnboardingPhase.forSnapshot(draft.snapshot).map(_.code))
+      runs=List(orphan,shared,issued,terminal).map(identity => draft.copy(id=uid,
+        snapshot=draft.snapshot.copy(input=draft.snapshot.input.copy(tlsHttp01=Some(NodeTlsHttp01(identity,"operator@example.org"))))))
+      _ <- runs.traverse_(r => w.run(repo.insertPlan(r)))
+      retained=runs(1).copy(id=uid,createdAt=now,updatedAt=now)
+      _ <- w.run(repo.insertPlan(retained))
+      cert=NodeTlsCertificate(issued,w.org,target.resourceId,"example.org","a"*64,now.plusSeconds(90*86400))
+      _ <- w.run(repo.insertCertificate(cert,cipher.encryptTls(issued,w.org,new NodeTlsMaterial("certificate-fixture","private-key-fixture"))))
+      // Terminal history must pin the issuance identity even without issued material.
+      terminalRun=runs(3).copy(createdAt=now,updatedAt=now)
+      terminalHistory=terminalRun.copy(id=uid)
+      _ <- w.run(repo.insertPlan(terminalHistory))
+      _ <- w.run(repo.start(w.org,pair._1,terminalHistory.id,uid,AuthorizationFixtures.ActorUserId,now))
+      token=uid
+      claimed <- w.run(repo.claim(uid,token,now,now.plusSeconds(300),1))
+      active=claimed.find(_.id==terminalHistory.id).get
+      _ <- w.run(repo.beginPhase(active,token,now) *> repo.persist(active,token,
+        active.copy(state=ProvisioningRunState.Failed,failureCode=Some("TEST_FAILURE")),now,false))
+      count <- w.run(repo.cleanupPlans(now.minusSeconds(86400),100))
+      remaining <- w.run(sql"select id from remnawave_tls_issuance_identity where organization_id=${w.org}".query[UUID].to[List])
+      _ = assertEquals(count,4)
+      _ = assertEquals(remaining.toSet,Set(shared,issued,terminal))
+      _ <- w.run(repo.cleanupPlans(now.plusSeconds(1),100))
+      after <- w.run(sql"select id from remnawave_tls_issuance_identity where organization_id=${w.org}".query[UUID].to[List])
+      _ = assertEquals(after.toSet,Set(issued,terminal))
+    } yield () }
+  }
   private def finishWorld(w: ConfigurationDeploymentWorld)(body: IO[Unit]): IO[Unit] =
     body.guarantee(w.run(for {
       // Isolated teardown bypasses terminal-history and FK triggers, then removes the linked rows explicitly.

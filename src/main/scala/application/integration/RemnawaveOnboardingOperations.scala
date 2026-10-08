@@ -37,6 +37,13 @@ final class ExistingRemnawaveOnboardingOperations[Tx[_]: MonadThrow](
     conflict <- query.bindingConflict(r.organizationId,r.resourceId,r.externalNodeId)
     previousConflict <- r.snapshot.recovery.filter(!_.reusesNode).fold(true.pure[Tx])(proof =>
       query.bindingConflict(r.organizationId,r.resourceId,proof.previousExternalNodeId))
+    _ <- if(!r.snapshot.replacement || r.externalNodeId.nonEmpty) MonadThrow[Tx].unit else for {
+      proof <- r.snapshot.recovery.liftTo[Tx](error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
+      previous <- proof.previousExternalNodeId.liftTo[Tx](error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
+      current <- query.replacementBinding(r.organizationId,r.integrationId,r.resourceId,previous).flatMap(_.leftMap(error).liftTo[Tx])
+      _ <- MonadThrow[Tx].raiseUnless(current.forall(id => proof.previousInstallation.flatMap(_.inventoryObjectId).contains(id)))(
+        error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
+    } yield ()
     _ <- MonadThrow[Tx].raiseWhen(conflict && previousConflict)(error("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
   } yield integration -> target
   def runtime(r: RemnawaveNodeOnboardingRun): IO[(IntegrationRuntimeContext,domain.connection.Connection)] = runner.run(for {
@@ -109,6 +116,18 @@ final class ExistingRemnawaveOnboardingOperations[Tx[_]: MonadThrow](
     _ <- checked(r)
     result <- op(now)
   } yield result))
+  override def unbindPrevious(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Unit] = fenced(r,token)(_ => for {
+    proof <- r.snapshot.recovery.filter(_ => r.snapshot.replacement).liftTo[Tx](error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
+    previous <- proof.previousExternalNodeId.liftTo[Tx](error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
+    pinned <- proof.previousInstallation.flatMap(_.inventoryObjectId).liftTo[Tx](error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
+    node <- query.externalNode(r.organizationId,r.integrationId,previous).flatMap(_.filter(n => !n.isActive && n.id==pinned)
+      .liftTo[Tx](error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED")))
+    bound <- bindings.find(r.organizationId,node.id)
+    _ <- MonadThrow[Tx].raiseUnless(bound.forall(_.resourceId==r.resourceId))(error("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
+    actor=ActorContext(r.createdBy,r.organizationId)
+    _ <- desiredService.remove(actor,r.integrationId,node.id)
+    _ <- bindingService.unbind(actor,r.integrationId,node.id)
+  } yield ())
   def bind(r: RemnawaveNodeOnboardingRun,token: UUID): IO[Unit] = fenced(r,token)(now => for {
     node <- query.externalNode(r.organizationId,r.integrationId,r.externalNodeId.get).flatMap(_.filter(_.isActive).liftTo[Tx](error("REMNAWAVE_ONBOARDING_INVENTORY_MISSING")))
     _ <- r.snapshot.recovery.filter(!_.reusesNode).traverse_ { proof => for {

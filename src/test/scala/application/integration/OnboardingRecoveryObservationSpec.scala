@@ -124,6 +124,35 @@ final class OnboardingRecoveryObservationSpec extends FunSuite {
   private def recovery(evidence: OnboardingRecoveryObservation.Evidence): OnboardingRecovery =
     evidence.recovery.getOrElse(fail("expected recovery evidence"))
 
+  test("new Hysteria2 intent discovers exact previous UUID ownership without reading deleted old profile") {
+    val oldId=UUID.fromString("58065b61-0cd1-4312-92c8-e443cb739172")
+    val old=previous(external=Some(oldId),snap=snapshot().copy(input=input.copy(address="138.124.38.229")))
+    val desired=input.copy(address="138.124.38.229",configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+      protocol=Some(RemnawaveProtocol.Hysteria2(443,"hy2.velesoracle.com")),tlsHttp01=Some(NodeTlsHttp01(uid,"operator@example.org")))
+    for(state <- List(LocalInstallationState.OwnedComplete,LocalInstallationState.OwnedPartial,LocalInstallationState.Foreign,LocalInstallationState.Unknown)) {
+      val h=new Harness(lookup0=NodeLookupOutcome.ConfirmedNotFound,local0=localGood.copy(installationState=state))
+      val result=OnboardingRecoveryObservation.inspect(Some(old),desired,context,h.nodes,h.remote,Some(connection),"RECREATE_WITH_NEW_CONFIG").unsafeRunSync()
+      val proof=recovery(result)
+      assertEquals(proof.action,"RECREATE_WITH_NEW_CONFIG")
+      assertEquals(proof.state,"CONFIRMED_NOT_FOUND")
+      assertEquals(proof.previousExternalNodeId,Some(oldId))
+      assertEquals(proof.previousInstallation,Some(PreviousNodeInstallation.fromRun(old)))
+      assertEquals(result.node,None)
+      assertEquals(proof.localInstallation.map(_.state),Some(state))
+      assertEquals(proof.localInstallation.flatMap(_.blocker).nonEmpty,!state.repairable)
+      assertEquals(h.observedSpec.map(_.nodePort),Some(old.snapshot.input.nodePort))
+      h.assertReadOnly()
+    }
+    val present=new Harness()
+    val evidence=OnboardingRecoveryObservation.inspect(Some(old),desired,context,present.nodes,present.remote,Some(connection),"RECREATE_WITH_NEW_CONFIG").unsafeRunSync()
+    assertEquals(recovery(evidence).state,"PRESENT_CONFLICT")
+    assertEquals(present.observedSpec,None)
+    val contradictory=new Harness(lookup0=NodeLookupOutcome.ConfirmedNotFound,candidates0=List(node(id=oldId)))
+    assertEquals(recovery(OnboardingRecoveryObservation.inspect(Some(old),desired,context,contradictory.nodes,contradictory.remote,Some(connection),"RECREATE_WITH_NEW_CONFIG").unsafeRunSync()).state,"PRESENT_CONFLICT")
+    val foreign=new Harness(lookup0=NodeLookupOutcome.ConfirmedNotFound,candidates0=List(node(id=uid)))
+    assertEquals(recovery(OnboardingRecoveryObservation.inspect(Some(old),desired,context,foreign.nodes,foreign.remote,Some(connection),"RECREATE_WITH_NEW_CONFIG").unsafeRunSync()).state,"PRESENT_CONFLICT")
+  }
+
   test("foreign tenant, integration and resource chains are rejected before provider reads") {
     List(previous().copy(organizationId=uid),previous().copy(integrationId=uid),previous().copy(resourceId=uid)).foreach { foreign =>
       val h=new Harness(candidates0=List(node()))

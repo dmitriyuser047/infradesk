@@ -16,7 +16,8 @@ object OnboardingRecoveryObservation {
   }
   def inspect(previous: Option[RemnawaveNodeOnboardingRun],input: OnboardingInput,
     context: IntegrationRuntimeContext,nodes: NodeProvisioningTransport[IO],remote: RemnawaveNodeRemote[IO],connection: Option[domain.connection.Connection],
-    action: String,reviewedAddressChange: Boolean = false): IO[Evidence] = previous match {
+    action: String,reviewedAddressChange: Boolean = false): IO[Evidence] = if(action=="RECREATE_WITH_NEW_CONFIG")
+      inspectReplacement(previous,input,context,nodes,remote,connection) else previous match {
     case None => IO.pure(Evidence(None,None,UUID.randomUUID()))
     case Some(r) if r.organizationId!=context.organizationId || r.integrationId!=context.id || r.resourceId!=input.resourceId =>
       IO.raiseError(IntegrationError("REMNAWAVE_ONBOARDING_NOT_FOUND","Onboarding was not found in this scope"))
@@ -93,6 +94,42 @@ object OnboardingRecoveryObservation {
         }
       } yield out)
         .handleError(_ => result("UNKNOWN",known))
+  }
+
+  private def inspectReplacement(previous: Option[RemnawaveNodeOnboardingRun],input: OnboardingInput,
+    context: IntegrationRuntimeContext,nodes: NodeProvisioningTransport[IO],remote: RemnawaveNodeRemote[IO],
+    connection: Option[domain.connection.Connection]): IO[Evidence] = previous.liftTo[IO](
+      IntegrationError("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW","Previous ownership chain is unavailable")).flatMap { r =>
+    IO.raiseUnless(r.organizationId==context.organizationId && r.integrationId==context.id && r.resourceId==input.resourceId)(
+      IntegrationError("REMNAWAVE_ONBOARDING_NOT_FOUND","Previous onboarding belongs to another scope")) *> IO.defer {
+      val old=PreviousNodeInstallation.fromRun(r)
+      val node=r.externalNodeId.orElse(r.snapshot.recovery.flatMap(_.previousExternalNodeId))
+      val correlation=if(r.externalNodeId.nonEmpty) r.snapshot.correlationId else r.snapshot.recovery.fold(r.snapshot.correlationId)(_.previousCorrelationId)
+      val owner=if(r.externalNodeId.nonEmpty) RemnawaveNodeOnboardingRun.installationOwner(r) else r.snapshot.recovery.fold(r.id)(_.installationOwnerId)
+      val cidrs=if(r.externalNodeId.nonEmpty) r.effectivePanelSources else r.snapshot.recovery.flatMap(_.previousPanelCidrs).getOrElse(r.snapshot.input.panelCidrs)
+      val image=if(r.externalNodeId.nonEmpty) r.snapshot.installationImageReference else r.snapshot.recovery.flatMap(_.previousImageReference).getOrElse(r.snapshot.installationImageReference)
+      def result(state: String,local: Option[LocalInstallationObservation]): Evidence = Evidence(
+        Some(OnboardingRecovery(r.id,node,correlation,owner,state,"RECREATE_WITH_NEW_CONFIG",Some(cidrs),Some(image),local,
+          previousNodeAddress=Some(old.address),previousInstallation=Some(old))),None,correlation,local.map(_.state))
+      (for {
+        id <- node.liftTo[IO](IntegrationError("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW","Previous UUID is unavailable"))
+        exact <- nodes.lookupNode(context,id).timeout(15.seconds)
+        inventory <- nodes.findNodes(context).timeout(15.seconds)
+        oldIntent=NodeCreateIntent(old.nodeName,old.address,old.nodePort,r.effectiveInput.configProfileId,r.effectiveInput.activeInboundIds,correlation)
+        newIntent=NodeCreateIntent(input.nodeName,input.address,input.nodePort,input.configProfileId,input.activeInboundIds,correlation)
+        conflict=inventory.exists(n => n.externalId==id || OnboardingRecovery.candidate(n,oldIntent) || OnboardingRecovery.candidate(n,newIntent))
+        out <- exact match {
+          case NodeLookupOutcome.ConfirmedNotFound if !conflict =>
+            connection.liftTo[IO](IntegrationError("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN","SSH is unavailable")).flatMap(conn =>
+              remote.localInstallationObservation(conn,RemnawaveNodeRemoteSpec(owner,input.resourceId,id,old.nodePort,image,cidrs,old.certificateId)))
+              .timeoutTo(35.seconds,IO.pure(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.ObservationTimeout)))
+              .handleError(_ => LocalInstallationObservation.unknown(LocalInstallationDiagnosis.SshUnavailable))
+              .map(local => result("CONFIRMED_NOT_FOUND",Some(local)))
+          case _: NodeLookupOutcome.Unknown => IO.pure(result("UNKNOWN",Some(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.StateUnknown))))
+          case _ => IO.pure(result("PRESENT_CONFLICT",None))
+        }
+      } yield out).handleError(_ => result("UNKNOWN",Some(LocalInstallationObservation.unknown(LocalInstallationDiagnosis.SshUnavailable))))
+    }
   }
 
 }

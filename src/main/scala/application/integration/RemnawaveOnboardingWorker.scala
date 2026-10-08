@@ -36,6 +36,12 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
   private case class Advance(run: RemnawaveNodeOnboardingRun) extends Decision
   private case class Wait(run: RemnawaveNodeOnboardingRun) extends Decision
   private case class Stop(code: String, unknown: Boolean, updated: Option[RemnawaveNodeOnboardingRun] = None) extends Decision
+  private def logInternal(r: RemnawaveNodeOnboardingRun, error: Throwable): IO[Unit] = {
+    // Throwable messages/causes can contain response bodies, SQL parameters or key material.
+    val diagnostic=new RuntimeException(error.getClass.getName)
+    diagnostic.setStackTrace(error.getStackTrace.take(32))
+    logger.error(diagnostic)(s"remnawave.onboarding.internal_error onboardingId=${r.id} integrationId=${r.integrationId} resourceId=${r.resourceId} phase=${r.phase.code}")
+  }
   def run: IO[Nothing] = (tick.handleErrorWith(_ => logger.warn("remnawave.onboarding.poll_failed")) *> IO.sleep(settings.pollInterval)).foreverM
   def tick: IO[Unit] = if (!settings.enabled) IO.unit else for {
     now <- clock
@@ -66,7 +72,9 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           e.code.contains("UNKNOWN") || e.code=="INTEGRATION_REMOTE_UNAVAILABLE" ||
           e.code=="REMNAWAVE_PANEL_CONNECTIVITY_CONFIRMATION_LOST" ||
           (r.phase.mutation && !fresh) || r.phase == OnboardingPhase.WaitForPanel || r.phase == OnboardingPhase.FinalVerify))
-        case _ => IO.pure(Stop("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN",unknown=true))
+        case e: ProtocolProfilePreparationFailed => logInternal(r,e.original).as(
+          Stop("REMNAWAVE_ONBOARDING_INTERNAL_ERROR",unknown= !fresh))
+        case e => logInternal(r,e).as(Stop("REMNAWAVE_ONBOARDING_INTERNAL_ERROR",unknown=r.phase.mutation || !fresh))
       }
     at <- clock
     _ <- decision match {
@@ -84,6 +92,9 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
       _ <- if(n.state.terminal) repo.deleteSecret(r,token,now) else MonadThrow[Tx].unit
       saved <- repo.persist(r,token,n,now,complete)
       _ <- MonadThrow[Tx].raiseUnless(saved)(LostLease)
+      _ <- if(complete && r.snapshot.replacement && r.phase==OnboardingPhase.RetireLocalNode)
+        audit.record(ActorContext(r.createdBy,r.organizationId),AuditAction.RemnawavePreviousInstallationRetired,
+          AuditTargetType.Resource,Some(r.resourceId)) else MonadThrow[Tx].unit
       _ <- if(n.state.terminal) audit.record(ActorContext(r.createdBy,r.organizationId),AuditAction.RemnawaveNodeOnboardingCompleted,
         AuditTargetType.Integration,Some(r.integrationId)) else MonadThrow[Tx].unit
     } yield ()) *> logger.info(s"remnawave.onboarding.phase onboardingId=${r.id} organizationId=${r.organizationId} integrationId=${r.integrationId} resourceId=${r.resourceId} phase=${r.phase.code} state=${n.state.code}")
@@ -191,8 +202,11 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
             case Left(stop) => IO.pure(stop)
           }
         def oldSpec(proof: OnboardingRecovery) = RemnawaveNodeRemoteSpec(proof.installationOwnerId,r.resourceId,
-          proof.previousExternalNodeId.get,r.snapshot.input.nodePort,proof.previousImageReference.getOrElse(r.snapshot.imageReference),proof.previousPanelCidrs.getOrElse(r.snapshot.input.panelCidrs),r.snapshot.input.certificateId)
-        def previousSources = r.snapshot.recovery.flatMap(_.previousPanelCidrs).getOrElse(r.snapshot.input.panelCidrs)
+          proof.previousExternalNodeId.get,proof.previousInstallation.fold(r.snapshot.input.nodePort)(_.nodePort),
+          proof.previousImageReference.getOrElse(r.snapshot.imageReference),proof.previousPanelCidrs.getOrElse(r.snapshot.input.panelCidrs),
+          proof.previousInstallation.fold(r.snapshot.input.certificateId)(_.certificateId))
+        def previousSources = if(r.snapshot.replacement) r.snapshot.input.panelCidrs else
+          r.snapshot.recovery.flatMap(_.previousPanelCidrs).getOrElse(r.snapshot.input.panelCidrs)
         def unionSources = (previousSources ++ r.snapshot.input.panelCidrs ++ r.effectivePanelSources).distinct.sorted
         def currentSpec = if(r.snapshot.connectivityRepair || r.observedPanelSource.exists(_.status==PanelSourceObservationStatus.Observed))
           spec(r).copy(panelCidrs=unionSources) else spec(r)
@@ -210,7 +224,12 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
         def oldAbsent: IO[Unit] = r.snapshot.recovery.filter(!_.reusesNode).traverse_ { proof =>
           nodes.lookupNode(context,proof.previousExternalNodeId.get).flatMap {
             case NodeLookupOutcome.ConfirmedNotFound => nodes.findNodes(context).flatMap(candidates => IO.raiseWhen(
-              candidates.exists(OnboardingRecovery.candidate(_,r.intent.copy(correlationId=proof.previousCorrelationId))))(
+              candidates.exists { n =>
+                val old=proof.previousInstallation.fold(r.intent.copy(correlationId=proof.previousCorrelationId))(i =>
+                  r.intent.copy(name=i.nodeName,address=i.address,port=i.nodePort,correlationId=proof.previousCorrelationId))
+                n.externalId==proof.previousExternalNodeId.get || OnboardingRecovery.candidate(n,old) ||
+                  r.snapshot.replacement && OnboardingRecovery.candidate(n,r.intent)
+              })(
                 IntegrationError("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW","Conflicting candidate exists")))
             case NodeLookupOutcome.Found(_) => IO.raiseError(IntegrationError("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW","Previous node still exists"))
             case _ => IO.raiseError(IntegrationError("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN","Previous node absence is unproven"))
@@ -227,6 +246,10 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
               }
             }
           }
+        def retirementOwnership: IO[Unit] = if(!r.snapshot.replacement) IO.unit else
+          r.snapshot.recovery.traverse_(proof => remote.recoveryPreflight(connection,oldSpec(proof)).flatMap(x =>
+            IO.raiseUnless(x.failureCode.isEmpty && !x.uncertain && !x.outputTruncated)(IntegrationError(
+              x.failureCode.getOrElse("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN"),"Previous ownership changed"))))
         def reconciliation: IO[Decision] = nodes.reconcileCreate(context,r.intent,r.snapshot.compatibility).map {
           case NodeCreateReconciliation.Confirmed(n) if matches(r,n) => Advance(r.copy(externalNodeId=Some(n.externalId)))
           case _ => Stop("INTEGRATION_NODE_CREATE_RESULT_UNKNOWN",true)
@@ -242,10 +265,22 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
           } else mutationResult(io)
         }
         r.phase match {
+          case ProtocolPreflight => for {
+            _ <- operations.validate(r,true)
+            protocol <- r.snapshot.input.protocol.liftTo[IO](IntegrationError("REMNAWAVE_PROTOCOL_INVALID","Protocol intent is unavailable"))
+            owner=r.snapshot.recovery.map(oldSpec)
+            observed <- remote.protocolPreflight(connection,r.resourceId,protocol,owner,
+              r.snapshot.recovery.filter(_ => r.snapshot.replacement).flatMap(_.previousInstallation).flatMap(_.protocol))
+            _ <- ProtocolPortObservation.blockers(protocol,observed).headOption.traverse_(code =>
+              IO.raiseError[Unit](IntegrationError(code,"Protocol port preflight blocked the plan")))
+            http <- if(r.snapshot.input.tlsHttp01.isEmpty) IO.pure(Option.empty[String]) else remote.http01Preflight(connection)
+            _ <- http.traverse_(code => IO.raiseError[Unit](IntegrationError(code,"HTTP-01 preflight blocked the plan")))
+          } yield Advance(r)
           case IssueTls => for {
             _ <- operations.validate(r,true)
-            request=r.snapshot.input.tlsHttp01.get
-            serverName=r.snapshot.input.protocol.get.asInstanceOf[RemnawaveProtocol.Hysteria2].serverName
+            request <- r.snapshot.input.tlsHttp01.liftTo[IO](IntegrationError("REMNAWAVE_TLS_HTTP01_INVALID","HTTP-01 intent is unavailable"))
+            serverName <- r.snapshot.input.protocol.collect { case h: RemnawaveProtocol.Hysteria2 => h.serverName }
+              .liftTo[IO](IntegrationError("REMNAWAVE_TLS_HTTP01_INVALID","HTTP-01 domain is unavailable"))
             stored <- runner.run(repo.certificate(r.organizationId,r.resourceId,request.certificateId))
             _ <- stored match {
               case Some((cert,_)) => clock.flatMap { now =>
@@ -307,12 +342,14 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
               IntegrationError("REMNAWAVE_PROTOCOL_PROFILE_CHANGED","The reviewed protocol configuration changed")) *>
               result(remote.verifyProtocol(connection,spec(r),r.snapshot.input.protocol.get))
           }
-          case Validate => operations.validate(r,false) *> validateSources *> r.snapshot.nodeAddress.traverse_ { reviewed =>
+          case Validate => operations.validate(r,false) *> (if(r.snapshot.replacement) oldAbsent else IO.unit) *> validateSources *> r.snapshot.nodeAddress.traverse_ { reviewed =>
             remote.publicNodeAddresses(connection).flatMap { ips =>
               IO.raiseUnless(ips==reviewed.publicAddresses)(IntegrationError("REMNAWAVE_ONBOARDING_SOURCE_CHANGED","Managed Node address changed")) *>
                 (if(reviewed.mode==NodeAddressMode.Domain) nodeAddresses.verifyDomain(reviewed.address,ips).void else IO.unit)
             }
-          } *> freshLocal(false) *> (r.snapshot.recovery match {
+          } *> (if(!r.snapshot.replacement) IO.unit else r.snapshot.input.protocol.collect {
+            case h: RemnawaveProtocol.Hysteria2 if r.snapshot.input.tlsHttp01.nonEmpty => h.serverName
+          }.traverse_(domain => remote.publicNodeAddresses(connection).flatMap(ips => nodeAddresses.verifyDomain(domain,ips)).void)) *> freshLocal(false) *> (r.snapshot.recovery match {
             case Some(proof) => remote.recoveryPreflight(connection,if(proof.reusesNode && (!r.snapshot.connectivityRepair || previousSources.isEmpty)) spec(r) else oldSpec(proof))
             case None => remote.preflight(connection,r.resourceId,r.snapshot.input.nodePort)
           }).flatMap(x =>
@@ -427,13 +464,35 @@ final class RemnawaveOnboardingWorker[Tx[_]: MonadThrow](repo: RemnawaveOnboardi
                 IO.pure(Stop("REMNAWAVE_ONBOARDING_DELETE_UNKNOWN",true))
               case Left(stop) => IO.pure(stop)
             }
+          case ConfirmPreviousAbsent => operations.validate(r,true) *> oldAbsent *> freshLocal(false) *> advance
+          case UnbindPreviousNode => oldAbsent *> operations.unbindPrevious(r,token) *> advance
+          case RetirePreviousClientFirewall => oldAbsent *> operations.validate(r,true) *> retirementOwnership *> {
+            val proof=r.snapshot.recovery.get
+            proof.previousInstallation.flatMap(_.protocol).liftTo[IO](IntegrationError("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED","Previous protocol is unavailable"))
+              .flatMap(protocol => result(remote.retireClientFirewall(connection,oldSpec(proof),protocol)))
+          }
+          case VerifyPreviousRetired => operations.validate(r,true) *> oldAbsent *> freshLocal(true) *> {
+            val management=remote.preflight(connection,r.resourceId,r.snapshot.input.nodePort).flatMap(x => IO.raiseUnless(
+              x.failureCode.isEmpty && !x.uncertain && !x.outputTruncated)(IntegrationError(
+              x.failureCode.getOrElse("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN"),"New management port is unavailable")))
+            management *> r.snapshot.recovery.traverse_ { proof =>
+              proof.previousInstallation.flatMap(_.protocol).traverse_(protocol => remote.clientFirewallRetired(connection,oldSpec(proof),protocol)
+                .flatMap(ok => IO.raiseUnless(ok)(IntegrationError("REMNAWAVE_CLIENT_FIREWALL_CONFLICT","Previous client firewall remains"))))
+            } *> r.snapshot.input.protocol.traverse_ { protocol =>
+              remote.protocolPreflight(connection,r.resourceId,protocol,None).flatMap { observed =>
+                val blockers=ProtocolPortObservation.blockers(protocol,observed)
+                val code=blockers.headOption.orElse(Option.when(observed.exists(_.state!=ProtocolPortState.Free))("REMNAWAVE_PROTOCOL_PORT_OCCUPIED"))
+                code.traverse_(c => IO.raiseError[Unit](IntegrationError(c,"New protocol port is unavailable")))
+              }
+            } *> advance
+          }
           case ConfirmNodeDeleted => oldAbsent *> advance
-          case RetireNodeFirewall => oldAbsent *> result(remote.retireFirewall(connection,oldSpec(r.snapshot.recovery.get))).flatMap {
-            case _: Advance if r.snapshot.input.protocol.nonEmpty => result(remote.retireClientFirewall(connection,
+          case RetireNodeFirewall => oldAbsent *> retirementOwnership *> result(remote.retireFirewall(connection,oldSpec(r.snapshot.recovery.get))).flatMap {
+            case _: Advance if !r.snapshot.replacement && r.snapshot.input.protocol.nonEmpty => result(remote.retireClientFirewall(connection,
               oldSpec(r.snapshot.recovery.get),r.snapshot.input.protocol.get))
             case decision => IO.pure(decision)
           }
-          case RetireLocalNode => oldAbsent *> result(remote.retireInstallation(connection,oldSpec(r.snapshot.recovery.get)))
+          case RetireLocalNode => oldAbsent *> retirementOwnership *> result(remote.retireInstallation(connection,oldSpec(r.snapshot.recovery.get)))
           case CreateNode if r.snapshot.recovery.exists(_.reusesNode) => operations.validate(r,true) *> existing
           case CreateNode if !fresh || r.externalNodeId.nonEmpty => operations.validate(r,true) *> reconciliation
           case CreateNode => operations.validate(r,true) *> validateSources *> oldAbsent *> (if(r.snapshot.recovery.nonEmpty && !r.snapshot.needsRetirement)

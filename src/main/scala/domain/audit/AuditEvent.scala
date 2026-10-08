@@ -99,6 +99,8 @@ object AuditAction {
   case object ServerProfileUnassigned extends AuditAction { val code = "SERVER_PROFILE_UNASSIGNED" }
   case object ServerProfileArchived extends AuditAction { val code = "SERVER_PROFILE_ARCHIVED" }
   case object ServerProfileApplyRequested extends AuditAction { val code = "SERVER_PROFILE_APPLY_REQUESTED" }
+  case object RemnawaveNodeReplacementRequested extends AuditAction { val code = "REMNAWAVE_NODE_REPLACEMENT_REQUESTED" }
+  case object RemnawavePreviousInstallationRetired extends AuditAction { val code = "REMNAWAVE_PREVIOUS_INSTALLATION_RETIRED" }
   case object RemnawaveNodeOnboardingRequested extends AuditAction { val code = "REMNAWAVE_NODE_ONBOARDING_REQUESTED" }
   case object RemnawaveNodeOnboardingCompleted extends AuditAction { val code = "REMNAWAVE_NODE_ONBOARDING_COMPLETED" }
   case object RemnawaveNodeCertificateImported extends AuditAction { val code = "REMNAWAVE_NODE_CERTIFICATE_IMPORTED" }
@@ -195,6 +197,8 @@ object AuditAction {
     ServerProfileUnassigned,
     ServerProfileArchived,
     ServerProfileApplyRequested,
+    RemnawaveNodeReplacementRequested,
+    RemnawavePreviousInstallationRetired,
     RemnawaveNodeOnboardingRequested,
     RemnawaveNodeOnboardingCompleted,
     RemnawaveNodeCertificateImported,

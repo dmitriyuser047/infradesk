@@ -12,6 +12,39 @@ import scala.concurrent.duration._
 
 private[ssh] final case class ProfileFirewallRule(action: String, rule: FirewallRule, owned: Boolean)
 private[ssh] object ProfileFirewall {
+  /** Ignore a foreign rule only when its explicit destination ports/transports prove irrelevance.
+    * Unsupported application/global policies still fail closed for the queried port. */
+  def parsePort(raw: String, prefix: String, port: Int, transports: List[String]): Either[String,List[ProfileFirewallRule]] = {
+    val header="Added user rules (see 'ufw status' for running firewall)"
+    val lines=raw.linesIterator.map(_.trim).filter(_.nonEmpty).toList
+    if(lines.isEmpty || !Set(header,header+":")(lines.head)) return Left("FIREWALL_RULE_UNSUPPORTED")
+    if(lines.drop(1)==List("(None)")) return Right(Nil)
+    def irrelevant(line: String): Boolean = {
+      val body=line.takeWhile(_!='\'').split(" comment ",2).head
+      val words=body.split("\\s+").toList
+      val destination=words.zipWithIndex.collectFirst { case ("port",i) if i>0 && words.take(i).contains("to") => words.lift(i+1) }.flatten
+        .orElse(words.lift(2).filter(_.matches("[0-9,:]+(?:/(?:tcp|udp))?")))
+      val protocols=words.sliding(2).collect { case List("proto",p) => p }.toList ++
+        words.lift(2).toList.flatMap(_.split("/",2).lift(1))
+      val otherTransport=protocols.size==1 && Set("tcp","udp")(protocols.head) && !transports.contains(protocols.head)
+      val intervals=destination.toList.flatMap(_.takeWhile(_!='/').split(",").toList).traverse { range =>
+        range.split(":",-1).toList match {
+          case one :: Nil => one.toIntOption.filter(p => p>=1 && p<=65535).map(p => (p,p))
+          case lo :: hi :: Nil => for { l<-lo.toIntOption; h<-hi.toIntOption if l>=1 && h<=65535 && l<=h } yield (l,h)
+          case _ => None
+        }
+      }
+      otherTransport || destination.nonEmpty && intervals.exists(xs => xs.nonEmpty && xs.forall { case(l,h) => port<l || port>h })
+    }
+    val relevant=lines.drop(1).filterNot(line => line.startsWith("ufw ") && !line.contains(prefix) && irrelevant(line))
+    if(relevant.isEmpty) Right(Nil) else parseOwned((header :: relevant).mkString("\n"),prefix).flatMap { parsed =>
+      val malformedOwnership=relevant.exists { line =>
+        val comment=line.split(" comment ",2).lift(1).getOrElse("").stripPrefix("'").stripSuffix("'")
+        comment.startsWith(prefix) && !comment.stripPrefix(prefix).matches("[a-z0-9][a-z0-9_-]{0,39}")
+      }
+      if(malformedOwnership) Left("FIREWALL_RULE_UNSUPPORTED") else Right(parsed)
+    }
+  }
   /** Parse only supported canonical UFW forms. Unknown rules block, never become deletions. */
   def parse(raw: String, resourceId: UUID): Either[String,List[ProfileFirewallRule]] =
     parseOwned(raw,s"infradesk:$resourceId:")

@@ -53,6 +53,29 @@ function mount(entry = '/', locale: 'en' | 'ru' = 'en', configure: (url: string,
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
 
 describe('NodeOnboarding', () => {
+  it.each([
+    ['REMNAWAVE_PROTOCOL_PORT_OCCUPIED', 'Another process occupies the client port. Choose a free port or review the server manually.'],
+    ['REMNAWAVE_PROTOCOL_PORT_OBSERVATION_UNKNOWN', 'Port state could not be confirmed. Restore access and check again.'],
+    ['REMNAWAVE_TLS_HTTP01_PORT_OCCUPIED', 'TCP/80 is occupied. Import a certificate instead.'],
+  ])('shows safe preflight blocker %s and prevents start', async (code, message) => {
+    const { calls } = mount('/', 'en', url => url.endsWith('/options') ? json({ ...options,
+      nodeApi: { ...options.nodeApi!, capabilities: ['PROTOCOL_PROFILE_CREATE'] } }) : url.endsWith('/preview') ? json({ ...preview,
+      blockingProblems: [code], changes: ['PROTOCOL_PREFLIGHT'],
+      protocolPorts: [{ port: 443, transport: 'udp', state: 'FOREIGN_LISTENER' }],
+    }) : undefined)
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Add node' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Add node' }))
+    fireEvent.change(await screen.findByLabelText('Server'), { target: { value: 'resource-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+    expect(await screen.findByText(message)).toBeTruthy()
+    expect(screen.getByText('UDP/443: Occupied by another process')).toBeTruthy()
+    expect(screen.getByText('Check client port and firewall policy')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Start onboarding' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(calls.filter(call => call.method === 'POST' && call.url.endsWith('/runs'))).toHaveLength(0)
+  })
   it('generates Shadowsocks without selecting an existing JSON profile', async () => {
     const { calls } = mount('/', 'en', url => url.endsWith('/options') ? json({ ...options,
       nodeApi: { ...options.nodeApi!, capabilities: ['PROTOCOL_PROFILE_CREATE'] } }) : undefined)
@@ -375,6 +398,34 @@ describe('NodeOnboarding', () => {
     await waitFor(() => expect(calls.some(call => call.method === 'POST' && call.url.endsWith('/runs'))).toBe(true))
     const startCall = calls.find(call => call.method === 'POST' && call.url.endsWith('/runs'))!
     expect(startCall.body).toEqual({ planId: 'plan-1', requestId: expect.any(String) })
+  })
+  it('reviews new settings replacement, confirms retirement and rechecks the fresh wizard instead of RECOVER', async () => {
+    const recovery: NodeOnboardingRecoverySummary = { ...recoverySummary('CONFIRMED_NOT_FOUND', 'RECREATE_WITH_NEW_CONFIG'),
+      localInstallation: { state: 'OWNED_COMPLETE', diagnosis: null },
+      previousInstallation: { nodeName: 'previous', address: '198.51.100.11', nodePort: 2222, protocol: null, certificateId: null, inventoryObjectId: 'old-object' } }
+    const replacement = { ...recoveryPreview(recovery), input: { resourceId: 'resource-1', nodeName: 'New Hysteria', address: '198.51.100.11', nodePort: 2222,
+      nodeAddressMode: 'PUBLIC_IP' as const, desiredState: 'ENABLED' as const, protocol: { version: 1 as const, kind: 'HYSTERIA2' as const, port: 443, serverName: 'hy2.example.org' },
+      tlsHttp01: { certificateId: 'fresh-certificate', email: 'operator@example.org', agreeTerms: true as const } } }
+    const { calls } = mount('/?onboardingRun=run-1', 'en', (url, method) => {
+      if (url.endsWith('/runs/run-1') && method === 'GET') return json({ run: run('FAILED'), phases: [] })
+      if (url.endsWith('/runs/run-1/reconcile') && method === 'POST') return json(replacement)
+      if (url.endsWith('/preview') && method === 'POST') return json(replacement)
+      return undefined
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const start = await screen.findByRole('button', { name: 'Recreate with new settings' }) as HTMLButtonElement
+    expect(start.disabled).toBe(true)
+    expect(screen.getByText(/will not automatically restore the retired configuration/)).toBeTruthy()
+    expect(screen.getByText('The previous binding will be removed.')).toBeTruthy()
+    const previousReconcileCount = calls.filter(call => call.url.endsWith('/reconcile')).length
+    fireEvent.click(screen.getByRole('button', { name: 'Check local installation' }))
+    await waitFor(() => expect(calls.some(call => call.url.endsWith('/preview'))).toBe(true))
+    expect(calls.filter(call => call.url.endsWith('/reconcile'))).toHaveLength(previousReconcileCount)
+    expect(calls.find(call => call.url.endsWith('/preview'))?.body).toMatchObject({ protocol: { kind: 'HYSTERIA2', serverName: 'hy2.example.org' } })
+    fireEvent.click(screen.getByLabelText('I confirm recreation of the managed node with the new settings.'))
+    fireEvent.click(screen.getByRole('button', { name: 'Recreate with new settings' }))
+    await waitFor(() => expect(calls.some(call => call.method === 'POST' && call.url.endsWith('/runs'))).toBe(true))
+    expect(calls.find(call => call.method === 'POST' && call.url.endsWith('/runs'))?.body).toMatchObject({ confirmRecreate: true })
   })
   it('requires explicit approval before starting a confirmed-missing node recreation', async () => {
     const missing = recoveryPreview(recoverySummary('CONFIRMED_NOT_FOUND', 'RECREATE'))

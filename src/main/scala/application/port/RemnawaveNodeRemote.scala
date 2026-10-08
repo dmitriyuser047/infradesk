@@ -28,6 +28,15 @@ final case class RemnawaveNodeLocalEvidence(managedFiles: Boolean, imageMatches:
 
 /** Each mutation is one separately journalled onboarding phase. No generic shell input. */
 trait RemnawaveNodeRemote[F[_]] {
+  /** A listener is reusable only with the exact previous installation ownership proof. */
+  def protocolPreflight(connection: Connection, resourceId: UUID, protocol: domain.integration.RemnawaveProtocol,
+    owner: Option[RemnawaveNodeRemoteSpec], previousProtocol: Option[domain.integration.RemnawaveProtocol] = None): F[List[domain.integration.ProtocolPortObservation]] =
+    throw new UnsupportedOperationException("Protocol port observation is unavailable")
+  def clientFirewallRetired(connection: Connection, spec: RemnawaveNodeRemoteSpec,
+    protocol: domain.integration.RemnawaveProtocol): F[Boolean] =
+    throw new UnsupportedOperationException("Previous client firewall observation is unavailable")
+  def http01Preflight(connection: Connection): F[Option[String]] =
+    throw new UnsupportedOperationException("HTTP-01 port observation is unavailable")
   def issueCertificate(connection: Connection, resourceId: UUID, serverName: String,
     request: domain.integration.NodeTlsHttp01, deadline: Instant, fresh: Boolean): F[domain.integration.NodeTlsMaterial] =
     throw new UnsupportedOperationException("HTTP-01 issuance is unavailable")

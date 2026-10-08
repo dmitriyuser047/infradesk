@@ -10,6 +10,19 @@ import java.util.UUID
 final class ProfileFirewallSpec extends FunSuite {
   private val resource=UUID.randomUUID()
   private val header="Added user rules (see 'ufw status' for running firewall)"
+  test("protocol policy ignores demonstrably unrelated unsupported rules and rejects ambiguous or relevant policies") {
+    val prefix=s"infradesk:remnawave-client:$resource:${UUID.randomUUID()}:"
+    assertEquals(ProfileFirewall.parsePort(s"$header\nufw deny 22/tcp\nufw unsupported to any port 8443 proto tcp",prefix,443,List("tcp","udp")),Right(Nil))
+    assertEquals(ProfileFirewall.parsePort(s"$header\nufw deny 443/tcp",prefix,443,List("udp")),Right(Nil))
+    assert(ProfileFirewall.parsePort(s"$header\nufw unsupported to any port 443 proto udp",prefix,443,List("udp")).isLeft)
+    assert(ProfileFirewall.parsePort(s"$header\nufw deny 440:450/udp",prefix,443,List("udp")).isLeft)
+    assert(ProfileFirewall.parsePort(s"$header\nufw deny from any",prefix,443,List("udp")).isLeft)
+    val allow=ProfileFirewall.parsePort(s"$header\nufw allow 443/udp",prefix,443,List("udp")).toOption.get
+    assertEquals(allow.map(_.owned),List(false))
+    assertEquals(allow.map(_.action),List("allow"))
+    assertEquals(ProfileFirewall.parsePort(s"$header\nufw reject 443/udp",prefix,443,List("udp")).toOption.get.map(_.action),List("reject"))
+    assert(ProfileFirewall.parsePort(s"$header\nufw allow 443/udp comment '${prefix}BAD!suffix'",prefix,443,List("udp")).isLeft)
+  }
   test("UFW 0.36.2 empty output with colon header and None parses as no rules") {
     assertEquals(ProfileFirewall.parse(s"$header:\n(None)\n",resource),Right(Nil))
   }

@@ -29,9 +29,9 @@ final class PostgresRemnawaveOnboardingQuery extends RemnawaveOnboardingQuery[Co
 
   private case class Latest(id: UUID, state: String, finishedAt: Option[Instant])
   private type StatusRow = (UUID,Option[String],Option[Int],Option[UUID],Option[Long],Option[UUID],
-    Option[String],Option[String],Option[ServerProfileRepositoryRows.ObservationRow],Option[Latest],Boolean,Boolean)
+    Option[String],Option[String],Option[ServerProfileRepositoryRows.ObservationRow],Option[Latest],Boolean,Boolean,Boolean)
 
-  def serverStatuses(org: UUID, targets: Map[UUID,Either[String,ProvisioningTarget]]): ConnectionIO[Map[UUID,OnboardingServerStatus]] = {
+  def serverStatuses(org: UUID, targets: Map[UUID,Either[String,ProvisioningTarget]], integration: Option[UUID] = None): ConnectionIO[Map[UUID,OnboardingServerStatus]] = {
     if (targets.isEmpty) Map.empty[UUID,OnboardingServerStatus].pure[ConnectionIO]
     else {
       val input = Json.arr(targets.toList.sortBy(_._1.toString).map { case(id,target) => Json.obj(
@@ -44,7 +44,15 @@ final class PostgresRemnawaveOnboardingQuery extends RemnawaveOnboardingQuery[Co
         o.revision_id,o.content::text,o.content_hash,o.observed_at,o.verified_run_id,
         latest.id,latest.status,latest.finished_at,""" ++ RemnawaveOnboardingActivitySql.resource(org,fr"t.resource_id") ++ sql""",
         exists(select 1 from integration_resource_binding b join integration_inventory_object n on n.id=b.inventory_object_id
-          where b.organization_id=$org and b.resource_id=t.resource_id and n.object_type='NODE')
+          where b.organization_id=$org and b.resource_id=t.resource_id and n.object_type='NODE'),
+        exists(select 1 from integration_resource_binding b join integration_inventory_object n on n.id=b.inventory_object_id
+          where b.organization_id=$org and b.resource_id=t.resource_id and n.object_type='NODE') AND
+        NOT exists(select 1 from integration_resource_binding b join integration_inventory_object n on n.id=b.inventory_object_id
+          where b.organization_id=$org and b.resource_id=t.resource_id and n.object_type='NODE' AND
+          (n.is_active OR n.integration_id IS DISTINCT FROM cast($integration as uuid) OR NOT exists(
+            select 1 from remnawave_node_onboarding owner where owner.organization_id=$org AND owner.integration_id=n.integration_id
+              AND owner.resource_id=t.resource_id AND owner.state IN ('SUCCEEDED','FAILED','UNKNOWN')
+              AND owner.external_node_id::text=n.external_id AND owner.input_snapshot->>'connectionId'=t.connection_id::text)))
         from jsonb_to_recordset(cast($input as jsonb)) as t(resource_id uuid,connection_id uuid,connection_updated_at timestamptz)
         left join server_profile_assignment a on a.organization_id=$org and a.resource_id=t.resource_id
         left join server_profile p on p.organization_id=$org and p.id=a.profile_id
@@ -60,7 +68,7 @@ final class PostgresRemnawaveOnboardingQuery extends RemnawaveOnboardingQuery[Co
           and pr.profile_apply_snapshot->>'revisionId'=a.revision_id::text
           order by case when pr.status in ('QUEUED','RUNNING') then 0 else 1 end,
             coalesce(pr.started_at,pr.updated_at) desc,pr.id desc limit 1) latest on true""").query[StatusRow].to[List]
-      rows.map(_.map { case(id,name,number,assignment,version,revision,content,hash,stored,latest,busy,conflict) =>
+      rows.map(_.map { case(id,name,number,assignment,version,revision,content,hash,stored,latest,busy,conflict,review) =>
         val desired = (content,hash).mapN { (c,h) => ServerProfileContent.parsePersisted(c,h)
           .fold(code => throw new IllegalStateException(code),identity) }
         val observed = stored.map(_.toDomain)
@@ -69,7 +77,7 @@ final class PostgresRemnawaveOnboardingQuery extends RemnawaveOnboardingQuery[Co
         val compliant = (desired,observed).mapN((d,o) => ServerProfileDiff.assess(d,o.content).compliant).contains(true)
         val state = ServerProfileAutomationState.assess(assignment.nonEmpty && name.nonEmpty && desired.nonEmpty,
           observed.nonEmpty,compliant,latest.map(l => ProvisioningRunState.fromCode(l.state)),linked,laterManual)
-        id -> OnboardingServerStatus(name,number,assignment.nonEmpty,state,busy,conflict)
+        id -> OnboardingServerStatus(name,number,assignment.nonEmpty,state,busy,conflict && !review,review)
       }.toMap)
     }
   }
@@ -89,6 +97,19 @@ final class PostgresRemnawaveOnboardingQuery extends RemnawaveOnboardingQuery[Co
             and n.state<>'PLANNED' and (n.external_node_id=cast($expected as uuid) or
               n.input_snapshot->'recovery'->>'previousExternalNodeId'=cast($expected as text))
             order by n.created_at desc,n.id desc limit 1)))""".query[Boolean].unique
+  override def replacementBinding(org: UUID,integration: UUID,resource: UUID,previous: UUID)
+    (implicit F: cats.Applicative[ConnectionIO]): ConnectionIO[Either[String,Option[UUID]]] = sql"""
+    select o.id,o.integration_id,o.external_id,o.is_active,b.resource_id
+    from integration_inventory_object o left join integration_resource_binding b
+      on b.organization_id=o.organization_id and b.inventory_object_id=o.id
+    where o.organization_id=$org and o.object_type='NODE' and
+      (b.resource_id=$resource or (o.integration_id=$integration and o.external_id=${previous.toString}))
+    order by o.id limit 3""".query[(UUID,UUID,String,Boolean,Option[UUID])].to[List].map { rows =>
+      if(rows.exists { case(_,i,e,active,b) => i!=integration || e!=previous.toString || active || b.exists(_!=resource) })
+        Left("REMNAWAVE_ONBOARDING_BINDING_CONFLICT")
+      else if(rows.size>1) Left("REMNAWAVE_ONBOARDING_BINDING_CONFLICT")
+      else Right(rows.headOption.collect { case(id,_,_,_,Some(_)) => id })
+    }
   def baselinePlanParent(org: UUID, planId: UUID): ConnectionIO[Option[UUID]] =
     sql"select onboarding_parent_id from provisioning_run where organization_id=$org and id=$planId"
       .query[Option[UUID]].option.map(_.flatten)

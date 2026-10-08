@@ -21,7 +21,7 @@ Shadowsocks supports chacha20-ietf-poly1305, aes-128-gcm and aes-256-gcm, TCP an
 
 ## Execution and ownership
 
-The existing onboarding workflow adds ISSUE_TLS, CREATE_PROTOCOL_PROFILE, INSTALL_TLS, CONFIGURE_CLIENT_FIREWALL and VERIFY_PROTOCOL where applicable. V61/V62 are additive migrations; legacy snapshots and phase sequences retain their meaning.
+Lifecycle V7 adds PROTOCOL_PREFLIGHT before provider writes and moves VERIFY_PROTOCOL before inventory synchronization; persisted V6 order remains unchanged. See [V7 hardening](remnawave-protocol-hardening-v7.md). The existing onboarding workflow adds ISSUE_TLS, CREATE_PROTOCOL_PROFILE, INSTALL_TLS, CONFIGURE_CLIENT_FIREWALL and VERIFY_PROTOCOL where applicable. V61/V62 are additive migrations; legacy snapshots and phase sequences retain their meaning.
 
 A generated profile is created once through the reviewed provider contract. Its UUID, inbound UUID and canonical configuration hash are stored in an immutable fenced receipt before Node creation. A lost provider response is reconciled by exact name, tag and hash; an unconfirmed result does not authorize another POST. Fresh plans do not adopt conflicting profiles. Resource admission and tenant scope use existing locking and permissions.
 
@@ -45,4 +45,4 @@ Frontend tests cover the existing workflow and new Shadowsocks/Hysteria2 HTTP-01
 - This workflow configures new Nodes; changing the protocol of an existing Node is not included.
 - Old manual certificate copies are not automatically converted into owned TLS mounts.
 - A terminal UNKNOWN before Node creation blocks a competing create. It requires diagnosis; there is no new automatic terminal resume operation for that case.
-- Generated profiles are capability gated to reviewed Panel 3.4.4. Earlier supported versions retain the existing-profile workflow.
+- Generated profiles are capability gated to reviewed Panel 3.4.4 and exact reviewed 3.4.5. Earlier supported versions retain the existing-profile workflow.

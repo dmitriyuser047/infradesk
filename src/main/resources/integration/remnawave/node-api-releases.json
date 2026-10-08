@@ -193,5 +193,19 @@
       "libs/contract/commands/nodes/update.command.ts": "d14b0e6a45bb74d330e60a3d5a075f11f9479b8bb589f0c452c4a1d3ff1e2c60",
       "libs/contract/commands/config-profiles/create-config-profile.command.ts": "b2cf9fc9cf3548c78b0bd00c951de976a630905f4983bca9c596946421d80e08"
     }
+  },
+  {
+    "version": "3.4.5",
+    "commit": "010b365ab1fabea01192b5e6ade4e98e66ee1dbd",
+    "generation": "PROFILE_SECRET_KEY",
+    "sourceSha256": {
+      "libs/contract/commands/nodes/create.command.ts": "2113d671211c07ebae43fdcdce3232890398ec33a0c7ecf1a748eae1eb64f14b",
+      "libs/contract/models/nodes.schema.ts": "70a0bf1b06d66e5b6dcd996ae35228111a50554d706b712c913ac0bf7cde40b7",
+      "libs/contract/commands/system/get-metadata.command.ts": "1b0125651390d2d016fc395fe8af4f778c795b59842916f1bebdc0903b5a665d",
+      "src/modules/keygen/keygen.service.ts": "971596979d28df21a034ed07305be36f846f589938989abe9d16eaadd08de00e",
+      "libs/contract/commands/keygen/get-node-secret-key.command.ts": "6689079635c1a4e6fc64d410bd975448fc40a47a99108af733cc6e35cfb539a2",
+      "libs/contract/commands/nodes/update.command.ts": "d14b0e6a45bb74d330e60a3d5a075f11f9479b8bb589f0c452c4a1d3ff1e2c60",
+      "libs/contract/commands/config-profiles/create-config-profile.command.ts": "b2cf9fc9cf3548c78b0bd00c951de976a630905f4983bca9c596946421d80e08"
+    }
   }
 ]

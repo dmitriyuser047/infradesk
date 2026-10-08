@@ -17,6 +17,28 @@ final class RemnawaveOnboardingSpec extends FunSuite {
     Instant.parse("2026-01-03T03:04:05Z"), id, id, 7, id, 4L, "revision-hash", id, false, api,
     "remnawave/node:2.8.0", id, "prod", "standard", "secure", List("primary"), List("change"), Nil, Nil)
 
+  test("replacement pins old retirement input and inserts confirmed retirement before new HTTP-01/profile creation") {
+    val desired=input.copy(configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+      protocol=Some(RemnawaveProtocol.Hysteria2(443,"hy2.velesoracle.com")),tlsHttp01=Some(NodeTlsHttp01(id,"operator@example.org"))).normalized.toOption.get
+    val old=PreviousNodeInstallation("previous-node","138.124.38.229",2222,Some(RemnawaveProtocol.Shadowsocks(1234,"aes-256-gcm")),None,Some(id))
+    val proof=OnboardingRecovery(id,Some(UUID.fromString("58065b61-0cd1-4312-92c8-e443cb739172")),id,id,
+      "CONFIRMED_NOT_FOUND","RECREATE_WITH_NEW_CONFIG",Some(input.panelCidrs.sorted),Some(snapshot.imageReference),
+      Some(LocalInstallationObservation.fromState(LocalInstallationState.OwnedComplete)),previousNodeAddress=Some(old.address),previousInstallation=Some(old))
+    val evidence=PanelSourceEvidence(PanelSourceMode.Manual,desired.panelCidrs,"MANUAL","MANUAL",PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.org").toOption.get))
+    val replacement=snapshot.copy(input=desired,recovery=Some(proof),lifecycleVersion=7,panelSource=Some(evidence))
+    val phases=OnboardingPhase.forSnapshot(replacement)
+    assertEquals(phases.take(10),List(OnboardingPhase.Validate,OnboardingPhase.PrepareServer,OnboardingPhase.ProtocolPreflight,
+      OnboardingPhase.ConfirmPreviousAbsent,OnboardingPhase.UnbindPreviousNode,OnboardingPhase.RetirePreviousClientFirewall,
+      OnboardingPhase.RetireNodeFirewall,OnboardingPhase.RetireLocalNode,OnboardingPhase.VerifyPreviousRetired,OnboardingPhase.ResolvePanelSource))
+    assert(!phases.contains(OnboardingPhase.DeleteNode))
+    assert(phases.indexOf(OnboardingPhase.VerifyPreviousRetired)<phases.indexOf(OnboardingPhase.IssueTls))
+    assertEquals(OnboardingSnapshotCodec.decode(OnboardingSnapshotCodec.encode(replacement)),replacement)
+    val run=RemnawaveNodeOnboardingRun(id,id,id,input.resourceId,None,id,domain.provisioning.ProvisioningRunState.Failed,
+      OnboardingPhase.WaitForPanel,snapshot,snapshot.integrationUpdatedAt,snapshot.integrationUpdatedAt,externalNodeId=Some(id))
+    assert(RemnawaveNodeOnboardingRun.recoveryCandidate(List(run),run.integrationId,desired,snapshot.imageReference,snapshot.connectionId).isLeft)
+    assertEquals(RemnawaveNodeOnboardingRun.replacementCandidate(List(run),run.organizationId,run.integrationId,input.resourceId,snapshot.connectionId),Right(Some(run)))
+    assert(RemnawaveNodeOnboardingRun.replacementCandidate(List(run,run.copy(id=id)),run.organizationId,run.integrationId,input.resourceId,snapshot.connectionId).isLeft)
+  }
   test("canonicalizes strict CIDRs and rejects broad, duplicate, hostname, and malformed sources") {
     assertEquals(OnboardingInput.canonicalCidrs(List("198.51.100.0/24", "192.0.2.0/24")),
       Right(List("192.0.2.0/24", "198.51.100.0/24")))
@@ -29,6 +51,24 @@ final class RemnawaveOnboardingSpec extends FunSuite {
   test("input rejects duplicate inbound IDs and invalid ports") {
     assert(input.copy(activeInboundIds = List(inbound, inbound)).normalized.isLeft)
     assert(input.copy(nodePort = 0).normalized.isLeft)
+  }
+  test("V7 observes protocol before provider mutation and verifies runtime before inventory while V6 remains unchanged") {
+    val generated=input.copy(configProfileId=OnboardingInput.GeneratedProfileId,activeInboundIds=Nil,
+      protocol=Some(RemnawaveProtocol.Shadowsocks(443,"aes-256-gcm"))).normalized.toOption.get
+    val evidence=PanelSourceEvidence(PanelSourceMode.Manual,generated.panelCidrs,"MANUAL","MANUAL",
+      PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.org").toOption.get))
+    val v6=snapshot.copy(input=generated,lifecycleVersion=6,panelSource=Some(evidence))
+    val old=OnboardingPhase.forSnapshot(v6)
+    val v7=v6.copy(lifecycleVersion=7)
+    val current=OnboardingPhase.forSnapshot(v7)
+    assertEquals(OnboardingSnapshotCodec.decode(OnboardingSnapshotCodec.encode(v7)),v7)
+    assertEquals(old.takeRight(2),List(OnboardingPhase.VerifyProtocol,OnboardingPhase.FinalVerify))
+    assert(!old.contains(OnboardingPhase.ProtocolPreflight))
+    assertEquals(current.take(3),List(OnboardingPhase.Validate,OnboardingPhase.PrepareServer,OnboardingPhase.ProtocolPreflight))
+    assertEquals(current.indexOf(OnboardingPhase.VerifyProtocol)+1,current.indexOf(OnboardingPhase.SyncInventory))
+    assert(current.indexOf(OnboardingPhase.VerifyProtocol)>current.indexOf(OnboardingPhase.FinalizePanelSources))
+    assertEquals(current.filterNot(p => p==OnboardingPhase.ProtocolPreflight || p==OnboardingPhase.VerifyProtocol),
+      old.filterNot(_==OnboardingPhase.VerifyProtocol))
   }
   test("protocol plans journal issuance and installation separately and preserve immutable TLS identity") {
     val http=NodeTlsHttp01(id,"operator@example.org")

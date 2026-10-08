@@ -59,9 +59,9 @@ final class RemnawaveNodeProvisioning(client: RemnawaveClient) extends NodeProvi
           case outcome => IO.pure(outcome)
         }
       }
-    } yield result).handleError {
-      case e: IntegrationError => if(fresh) Rejected(e.code) else Unknown(e.code)
-      case _ => Unknown("REMNAWAVE_PROTOCOL_PROFILE_CREATE_UNKNOWN")
+    } yield result).handleErrorWith {
+      case e: IntegrationError => IO.pure(if(fresh) Rejected(e.code) else Unknown(e.code))
+      case e => IO.raiseError(new application.integration.ProtocolProfilePreparationFailed(e))
     }
   }
 

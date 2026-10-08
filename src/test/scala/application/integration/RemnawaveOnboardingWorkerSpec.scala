@@ -152,8 +152,11 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     var inspectedApi = api
     var generatedProfile: Option[NodeProtocolBinding] = None
     var presetConfig = io.circe.Json.obj()
+    var protocolFailure: Option[Throwable] = None
     var protocolOutcome: Option[ProtocolProfileOutcome] = None
     var protocolRuntime = ProvisioningStepResult(Map.empty,None,Some(true))
+    var retiredProtocol: Option[RemnawaveProtocol] = None
+    var protocolPortState: ProtocolPortState = ProtocolPortState.Free
     var enableOutcome: IntegrationActionRemoteOutcome = IntegrationActionRemoteOutcome.Succeeded
     var childStartCount = 0
     var validateCompliant = true
@@ -175,6 +178,11 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
         Option.when(status != IntegrationSyncStatus.Running)(now), status,
         Option.when(status == IntegrationSyncStatus.Failed)("INTEGRATION_TIMEOUT"), None, None)
     val remote = new RemnawaveNodeRemote[IO] {
+      override def protocolPreflight(c: Connection,resource: UUID,p: RemnawaveProtocol,owner: Option[RemnawaveNodeRemoteSpec],previousProtocol: Option[RemnawaveProtocol] = None)=IO {
+        events += "protocol-preflight"
+        (if(p.transport=="UDP") List("udp") else List("tcp","udp")).map(t =>
+          ProtocolPortObservation(p.port,t,protocolPortState))
+      }
       override def configureClientFirewall(c: Connection,s: RemnawaveNodeRemoteSpec,p: RemnawaveProtocol)=IO {
         events += "client-firewall"; assert(generatedProfile.nonEmpty); ProvisioningStepResult(Map.empty,None,Some(true))
       }
@@ -193,7 +201,11 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
         events += "retire-firewall"; retiredCidrs=s.panelCidrs
         if(connectivityMode && retiredFirewallResult.failureCode.isEmpty) { Harness.this.connectivitySources=Nil; connectivityChanges :+= Nil }; retiredFirewallResult
       }
-      override def retireInstallation(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "retire"; retiredImage=Some(s.imageReference); ProvisioningStepResult(Map.empty,None,Some(true)) }
+      override def clientFirewallRetired(c: Connection,s: RemnawaveNodeRemoteSpec,p: RemnawaveProtocol)=IO.pure(true)
+      override def retireClientFirewall(c: Connection,s: RemnawaveNodeRemoteSpec,p: RemnawaveProtocol)=IO {
+        events += "retire-client"; retiredProtocol=Some(p); ProvisioningStepResult(Map.empty,None,Some(true))
+      }
+      override def retireInstallation(c: Connection,s: RemnawaveNodeRemoteSpec) = IO { events += "retire"; retiredImage=Some(s.imageReference); if(repo.record.snapshot.replacement) installationState=Some(LocalInstallationState.Absent); ProvisioningStepResult(Map.empty,None,Some(true)) }
       override def installationPrerequisites(c: Connection) = IO.pure(ProvisioningStepResult(Map.empty, None, Some(true)))
       override def preflight(c: Connection, r: UUID, p: Int) = IO { events += "preflight"; ProvisioningStepResult(Map.empty, None, Some(true)) }
       override def configureFirewall(c: Connection, s: RemnawaveNodeRemoteSpec) = IO {
@@ -270,6 +282,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
         sessions.get(id)
       }
       override def inventoryHasNode(r: RemnawaveNodeOnboardingRun) = IO { events += "sync-evidence"; nodeInInventory }
+      override def unbindPrevious(r: RemnawaveNodeOnboardingRun, token: UUID)=IO { events += "unbind-previous"; () }
       override def bind(r: RemnawaveNodeOnboardingRun, token: UUID) = IO {
         events += "bind"; if (bindConflict) throw IntegrationError("REMNAWAVE_ONBOARDING_BINDING_CONFLICT", "conflict")
       }
@@ -279,7 +292,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
     val provisioning = new NodeProvisioningTransport[IO] {
       override def ensureProtocolProfile(c: IntegrationRuntimeContext,name: String,tag: String,config: io.circe.Json,
         reviewed: NodeApiCompatibility,fresh: Boolean)=IO {
-        events += "create-profile"; assertEquals(config,presetConfig)
+        events += "create-profile"; protocolFailure.foreach(throw _); assertEquals(config,presetConfig)
         protocolOutcome.getOrElse(ProtocolProfileOutcome.Confirmed(generatedProfile.get))
       }
       override def updateNodeAddress(c: IntegrationRuntimeContext,id: UUID,old: NodeCreateIntent,desired: NodeCreateIntent,reviewed: NodeApiCompatibility)=IO {
@@ -292,7 +305,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       override def getNode(c: IntegrationRuntimeContext, id: UUID) = IO {
         events += "get-node"; if (failPanelApi) throw IntegrationError("INTEGRATION_REMOTE_UNAVAILABLE", "offline") else panel
       }
-      override def lookupNode(c: IntegrationRuntimeContext,id: UUID) = IO { events += "lookup"; lookup.getOrElse(if(failPanelApi) NodeLookupOutcome.Unknown("INTEGRATION_REMOTE_UNAVAILABLE") else NodeLookupOutcome.Found(panel)) }
+      override def lookupNode(c: IntegrationRuntimeContext,id: UUID) = IO { events += "lookup"; if(repo.record.snapshot.replacement && repo.record.externalNodeId.contains(id)) NodeLookupOutcome.Found(panel) else lookup.getOrElse(if(failPanelApi) NodeLookupOutcome.Unknown("INTEGRATION_REMOTE_UNAVAILABLE") else NodeLookupOutcome.Found(panel)) }
       override def deleteNode(c: IntegrationRuntimeContext,id: UUID,reviewed: NodeApiCompatibility) = IO { events += "delete"; if(deletion==NodeDeleteOutcome.Deleted) { lookup=Some(NodeLookupOutcome.ConfirmedNotFound); candidateNodes=Some(Nil) }; deletion }
       override def createNode(c: IntegrationRuntimeContext, i: NodeCreateIntent, reviewed: NodeApiCompatibility) = IO { events += "create"
         if(generatedProfile.nonEmpty) { assertEquals(repo.record.protocolBinding,generatedProfile); assertEquals(i.configProfileId,generatedProfile.get.profileId) }
@@ -341,8 +354,99 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       })
   }
 
+  private def replacementHarness(phase: OnboardingPhase): Harness = {
+    val h=new Harness(phase)
+    val protocol=RemnawaveProtocol.Shadowsocks(443,"chacha20-ietf-poly1305")
+    val config=RemnawaveProtocolPreset.render(protocol,RemnawaveProtocol.inboundTag(org,resource,protocol))
+    val receipt=NodeProtocolBinding(uid,List(uid),domain.configuration.CanonicalJson.sha256(config))
+    h.generatedProfile=Some(receipt); h.presetConfig=config
+    val old=PreviousNodeInstallation("previous-node",input.address,2222,Some(RemnawaveProtocol.Shadowsocks(1234,"aes-256-gcm")),None,Some(uid))
+    val proof=OnboardingRecovery(uid,Some(UUID.fromString("58065b61-0cd1-4312-92c8-e443cb739172")),uid,uid,"CONFIRMED_NOT_FOUND",
+      "RECREATE_WITH_NEW_CONFIG",Some(input.panelCidrs),Some(snap.imageReference),Some(LocalInstallationObservation.fromState(LocalInstallationState.OwnedComplete)),
+      previousNodeAddress=Some(old.address),previousInstallation=Some(old))
+    val evidence=PanelSourceEvidence(PanelSourceMode.Manual,input.panelCidrs,"MANUAL","MANUAL",PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.test").toOption.get))
+    h.repo.record=h.repo.record.copy(externalNodeId=None,snapshot=snap.copy(input=input.copy(configProfileId=OnboardingInput.GeneratedProfileId,
+      activeInboundIds=Nil,protocol=Some(protocol)),recovery=Some(proof),lifecycleVersion=7,panelSource=Some(evidence)))
+    h.installationState=Some(LocalInstallationState.OwnedComplete); h.lookup=Some(NodeLookupOutcome.ConfirmedNotFound);h.candidateNodes=Some(Nil)
+    h.panel=node().copy(configProfileId=Some(receipt.profileId),activeInboundIds=receipt.inboundIds)
+    h.create=NodeCreateOutcome.Created(h.panel);h.repo.inFlight=false
+    h
+  }
+  test("replacement retires previous protocol with old parameters before one fresh create and preserves new receipt") {
+    val h=replacementHarness(OnboardingPhase.ConfirmPreviousAbsent)
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded,s"failure=${h.repo.record.failureCode} phase=${h.repo.record.phase} events=${h.events}")
+    assertEquals(h.retiredProtocol,Some(RemnawaveProtocol.Shadowsocks(1234,"aes-256-gcm")))
+    assert(h.events.indexOf("unbind-previous")<h.events.indexOf("retire-client"))
+    assert(h.events.indexOf("retire-client")<h.events.indexOf("retire-firewall"))
+    assert(h.events.indexOf("retire")<h.events.indexOf("create-profile"))
+    assertEquals(h.events.count(_=="create"),1)
+    assert(!h.events.contains("delete"))
+    assert(h.repo.record.externalNodeId!=h.repo.record.snapshot.recovery.flatMap(_.previousExternalNodeId))
+  }
+  test("unexpected pre-write protocol preparation failures remain INTERNAL_ERROR with fresh versus recovered uncertainty") {
+    for(fresh <- List(true,false)) {
+      val h=replacementHarness(OnboardingPhase.CreateProtocolProfile)
+      h.repo.inFlight= !fresh
+      val original=new IllegalStateException("private-api-token private-registration-key")
+      val failure=new ProtocolProfilePreparationFailed(original)
+      assertEquals(failure.getCause,null)
+      assert(!failure.getMessage.contains("private"))
+      h.protocolFailure=Some(failure)
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record.failureCode,Some("REMNAWAVE_ONBOARDING_INTERNAL_ERROR"))
+      assertEquals(h.repo.record.state,if(fresh) ProvisioningRunState.Failed else ProvisioningRunState.Unknown)
+      assert(!h.events.contains("create"))
+      assert(!OnboardingJson.run(h.repo.record).noSpaces.contains("private-api-token"))
+    }
+  }
+  test("replacement connectivity discovery uses the new initial sources after retiring the old policy") {
+    val h=replacementHarness(OnboardingPhase.ConfirmPreviousAbsent)
+    val initial=h.candidateSources
+    val evidence=PanelSourceEvidence(PanelSourceMode.Auto,initial,"DNS_BASE_URL","AUTO_CANDIDATE",
+      PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.test").toOption.get))
+    val snapshot=h.repo.record.snapshot
+    h.repo.record=h.repo.record.copy(snapshot=snapshot.copy(input=snapshot.input.copy(panelSourceMode=PanelSourceMode.Auto,panelCidrs=initial),panelSource=Some(evidence)))
+    h.connectivityMode=true;h.connectOnAdd=false;h.connectOnObserved=true;h.connectivitySources=input.panelCidrs
+    h.panel=h.panel.copy(connected=false,connecting=true);h.create=NodeCreateOutcome.Created(h.panel)
+    h.worker.tick.unsafeRunSync()
+    assertEquals(h.repo.record.state,ProvisioningRunState.Succeeded,s"phase=${h.repo.record.phase} failure=${h.repo.record.failureCode}")
+    assertEquals(h.connectivitySources,h.observedSource.sources)
+    assertEquals(h.repo.record.connectivityCompletion,Some(PanelConnectivityCompletion.Promoted))
+  }
+  test("post-retirement foreign port and reappearing Panel UUID block every new create") {
+    val port=replacementHarness(OnboardingPhase.VerifyPreviousRetired)
+    port.installationState=Some(LocalInstallationState.Absent);port.protocolPortState=ProtocolPortState.ForeignListener
+    port.worker.tick.unsafeRunSync()
+    assertEquals(port.repo.record.failureCode,Some("REMNAWAVE_PROTOCOL_PORT_OCCUPIED"))
+    assert(!port.events.exists(Set("create-profile","create","install","delete")))
+    val present=replacementHarness(OnboardingPhase.ConfirmPreviousAbsent)
+    present.lookup=Some(NodeLookupOutcome.Found(present.panel))
+    present.worker.tick.unsafeRunSync()
+    assert(!present.events.exists(Set("retire","retire-client","retire-firewall","unbind-previous","create")))
+    val contradictory=replacementHarness(OnboardingPhase.ConfirmPreviousAbsent)
+    val previousId=contradictory.repo.record.snapshot.recovery.flatMap(_.previousExternalNodeId).get
+    contradictory.candidateNodes=Some(List(node(id=previousId,wrongName=true).copy(address="203.0.113.9",correlationTags=Nil)))
+    contradictory.worker.tick.unsafeRunSync()
+    assertEquals(contradictory.repo.record.failureCode,Some("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW"))
+    assert(!contradictory.events.exists(Set("retire","retire-client","retire-firewall","unbind-previous","create")))
+  }
+  test("foreign listener appearing after preview blocks before any protocol or provider mutation") {
+    for(state <- List(ProtocolPortState.ForeignListener,ProtocolPortState.ObservationUnknown)) {
+      val h=new Harness(OnboardingPhase.ProtocolPreflight)
+      val protocol=RemnawaveProtocol.Shadowsocks(443,"aes-256-gcm")
+      val evidence=PanelSourceEvidence(PanelSourceMode.Manual,input.panelCidrs,"MANUAL","MANUAL",
+        PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.test").toOption.get))
+      h.repo.record=h.repo.record.copy(snapshot=snap.copy(input=input.copy(configProfileId=OnboardingInput.GeneratedProfileId,
+        activeInboundIds=Nil,protocol=Some(protocol)),lifecycleVersion=7,panelSource=Some(evidence)))
+      h.protocolPortState=state; h.repo.inFlight=false
+      h.worker.tick.unsafeRunSync()
+      assertEquals(h.repo.record.failureCode,ProtocolPortObservation(443,"tcp",state).blocker)
+      assert(!h.events.exists(Set("create-profile","create","client-firewall","install","sync","bind","desired")))
+    }
+  }
   test("generated protocol persists its profile receipt before Node creation and cannot succeed without its runtime probe") {
-    for(healthy <- List(true,false)) {
+    for(healthy <- List(true,false); version <- List(6,7)) {
       val h=new Harness(OnboardingPhase.CreateProtocolProfile)
       val protocol=RemnawaveProtocol.Shadowsocks(443,"chacha20-ietf-poly1305")
       val config=RemnawaveProtocolPreset.render(protocol,RemnawaveProtocol.inboundTag(org,resource,protocol))
@@ -351,7 +455,7 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       val evidence=PanelSourceEvidence(PanelSourceMode.Manual,input.panelCidrs,"MANUAL","MANUAL",
         PanelSourceEvidence.fingerprint(IntegrationBaseUrl.parse("https://panel.example.test").toOption.get))
       h.repo.record=h.repo.record.copy(snapshot=snap.copy(input=input.copy(configProfileId=OnboardingInput.GeneratedProfileId,
-        activeInboundIds=Nil,protocol=Some(protocol)),lifecycleVersion=6,panelSource=Some(evidence)))
+        activeInboundIds=Nil,protocol=Some(protocol)),lifecycleVersion=version,panelSource=Some(evidence)))
       h.repo.inFlight=false
       h.panel=node().copy(configProfileId=Some(receipt.profileId),activeInboundIds=receipt.inboundIds)
       h.create=NodeCreateOutcome.Created(h.panel)
@@ -363,6 +467,11 @@ final class RemnawaveOnboardingWorkerSpec extends FunSuite {
       assertEquals(h.repo.record.state,if(healthy) ProvisioningRunState.Succeeded else ProvisioningRunState.Failed)
       assertEquals(h.repo.completed.contains(OnboardingPhase.FinalVerify),healthy)
       assertEquals(h.events.count(_=="create-profile"),1)
+      if(version==7 && !healthy) {
+        assert(!h.repo.completed.contains(OnboardingPhase.SyncInventory))
+        assert(!h.repo.completed.contains(OnboardingPhase.BindResource))
+        assert(!h.repo.completed.contains(OnboardingPhase.SetDesiredState))
+      }
     }
   }
 

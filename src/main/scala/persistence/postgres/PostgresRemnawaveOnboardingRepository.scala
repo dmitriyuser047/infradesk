@@ -77,11 +77,15 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
         busy <- active(org,locked.resourceId)
         _ <- if (busy) fail("REMNAWAVE_ONBOARDING_RESOURCE_BUSY") else ().pure[ConnectionIO]
         previous <- createdNodes(org,locked.resourceId)
-        recovery <- RemnawaveNodeOnboardingRun.recoveryCandidate(previous,integration,locked.snapshot.input,
-          locked.snapshot.imageReference,locked.snapshot.connectionId,reviewedAddressChange=locked.snapshot.nodeAddress.nonEmpty)
+        recovery <- (if(locked.snapshot.replacement) RemnawaveNodeOnboardingRun.replacementCandidate(previous,org,integration,
+          locked.resourceId,locked.snapshot.connectionId) else RemnawaveNodeOnboardingRun.recoveryCandidate(previous,integration,locked.snapshot.input,
+          locked.snapshot.imageReference,locked.snapshot.connectionId,reviewedAddressChange=locked.snapshot.nodeAddress.nonEmpty))
           .leftMap(code => IntegrationError(code,"Existing node requires review")).liftTo[ConnectionIO]
         chainValid=locked.snapshot.recovery match {
           case Some(proof) => recovery.exists(r => r.id==proof.sourceRunId &&
+            (!locked.snapshot.replacement || proof.state=="CONFIRMED_NOT_FOUND" && proof.previousInstallation.exists(old =>
+              old.copy(inventoryObjectId=None)==PreviousNodeInstallation.fromRun(r).copy(inventoryObjectId=None)) &&
+              proof.localInstallation.exists(o => o.state!=LocalInstallationState.Absent && o.state.repairable)) &&
             proof.previousImageReference.getOrElse(locked.snapshot.imageReference) == (if(r.externalNodeId.isEmpty &&
               !(r.state==ProvisioningRunState.Unknown && r.phase==OnboardingPhase.CreateNode))
               r.snapshot.recovery.flatMap(_.previousImageReference).getOrElse(r.snapshot.installationImageReference)
@@ -202,7 +206,20 @@ final class PostgresRemnawaveOnboardingRepository extends RemnawaveOnboardingRep
   } yield ()
   def replaceFleetMembership(r: RemnawaveNodeOnboardingRun, token: UUID, node: UUID, now: Instant): ConnectionIO[Unit] =
     sql"select 1 from infradesk_onboarding_replace_membership(${r.organizationId},${r.id},$token,$node,$now)".query[Int].unique.void
-  def cleanupPlans(before: Instant, limit: Int): ConnectionIO[Int] = sql"""delete from remnawave_node_onboarding where id in(
-    select id from remnawave_node_onboarding where state='PLANNED' and created_at<=$before
-    for update skip locked limit $limit) and state='PLANNED'""".update.run
+  def cleanupPlans(before: Instant, limit: Int): ConnectionIO[Int] = for {
+    expired <- sql"""select id,input_snapshot->'tlsHttp01'->>'certificateId' from remnawave_node_onboarding
+      where state='PLANNED' and created_at<=$before order by id for update skip locked limit $limit"""
+      .query[(UUID,Option[String])].to[List]
+    identities=expired.flatMap(_._2).distinct.sorted
+    // Separate statements intentionally take a fresh READ COMMITTED snapshot after waiting for
+    // a concurrent preview/issuance transaction. Plan row locks fence concurrent start.
+    _ <- identities.traverse_(id => sql"select infradesk_tls_identity_lock($id::uuid)".query[Unit].unique)
+    removed <- expired.traverse { case(id,_) =>
+      sql"delete from remnawave_node_onboarding where id=$id and state='PLANNED'".update.run
+    }
+    _ <- identities.traverse_(id => sql"""delete from remnawave_tls_issuance_identity i where i.id::text=$id
+      and not exists(select 1 from remnawave_node_onboarding r
+        where r.input_snapshot->'tlsHttp01'->>'certificateId'=$id or r.input_snapshot->>'tlsCertificateId'=$id)
+      and not exists(select 1 from remnawave_node_tls_certificate c where c.id=i.id)""".update.run)
+  } yield removed.sum
 }

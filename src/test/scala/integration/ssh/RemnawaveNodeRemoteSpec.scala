@@ -132,16 +132,72 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
   test("protocol listener proof rejects a different process in the shared host network") {
     val s=new Session; idResponse(s)
     val base=s.respond
-    s.respond=(ex,args) => if(ex=="docker" && args.headOption.contains("inspect")) IO.pure(ok.copy(stdout="true"))
-      else if(ex=="docker" && args.headOption.contains("top")) IO.pure(ok.copy(stdout="PID COMMAND\n123 xray\n124 node\n"))
-      else if(ex=="ss") IO.pure(ok.copy(stdout="UNCONN 0 0 *:443 *:* users:((\"other\",pid=999,fd=3))"))
-      else base(ex,args)
+    s.respond=(ex,args) => if(ex=="sh" && args.exists(_.contains("markerOwned=0"))) IO.pure(ok.copy(stdout="OWNED_COMPLETE"))
+      else if(ex=="/usr/bin/python3") IO.pure(ok.copy(stdout="FOREIGN_LISTENER")) else base(ex,args)
     val protocol=domain.integration.RemnawaveProtocol.Hysteria2(443,"example.org")
-    val rejected=remote(s).verifyProtocol(connection,spec,protocol).unsafeRunSync()
-    assertEquals(rejected.failureCode,Some("REMNAWAVE_PROTOCOL_LISTENER_MISSING"))
+    assertEquals(remote(s).verifyProtocol(connection,spec,protocol).unsafeRunSync().failureCode,
+      Some("REMNAWAVE_PROTOCOL_LISTENER_MISSING"))
     val foreign=s.respond
-    s.respond=(ex,args) => if(ex=="ss") IO.pure(ok.copy(stdout="UNCONN 0 0 *:443 *:* users:((\"xray\",pid=123,fd=3))")) else foreign(ex,args)
+    s.respond=(ex,args) => if(ex=="/usr/bin/python3") IO.pure(ok.copy(stdout="OWNED_EXPECTED")) else foreign(ex,args)
     assertEquals(remote(s).verifyProtocol(connection,spec,protocol).unsafeRunSync().failureCode,None)
+    assert(s.calls.exists { case("sh",args) => args.exists(_.contains("markerOwned=0")); case _ => false })
+    assert(s.calls.exists { case("/usr/bin/python3",args) => args.contains(SshRemnawaveNodeRemote.containerName(spec)); case _ => false })
+  }
+  test("replacement preflight accepts only the pinned old client rules while probing the new transport") {
+    import domain.integration.{ProtocolPortState => State,RemnawaveProtocol}
+    val s=new Session;idResponse(s);val base=s.respond
+    val prefix=s"infradesk:remnawave-client:$resource:$node:"
+    val old=RemnawaveProtocol.Shadowsocks(1234,"aes-256-gcm")
+    val desired=RemnawaveProtocol.Hysteria2(443,"example.org")
+    s.respond=(ex,args) => if(ex=="ufw" && args==List("show","added")) IO.pure(ok.copy(stdout=
+      s"Added user rules (see 'ufw status' for running firewall)\nufw allow 1234/tcp comment '${prefix}tcp'\nufw allow 1234/udp comment '${prefix}udp'"))
+      else if(ex=="/usr/bin/python3") IO.pure(ok.copy(stdout="FREE")) else base(ex,args)
+    assertEquals(remote(s).protocolPreflight(connection,resource,desired,Some(spec),Some(old)).unsafeRunSync().map(_.state),List(State.Free))
+    assertEquals(remote(s).protocolPreflight(connection,resource,desired,Some(spec)).unsafeRunSync().map(_.state),List(State.FirewallConflict))
+    assert(!s.calls.exists { case("ufw",args) => args.headOption.exists(Set("allow","delete"));case _ => false })
+  }
+  test("typed protocol preflight scopes transports and firewall and performs no writes") {
+    import domain.integration.{ProtocolPortState => State,RemnawaveProtocol}
+    for((protocol,transport) <- List(RemnawaveProtocol.Shadowsocks(443,"aes-256-gcm") -> "tcp",
+      RemnawaveProtocol.Shadowsocks(443,"aes-256-gcm") -> "udp",RemnawaveProtocol.Hysteria2(443,"example.org") -> "udp")) {
+      val s=new Session; idResponse(s); val base=s.respond
+      s.respond=(ex,args) => if(ex=="/usr/bin/python3") IO.pure(ok.copy(stdout=
+        if(args(3)==transport) "FOREIGN_LISTENER" else "FREE")) else base(ex,args)
+      val observed=remote(s).protocolPreflight(connection,resource,protocol,None).unsafeRunSync()
+      assertEquals(observed.find(_.transport==transport).map(_.state),Some(State.ForeignListener))
+      assert(!s.calls.exists { case("ufw",args) => args.headOption.contains("allow"); case _ => false })
+    }
+    val s=new Session; idResponse(s); val base=s.respond
+    s.respond=(ex,args) => if(ex=="/usr/bin/python3") IO.pure(ok.copy(stdout="FREE"))
+      else if(ex=="ufw") IO.pure(ok.copy(stdout="Added user rules (see 'ufw status' for running firewall)\nufw deny 22/tcp\nufw reject 443/udp")) else base(ex,args)
+    val hy2=RemnawaveProtocol.Hysteria2(443,"example.org")
+    assertEquals(remote(s).protocolPreflight(connection,resource,hy2,None).unsafeRunSync().map(_.state),List(State.FirewallConflict))
+    val conflict=s.respond
+    s.respond=(ex,args) => if(ex=="ufw") IO.pure(ok.copy(stdout="Added user rules (see 'ufw status' for running firewall)\nufw allow 443/udp")) else conflict(ex,args)
+    assertEquals(remote(s).protocolPreflight(connection,resource,hy2,None).unsafeRunSync().map(_.state),List(State.Free))
+  }
+  test("client allow checks a fresh listener race and fails closed for unknown installation ownership") {
+    import domain.integration.{RemnawaveProtocol,ProtocolPortState => State}
+    val protocol=RemnawaveProtocol.Hysteria2(443,"example.org")
+    val s=new Session; idResponse(s); val base=s.respond
+    s.respond=(ex,args) => if(ex=="/usr/bin/python3") IO.pure(ok.copy(stdout="FOREIGN_LISTENER")) else base(ex,args)
+    assertEquals(remote(s).configureClientFirewall(connection,spec,protocol).unsafeRunSync().failureCode,
+      Some("REMNAWAVE_PROTOCOL_PORT_OCCUPIED"))
+    assert(!s.calls.exists { case("ufw",args) => args.headOption.contains("allow"); case _ => false })
+    val absent=s.respond
+    s.respond=(ex,args) => if(ex=="sh" && args.exists(_.contains("markerOwned=0")))
+      IO.pure(ok.copy(stdout="UNKNOWN:REMNAWAVE_LOCAL_INSTALLATION_CONTAINER_STATE_UNKNOWN")) else absent(ex,args)
+    assertEquals(remote(s).protocolPreflight(connection,resource,protocol,Some(spec)).unsafeRunSync().map(_.state),List(State.ObservationUnknown))
+  }
+  test("unrelated unsupported policy does not block owned installation observation but relevant SSH policy stays unknown") {
+    val s=new Session; idResponse(s); val base=s.respond
+    s.respond=(ex,args) => if(ex=="ufw" && args==List("show","added")) IO.pure(ok.copy(stdout=
+      "Added user rules (see 'ufw status' for running firewall)\nufw unsupported to any port 8443 proto udp")) else base(ex,args)
+    assertEquals(remote(s).localInstallationObservation(connection,spec).unsafeRunSync().state,LocalInstallationState.Absent)
+    val unrelated=s.respond
+    s.respond=(ex,args) => if(ex=="ufw" && args==List("show","added")) IO.pure(ok.copy(stdout=
+      "Added user rules (see 'ufw status' for running firewall)\nufw unsupported to any port 22 proto tcp")) else unrelated(ex,args)
+    assertEquals(remote(s).localInstallationObservation(connection,spec).unsafeRunSync().state,LocalInstallationState.Unknown)
   }
 
   test("local installation classifier returns typed state from its exact recovery probe") {
@@ -641,7 +697,7 @@ final class RemnawaveNodeRemoteSpec extends FunSuite {
       if (ex == "id") ok.copy(stdout = "0")
       else if (ex == "sh" && args.exists(_.contains("SSH_CONNECTION"))) ok.copy(stdout = "192.0.2.5 45000 198.51.100.1 22")
       else if (ex == "ufw" && args == List("status")) ok.copy(stdout = "Status: active")
-      else if (ex == "ufw" && args == List("show", "added")) ok.copy(stdout = "ufw allow 30222/tcp comment 'foreign'")
+      else if (ex == "ufw" && args == List("show", "added")) ok.copy(stdout = "Added user rules (see 'ufw status' for running firewall)\nufw allow 30222/tcp comment 'foreign'")
       else ok
     }
     val result = remote(s).configureFirewall(connection, spec).unsafeRunSync()

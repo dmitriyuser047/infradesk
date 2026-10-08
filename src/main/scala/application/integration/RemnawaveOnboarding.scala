@@ -66,7 +66,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     api <- c._3.nodeProvisioning.get.inspect(c._2)
     candidates <- runner.run(query.candidates(org,500))
     eligible <- runner.run(targets.eligibleBatch(org,candidates.map(_.id)))
-    statuses <- runner.run(query.serverStatuses(org,eligible))
+    statuses <- runner.run(query.serverStatuses(org,eligible,Some(integration)))
     servers = candidates.map { candidate =>
       val target = eligible.getOrElse(candidate.id,Left("PROVISIONING_TARGET_NOT_FOUND"))
       val status = statuses.getOrElse(candidate.id,OnboardingServerStatus(None,None,false,"UNOBSERVED",false,false))
@@ -78,7 +78,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
         "environmentName" -> str(candidate.environmentName),"sshStatus" -> str(if(target.isRight) "TRUSTED" else "UNAVAILABLE"),
         "serverProfileName" -> status.profileName.fold(Json.Null)(str),
         "revisionNumber" -> status.revisionNumber.fold(Json.Null)(Json.fromInt),"serverProfileStatus" -> str(status.profileState),
-        "blockingProblems" -> strings(blocks))
+        "blockingProblems" -> strings(blocks),"previousBindingReview" -> Json.fromBoolean(status.previousBindingReview))
     }
     items <- profileInventory(org,integration)
   } yield Json.obj("nodeApi" -> OnboardingJson.compatibility(api),"servers" -> Json.arr(servers: _*),
@@ -96,7 +96,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       else selected,action)
   } yield result
 
-  def preview(actor: ActorContext,integration: UUID,raw: OnboardingInput): IO[Json] = preview(actor,integration,raw,"RECOVER")
+  def preview(actor: ActorContext,integration: UUID,raw: OnboardingInput): IO[Json] = preview(actor,integration,raw,"FRESH_WIZARD")
 
   private def preview(actor: ActorContext,integration: UUID,raw: OnboardingInput,action: String): IO[Json] = for {
     _ <- IO.raiseUnless(settings.enabled)(error("PROVISIONING_DISABLED"))
@@ -115,8 +115,9 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
         "REMNAWAVE_PROTOCOL_TLS_REQUIRED" else ""
     }.filter(_.nonEmpty)
     httpDns <- input.tlsHttp01.traverse(_ => target.toOption.traverse { t =>
-      remote.publicNodeAddresses(t.connection).flatMap(ips => nodeAddresses.verifyDomain(
-        input.protocol.get.asInstanceOf[RemnawaveProtocol.Hysteria2].serverName,ips)).attempt
+      input.protocol.collect { case h: RemnawaveProtocol.Hysteria2 => h.serverName }
+        .liftTo[IO](error("REMNAWAVE_TLS_HTTP01_INVALID")).flatMap(domain =>
+          remote.publicNodeAddresses(t.connection).flatMap(ips => nodeAddresses.verifyDomain(domain,ips))).attempt
     })
     api <- c._3.nodeProvisioning.get.inspect(c._2)
     candidates <- runner.run(query.candidates(actor.organizationId,500))
@@ -130,11 +131,17 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     liveInboundIds = liveProfile.toList.flatMap(_.summary match { case p: RemnawaveConfigProfileSummary => p.inbounds.map(_.uuid); case _ => Nil }).toSet
     image = RemnawaveNodeImagePolicy.select(api)
     previous <- runner.run(repo.createdNodes(actor.organizationId,input.resourceId))
-    candidate = RemnawaveNodeOnboardingRun.recoveryCandidate(previous,integration,input,image.getOrElse(""),
+    exactCandidate = RemnawaveNodeOnboardingRun.recoveryCandidate(previous,integration,input,image.getOrElse(""),
       target.toOption.fold(new UUID(0,0))(_.connectionId),reviewedAddressChange=addressEvidence.nonEmpty)
-    proof <- OnboardingRecoveryObservation.inspect(candidate.toOption.flatten,input,c._2,c._3.nodeProvisioning.get,remote,target.toOption.map(_.connection),action,
+    replacing=action=="FRESH_WIZARD" && exactCandidate.isLeft
+    candidate=if(replacing) RemnawaveNodeOnboardingRun.replacementCandidate(previous,actor.organizationId,integration,
+      input.resourceId,target.toOption.fold(new UUID(0,0))(_.connectionId)) else exactCandidate
+    proof <- OnboardingRecoveryObservation.inspect(candidate.toOption.flatten,input,c._2,c._3.nodeProvisioning.get,remote,target.toOption.map(_.connection),if(replacing && candidate.exists(_.nonEmpty)) "RECREATE_WITH_NEW_CONFIG" else if(action=="FRESH_WIZARD") "RECOVER" else action,
       reviewedAddressChange=addressEvidence.nonEmpty)
-    recovery=proof.recovery.map(r => if(r.action=="RECOVER" && r.localVerified) r.copy(action="REPAIR_PANEL_CONNECTIVITY") else r)
+    replacementBinding <- proof.recovery.filter(_.action=="RECREATE_WITH_NEW_CONFIG").traverse(r =>
+      runner.run(query.replacementBinding(actor.organizationId,integration,input.resourceId,r.previousExternalNodeId.get)))
+    recovery=proof.recovery.map(r => if(r.action=="RECOVER" && r.localVerified) r.copy(action="REPAIR_PANEL_CONNECTIVITY") else if(r.action=="RECREATE_WITH_NEW_CONFIG") r.copy(previousInstallation=r.previousInstallation.map(_.copy(
+      inventoryObjectId=replacementBinding.flatMap(_.toOption.flatten)))) else r)
     connectivityFirewall <- recovery.filter(_.action=="REPAIR_PANEL_CONNECTIVITY").traverse(r =>
       target.toOption.traverse(t => remote.connectivitySources(t.connection,
         RemnawaveNodeRemoteSpec(r.installationOwnerId,input.resourceId,r.previousExternalNodeId.get,input.nodePort,
@@ -144,6 +151,14 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       recovery.flatMap(_.previousExternalNodeId)))
     local <- if(previous.nonEmpty) IO.pure(List.empty[Either[Throwable,ProvisioningStepResult]]) else
       target.toOption.toList.traverse(t => remote.preflight(t.connection,input.resourceId,input.nodePort).attempt)
+    protocolPorts <- target.toOption.toList.flatTraverse(t => input.protocol.toList.flatTraverse { protocol =>
+      val owner=recovery.flatMap(r => r.previousExternalNodeId.map(node => RemnawaveNodeRemoteSpec(r.installationOwnerId,
+        input.resourceId,node,r.previousInstallation.fold(input.nodePort)(_.nodePort),r.previousImageReference.getOrElse(image.getOrElse("")),
+        r.previousPanelCidrs.getOrElse(input.panelCidrs),r.previousInstallation.fold(input.certificateId)(_.certificateId))))
+      remote.protocolPreflight(t.connection,input.resourceId,protocol,owner,recovery.filter(_.action=="RECREATE_WITH_NEW_CONFIG").flatMap(_.previousInstallation).flatMap(_.protocol))
+    })
+    httpPort <- if(input.tlsHttp01.isEmpty) IO.pure(List.empty[String]) else
+      target.toOption.toList.flatTraverse(t => remote.http01Preflight(t.connection).map(_.toList))
     blocks = (Option.when(!source.resolved)("REMNAWAVE_PANEL_SOURCE_UNRESOLVED").toList ++
       Option.when(recovery.exists(r => r.reusesNode && r.previousNodeAddress.nonEmpty) && !api.capabilities(NodeProvisioningCapability.AddressUpdate))("INTEGRATION_API_CONTRACT_UNCONFIRMED") ++
       Option.when(recovery.exists(r => (r.previousPanelCidrs.toList.flatten ++ input.panelCidrs).distinct.size>32))("REMNAWAVE_PANEL_SOURCE_LIMIT_EXCEEDED") ++
@@ -153,14 +168,15 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       Option.when(image.isEmpty)("REMNAWAVE_ONBOARDING_IMAGE_UNCONFIRMED") ++ Option.when(!c._1.enabled)("INTEGRATION_MANAGEMENT_REQUIRES_SYNC") ++
       Option.when(c._1.managementMode!=IntegrationManagementMode.ManagedSelected)("INTEGRATION_MANAGEMENT_MODE_REQUIRED") ++
       Option.when(input.protocol.nonEmpty && !api.capabilities(NodeProvisioningCapability.ProtocolProfileCreate))("INTEGRATION_API_CONTRACT_UNCONFIRMED") ++
-      certificateProblems ++
+      certificateProblems ++ input.protocol.toList.flatMap(p => ProtocolPortObservation.blockers(p,protocolPorts)) ++ httpPort ++
       Option.when(httpDns.flatten.exists(_.isLeft))("REMNAWAVE_TLS_HTTP01_DNS_UNCONFIRMED") ++
       Option.when(input.protocol.isEmpty && (profile.isEmpty || liveProfile.isEmpty))("REMNAWAVE_ONBOARDING_CONFIG_PROFILE_MISSING") ++
       Option.when(input.protocol.isEmpty && !input.activeInboundIds.forall(id => inbounds.exists(_.uuid==id.toString) && liveInboundIds(id.toString)))("REMNAWAVE_ONBOARDING_INBOUND_INVALID") ++
       Option.when(busy)("REMNAWAVE_ONBOARDING_RESOURCE_BUSY") ++ Option.when(conflict)("REMNAWAVE_ONBOARDING_BINDING_CONFLICT") ++
       baseline.left.toOption.map(safeCode).toList ++ baseline.toOption.toList.flatMap(_.blockingProblems) ++
       local.toList.flatMap(_.fold(e => List(safeCode(e)),r => r.failureCode.toList ++ Option.when(r.uncertain)("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN"))) ++
-      live.left.toOption.map(safeCode) ++ candidate.left.toOption ++
+      live.left.toOption.map(safeCode) ++ candidate.left.toOption ++ replacementBinding.flatMap(_.left.toOption) ++
+      Option.when(recovery.exists(r => r.action=="RECREATE_WITH_NEW_CONFIG" && r.localInstallation.forall(_.state==LocalInstallationState.Absent)))("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW") ++
       proof.localInstallation.toList.flatMap(_.blocker) ++ recovery.toList.flatMap(r => r.state match {
         case "PRESENT_CONFLICT" => List("REMNAWAVE_ONBOARDING_EXISTING_NODE_REQUIRES_REVIEW")
         case "UNKNOWN" => List("REMNAWAVE_ONBOARDING_OBSERVATION_UNKNOWN")
@@ -190,14 +206,15 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
         (if(recovery.exists(_.reusesNode)) Nil else List("CREATE_NODE")) ++
         List("CONFIGURE_NODE_FIREWALL", "INSTALL_NODE", "START_NODE", "WAIT_FOR_PANEL", "FINALIZE_PANEL_SOURCES", "SYNC_INVENTORY", "BIND_RESOURCE", "SET_DESIRED_STATE", "FINAL_VERIFY"),
       baseline.toOption.toList.flatMap(_.warnings) ++ Option.when(recovery.exists(_.reusesNode))("REMNAWAVE_ONBOARDING_REUSE_EXISTING_NODE") ++
-        Option.when(input.tlsHttp01.nonEmpty)("REMNAWAVE_TLS_HTTP01_TEMPORARY_PORT_80"),blocks,recovery,
-      lifecycleVersion=if(input.protocol.nonEmpty) 6 else 5,panelSource=Some(source),nodeAddress=addressEvidence)
+        Option.when(input.tlsHttp01.nonEmpty)("REMNAWAVE_TLS_HTTP01_TEMPORARY_PORT_80") ++
+        Option.when(recovery.exists(_.action=="RECREATE_WITH_NEW_CONFIG"))("REMNAWAVE_ONBOARDING_REPLACEMENT_IRREVERSIBLE"),blocks,recovery,
+      lifecycleVersion=if(input.protocol.nonEmpty || recovery.exists(_.action=="RECREATE_WITH_NEW_CONFIG")) 7 else 5,panelSource=Some(source),nodeAddress=addressEvidence)
     snapshot=snapshotDraft.copy(changes=if(blocks.nonEmpty) snapshotDraft.changes else
       baseline.toOption.toList.flatMap(_.assessment.modules.filterNot(_._2).map(_._1)) ++
         OnboardingPhase.forSnapshot(snapshotDraft).filterNot(p => p==OnboardingPhase.Validate || p==OnboardingPhase.PrepareServer).map(_.code))
     run = RemnawaveNodeOnboardingRun(UUID.randomUUID(),actor.organizationId,integration,input.resourceId,None,actor.userId,
       ProvisioningRunState.Planned,OnboardingPhase.Validate,snapshot,now,now,externalNodeId=proof.node,
-      protocolBinding=if(recovery.nonEmpty) candidate.toOption.flatten.flatMap(_.protocolBinding) else None)
+      protocolBinding=if(recovery.exists(_.action!="RECREATE_WITH_NEW_CONFIG")) candidate.toOption.flatten.flatMap(_.protocolBinding) else None)
     _ <- if (blocks.nonEmpty) IO.unit else runner.run(for {
       current <- integrations.findByIdForUpdate(actor.organizationId,integration)
       _ <- repo.lockResource(actor.organizationId,input.resourceId)
@@ -215,6 +232,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
     "serverProfileName" -> str(snapshot.serverProfileName),"revisionNumber" -> Json.fromInt(snapshot.revisionNumber),
     "configProfileName" -> str(snapshot.configProfileName),"inboundNames" -> strings(snapshot.inboundNames),
     "nodeImage" -> image.fold(Json.Null)(str),"nodeApi" -> OnboardingJson.compatibility(api),
+    "protocolPorts" -> Json.fromValues(protocolPorts.map(_.json)),
     "panelCidrs" -> strings(input.panelCidrs),"panelSource" -> PanelSourceEvidence.encode(source),
     "input" -> Json.obj("resourceId" -> str(input.resourceId.toString),"nodeName" -> str(input.nodeName),"address" -> str(input.address),
       "nodePort" -> Json.fromInt(input.nodePort),"configProfileId" -> str(input.configProfileId.toString),
@@ -223,6 +241,7 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
       .deepMerge(input.tlsCertificateId.fold(Json.obj())(id => Json.obj("tlsCertificateId"->str(id.toString))))
       .deepMerge(input.tlsHttp01.fold(Json.obj())(h => Json.obj("tlsHttp01" -> Json.obj("certificateId" -> str(h.certificateId.toString),
         "email" -> str(h.email), "agreeTerms" -> Json.True)))),
+    "confirmationRequired" -> Json.fromBoolean(recovery.exists(!_.reusesNode)),
     "changes" -> strings(snapshot.changes),"warnings" -> strings(snapshot.warnings),
     "packageFindings" -> Json.fromValues(baseline.toOption.toList.flatMap(_.packageFindings).map(_.json)),
     "blockingProblems" -> strings(blocks),"localInstallationState" -> proof.localState.fold(Json.Null)(s => str(s.code)),
@@ -246,6 +265,24 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
         }
       }
     }
+    _ <- if(draft.state!=ProvisioningRunState.Planned || !draft.snapshot.replacement) IO.unit else for {
+      c <- context(actor.organizationId,integration)
+      target <- runner.run(targets.eligible(actor.organizationId,draft.resourceId)).flatMap(_.leftMap(error).liftTo[IO])
+      previous <- runner.run(repo.createdNodes(actor.organizationId,draft.resourceId))
+      candidate <- RemnawaveNodeOnboardingRun.replacementCandidate(previous,actor.organizationId,integration,draft.resourceId,target.connectionId)
+        .leftMap(error).liftTo[IO]
+      observed <- OnboardingRecoveryObservation.inspect(candidate,draft.snapshot.input,c._2,c._3.nodeProvisioning.get,
+        remote,Some(target.connection),"RECREATE_WITH_NEW_CONFIG")
+      _ <- IO.raiseUnless(observed.recovery.exists(current => draft.snapshot.recovery.exists(reviewed =>
+        current.copy(previousInstallation=current.previousInstallation.map(_.copy(inventoryObjectId=None)))==
+          reviewed.copy(previousInstallation=reviewed.previousInstallation.map(_.copy(inventoryObjectId=None))))))(
+        error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
+      binding <- runner.run(query.replacementBinding(actor.organizationId,integration,draft.resourceId,draft.snapshot.recovery.flatMap(_.previousExternalNodeId).get)).flatMap(_.leftMap(error).liftTo[IO])
+      _ <- IO.raiseUnless(binding==draft.snapshot.recovery.flatMap(_.previousInstallation).flatMap(_.inventoryObjectId))(
+        error("REMNAWAVE_ONBOARDING_PREVIEW_CHANGED"))
+      _ <- draft.snapshot.input.protocol.collect { case h: RemnawaveProtocol.Hysteria2 if draft.snapshot.input.tlsHttp01.nonEmpty => h.serverName }
+        .traverse_(domain => remote.publicNodeAddresses(target.connection).flatMap(ips => nodeAddresses.verifyDomain(domain,ips)).void)
+    } yield ()
     now <- IO.realTimeInstant
     result <- runner.run(for {
       outcome <- repo.startResult(actor.organizationId,integration,plan,request,actor.userId,now,confirmRecreate)
@@ -261,6 +298,8 @@ final class RemnawaveOnboarding[Tx[_]: MonadThrow](repo: RemnawaveOnboardingRepo
           v.updatedAt==started.snapshot.integrationUpdatedAt && v.enabled && v.managementMode==IntegrationManagementMode.ManagedSelected))(
           error("REMNAWAVE_ONBOARDING_SOURCE_CHANGED"))
         _ <- audit.record(actor,AuditAction.RemnawaveNodeOnboardingRequested,AuditTargetType.Integration,Some(integration))
+        _ <- if(started.snapshot.replacement) audit.record(actor,AuditAction.RemnawaveNodeReplacementRequested,
+          AuditTargetType.Integration,Some(integration)) else MonadThrow[Tx].unit
       } yield ()
     } yield started)
   } yield result

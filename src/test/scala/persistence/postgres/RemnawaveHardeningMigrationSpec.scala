@@ -16,7 +16,8 @@ import org.typelevel.log4cats.noop.NoOpLogger
 import support.{AuthorizationFixtures,RemoteConfigurationServer}
 
 final class RemnawaveHardeningMigrationSpec extends FunSuite {
-  test("production CI V29 and V41 backup fixtures upgrade cleanly through V62") {
+  override val munitTimeout: scala.concurrent.duration.Duration=scala.concurrent.duration.Duration(120,"seconds")
+  test("production CI V29 and V41 backup fixtures upgrade cleanly through V64") {
     assume(ConfigurationDeploymentWorld.enabled,"PostgreSQL integration tests are opt-in")
     val config = PostgresTestDatabase.config
     val workflow = java.nio.file.Files.readString(java.nio.file.Paths.get(".github/workflows/ci.yml"))
@@ -43,8 +44,8 @@ final class RemnawaveHardeningMigrationSpec extends FunSuite {
           version <- runner.run(sql"select version from flyway_schema_history where success order by installed_rank desc limit 1".query[String].unique)
           _ = assertEquals(version,target)
           migrated <- DatabaseMigrator.migrate(isolated,NoOpLogger[IO])
-          _ = assertEquals(migrated.currentVersion,"62")
-          _ = assertEquals(migrated.migrationsApplied,62-target.toInt)
+          _ = assertEquals(migrated.currentVersion,"64")
+          _ = assertEquals(migrated.migrationsApplied,64-target.toInt)
           retained <- runner.run(sql"select count(*) from organization where id=$org and name='Backup marker'".query[Long].unique)
           _ = assertEquals(retained,1L)
         } yield ()
@@ -52,11 +53,11 @@ final class RemnawaveHardeningMigrationSpec extends FunSuite {
     }.unsafeRunSync()
   }
 
-  test("V52 and V56 upgrades preserve terminal legacy snapshots, journal sequences and fleet identity") {
+  test("V52, V56, V60 and V62 upgrades preserve terminal legacy snapshots, journal sequences and fleet identity") {
     assume(ConfigurationDeploymentWorld.enabled,"PostgreSQL integration tests are opt-in")
     val config=PostgresTestDatabase.config
     val remote=RemoteConfigurationServer.start()
-    try List("52","56").traverse_ { version => PostgresTestDatabase.isolatedTransactor(config,Some(version)).use { xa =>
+    try List("52","56","60","62").traverse_ { version => PostgresTestDatabase.isolatedTransactor(config,Some(version)).use { xa =>
       val runner=new DoobieTransactionRunner(xa)
       val w=new ConfigurationDeploymentWorld(runner,remote)
       val repo=new PostgresRemnawaveOnboardingRepository
@@ -97,8 +98,8 @@ final class RemnawaveHardeningMigrationSpec extends FunSuite {
           .query[(String,String,String,Option[UUID],Option[UUID])].unique))
         fleetBefore <- w.run(fleets.fleet(w.org,integration,fleet))
         result <- DatabaseMigrator.migrate(config.copy(url=xa.kernel.getJdbcUrl),NoOpLogger[IO])
-        _ = assertEquals(result.migrationsApplied,62-version.toInt)
-        _ = assertEquals(result.currentVersion,"62")
+        _ = assertEquals(result.migrationsApplied,64-version.toInt)
+        _ = assertEquals(result.currentVersion,"64")
         after <- w.run(ids.traverse(id => sql"select input_snapshot::text,state,phase,external_node_id,request_id from remnawave_node_onboarding where id=$id"
           .query[(String,String,String,Option[UUID],Option[UUID])].unique))
         decoded <- w.run(ids.traverse(repo.find(w.org,integration,_)))

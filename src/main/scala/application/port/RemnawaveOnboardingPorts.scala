@@ -50,14 +50,17 @@ final case class OnboardingStartResult(run: RemnawaveNodeOnboardingRun, newlySta
 
 final case class OnboardingServerCandidate(id: UUID, name: String, address: String, environmentName: String)
 final case class OnboardingServerStatus(profileName: Option[String], revisionNumber: Option[Int],
-  profileAssigned: Boolean, profileState: String, busy: Boolean, bindingConflict: Boolean)
+  profileAssigned: Boolean, profileState: String, busy: Boolean, bindingConflict: Boolean, previousBindingReview: Boolean = false)
 trait RemnawaveOnboardingQuery[F[_]] {
   /** A HOST binding alone is not a Panel host: its managed hostname must match this API endpoint. */
   def managedPanelAddresses(org: UUID,integration: UUID,endpointHost: String)(implicit F: cats.Applicative[F]): F[List[String]] = F.pure(Nil)
   /** Fixed-query projection; targets are the already batched, trusted SSH source identities. */
-  def serverStatuses(org: UUID, targets: Map[UUID, Either[String, ProvisioningTarget]]): F[Map[UUID, OnboardingServerStatus]]
+  def serverStatuses(org: UUID, targets: Map[UUID, Either[String, ProvisioningTarget]], integration: Option[UUID] = None): F[Map[UUID, OnboardingServerStatus]]
   def candidates(org: UUID, limit: Int): F[List[OnboardingServerCandidate]]
   def bindingConflict(org: UUID, resource: UUID, expectedExternalId: Option[UUID]): F[Boolean]
+  /** Only an exact inactive same-resource binding may be reviewed for replacement. */
+  def replacementBinding(org: UUID, integration: UUID, resource: UUID, previousExternalId: UUID)
+    (implicit F: cats.Applicative[F]): F[Either[String,Option[UUID]]] = F.pure(Left("REMNAWAVE_ONBOARDING_BINDING_CONFLICT"))
   def externalNode(org: UUID, integration: UUID, externalId: UUID): F[Option[IntegrationInventoryObject]]
   /** The onboarding that owns an approved baseline plan; recovery proves the child before starting it. */
   def baselinePlanParent(org: UUID, planId: UUID): F[Option[UUID]]
@@ -99,6 +102,8 @@ trait RemnawaveOnboardingOperations[F[_]] {
   def syncSession(run: RemnawaveNodeOnboardingRun, id: UUID): F[Option[IntegrationSyncSession]]
   /** Whether the stored inventory now holds the active node this onboarding created. */
   def inventoryHasNode(run: RemnawaveNodeOnboardingRun): F[Boolean]
+  def unbindPrevious(run: RemnawaveNodeOnboardingRun, token: UUID): F[Unit] =
+    throw new UnsupportedOperationException("Previous binding retirement is unavailable")
   def bind(run: RemnawaveNodeOnboardingRun, token: UUID): F[Unit]
   def setDesiredState(run: RemnawaveNodeOnboardingRun, token: UUID): F[Unit]
   def verifyInventoryBindingDesired(run: RemnawaveNodeOnboardingRun): F[Boolean]

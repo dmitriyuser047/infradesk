@@ -6,7 +6,7 @@ export type NodeProtocolSettings = { version: 1; kind: 'HYSTERIA2'; port: number
 export interface NodeOnboardingServer {
   id: string; name: string; address: string; environmentName: string; sshStatus: string
   serverProfileName: string | null; revisionNumber: number | null; serverProfileStatus: string
-  blockingProblems: string[]
+  blockingProblems: string[]; previousBindingReview?: boolean
 }
 export interface NodeOnboardingProfile { id: string; name: string; inbounds: { id: string; name: string }[] }
 export interface NodeOnboardingOptions {
@@ -33,11 +33,12 @@ export interface PanelSourceEvidence {
   confidence: 'AUTO_CANDIDATE' | 'MANUAL' | 'UNRESOLVED'; endpointFingerprint: string
 }
 export type NodeOnboardingRecoveryState = 'PRESENT_EXACT' | 'PRESENT_UNHEALTHY' | 'CONFIRMED_NOT_FOUND' | 'PRESENT_CONFLICT' | 'UNKNOWN'
-export type NodeOnboardingRecoveryAction = 'RECOVER' | 'RECREATE' | 'DELETE_RECREATE' | 'REPAIR_PANEL_CONNECTIVITY'
+export type NodeOnboardingRecoveryAction = 'RECOVER' | 'RECREATE' | 'DELETE_RECREATE' | 'REPAIR_PANEL_CONNECTIVITY' | 'RECREATE_WITH_NEW_CONFIG'
 export interface NodeOnboardingRecoverySummary {
   state: NodeOnboardingRecoveryState; action: NodeOnboardingRecoveryAction; sourceRunId: string
   previousExternalNodeId: string | null; previousCorrelationId: string; installationOwnerId: string
   localInstallation?: LocalInstallationObservation
+  previousInstallation?: { nodeName: string; address: string; nodePort: number; protocol: NodeProtocolSettings | null; certificateId: string | null; inventoryObjectId: string | null }
 }
 export interface LocalInstallationObservation {
   state: 'ABSENT' | 'OWNED_COMPLETE' | 'OWNED_PARTIAL' | 'OWNED_DAMAGED' | 'FOREIGN' | 'PORT_CONFLICT' | 'UNKNOWN'
@@ -49,6 +50,7 @@ export interface NodeOnboardingPreview {
   configProfileName: string; inboundNames: string[]; nodeImage: string | null
   changes: string[]; warnings: string[]; blockingProblems: string[]; packageFindings?: PackageProbeFinding[]
   nodeApi?: NodeApiCompatibility; panelCidrs?: string[]
+  protocolPorts?: { port: number; transport: 'tcp' | 'udp'; state: 'FREE' | 'OWNED_EXPECTED' | 'FOREIGN_LISTENER' | 'FIREWALL_CONFLICT' | 'OBSERVATION_UNKNOWN' }[]
   panelSource?: PanelSourceEvidence
   input?: Omit<NodeOnboardingPreviewRequest, 'panelCidrs' | 'panelSourceMode'>
   recovery?: NodeOnboardingRecoverySummary

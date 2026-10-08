@@ -490,7 +490,7 @@ final class NodeUpgradeIntegrationSpec extends FunSuite {
         beforeRolloutMembers <- w.run(rollouts.members(legacy._1.id))
         migrated <- infrastructure.database.DatabaseMigrator.migrate(config.copy(url=xa.kernel.getJdbcUrl),
           org.typelevel.log4cats.noop.NoOpLogger[IO])
-        _ = assertEquals(migrated.currentVersion,"62")
+        _ = assertEquals(migrated.currentVersion,"64")
         afterUpgrade <- w.run(repo.byId(s.run.id))
         afterUpgradeMembers <- w.run(repo.members(s.run.id))
         afterRollout <- w.run(rollouts.rolloutById(legacy._1.id))

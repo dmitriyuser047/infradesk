@@ -19,7 +19,7 @@ final class ConnectionScheduleClaimIntegrationSpec extends FunSuite {
   test("claimDue skips rows locked by a concurrent transaction") {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"), "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true")
     val org = UUID.randomUUID(); val ids = List.fill(4)(UUID.randomUUID()); val ownerA = UUID.randomUUID(); val ownerB = UUID.randomUUID(); val due = Instant.parse("2026-09-23T10:00:00Z")
-    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    PostgresTestDatabase.isolatedTransactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa); val schedules = new PostgresConnectionScheduleRepository
       val setup = for {
         _ <- sql"insert into organization (id, code, name) values ($org, ${org.toString}, 'skip locked')".update.run
@@ -46,7 +46,7 @@ final class ConnectionScheduleClaimIntegrationSpec extends FunSuite {
     assume(sys.env.get("INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS").contains("true"), "Set INFRADESK_RUN_POSTGRES_INTEGRATION_TESTS=true")
     val org = UUID.randomUUID(); val connection = UUID.randomUUID(); val ownerA = UUID.randomUUID(); val ownerB = UUID.randomUUID()
     val due = Instant.parse("2026-09-23T10:00:00Z")
-    PostgresTestDatabase.transactor(PostgresTestDatabase.config).use { xa =>
+    PostgresTestDatabase.isolatedTransactor(PostgresTestDatabase.config).use { xa =>
       val runner = new DoobieTransactionRunner(xa); val schedules = new PostgresConnectionScheduleRepository
       val setup = for {
         _ <- sql"insert into organization (id, code, name) values ($org, ${org.toString}, 'claim test')".update.run
