@@ -2,9 +2,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../i18n'
 import { AdministrationPage, AdministrationUserCreatePage, AdministrationUserPage, OrganizationCreatePage, OrganizationMembersPage } from './AdministrationPages'
+
+const getRandomValues = crypto.getRandomValues.bind(crypto)
+beforeEach(() => vi.stubGlobal('crypto', { getRandomValues }))
 
 const user = { id: 'target', email: 'target@example.test', displayName: 'Test account', isActive: true, isAdministrator: false, updatedAt: '2026-10-09T10:00:00Z' }
 const member = { user, organizationId: 'org', organizationName: 'First organization', role: 'MEMBER', isActive: true, updatedAt: '2026-10-09T10:01:00Z' }

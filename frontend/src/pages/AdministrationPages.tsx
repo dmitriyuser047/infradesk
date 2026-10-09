@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Building2, Crown, LockKeyhole, Plus, Search, Shield, ShieldCheck, UserRound, Users } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { createRequestId } from '../app/requestId'
 import { useMe } from '../api/auth'
 import { addMemberByEmail, changeMembership, changeUserStatus, createAdministrationUser, createOrganization,
   useAdministrationMutation, useAdministrationOrganizations, useAdministrationUser, useAdministrationUsers,
@@ -100,7 +101,7 @@ function OrganizationDirectory() {
 export function OrganizationCreatePage() {
   const i18n = useI18n(); const t = i18n.t.administration; const navigate = useNavigate()
   const create = useAdministrationMutation(createOrganization)
-  const [requestId] = useState(() => crypto.randomUUID()); const [name, setName] = useState(''); const [code, setCode] = useState('')
+  const [requestId] = useState(createRequestId); const [name, setName] = useState(''); const [code, setCode] = useState('')
   function submit(event: FormEvent) { event.preventDefault(); create.mutate({ requestId, name: name.trim(), code: code.trim() },
     { onSuccess: org => navigate(`/organizations/${encodeURIComponent(org.id)}/overview`) }) }
   return <AppShell><div className="workspace-page form-page"><WorkspaceHeader title={t.createOrganization} subtitle={t.organizationHint}
@@ -128,7 +129,7 @@ function UserCreateForm({ organizationId }: { organizationId: string | null }) {
   const permissions = useOrganizationPermissions(organizationId ?? undefined)
   const organizations = useAdministrationOrganizations(organizationId === null)
   const create = useAdministrationMutation((input: CreateAdministrationUserRequest) => createAdministrationUser(organizationId, input))
-  const [requestId] = useState(() => crypto.randomUUID()); const [email, setEmail] = useState(''); const [name, setName] = useState(''); const [password, setPassword] = useState('')
+  const [requestId] = useState(createRequestId); const [email, setEmail] = useState(''); const [name, setName] = useState(''); const [password, setPassword] = useState('')
   const [org, setOrg] = useState(organizationId ?? ''); const [role, setRole] = useState('MEMBER'); const [administrator, setAdministrator] = useState(false)
   const back = organizationId ? `/organizations/${encodeURIComponent(organizationId)}/members` : '/administration'
   function submit(event: FormEvent) { event.preventDefault(); create.mutate({ requestId, email, displayName: name, password,
