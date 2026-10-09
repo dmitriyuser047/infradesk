@@ -270,12 +270,6 @@ jobs:
           -- Hardening V53-V56: remove additive ownership/admission objects in this disposable fixture.
           -- V65-V66 additive objects must also be removed from this disposable old-schema fixture.
           drop table administration_audit, administration_request, installation_administrator, administration_access_guard;
-          drop function infradesk_inventory_archive_guard() cascade;
-          drop function infradesk_archived_inventory_reference_guard() cascade;
-          drop function infradesk_panel_delete_guard() cascade;
-          drop function infradesk_panel_delete_exclusion() cascade;
-          drop function infradesk_inventory_mutation_busy(uuid,uuid);
-          alter table integration_inventory_object drop column archived_at;
           -- Protocol onboarding V61-V62: remove only new intent/receipt and encrypted TLS objects.
           drop function if exists infradesk_onboarding_protocol_binding_guard() cascade;
           drop function if exists infradesk_onboarding_v7_expected_phases(jsonb) cascade;
@@ -627,12 +621,6 @@ jobs:
           -- Hardening V53-V56: remove additive ownership/admission objects in this disposable fixture.
           -- V65-V66 additive objects must also be removed from this disposable old-schema fixture.
           drop table administration_audit, administration_request, installation_administrator, administration_access_guard;
-          drop function infradesk_inventory_archive_guard() cascade;
-          drop function infradesk_archived_inventory_reference_guard() cascade;
-          drop function infradesk_panel_delete_guard() cascade;
-          drop function infradesk_panel_delete_exclusion() cascade;
-          drop function infradesk_inventory_mutation_busy(uuid,uuid);
-          alter table integration_inventory_object drop column archived_at;
           -- Protocol onboarding V61-V62: remove only new intent/receipt and encrypted TLS objects.
           drop function if exists infradesk_onboarding_protocol_binding_guard() cascade;
           drop function if exists infradesk_onboarding_v7_expected_phases(jsonb) cascade;
