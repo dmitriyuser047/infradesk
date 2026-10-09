@@ -170,6 +170,45 @@ describe('application shell', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('keeps an entered organization ready through administration, account settings and browser Back', async () => {
+    vi.useFakeTimers()
+    try {
+      const router = setup('/organizations/org/overview', 'OWNER', 'en', client => client.setQueryData(['me'], {
+        id: 'user', email: 'admin@example.test', displayName: 'Admin', isAdministrator: true,
+      }))
+      expect(document.querySelector('.workspace-splash')).toBeTruthy()
+      await act(async () => vi.advanceTimersByTime(1000))
+      for (const group of [en.shell.nav.overview, en.shell.groups.infrastructure, en.shell.groups.monitoring,
+        en.shell.groups.automation, en.shell.groups.structure]) {
+        fireEvent.click(screen.getByRole('button', { name: en.administration.title }))
+        expect(location()).toBe('/administration')
+        expect(document.querySelector('.workspace-splash')).toBeNull()
+        fireEvent.click(screen.getByRole('button', { name: group }))
+        expect(location()).toMatch(/^\/organizations\/org/)
+        expect(document.querySelector('.workspace-splash')).toBeNull()
+        expect(document.querySelector('.app-shell')?.hasAttribute('inert')).toBe(false)
+      }
+      fireEvent.click(screen.getByRole('button', { name: en.administration.title }))
+      fireEvent.click(screen.getByRole('link', { name: en.shell.returnToWorkspace }))
+      expect(location()).toBe('/organizations/org/overview')
+      expect(document.querySelector('.workspace-splash')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: en.shell.accountMenu('Admin') }))
+      fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: en.shell.accountSettings }))
+      expect(location()).toBe('/settings/account')
+      await act(async () => router.navigate(-1))
+      expect(location()).toBe('/organizations/org/overview')
+      expect(document.querySelector('.workspace-splash')).toBeNull()
+      fireEvent.click(screen.getByRole('link', { name: en.shell.organizations }))
+      fireEvent.click(screen.getByRole('link', { name: /Other org/ }))
+      expect(document.querySelector('.workspace-splash strong')?.textContent).toBe('Other org')
+      await act(async () => vi.advanceTimersByTime(1000))
+      expect(document.querySelector('.workspace-splash')).toBeNull()
+      fireEvent.click(screen.getByRole('link', { name: en.shell.organizations }))
+      fireEvent.click(screen.getByRole('link', { name: /InfraDesk ORG/ }))
+      expect(document.querySelector('.workspace-splash strong')?.textContent).toBe('InfraDesk')
+    } finally { vi.useRealTimers() }
+  })
+
   it('falls back to organization scope when a selected project is no longer available', async () => {
     setup('/organizations/org/integrations/one?project=removed&environment=gone&tab=nodes', 'OWNER', 'en', client => {
       client.setQueryData(['environments', 'org', 'removed'], [])

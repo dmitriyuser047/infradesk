@@ -108,11 +108,11 @@ function ShellFrame({ children, showEntrySplash }: { children: ReactNode; showEn
   const enteringOrganization = globalPage || !showEntrySplash ? undefined : scope.organizationId
   const [readyOrganization, setReadyOrganization] = useState<string | undefined>()
   useEffect(() => {
-    setReadyOrganization(undefined)
-    if (!enteringOrganization) return
+    // Global pages share this frame: visiting them does not leave the selected organization.
+    if (!enteringOrganization || enteringOrganization === readyOrganization) return
     const timer = window.setTimeout(() => setReadyOrganization(enteringOrganization), 1000)
     return () => window.clearTimeout(timer)
-  }, [enteringOrganization])
+  }, [enteringOrganization, readyOrganization])
   const entering = Boolean(enteringOrganization && (readyOrganization !== enteringOrganization || permissions.isPending))
   useEffect(() => {
     if (!globalPage && scope.organizationId && me.isSuccess && permissions.role) rememberWorkspace(me.data.id, scope)

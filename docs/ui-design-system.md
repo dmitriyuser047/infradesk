@@ -35,7 +35,8 @@ The user's existing theme preference is preserved.
   and an explicit workspace return. Global administration never grants organization access.
 - There is no top context breadcrumb or switcher. Project and environment filters live inside working
   pages and use the existing URL scope. Organization entry shows a one-second splash with its name and a preparing-data message;
-  within-organization page navigation does not restart it. Reduced motion disables its animation.
+  within-organization page navigation, administration and account settings do not restart it.
+  Selecting an organization from the standalone chooser starts a new entry. Reduced motion disables its animation.
 - Navigation uses quiet controls with restrained orange selection accents.
   Account controls reveal a surface on hover.
 - Account menus use solid matte surfaces, a quiet border and paired theme/language choices.
