@@ -9,6 +9,7 @@ import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
 
 import java.util.UUID
+import scala.concurrent.duration._
 
 /** Startup and shutdown of the whole application.
   *
@@ -121,11 +122,17 @@ object InfraDeskApplication {
     terminalConfig: infrastructure.config.TerminalConfig,
     loggers: AppLoggers
   ): Resource[IO, Server] =
+    httpServerBuilder(config)
+      .withHttpWebSocketApp(builder =>
+        HttpModule.build(persistence, application, authSettings, loggers, terminalConfig, Some(builder)))
+      .build
+
+  private[bootstrap] def httpServerBuilder(config: HttpConfig): EmberServerBuilder[IO] =
     EmberServerBuilder
       .default[IO]
       .withHost(config.host)
       .withPort(config.port)
-      .withHttpWebSocketApp(builder =>
-        HttpModule.build(persistence, application, authSettings, loggers, terminalConfig, Some(builder)))
-      .build
+      // Caddy pools upstream connections. Bound their drain below the runtime's 30-second
+      // shutdown budget, leaving time to release HTTP clients and the database pool.
+      .withShutdownTimeout(20.seconds)
 }

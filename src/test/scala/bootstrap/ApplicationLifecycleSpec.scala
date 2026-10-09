@@ -4,6 +4,14 @@ package bootstrap
 import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.effect.unsafe.implicits.global
 import munit.FunSuite
+import com.comcast.ip4s.{Host, Port}
+import infrastructure.config.HttpConfig
+import org.http4s.{HttpApp, Response, Status}
+import org.http4s.server.Server
+
+import java.io.{BufferedReader, InputStreamReader}
+import java.net.Socket
+import java.nio.charset.StandardCharsets
 
 import scala.concurrent.duration._
 
@@ -11,6 +19,39 @@ import scala.concurrent.duration._
   * server is always released when the scheduler loop ends or the application is cancelled.
   */
 final class ApplicationLifecycleSpec extends FunSuite {
+
+  test("production HTTP server drains a persistent upstream connection within the shutdown budget") {
+    val program = for {
+      acquired <- Deferred[IO, Server]
+      config = HttpConfig(Host.fromString("127.0.0.1").get, Port.fromInt(0).get)
+      server = InfraDeskApplication.httpServerBuilder(config)
+        .withHttpApp(HttpApp[IO](_ => IO.pure(Response[IO](Status.NoContent))))
+        .build.evalTap(value => acquired.complete(value).void)
+      elapsed <- Resource.make(InfraDeskApplication.serve(server, Nil).start)(_.cancel).use { fiber =>
+        acquired.get.flatMap { bound =>
+          Resource.make(IO.blocking {
+            val socket = new Socket("127.0.0.1", bound.address.getPort)
+            socket.setSoTimeout(5000)
+            socket
+          })(socket => IO.blocking(socket.close())).use { socket =>
+            IO.blocking {
+              socket.getOutputStream.write(
+                "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n"
+                  .getBytes(StandardCharsets.US_ASCII))
+              socket.getOutputStream.flush()
+              val reader = new BufferedReader(new InputStreamReader(socket.getInputStream, StandardCharsets.US_ASCII))
+              assertEquals(reader.readLine(), "HTTP/1.1 204 No Content")
+              var line = reader.readLine()
+              while (line != null && line.nonEmpty) line = reader.readLine()
+              assertEquals(line, "")
+            } *> fiber.cancel.timed.map(_._1).timeout(25.seconds)
+          }
+        }
+      }
+    } yield elapsed
+
+    assert(program.unsafeRunSync() < 25.seconds)
+  }
 
   test("HTTP stays alive when scheduler and notifications are disabled") {
     val program = for {

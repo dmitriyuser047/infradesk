@@ -66,6 +66,10 @@ SSH settings are also bounded: connect timeout is at most 60 seconds and command
 is longer than the maximum backend transport budget plus its recovery margin. Ordinary API
 routes retain a 60-second proxy timeout.
 
+On shutdown, Ember drains HTTP connections for at most 20 seconds, including Caddy's pooled
+upstream connections. This leaves time to release clients and the database pool before the
+30-second runtime budget and the container's 45-second stop grace period.
+
 Copy [`.env.production.example`](../.env.production.example) to a host path outside the
 repository — `/etc/infradesk/infradesk.env`, mode `600`, owned by root — and fill it in. The
 compose file reads it and contains no secrets itself:
