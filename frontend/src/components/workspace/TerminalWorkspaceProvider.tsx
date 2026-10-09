@@ -13,16 +13,20 @@ const noSnapshot = () => noSessions
  * ends one. Live transport state is kept here rather than in the query cache: it is not server
  * data to refetch but a connection this tab owns.
  *
- * Every terminal ends when the provider goes (the application is torn down) and when the session
- * is found to be signed out.
+ * Every terminal ends when the provider goes (the application is torn down), when the page is
+ * left and when the session is found to be signed out.
  */
 export function TerminalWorkspaceProvider({ children, workspace: supplied }: { children: ReactNode; workspace?: TerminalWorkspace }) {
   const [workspace] = useState(() => supplied ?? new TerminalWorkspace())
   useEffect(() => {
     const signedOut = () => workspace.closeAll()
     window.addEventListener('infradesk:unauthenticated', signedOut)
+    // Leaving or reloading the page ends its shells: the server would otherwise keep each one
+    // detached, awaiting a resume this page can no longer make.
+    window.addEventListener('pagehide', signedOut)
     return () => {
       window.removeEventListener('infradesk:unauthenticated', signedOut)
+      window.removeEventListener('pagehide', signedOut)
       workspace.closeAll()
     }
   }, [workspace])

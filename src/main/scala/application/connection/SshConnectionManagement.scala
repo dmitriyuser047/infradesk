@@ -3,7 +3,7 @@ package application.connection
 
 import application.audit.AuditRecorder
 import application.auth.ActorContext
-import application.port.{ConnectionRepository, ConnectionScheduleRepository, ConnectionSecretCryptography, ConnectionSecretRepository, EnvironmentRepository, ProjectRepository, SshConnectionProbe, SshCredentialResolver, SshProbeError, TransactionRunner}
+import application.port.{ConnectionDeletion, ConnectionLifecycleRepository, ConnectionRepository, ConnectionScheduleRepository, ConnectionSecretCryptography, ConnectionSecretRepository, EnvironmentRepository, ProjectRepository, SshConnectionProbe, SshCredentialResolver, SshProbeError, TransactionRunner}
 import cats.MonadThrow
 import cats.effect.IO
 import cats.syntax.all._
@@ -26,7 +26,8 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
   probe: SshConnectionProbe[IO],
   credentials: SshCredentialResolver[IO],
   cipher: ConnectionSecretCryptography,
-  audit: AuditRecorder[Tx]
+  audit: AuditRecorder[Tx],
+  lifecycle: ConnectionLifecycleRepository[Tx]
 ) {
   /** Step one of onboarding: learn who the host is, without offering it anything. */
   def probeHost(request: ProbeSshHostCommand): IO[String] =
@@ -56,6 +57,9 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
       // is telling us which fingerprint it accepts.
       _ <- IO.fromEither(requireTrustedHost(ssh))
       _ <- runner.run(validateScope(orgId, request.scope))
+      // Fail before contacting the host; the check that counts runs again under the lock below.
+      _ <- runner.run(connections.findByOrganization(orgId)).flatMap(existing =>
+        IO.fromEither(requireUniqueEndpoint(existing, None, ssh)))
       fingerprint <- probeConnection(ssh, request.credential)
       now <- IO(Instant.now())
       id <- IO(UUID.randomUUID())
@@ -67,10 +71,12 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
       schedule = ConnectionSchedule(orgId, id, request.schedule.enabled, request.schedule.intervalSeconds,
         now.plusSeconds(request.schedule.intervalSeconds), 0L)
       _ <- runner.run(for {
+        _ <- lifecycle.lockOrganization(orgId)
         existing <- connections.findByOrganization(orgId)
         _ <- if (existing.exists(_.code.equalsIgnoreCase(connection.code)))
           MonadThrow[Tx].raiseError[Unit](ConnectionManagementError("CONNECTION_CODE_ALREADY_EXISTS", "Connection code already exists"))
         else MonadThrow[Tx].unit
+        _ <- requireUniqueEndpoint(existing, None, ssh).liftTo[Tx]
         _ <- secrets.save(secret)
         _ <- connections.save(connection)
         _ <- schedules.save(schedule)
@@ -135,10 +141,12 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
         else old._2.map(_.nextRunAt).getOrElse(now.plusSeconds(request.schedule.intervalSeconds)),
         old._2.map(_.consecutiveFailures).getOrElse(0L))
       _ <- runner.run(for {
+        _ <- lifecycle.lockOrganization(orgId)
         existing <- connections.findByOrganization(orgId)
         _ <- if (existing.exists(c => c.id != id && c.code.equalsIgnoreCase(next.code)))
           MonadThrow[Tx].raiseError[Unit](ConnectionManagementError("CONNECTION_CODE_ALREADY_EXISTS", "Connection code already exists"))
         else MonadThrow[Tx].unit
+        _ <- requireUniqueEndpoint(existing, Some(id), effectiveSsh).liftTo[Tx]
         _ <- newSecret.fold(MonadThrow[Tx].unit)(secrets.save)
         saved <- connections.saveIfUnmodified(next, connection.updatedAt)
         _ <- if (saved) MonadThrow[Tx].unit else MonadThrow[Tx].raiseError[Unit](
@@ -154,20 +162,40 @@ final class SshConnectionManagement[Tx[_]: MonadThrow](
     } yield ConnectionOverview(next, Some(schedule), None)
   }
 
-  def deactivate(actor: ActorContext, id: UUID): IO[Unit] = {
+  /**
+   * Deletes the connection together with the servers only it observes, active or not. Its
+   * credential is destroyed; its history stays. Live terminals end at their next heartbeat,
+   * which sees the connection changed. Refused while work that needs the connection is queued
+   * or running.
+   */
+  def delete(actor: ActorContext, id: UUID): IO[Unit] = {
     val orgId = actor.organizationId
-    runner.run(for {
-      found <- connections.findById(orgId, id)
-      connection <- found.liftTo[Tx](ConnectionManagementError("CONNECTION_NOT_FOUND", "Connection was not found"))
-      now <- MonadThrow[Tx].pure(Instant.now())
-      _ <- if (connection.isActive) connections.save(connection.copy(isActive = false, updatedAt = now))
-        else MonadThrow[Tx].unit
-      schedule <- schedules.findByConnection(orgId, id)
-      _ <- schedule.fold(MonadThrow[Tx].unit)(s => schedules.save(s.copy(enabled = false)))
-      // The journal outlives the connection, which is why the target carries no foreign key.
-      _ <- audit.record(actor, AuditAction.ConnectionDeleted, AuditTargetType.Connection, Some(id))
-    } yield ())
+    IO(Instant.now()).flatMap(now => runner.run(lifecycle.delete(orgId, id, now).flatMap {
+      case ConnectionDeletion.NotFound =>
+        MonadThrow[Tx].raiseError[Unit](ConnectionManagementError("CONNECTION_NOT_FOUND", "Connection was not found"))
+      case ConnectionDeletion.Busy =>
+        MonadThrow[Tx].raiseError[Unit](ConnectionManagementError("CONNECTION_BUSY",
+          "Work that uses this connection is still running; try again when it has finished"))
+      case ConnectionDeletion.Deleted(secretRef, _) => for {
+        _ <- secretRef.flatMap(raw => SecretRef.parse(raw).toOption) match {
+          case Some(SecretRef.Database(secretId)) => secrets.delete(orgId, secretId)
+          case _ => MonadThrow[Tx].unit
+        }
+        // The journal outlives the connection, which is why the target carries no foreign key.
+        _ <- audit.record(actor, AuditAction.ConnectionDeleted, AuditTargetType.Connection, Some(id))
+      } yield ()
+    }))
   }
+
+  /** One connection per server: the same host and port cannot be added twice. */
+  private def requireUniqueEndpoint(existing: List[Connection], self: Option[UUID],
+    ssh: SshConnectionSettings): Either[ConnectionManagementError, Unit] =
+    existing.find { other =>
+      !self.contains(other.id) && other.connectorType == "SSH" &&
+        SshConnectionSettings.from(other.config).toOption.exists(settings =>
+          settings.host.trim.equalsIgnoreCase(ssh.host.trim) && settings.port == ssh.port)
+    }.fold[Either[ConnectionManagementError, Unit]](Right(()))(other => Left(ConnectionManagementError(
+      "CONNECTION_HOST_ALREADY_EXISTS", s"This server already has the connection ${other.name}")))
 
   private def validateScope(orgId: UUID, scope: ConnectionScope): Tx[Unit] = scope match {
     case ConnectionScope.Organization => MonadThrow[Tx].unit

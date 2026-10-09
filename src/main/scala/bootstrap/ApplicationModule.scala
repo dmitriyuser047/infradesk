@@ -622,7 +622,8 @@ object ApplicationModule {
         integrations.sshConnectionProbe,
         integrations.sshCredentialResolver,
         integrations.secretCipher,
-        auditRecorder
+        auditRecorder,
+        connectionLifecycleRepository
       ),
       openSshTerminal = integrations.openSshTerminal,
       terminalSessionLifecycle = new application.terminal.TerminalSessionLifecycle(

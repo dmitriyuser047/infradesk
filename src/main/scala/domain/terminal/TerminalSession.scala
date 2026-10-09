@@ -28,9 +28,11 @@ object TerminalCloseReason {
   case object ConnectionChanged extends TerminalCloseReason("CONNECTION_CHANGED")
   case object SessionRevoked extends TerminalCloseReason("TERMINAL_SESSION_REVOKED")
   case object ValidationFailed extends TerminalCloseReason("SESSION_VALIDATION_FAILED")
+  /** The socket was lost and no socket resumed the shell before the detach timeout. */
+  case object DetachTimeout extends TerminalCloseReason("DETACH_TIMEOUT")
   val All: List[TerminalCloseReason] = List(ClientClose, RemoteEof, IdleTimeout, MaxLifetime,
     ServerShutdown, LeaseExpired, SshOpenFailed, SshFailure, ProtocolError, AuthSessionEnded,
-    PermissionRevoked, ConnectionChanged, SessionRevoked, ValidationFailed)
+    PermissionRevoked, ConnectionChanged, SessionRevoked, ValidationFailed, DetachTimeout)
   def fromCode(code: String): Option[TerminalCloseReason] = All.find(_.code == code)
 }
 

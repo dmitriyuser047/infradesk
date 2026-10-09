@@ -122,10 +122,15 @@ object InfraDeskApplication {
     terminalConfig: infrastructure.config.TerminalConfig,
     loggers: AppLoggers
   ): Resource[IO, Server] =
-    httpServerBuilder(config)
-      .withHttpWebSocketApp(builder =>
-        HttpModule.build(persistence, application, authSettings, loggers, terminalConfig, Some(builder)))
-      .build
+    // Live shells outlive their sockets, so they live beside the server: released after it, they
+    // end every remaining shell with SERVER_SHUTDOWN once no socket can reach them any more.
+    infrastructure.http.LiveTerminals.resource(application.terminalSessionLifecycle, terminalConfig, loggers.terminal)
+      .flatMap { liveTerminals =>
+        httpServerBuilder(config)
+          .withHttpWebSocketApp(builder =>
+            HttpModule.build(persistence, application, authSettings, loggers, terminalConfig, Some(builder -> liveTerminals)))
+          .build
+      }
 
   private[bootstrap] def httpServerBuilder(config: HttpConfig): EmberServerBuilder[IO] =
     EmberServerBuilder

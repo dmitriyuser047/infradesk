@@ -17,7 +17,9 @@ final case class TerminalConfig(
   maxUserSessions: Int = 4,
   maxOrganizationSessions: Int = 32,
   heartbeatInterval: FiniteDuration = 15.seconds,
-  leaseDuration: FiniteDuration = 45.seconds
+  leaseDuration: FiniteDuration = 45.seconds,
+  detachTimeout: FiniteDuration = 10.minutes,
+  detachedOutputBytes: Int = 262144
 ) {
   require(initialColumns > 0 && initialColumns <= maxColumns)
   require(initialRows > 0 && initialRows <= maxRows)
@@ -32,6 +34,8 @@ final case class TerminalConfig(
   require(leaseDuration >= heartbeatInterval * 2 &&
     leaseDuration >= heartbeatInterval + TerminalConfig.RenewWorstCase + TerminalConfig.RenewSafetyMargin &&
     leaseDuration <= 15.minutes)
+  require(detachTimeout > Duration.Zero && detachTimeout <= 2.hours)
+  require(detachedOutputBytes >= 4096 && detachedOutputBytes <= 4194304)
 }
 
 object TerminalConfig {
@@ -40,6 +44,8 @@ object TerminalConfig {
   val RenewRetryDelays: List[FiniteDuration] = List(2.seconds, 4.seconds)
   val RenewWorstCase: FiniteDuration = RenewAttemptTimeout * 3 + RenewRetryDelays.foldLeft(Duration.Zero: FiniteDuration)(_ + _)
   val RenewSafetyMargin: FiniteDuration = 5.seconds
+  /** An attached socket that takes no output for this long is treated as gone and detached. */
+  val OutputStallTimeout: FiniteDuration = 30.seconds
   val default: TerminalConfig = TerminalConfig()
 
   def fromEnvironment(values: Map[String, String]): Either[IllegalArgumentException, TerminalConfig] =
@@ -58,8 +64,11 @@ object TerminalConfig {
       heartbeat <- bounded(values, "INFRADESK_TERMINAL_HEARTBEAT_SECONDS", default.heartbeatInterval.toSeconds.toInt, 1, 300)
       lease <- bounded(values, "INFRADESK_TERMINAL_LEASE_SECONDS", default.leaseDuration.toSeconds.toInt,
         math.max(heartbeat * 2, heartbeat + RenewWorstCase.toSeconds.toInt + RenewSafetyMargin.toSeconds.toInt), 900)
+      detachSeconds <- bounded(values, "INFRADESK_TERMINAL_DETACH_TIMEOUT_SECONDS", default.detachTimeout.toSeconds.toInt, 1, 7200)
+      detachedBytes <- bounded(values, "INFRADESK_TERMINAL_DETACHED_OUTPUT_BYTES", default.detachedOutputBytes, 4096, 4194304)
     } yield TerminalConfig(columns, rows, maxColumns, maxRows, frameBytes, controlBytes,
-      idleSeconds.seconds, lifetimeSeconds.seconds, sessions, userSessions, orgSessions, heartbeat.seconds, lease.seconds)
+      idleSeconds.seconds, lifetimeSeconds.seconds, sessions, userSessions, orgSessions, heartbeat.seconds, lease.seconds,
+      detachSeconds.seconds, detachedBytes)
 
   private def bounded(values: Map[String, String], key: String, default: Int, min: Int, max: Int):
     Either[IllegalArgumentException, Int] = values.get(key) match {

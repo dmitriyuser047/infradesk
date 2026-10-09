@@ -20,7 +20,7 @@ class Socket {
   onerror: (() => void) | null = null
   send = vi.fn(); close = vi.fn(() => { this.readyState = 3 })
   constructor(readonly url: string) { Socket.instances.push(this) }
-  ready() { this.onmessage?.({ data: JSON.stringify({ type: 'ready', protocolVersion: 1, sessionId: '00000000-0000-0000-0000-000000000001' }) }) }
+  ready(extra: Record<string, unknown> = {}) { this.onmessage?.({ data: JSON.stringify({ type: 'ready', protocolVersion: 1, sessionId: '00000000-0000-0000-0000-000000000001', ...extra }) }) }
   // Built from this realm's typed arrays: the transport accepts only a genuine ArrayBuffer as output.
   output(text: string) { this.onmessage?.({ data: Uint8Array.from(text, char => char.charCodeAt(0)).buffer }) }
   control(type: 'closed' | 'error', code: string) { this.onmessage?.({ data: JSON.stringify({ type, protocolVersion: 1, code }) }) }
@@ -249,6 +249,56 @@ describe('terminal workspace', () => {
     expect(written.indexOf('\x1b[?1049l\x1b[!p')).toBeGreaterThan(written.indexOf('$ make build'))
     expect(written).toContain('─'.repeat(40))
     vi.useRealTimers()
+  })
+
+  it('resumes the same server shell after a lost socket and simply continues on screen', async () => {
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    act(() => Socket.instances[0].output('$ make build\r\n'))
+    expect(Socket.instances[0].url).not.toContain('resume=')
+    vi.useFakeTimers()
+    act(() => Socket.instances[0].onclose?.({ reason: '' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(Socket.instances[1].url).toMatch(/\/terminal\?resume=00000000-0000-0000-0000-000000000001$/)
+    act(() => Socket.instances[1].ready({ resumed: true, outputTruncated: false }))
+    act(() => Socket.instances[1].output('compiled\r\n'))
+    expect(FakeTerminal.instances[0].written.join('')).toBe('$ make build\r\ncompiled\r\n')
+    expect(FakeTerminal.instances[0].clear).not.toHaveBeenCalled()
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0)
+  })
+
+  it('marks dropped output of a resumed shell and starts a fresh shell when it cannot be resumed', async () => {
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    vi.useFakeTimers()
+    act(() => Socket.instances[0].onclose?.({ reason: '' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    act(() => Socket.instances[1].ready({ resumed: true, outputTruncated: true }))
+    expect(FakeTerminal.instances[0].written.join('')).toContain('\u2026')
+    act(() => Socket.instances[1].onclose?.({ reason: '' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(Socket.instances[2].url).toContain('resume=')
+    // The server no longer has the shell: a fresh one opens at once, without a resume.
+    act(() => Socket.instances[2].control('error', 'SESSION_NOT_RESUMABLE'))
+    expect(Socket.instances).toHaveLength(4)
+    expect(Socket.instances[3].url).not.toContain('resume=')
+    act(() => Socket.instances[3].ready())
+    expect(FakeTerminal.instances[0].written.join('')).toContain('\x1b[?1049l\x1b[!p')
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0)
+  })
+
+  it('ends the server shell with a close control on Disconnect, and a later Connect opens a new one', async () => {
+    render(app(workspace))
+    await connect()
+    act(() => Socket.instances[0].ready())
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
+    expect(Socket.instances[0].send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'close' }))
+    expect(Socket.instances[0].close).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
+    await flush()
+    expect(Socket.instances[1].url).not.toContain('resume=')
   })
 
   it('uses one socket per retry and resets the delay after a successful reconnect', async () => {

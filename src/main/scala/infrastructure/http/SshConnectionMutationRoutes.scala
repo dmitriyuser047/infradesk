@@ -77,7 +77,7 @@ final class SshConnectionMutationRoutes[Tx[_]](
     case request @ DELETE -> Root / "api" / "v1" / "organizations" / org / "connections" / connection =>
       authorization.require(request, OrganizationPermission.ManageConnections) { context =>
         withIds(org, connection) { (_, connectionId) =>
-          respond(management.deactivate(context.actor, connectionId).flatMap(_ => NoContent()))
+          respond(management.delete(context.actor, connectionId).flatMap(_ => NoContent()))
         }
       }
   }
@@ -100,8 +100,8 @@ final class SshConnectionMutationRoutes[Tx[_]](
         val body = ApiErrorResponse(error.code, error.getMessage)
         error.code match {
           case "CONNECTION_NOT_FOUND" | "PROJECT_NOT_FOUND" | "ENVIRONMENT_NOT_FOUND" => NotFound(body)
-          case "CONNECTION_CODE_ALREADY_EXISTS" | "CONNECTION_MODIFIED" |
-               "SSH_HOST_KEY_MISMATCH" => Conflict(body)
+          case "CONNECTION_CODE_ALREADY_EXISTS" | "CONNECTION_MODIFIED" | "CONNECTION_HOST_ALREADY_EXISTS" |
+               "CONNECTION_BUSY" | "SSH_HOST_KEY_MISMATCH" => Conflict(body)
           // Reaching the host failed for a reason the operator can act on; the request itself
           // was well formed.
           case "SSH_CONNECTION_FAILED" | "SSH_AUTHENTICATION_FAILED" | "SSH_PRIVATE_KEY_INVALID" |

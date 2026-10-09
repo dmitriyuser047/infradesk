@@ -2,7 +2,7 @@ import { lazy, Suspense } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { CheckCircle2, Server, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 
-import { useConnection, useConnectionSyncSessions, useDeactivateConnection, useRunConnectionSync } from '../api/connections'
+import { useConnection, useConnectionSyncSessions, useDeleteConnection, useRunConnectionSync } from '../api/connections'
 import { ApiError } from '../api/httpClient'
 import { useConnectionInfrastructureSummary, useConnectionResources } from '../api/infrastructure'
 import { useI18n } from '../i18n'
@@ -58,7 +58,7 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
   const scopedProjectId = scope && scope.type !== ConnectionScopeType.organization ? scope.projectId : null
   const environmentsQuery = useEnvironments(organizationId, scopedProjectId)
   const permissions = useOrganizationPermissions(organizationId)
-  const deactivate = useDeactivateConnection(organizationId, connectionId)
+  const remove = useDeleteConnection(organizationId, connectionId)
   const sync = useRunConnectionSync(organizationId, connectionId)
   const navigate = useNavigate()
   const context = workspaceQuery(searchParams)
@@ -108,19 +108,21 @@ function ConnectionContent({ organizationId, connectionId }: { organizationId: s
       back={backLink} status={<><ConnectionStatusBadge active={connection.active} />{connection.active && connection.lastSync?.status === SyncStatus.failed ? <SyncStatusBadge status={connection.lastSync.status} /> : null}</>}
       actions={<>
         {syncAction}
-        {canManage && connection.active && connection.connectorType === 'SSH' ? <>
-          <Link className="secondary-button" to={`${connectionBase}/${encodeURIComponent(connectionId)}/edit${context}`}>{i18n.t.common.edit}</Link>
-          <PageActionMenu actions={[{ label: t.deactivate, danger: true, disabled: deactivate.isPending, onSelect: () => {
-            if (window.confirm(i18n.t.workScreens.deactivateConfirm(connection.name))) {
-              deactivate.mutate(undefined, { onSuccess: () => navigate(`${connectionBase}${context}`) })
+        {canManage && connection.active && connection.connectorType === 'SSH'
+          ? <Link className="secondary-button" to={`${connectionBase}/${encodeURIComponent(connectionId)}/edit${context}`}>{i18n.t.common.edit}</Link>
+          : null}
+        {/* An inactive connection can be deleted too: that is how it leaves the list. */}
+        {canManage && connection.connectorType === 'SSH' ? <PageActionMenu actions={[{ label: t.delete, danger: true,
+          disabled: remove.isPending, onSelect: () => {
+            if (window.confirm(i18n.t.workScreens.deleteConfirm(connection.name))) {
+              remove.mutate(undefined, { onSuccess: () => navigate(`${connectionBase}${context}`) })
             }
-          } }]} />
-        </> : null}
+          } }]} /> : null}
       </>} />
     {connectionQuery.isError ? <RefreshWarning updatedAt={connectionQuery.dataUpdatedAt} retry={() => connectionQuery.refetch()} /> : null}
     {connection.lastSync?.errorCode === 'SSH_HOST_KEY_MISMATCH' ? <InlineAlert tone="danger"
       title={i18n.t.connections.form.statusMismatch}>{i18n.t.connections.form.statusMismatchDetail}</InlineAlert> : null}
-    {deactivate.isError ? <InlineAlert tone="danger" title={describeError(deactivate.error, i18n)} /> : null}
+    {remove.isError ? <InlineAlert tone="danger" title={describeError(remove.error, i18n)} /> : null}
     {sync.isError ? <InlineAlert tone="danger" title={describeError(sync.error, i18n)} /> : null}
     {sync.isSuccess ? <InlineAlert tone={sync.data.status === SyncStatus.failed ? 'danger' : 'success'}
       title={sync.data.status === SyncStatus.failed ? getSyncFailureMessage(sync.data, i18n) : t.syncCompleted} /> : null}

@@ -4,8 +4,10 @@ const chunkBytes = 16 * 1024
 const queueLimit = 256 * 1024
 const highWater = 64 * 1024
 
-export function terminalUrl(location: Pick<Location, 'protocol' | 'host'>, organizationId: string, connectionId: string): string {
-  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/organizations/${encodeURIComponent(organizationId)}/connections/${encodeURIComponent(connectionId)}/terminal`
+/** `resume` names a live shell of this login session to attach to instead of opening a new one. */
+export function terminalUrl(location: Pick<Location, 'protocol' | 'host'>, organizationId: string, connectionId: string, resume?: string): string {
+  const query = resume ? `?resume=${encodeURIComponent(resume)}` : ''
+  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/organizations/${encodeURIComponent(organizationId)}/connections/${encodeURIComponent(connectionId)}/terminal${query}`
 }
 
 export function inputChunks(value: string): Uint8Array[] {
@@ -35,6 +37,10 @@ export class TerminalTransport {
   private lastSize = ''
   private pendingSize: { columns: number; rows: number } | undefined
   sessionId: string | undefined
+  /** From `ready`: this socket continues a shell that outlived an earlier one. */
+  resumed = false
+  /** From `ready`: output produced while no socket was attached was partly dropped. */
+  outputTruncated = false
 
   constructor(url: string, private sink: TerminalSink, createSocket = (url: string, protocol: string) => new WebSocket(url, protocol)) {
     sink.state('connecting')
@@ -56,6 +62,8 @@ export class TerminalTransport {
         if (message.type === 'ready' && message.protocolVersion === 1 && !this.active) {
           if (typeof message.sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(message.sessionId)) throw new Error()
           this.sessionId = message.sessionId
+          this.resumed = message.resumed === true
+          this.outputTruncated = message.outputTruncated === true
           this.active = true
           sink.state('connected')
           sink.ready()
@@ -99,8 +107,15 @@ export class TerminalTransport {
     this.flush()
   }
 
+  /**
+   * Ends the shell, not only this socket. The server keeps a shell whose socket merely went away,
+   * so the explicit end is a control message sent before the socket closes.
+   */
   disconnect(): void {
     if (!this.disposed) {
+      if (this.active && this.socket.readyState === 1) {
+        try { this.socket.send(JSON.stringify({ type: 'close' })) } catch { /* the socket is already failing */ }
+      }
       this.sink.state('closing')
       this.dispose()
       this.sink.state('closed', 'CLIENT_CLOSE')

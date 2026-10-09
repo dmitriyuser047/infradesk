@@ -6,12 +6,21 @@ The connection must be active, have configured credentials and a confirmed pinne
 A reported host-key mismatch blocks the UI until the connection is explicitly reviewed.
 
 Connect is explicit. Navigation detaches the viewport while the workspace keeps its shell
-and scrollback alive. Disconnect ends the socket and SSH shell; closing the dock tab
-releases the emulator. An unexpected transport loss retries a fresh SSH session up to
-three times with 1, 2 and 4 second delays. Manual Disconnect never retries. A new
-session keeps the prior shell output in the scrollback: after `ready` it leaves any
-alternate screen, soft-resets terminal modes and draws a separator line; until then, a
-status label marks it as previous output. Only the explicit Clear action erases it. Fullscreen uses the browser's Fullscreen API.
+and scrollback alive. Disconnect, closing the dock tab, signing out and leaving or reloading
+the page end the SSH shell; closing the dock tab also releases the emulator.
+
+The SSH shell belongs to its durable terminal session, not to the WebSocket. A socket lost
+without the explicit `close` control (network loss, proxy restart, sleeping laptop) leaves
+the shell running, detached, for the detach timeout (10 minutes by default): commands such
+as a long build keep running and their output is kept, newest bytes first, up to a bound
+(256 KiB by default). The client retries up to three times with 1, 2 and 4 second delays,
+and Reconnect tries again later; each attempt resumes the same shell and the screen simply
+continues, with a dim `…` line where detached output was dropped. If the shell is gone, the
+server answers SESSION_NOT_RESUMABLE and the client opens a fresh shell at once. A fresh
+shell keeps the prior output in the scrollback: after `ready` it leaves any alternate
+screen, soft-resets terminal modes and draws a separator line; until then, a status label
+marks it as previous output. Only the explicit Clear action erases it. Manual Disconnect
+never retries. Fullscreen uses the browser's Fullscreen API.
 
 The terminal has independent light and near-black themes. Only the theme choice is
 persisted in local storage. xterm provides mouse selection and scrollback. Copy and
@@ -26,9 +35,23 @@ The same-origin WebSocket path is
 The browser requests `infradesk-terminal-v1`; the existing authentication cookie and
 same-origin check authorize the Upgrade. No token is placed in the URL or subprotocol.
 
-Protocol v1 uses `protocolVersion: 1`. `ready` contains `columns`, `rows` and a public
-terminal `sessionId` UUID. Lease owner/token are server-only. Binary frames carry bytes
-in both directions. Resize is JSON `{ "type": "resize", "columns": 100, "rows": 35 }`.
+Protocol v1 uses `protocolVersion: 1`. `ready` contains `columns`, `rows`, a public
+terminal `sessionId` UUID, `resumed` and `outputTruncated`. Lease owner/token are
+server-only. Binary frames carry bytes in both directions. Resize is JSON
+`{ "type": "resize", "columns": 100, "rows": 35 }`. `{ "type": "close" }` ends the shell
+(close 1000 CLIENT_CLOSE). Ember answers a bare Close frame itself, indistinguishably from
+a lost connection, so a Close frame alone only detaches.
+
+`?resume={sessionId}` on the same path attaches a new socket to a live shell. The usual
+authentication, OpenTerminal permission, same-origin and active SSH connection checks apply;
+the shell must also belong to the same organization, connection, user and login session,
+and the connection version must be unchanged. Shells live only in the backend process that
+opened them. A missing, foreign, ended or other-process shell is answered identically, with
+an error control SESSION_NOT_RESUMABLE and close 1000. A resume supersedes a socket still
+attached to the shell, which receives close 1000 SESSION_RESUMED; only the current socket
+can end the shell or fail it closed with a protocol error. While a socket is attached, a full
+output buffer holds the shell back as before; a socket that takes no output for 30 seconds is
+treated as gone and detached.
 Safe error/closed controls carry bounded codes; native pre-Upgrade browser failures cannot
 expose the HTTP response body. Unknown codes have a generic localized presentation.
 
@@ -64,12 +87,19 @@ closes them as LEASE_EXPIRED and journals their closure in the same transaction.
 
 Policy close code 1008: AUTH_SESSION_ENDED, TERMINAL_PERMISSION_REVOKED,
 CONNECTION_CHANGED, TERMINAL_SESSION_REVOKED.
-Normal close code 1000: CLIENT_CLOSE, REMOTE_EOF, IDLE_TIMEOUT, MAX_LIFETIME.
+Normal close code 1000: CLIENT_CLOSE, REMOTE_EOF, IDLE_TIMEOUT, MAX_LIFETIME,
+SESSION_NOT_RESUMABLE, SESSION_RESUMED. A detached shell that is not resumed in time closes
+its durable session as DETACH_TIMEOUT. Heartbeat, idle and lifetime limits keep applying while
+a shell is detached; output counts as activity. Server shutdown ends every shell with
+SERVER_SHUTDOWN.
 Malformed frames use 1002, oversized frames 1009, SSH/unexpected/validation failures 1011.
 
 Configuration is in `.env.example` and production compose. Heartbeat must be positive,
 at most 300 seconds; lease must be at least twice heartbeat and at most 900 seconds.
-Default idle timeout remains 30 minutes; maximum lifetime remains 2 hours.
+Default idle timeout remains 30 minutes; maximum lifetime remains 2 hours. The detach timeout
+(`INFRADESK_TERMINAL_DETACH_TIMEOUT_SECONDS`, 1–7200, default 600) and the detached output
+bound (`INFRADESK_TERMINAL_DETACHED_OUTPUT_BYTES`, 4096–4194304, default 262144) are
+configurable. A detached shell keeps its capacity slot until it ends.
 
 Production CI exercises the real nginx-to-backend-to-SSH path, validates the ready UUID,
 reads a safe marker in binary output, logs out through the API and requires a safe

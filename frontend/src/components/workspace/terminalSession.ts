@@ -17,6 +17,9 @@ const darkTheme = {
 /** Main screen, soft terminal reset (modes and attributes, not content), then a dim rule. */
 const sessionSeparator = new TextEncoder().encode(`\x1b[?1049l\x1b[!p\r\n\x1b[2m${'─'.repeat(40)}\x1b[0m\r\n`)
 
+/** A resumed shell whose output overflowed the server's bound while no socket was attached. */
+const outputGap = new TextEncoder().encode('\r\n\x1b[2m…\x1b[0m\r\n')
+
 function savedTheme(): TerminalTheme {
   try { return localStorage.getItem(themeKey) === 'dark' ? 'dark' : 'light' } catch { return 'light' }
 }
@@ -85,6 +88,11 @@ export class TerminalSessionController {
   private retries = 0
   private manualDisconnect = false
   private everReady = false
+  /**
+   * The server's shell to resume after a lost socket, kept until this terminal ends it. A shell the
+   * server has already ended costs one SESSION_NOT_RESUMABLE answer, never a wrong attachment.
+   */
+  private resumeId: string | undefined
 
   constructor(organizationId: string, connectionId: string, connectionName: string, private deps: TerminalSessionDependencies) {
     this.element = document.createElement('div')
@@ -131,15 +139,20 @@ export class TerminalSessionController {
     this.transport?.dispose()
     let transport: TerminalTransport | undefined
     try {
-      transport = this.deps.createTransport(terminalUrl(this.deps.location, this.current.organizationId, this.current.connectionId), {
+      transport = this.deps.createTransport(terminalUrl(this.deps.location, this.current.organizationId, this.current.connectionId, this.resumeId), {
         write: bytes => { if (this.transport === transport) this.emulator?.write(bytes) },
         ready: () => {
           if (this.transport !== transport) return
-          // Keep the earlier commands and output: the user may need them to repeat work the lost
-          // shell was doing. Leave any full-screen program's buffer and modes behind, then mark the
-          // boundary so new output is never mistaken for the old shell's.
-          if (this.everReady) this.emulator?.write(sessionSeparator)
+          // A resumed shell simply continues on screen. A new shell keeps the earlier commands and
+          // output, which the user may need to repeat the lost shell's work: leave any full-screen
+          // program's buffer and modes behind, then mark the boundary.
+          if (transport?.resumed) {
+            if (transport.outputTruncated) this.emulator?.write(outputGap)
+          } else if (this.everReady) {
+            this.emulator?.write(sessionSeparator)
+          }
           this.everReady = true
+          this.resumeId = transport?.sessionId
           this.update({ serverSessionId: transport?.sessionId })
           this.retries = 0
           this.fit()
@@ -147,6 +160,12 @@ export class TerminalSessionController {
         },
         state: (state, code) => {
           if (this.transport !== transport && transport !== undefined) return
+          if (code === 'SESSION_NOT_RESUMABLE') {
+            // The shell is gone or lives on another server process: start a fresh one at once.
+            this.resumeId = undefined
+            this.openTransport()
+            return
+          }
           if (state === 'connecting' && this.retries > 0) state = 'reconnecting'
           const ended = state === 'closed' || state === 'error'
           if (ended && !this.manualDisconnect && this.shouldRetry(code) && this.retries < 3) {
@@ -167,6 +186,7 @@ export class TerminalSessionController {
   /** Ends the SSH session but keeps this terminal, its history and its place in the dock. */
   disconnect(): void {
     this.manualDisconnect = true
+    this.resumeId = undefined
     clearTimeout(this.retryTimer)
     if (this.transport && this.running) {
       this.transport.disconnect()
@@ -181,11 +201,13 @@ export class TerminalSessionController {
   close(): void {
     this.closed = true
     this.manualDisconnect = true
+    this.resumeId = undefined
     clearTimeout(this.retryTimer)
     this.attempt++
     const transport = this.transport
     this.transport = undefined
-    transport?.dispose()
+    // Ends the server's shell too; merely closing the socket would leave it detached.
+    transport?.disconnect()
     this.cleanup.forEach(dispose => dispose())
     this.cleanup = []
     this.emulator?.dispose()

@@ -210,7 +210,7 @@
 :root .navigation-panel .sidebar-nav { grid-column: 1; grid-row: 2; display: flex; flex-wrap: wrap; gap: 8px 20px; min-width: 0; padding: 0; }
 :root .navigation-panel .sidebar-nav ul { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 :root .navigation-panel .nav-group + .nav-group { margin-top: 0; }
-:root .navigation-panel .nav-link { font-size: var(--font-size-small); min-height: 34px; padding-inline: 12px; }
+:root .navigation-panel .nav-link { font-size: var(--font-size-small); min-height: 34px; padding-inline: 12px; white-space: nowrap; }
 :root .navigation-panel .nav-link-active { background: var(--primary-soft); color: var(--primary); }
 :root .navigation-panel .nav-link-active::before { display: none; }
 :root .navigation-panel .nav-group-label { padding: 0 0 6px; }

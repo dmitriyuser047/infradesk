@@ -42,6 +42,13 @@
   --danger-border: #edbcbc;
   --info-border: #bfd2ef;
 
+  /* Charts: marks read against the panel, so they carry more chroma than status text */
+  --chart-success: #2e9d62;
+  --chart-danger: #d64545;
+  --chart-warning: #c98a1a;
+  --chart-neutral: #9aa5b4;
+  --chart-track: #d5dbe3;
+
   /* Sidebar */
   --sidebar-bg: var(--surface);
   --sidebar-text: var(--text-secondary);
@@ -157,6 +164,11 @@
   --info: #b7cac0;
   --info-soft: #26332c;
   --info-border: #4c6255;
+  --chart-success: #45c486;
+  --chart-danger: #ff7a66;
+  --chart-warning: #e8b04a;
+  --chart-neutral: #6f7884;
+  --chart-track: #303833;
   --neutral: #c5c8d0;
   --neutral-soft: #2c342e;
   --overlay-backdrop: rgb(6 10 7 / 68%);

@@ -42,6 +42,7 @@ import infrastructure.config.TerminalConfig
 import infrastructure.http.middleware.{HttpRequestLogging, RequestIdMiddleware}
 import org.http4s.{HttpApp, Method, Request}
 import org.http4s.server.websocket.WebSocketBuilder2
+import org.typelevel.doobie.ConnectionIO
 
 /** Assembles routes, the authentication boundary, the platform endpoints and the observability
   * middleware into the single HttpApp served by the runtime.
@@ -61,16 +62,16 @@ object HttpModule {
     authSettings: AuthSettings,
     loggers: AppLoggers,
     terminalConfig: TerminalConfig,
-    webSocketBuilder: Option[WebSocketBuilder2[IO]]
+    webSocket: Option[(WebSocketBuilder2[IO], infrastructure.http.LiveTerminals[ConnectionIO])]
   ): HttpApp[IO] = {
     val transactionRunner = persistence.transactionRunner
     // Every organization-scoped handler states the permission it needs through this helper; the
     // authentication boundary no longer knows which operations are privileged.
     val authorization = new OrganizationAuthorization(loggers.authorization)
 
-    val terminalRoutes = webSocketBuilder.fold(org.http4s.HttpRoutes.empty[IO]) { builder =>
+    val terminalRoutes = webSocket.fold(org.http4s.HttpRoutes.empty[IO]) { case (builder, liveTerminals) =>
       new TerminalRoutes(application.openSshTerminal, terminalConfig, authorization, loggers.terminal,
-        Some(application.terminalSessionLifecycle)).routes(builder)
+        liveTerminals).routes(builder)
     }
 
     val businessApp = (

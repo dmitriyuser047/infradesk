@@ -136,6 +136,7 @@ import persistence.postgres.{
 final case class PersistenceComponents(
   administrationRepository: application.port.AdministrationRepository[ConnectionIO],
   terminalSessionRepository: application.port.TerminalSessionRepository[ConnectionIO],
+  connectionLifecycleRepository: application.port.ConnectionLifecycleRepository[ConnectionIO],
   transactionRunner: TransactionRunner[IO, ConnectionIO],
   /** One read-only snapshot, for read models composed of several statements. */
   readOnlySnapshotRunner: TransactionRunner[IO, ConnectionIO],
@@ -223,6 +224,7 @@ object PersistenceModule {
     val connections = new PostgresConnectionRepository
     PersistenceComponents(
       terminalSessionRepository = new persistence.postgres.PostgresTerminalSessionRepository(new PostgresAuditEventRepository),
+      connectionLifecycleRepository = new persistence.postgres.PostgresConnectionLifecycleRepository,
       transactionRunner = new DoobieTransactionRunner(xa),
       readOnlySnapshotRunner = new DoobieReadOnlySnapshotRunner(xa),
       readinessCheck = new PostgresReadinessCheck(xa),

@@ -27,6 +27,18 @@ describe('terminal transport', () => {
   it('uses same-origin ws/wss with encoded IDs and no auth query', () => {
     expect(terminalUrl({ protocol: 'https:', host: 'example:8443' }, 'a/b', 'x y')).toBe('wss://example:8443/api/v1/organizations/a%2Fb/connections/x%20y/terminal')
     expect(terminalUrl({ protocol: 'http:', host: 'localhost:5173' }, 'a', 'b')).toMatch(/^ws:\/\/localhost:5173/)
+    expect(terminalUrl({ protocol: 'https:', host: 'example' }, 'a', 'b', '00000000-0000-0000-0000-000000000001'))
+      .toBe('wss://example/api/v1/organizations/a/connections/b/terminal?resume=00000000-0000-0000-0000-000000000001')
+  })
+  it('reads the resume flags of ready and ends the shell explicitly on disconnect', () => {
+    const { socket, transport, sink } = fixture()
+    socket.message(JSON.stringify({ type: 'ready', protocolVersion: 1, sessionId: '00000000-0000-0000-0000-000000000001', resumed: true, outputTruncated: true }))
+    expect(transport.resumed).toBe(true)
+    expect(transport.outputTruncated).toBe(true)
+    transport.disconnect()
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'close' }))
+    expect(socket.close).toHaveBeenCalledWith(1000)
+    expect(sink.state).toHaveBeenLastCalledWith('closed', 'CLIENT_CLOSE')
   })
   it('negotiates the protocol and accepts no input before ready', () => {
     const { socket, transport, factory, sink } = fixture()

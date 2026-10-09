@@ -5,6 +5,10 @@ import { useI18n } from '../../i18n'
 import type { OverviewSummaryResponse } from '../../types/overview'
 import { WorkspaceSection } from '../layout/WorkspacePrimitives'
 
+const ringWidth = 12
+/** Share of the ring, out of 100, left empty between two segments. */
+const segmentGap = 1.6
+
 /** Unobserved states remain visible; totals never imply that the remaining objects are healthy. */
 export function distributionRemainder(total: number, counts: readonly number[]): number {
   return Math.max(0, total - counts.reduce((sum, count) => sum + count, 0))
@@ -42,20 +46,24 @@ export function OverviewDistribution({ summary, resourcesPath, connectionsPath }
   return <section className="overview-distributions" aria-label={t.title}>
     {groups.map(group => {
       let offset = 0
+      const visible = group.segments.filter(segment => segment.count > 0)
+      // Neighbouring segments are separated by a gap so each stays readable; a single one is a full ring.
+      const gap = visible.length > 1 ? segmentGap : 0
       return <WorkspaceSection key={group.id} title={group.title} className="distribution-card"
         actions={<Link className="distribution-open" to={group.path} aria-label={i18n.t.overview.openItem(group.title)}>
           <ArrowUpRight size={17} aria-hidden /></Link>}>
         <div className="distribution-body">
           <div className="distribution-ring">
             <svg viewBox="0 0 120 120" aria-hidden="true" focusable="false">
-              <circle className="distribution-track" cx="60" cy="60" r="48" fill="none" strokeWidth="10" />
-              {group.segments.filter(segment => segment.count > 0).map(segment => {
+              <circle className="distribution-track" cx="60" cy="60" r="48" fill="none" strokeWidth={ringWidth} />
+              {visible.map(segment => {
                 const length = group.total > 0 ? segment.count / group.total * 100 : 0
                 const start = offset
                 offset += length
+                const drawn = Math.max(length - gap, 0.5)
                 return <circle key={segment.label} className={`distribution-stroke distribution-${segment.tone}`}
-                  cx="60" cy="60" r="48" fill="none" strokeWidth="10" pathLength="100"
-                  strokeDasharray={`${length} ${100 - length}`} strokeDashoffset={-start} transform="rotate(-90 60 60)" />
+                  cx="60" cy="60" r="48" fill="none" strokeWidth={ringWidth} pathLength="100"
+                  strokeDasharray={`${drawn} ${100 - drawn}`} strokeDashoffset={-(start + gap / 2)} transform="rotate(-90 60 60)" />
               })}
             </svg>
             <div className="distribution-total"><strong>{i18n.format.number(group.total)}</strong><span>{t.total}</span></div>

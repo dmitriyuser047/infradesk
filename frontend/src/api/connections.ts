@@ -138,13 +138,14 @@ export function useUpdateConnection(organizationId: string, connectionId: string
   } }
 }
 
-export function useDeactivateConnection(organizationId: string, connectionId: string) {
+/** Deletes the connection with the servers only it sees; every view of them is refetched. */
+export function useDeleteConnection(organizationId: string, connectionId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => requestVoid(`${path(organizationId)}/${encodeURIComponent(connectionId)}`, { method: 'DELETE' }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['connections', organizationId] })
-      void queryClient.invalidateQueries({ queryKey: ['connection', organizationId, connectionId] })
+      queryClient.removeQueries({ queryKey: ['connection', organizationId, connectionId] })
+      void queryClient.invalidateQueries()
     },
   })
 }

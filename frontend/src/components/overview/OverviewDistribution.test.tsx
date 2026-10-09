@@ -38,8 +38,9 @@ describe('overview snapshot distributions', () => {
     expect(html).toMatch(/Other \/ no data<\/dt><dd>2<\/dd>/)
     expect(html).toMatch(/Stopped<\/dt><dd>2<\/dd>/)
     expect(html).toMatch(/Never run<\/dt><dd>2<\/dd>/)
-    expect(html).toContain('stroke-dasharray="50 50"')
-    expect(html).toContain('stroke-dashoffset="-75"')
+    // Half the ring from the three-quarter mark, less the gap that separates it from its neighbours.
+    expect(html).toContain('stroke-dasharray="48.4 51.6"')
+    expect(html).toContain('stroke-dashoffset="-75.8"')
     expect(html).not.toContain('uptime')
   })
 

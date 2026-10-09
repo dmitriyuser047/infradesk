@@ -47,6 +47,13 @@ final class OpenSshTerminal[Tx[_]] private (
       authentication <- credentials.resolve(connection)
     } yield Prepared(config, authentication, connection.updatedAt)
 
+  /** The connection's current version, for resuming a shell opened against it. Needs no credentials. */
+  def currentVersion(organizationId: UUID, connectionId: UUID): IO[java.time.Instant] =
+    runner.run(connections.findById(organizationId, connectionId))
+      .flatMap(IO.fromOption(_)(NotFound))
+      .flatTap(validate)
+      .map(_.updatedAt)
+
   final class CapacityPermit private[OpenSshTerminal] (released: Ref[IO, Boolean]) {
     def release: IO[Unit] = IO.uncancelable { _ =>
       released.modify(done => (true, !done)).flatMap {

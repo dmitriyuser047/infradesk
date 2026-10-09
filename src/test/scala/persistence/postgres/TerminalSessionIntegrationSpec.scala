@@ -37,6 +37,22 @@ final class TerminalSessionIntegrationSpec extends FunSuite {
     }
   } }
 
+  test("a shell that no socket resumed closes as DETACH_TIMEOUT, fenced and audited once") { withSetup { s =>
+    val session = s.session()
+    for {
+      _ <- s.run(s.repo.claim(session, 4, 32))
+      _ <- s.run(s.repo.activate(s.org, session.id, session.leaseToken, s.now, s.now.plusSeconds(45)))
+      stale <- s.run(s.repo.closeOwned(s.org, session.id, UUID.randomUUID(), s.now, TerminalCloseReason.DetachTimeout))
+      closed <- s.run(s.repo.closeOwned(s.org, session.id, session.leaseToken, s.now, TerminalCloseReason.DetachTimeout))
+      stored <- s.run(sql"select state, close_reason from terminal_session where id = ${session.id}".query[(String, String)].unique)
+      count <- s.auditCount(session.id)
+    } yield {
+      assert(!stale && closed)
+      assertEquals(stored, ("CLOSED", "DETACH_TIMEOUT"))
+      assertEquals(count, 2L)
+    }
+  } }
+
   test("activation starts a fresh lease after SSH setup") { withSetup { s =>
     val session = s.session()
     val opened = s.now.plusSeconds(20)

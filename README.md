@@ -95,6 +95,16 @@ including a failed one, so a connection that stopped answering turns its rules i
 instead of leaving them on stale data. The evaluation is a secondary step: it never changes the
 outcome the synchronization itself reports.
 
+An organization has one SSH connection per server: creating or re-pointing a connection to a host
+and port another connection already uses is refused with `CONNECTION_HOST_ALREADY_EXISTS`, checked
+under an organization lock. `DELETE /api/v1/organizations/{id}/connections/{connectionId}` deletes a
+connection, active or not, in one transaction: the row becomes an inactive tombstone (its code is
+free again), its schedule stops, its credential is destroyed, and the servers that no other live
+connection sees are deactivated together with everything beneath them. Sync sessions, operations,
+deployments and the journal keep naming it. Deletion is refused with `CONNECTION_BUSY` while a
+sync, operation, deployment, rollout item, provisioning run or onboarding that needs it is queued
+or running; finished runs, including `UNKNOWN` ones, do not block it.
+
 `GET /api/v1/organizations/{id}/incidents` is a read projection. Each incident carries the identity
 of its resource (`resource: { id, name, resourceTypeCode }`), read in one tenant-scoped statement,
 so the list never needs a request per row.

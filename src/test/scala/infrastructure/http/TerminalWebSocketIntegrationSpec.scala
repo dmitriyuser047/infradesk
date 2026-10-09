@@ -5,6 +5,8 @@ import application.connection.OpenSshTerminal
 import application.port.{ConnectionRepository, TransactionRunner}
 import cats.data.Kleisli
 import cats.effect.{Deferred, IO, Ref, Resource}
+import cats.effect.std.Queue
+import cats.syntax.all._
 import cats.effect.unsafe.implicits.global
 import domain.auth.{AuthenticatedUser, OrganizationRole}
 import domain.connection.{Connection, ConnectionConfig, ConnectionScope}
@@ -27,6 +29,7 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.{ArrayBlockingQueue, CompletionStage, ExecutionException, TimeUnit}
 import scala.concurrent.duration._
+import scala.util.Try
 
 final class TerminalWebSocketIntegrationSpec extends FunSuite {
   override val munitTimeout: Duration = 30.seconds
@@ -56,10 +59,10 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
     }
     val terminal = OpenSshTerminal.create(repository, runner, ssh, credentials, 2).unsafeRunSync()
     val authorization = support.AuthorizationFixtures.authorization
+    val live = liveTerminals(new LifecycleRepository(IO.pure(domain.terminal.TerminalRenewResult.Renewed(Instant.now().plusSeconds(45)))),
+      infrastructure.config.TerminalConfig.default)
     val routes = new TerminalRoutes[IO](terminal, infrastructure.config.TerminalConfig.default, authorization,
-      Slf4jLogger.getLoggerFromName[IO]("test.terminal"), Some(new application.terminal.TerminalSessionLifecycle(
-        new LifecycleRepository(IO.pure(domain.terminal.TerminalRenewResult.Renewed(Instant.now().plusSeconds(45)))),
-        runner, UUID.randomUUID(), 4, 32, 45.seconds, Slf4jLogger.getLoggerFromName[IO]("test.terminal.lifecycle"))))
+      Slf4jLogger.getLoggerFromName[IO]("test.terminal"), live)
     val response = withServer(routes, OrganizationRole.Owner) { base =>
       val client = HttpClient.newHttpClient()
       val terminalUri = base.resolve(s"/api/v1/organizations/$organizationId/connections/$connectionId/terminal")
@@ -109,7 +112,8 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
         assertEquals(new String(receivedInput.get.unsafeRunSync().toArray, StandardCharsets.UTF_8), "stdin")
         assertEquals(resized.get.unsafeRunSync(), Some(TerminalSize(120, 40)))
       }
-      socket.sendClose(WebSocket.NORMAL_CLOSURE, "test complete").get(5, TimeUnit.SECONDS)
+      socket.sendText("{\"type\":\"close\"}", true).get(5, TimeUnit.SECONDS)
+      assertEquals(listener.closed.poll(5, TimeUnit.SECONDS), (1000, "CLIENT_CLOSE"))
       eventually(5.seconds) { assertEquals(released.get.unsafeRunSync(), 1) }
       client.close()
       ()
@@ -155,7 +159,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
 
   protocolCases.foreach { case (name, send, expectedCode, closeCode) =>
     test(s"$name is rejected with close $closeCode and releases the terminal") {
-      val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(maxFrameBytes = 32, maxControlBytes = 80))
+      val fixture = terminalFixture(testConfig.copy(maxFrameBytes = 32, maxControlBytes = 80))
       withServer(fixture.routes, OrganizationRole.Owner) { base =>
         withSocket(base) { (socket, listener) =>
           send(socket)
@@ -199,7 +203,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
   }
 
   test("capacity is reserved before Upgrade and becomes available after disconnect") {
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(maxConcurrentSessions = 1))
+    val fixture = terminalFixture(testConfig.copy(maxConcurrentSessions = 1))
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       withSocket(base) { (_, _) =>
         val client = HttpClient.newHttpClient()
@@ -227,7 +231,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
       case 0 => IO.raiseError[Unit](new integration.ssh.SshTransportFailure.AuthenticationFailed(new Exception("test failure")))
       case _ => IO.unit
     }
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(maxConcurrentSessions = 1), beforeOpen = open)
+    val fixture = terminalFixture(testConfig.copy(maxConcurrentSessions = 1), beforeOpen = open)
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       val client = HttpClient.newHttpClient()
       val listener = new Frames
@@ -245,7 +249,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
   }
 
   test("idle timeout releases a silent terminal and Ping/Pong does not extend idle activity") {
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(idleTimeout = 300.millis, maxLifetime = 2.seconds),
+    val fixture = terminalFixture(testConfig.copy(idleTimeout = 300.millis, maxLifetime = 2.seconds),
       output = Stream.never[IO])
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       withSocket(base) { (socket, listener) =>
@@ -259,7 +263,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
 
   test("maximum lifetime closes an active terminal and releases its resources") {
     val output = Stream.awakeEvery[IO](50.millis).flatMap(_ => Stream.emit('.'.toByte))
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(idleTimeout = 300.millis, maxLifetime = 800.millis),
+    val fixture = terminalFixture(testConfig.copy(idleTimeout = 300.millis, maxLifetime = 800.millis),
       output = output)
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       withSocket(base) { (_, listener) =>
@@ -298,7 +302,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
   }
 
   test("failed WebSocket handshake releases the reserved permit without opening SSH") {
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(maxConcurrentSessions = 1))
+    val fixture = terminalFixture(testConfig.copy(maxConcurrentSessions = 1))
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       val socket = new java.net.Socket(base.getHost, base.getPort)
       socket.setSoTimeout(5000)
@@ -321,7 +325,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
   }
 
   test("WebSocket build failure and cancellation release their reserved permits") {
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(maxConcurrentSessions = 1))
+    val fixture = terminalFixture(testConfig.copy(maxConcurrentSessions = 1))
     val failure = new IllegalStateException("test builder failure")
     val failed = WebSocketBuilder2[IO].flatMap { builder =>
       fixture.routes.routes(builder.withOnNonWebSocketRequest(IO.raiseError(failure))).orNotFound.run(upgradeRequest).attempt
@@ -346,7 +350,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
   }
 
   test("valid resize extends idle activity until the maximum lifetime") {
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(idleTimeout = 350.millis, maxLifetime = 1100.millis),
+    val fixture = terminalFixture(testConfig.copy(idleTimeout = 350.millis, maxLifetime = 1100.millis),
       output = Stream.never[IO])
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       withSocket(base) { (socket, listener) =>
@@ -365,7 +369,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
     domain.terminal.TerminalCloseReason.ConnectionChanged).foreach { reason =>
     test(s"durable heartbeat closes revoked session ${reason.code} with policy code and releases SSH") {
       val repository = new LifecycleRepository(IO.pure(domain.terminal.TerminalRenewResult.Revoked(reason)))
-      val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(heartbeatInterval = 50.millis),
+      val fixture = terminalFixture(testConfig.copy(heartbeatInterval = 50.millis),
         sessionRepository = Some(repository))
       withServer(fixture.routes, OrganizationRole.Owner) { base =>
         withSocket(base) { (_, listener) =>
@@ -378,7 +382,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
   }
   test("durable heartbeat database failure fails closed with 1011 and releases SSH") {
     val repository = new LifecycleRepository(IO.raiseError(new IllegalStateException("test database unavailable")))
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(heartbeatInterval = 50.millis),
+    val fixture = terminalFixture(testConfig.copy(heartbeatInterval = 50.millis),
       sessionRepository = Some(repository))
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       withSocket(base) { (_, listener) =>
@@ -390,7 +394,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
   test("a renewal that never answers is bounded: three timed-out attempts fail closed before the lease could expire") {
     val attempts = Ref.of[IO, Int](0).unsafeRunSync()
     val repository = new LifecycleRepository(attempts.update(_ + 1) *> IO.never)
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(heartbeatInterval = 50.millis),
+    val fixture = terminalFixture(testConfig.copy(heartbeatInterval = 50.millis),
       output = Stream.never[IO], sessionRepository = Some(repository))
     val worstCase = infrastructure.config.TerminalConfig.RenewWorstCase
     // The default lease leaves room for a heartbeat plus every attempt and pause, with margin.
@@ -414,7 +418,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
       case _ => IO.pure(domain.terminal.TerminalRenewResult.Renewed(Instant.now().plusSeconds(45)))
     }
     val repository = new LifecycleRepository(renewal)
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(heartbeatInterval = 50.millis),
+    val fixture = terminalFixture(testConfig.copy(heartbeatInterval = 50.millis),
       output = Stream.never[IO], sessionRepository = Some(repository))
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       withSocket(base) { (socket, listener) =>
@@ -427,7 +431,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
   }
   test("heartbeat renewals do not count as user activity") {
     val repository = new LifecycleRepository(IO.pure(domain.terminal.TerminalRenewResult.Renewed(Instant.now().plusSeconds(45))))
-    val fixture = terminalFixture(infrastructure.config.TerminalConfig.default.copy(heartbeatInterval = 50.millis,
+    val fixture = terminalFixture(testConfig.copy(heartbeatInterval = 50.millis,
       idleTimeout = 300.millis), output = Stream.never[IO], sessionRepository = Some(repository))
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       withSocket(base) { (_, listener) =>
@@ -435,6 +439,138 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
         eventually(5.seconds) { assertEquals(fixture.released.get.unsafeRunSync(), 1) }
       }
     }
+  }
+
+  test("a socket lost without Close leaves the shell running and the same login session resumes it") {
+    val output = Queue.unbounded[IO, Option[Chunk[Byte]]].unsafeRunSync()
+    val opened = Ref.of[IO, Int](0).unsafeRunSync()
+    val fixture = terminalFixture(testConfig.copy(detachTimeout = 10.seconds),
+      output = Stream.fromQueueNoneTerminatedChunk(output), opened = Some(opened))
+    withServer(fixture.routes, OrganizationRole.Owner) { base =>
+      val sessionId = openAndLose(base, fixture)
+      output.offer(Some(Chunk.array("while away".getBytes(StandardCharsets.UTF_8)))).unsafeRunSync()
+      withConnection(base, resume = Some(sessionId)) { (socket, listener) =>
+        val ready = listener.text.poll(5, TimeUnit.SECONDS)
+        assert(Option(ready).exists(value => value.contains("\"type\":\"ready\"") && value.contains("\"resumed\":true") &&
+          value.contains("\"outputTruncated\":false") && value.contains(sessionId)), clues(ready))
+        assertEquals(Option(listener.binary.poll(5, TimeUnit.SECONDS)).map(new String(_, StandardCharsets.UTF_8)), Some("while away"))
+        socket.sendBinary(ByteBuffer.wrap("next".getBytes(StandardCharsets.UTF_8)), true).get(5, TimeUnit.SECONDS)
+        eventually(5.seconds) { assertEquals(new String(fixture.input.get.unsafeRunSync().toArray, StandardCharsets.UTF_8), "next") }
+        assertEquals(opened.get.unsafeRunSync(), 1)
+        assertEquals(fixture.released.get.unsafeRunSync(), 0)
+        socket.sendText("{\"type\":\"close\"}", true).get(5, TimeUnit.SECONDS)
+        eventually(5.seconds) { assertEquals(fixture.released.get.unsafeRunSync(), 1) }
+      }
+    }
+  }
+
+  test("a bare Close frame only detaches the shell; the close control ends it") {
+    val fixture = terminalFixture(testConfig.copy(detachTimeout = 10.seconds), output = Stream.never[IO])
+    withServer(fixture.routes, OrganizationRole.Owner) { base =>
+      val sessionId = withConnection(base) { (socket, listener) =>
+        val id = readySessionId(listener)
+        socket.sendClose(WebSocket.NORMAL_CLOSURE, "going").get(5, TimeUnit.SECONDS)
+        id
+      }
+      eventually(5.seconds) {
+        assert(liveShell(fixture, sessionId).flatMap(_.flatTraverse(_.detachedFor)).unsafeRunSync().nonEmpty)
+      }
+      assertEquals(fixture.released.get.unsafeRunSync(), 0)
+      withConnection(base, resume = Some(sessionId)) { (socket, listener) =>
+        assert(Option(listener.text.poll(5, TimeUnit.SECONDS)).exists(_.contains("\"resumed\":true")))
+        socket.sendText("{\"type\":\"close\"}", true).get(5, TimeUnit.SECONDS)
+        assertEquals(listener.closed.poll(5, TimeUnit.SECONDS), (1000, "CLIENT_CLOSE"))
+        eventually(5.seconds) { assertEquals(fixture.released.get.unsafeRunSync(), 1) }
+      }
+      expectNotResumable(base, sessionId)
+    }
+  }
+
+  test("only the shell's own login session can resume it, and nothing can after the detach timeout") {
+    val repository = new LifecycleRepository(IO.pure(domain.terminal.TerminalRenewResult.Renewed(Instant.now().plusSeconds(45))))
+    val fixture = terminalFixture(testConfig.copy(detachTimeout = 1.second), output = Stream.never[IO],
+      sessionRepository = Some(repository))
+    withServer(fixture.routes, OrganizationRole.Owner) { base =>
+      val sessionId = openAndLose(base, fixture)
+      expectNotResumable(base, sessionId, cookie = "other-session")
+      expectNotResumable(base, UUID.randomUUID().toString)
+      assertEquals(fixture.released.get.unsafeRunSync(), 0)
+      eventually(5.seconds) { assertEquals(fixture.released.get.unsafeRunSync(), 1) }
+      assert(repository.transitions.get.unsafeRunSync().contains("DETACH_TIMEOUT"))
+      expectNotResumable(base, sessionId)
+    }
+  }
+
+  test("a resumed socket supersedes the one still attached, whose late Close cannot end the shell") {
+    val fixture = terminalFixture(testConfig.copy(detachTimeout = 10.seconds), output = Stream.never[IO])
+    withServer(fixture.routes, OrganizationRole.Owner) { base =>
+      withConnection(base) { (first, firstFrames) =>
+        val sessionId = readySessionId(firstFrames)
+        withConnection(base, resume = Some(sessionId)) { (second, secondFrames) =>
+          assert(Option(secondFrames.text.poll(5, TimeUnit.SECONDS)).exists(_.contains("\"resumed\":true")))
+          assertEquals(firstFrames.closed.poll(5, TimeUnit.SECONDS), (1000, "SESSION_RESUMED"))
+          Try(first.sendClose(WebSocket.NORMAL_CLOSURE, "late").get(5, TimeUnit.SECONDS))
+          second.sendBinary(ByteBuffer.wrap("still mine".getBytes(StandardCharsets.UTF_8)), true).get(5, TimeUnit.SECONDS)
+          eventually(5.seconds) {
+            assertEquals(new String(fixture.input.get.unsafeRunSync().toArray, StandardCharsets.UTF_8), "still mine")
+          }
+          assertEquals(fixture.released.get.unsafeRunSync(), 0)
+          assertEquals(secondFrames.closed.poll(), null)
+        }
+      }
+    }
+  }
+
+  test("output while detached keeps only the newest bytes and the resume reports the gap") {
+    val output = Queue.unbounded[IO, Option[Chunk[Byte]]].unsafeRunSync()
+    val fixture = terminalFixture(testConfig.copy(detachTimeout = 10.seconds, detachedOutputBytes = 4096),
+      output = Stream.fromQueueNoneTerminatedChunk(output))
+    withServer(fixture.routes, OrganizationRole.Owner) { base =>
+      val sessionId = openAndLose(base, fixture)
+      List('a', 'b', 'c').foreach(letter => output.offer(Some(Chunk.array(Array.fill(3000)(letter.toByte)))).unsafeRunSync())
+      eventually(5.seconds) {
+        assertEquals(liveShell(fixture, sessionId).flatMap(_.traverse(_.pendingBytes)).unsafeRunSync(), Some(3000L))
+      }
+      withConnection(base, resume = Some(sessionId)) { (_, listener) =>
+        assert(Option(listener.text.poll(5, TimeUnit.SECONDS)).exists(_.contains("\"outputTruncated\":true")))
+        assertEquals(Option(listener.binary.poll(5, TimeUnit.SECONDS)).map(new String(_, StandardCharsets.UTF_8)), Some("c" * 3000))
+      }
+    }
+  }
+
+  private def liveShell(fixture: TerminalFixture, sessionId: String): IO[Option[LiveTerminal]] =
+    fixture.live.resumable(UUID.fromString(sessionId), organizationId, connectionId, userId, loginSession, Instant.EPOCH)
+
+  /** Opens a shell and drops its socket without a Close frame; returns once the shell is detached. */
+  private def openAndLose(base: URI, fixture: TerminalFixture): String = {
+    val sessionId = withConnection(base) { (_, listener) => readySessionId(listener) }
+    eventually(5.seconds) {
+      assert(liveShell(fixture, sessionId).flatMap(_.flatTraverse(_.detachedFor)).unsafeRunSync().nonEmpty)
+    }
+    sessionId
+  }
+
+  private def readySessionId(listener: Frames): String = {
+    val ready = listener.text.poll(5, TimeUnit.SECONDS)
+    assert(Option(ready).exists(value => value.contains("\"type\":\"ready\"") && value.contains("\"resumed\":false")), clues(ready))
+    io.circe.parser.parse(ready).toOption.get.hcursor.get[String]("sessionId").toOption.get
+  }
+
+  private def expectNotResumable(base: URI, sessionId: String, cookie: String = "test-session"): Unit =
+    withConnection(base, resume = Some(sessionId), cookie = cookie) { (_, listener) =>
+      val message = listener.text.poll(5, TimeUnit.SECONDS)
+      assert(Option(message).exists(_.contains("\"code\":\"SESSION_NOT_RESUMABLE\"")), clues(message))
+      assertEquals(listener.closed.poll(5, TimeUnit.SECONDS), (1000, "SESSION_NOT_RESUMABLE"))
+    }
+
+  /** A socket that is aborted afterwards: the server sees it vanish without a Close frame. */
+  private def withConnection[A](base: URI, resume: Option[String] = None, cookie: String = "test-session")
+    (use: (WebSocket, Frames) => A): A = {
+    val client = HttpClient.newHttpClient()
+    val listener = new Frames
+    val socket = socketBuilder(client, base, requestProtocol = true, cookie)
+      .buildAsync(terminalUri(base, resume), listener).get(5, TimeUnit.SECONDS)
+    try use(socket, listener) finally { socket.abort(); client.close() }
   }
 
   private final class LifecycleRepository(renewal: IO[domain.terminal.TerminalRenewResult])
@@ -452,19 +588,33 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
   }
 
   private final case class TerminalFixture(routes: TerminalRoutes[IO], input: Ref[IO, Vector[Byte]],
-                                           released: Ref[IO, Int], terminal: OpenSshTerminal[IO])
+                                           released: Ref[IO, Int], terminal: OpenSshTerminal[IO], live: LiveTerminals[IO])
+
+  /** Sockets that vanish in these tests leave their shell detached only briefly. */
+  private val testConfig = infrastructure.config.TerminalConfig.default.copy(detachTimeout = 300.millis)
+  private val userId = UUID.fromString("23000000-0000-0000-0000-000000000001")
+  private val loginSession = UUID.fromString("24000000-0000-0000-0000-000000000001")
+  private val otherLoginSession = UUID.fromString("24000000-0000-0000-0000-000000000002")
+
+  private def liveTerminals(repository: application.port.TerminalSessionRepository[IO],
+    config: infrastructure.config.TerminalConfig): LiveTerminals[IO] =
+    LiveTerminals.resource(new application.terminal.TerminalSessionLifecycle(repository,
+      new TransactionRunner[IO, IO] { override def run[A](program: IO[A]): IO[A] = program },
+      UUID.randomUUID(), 4, 32, config.leaseDuration, Slf4jLogger.getLoggerFromName[IO]("test.terminal.lifecycle")),
+      config, Slf4jLogger.getLoggerFromName[IO]("test.terminal.live")).allocated.unsafeRunSync()._1
 
   private def terminalFixture(
-    config: infrastructure.config.TerminalConfig = infrastructure.config.TerminalConfig.default,
+    config: infrastructure.config.TerminalConfig = testConfig,
     output: Stream[IO, Byte] = Stream.emits("terminal-output".getBytes(StandardCharsets.UTF_8)) ++ Stream.never[IO],
     beforeOpen: IO[Unit] = IO.unit,
     beforeWrite: IO[Unit] = IO.unit,
-    sessionRepository: Option[application.port.TerminalSessionRepository[IO]] = None
+    sessionRepository: Option[application.port.TerminalSessionRepository[IO]] = None,
+    opened: Option[Ref[IO, Int]] = None
   ): TerminalFixture = {
     val input = Ref.of[IO, Vector[Byte]](Vector.empty).unsafeRunSync()
     val resized = Ref.of[IO, Option[TerminalSize]](None).unsafeRunSync()
     val released = Ref.of[IO, Int](0).unsafeRunSync()
-    val ssh = new FakeSshClient(input, resized, released, output, beforeOpen, beforeWrite)
+    val ssh = new FakeSshClient(input, resized, released, output, beforeOpen, beforeWrite, opened)
     val repository = new ConnectionRepository[IO] {
       override def findById(org: UUID, id: UUID): IO[Option[Connection]] =
         IO.pure(Option.when(org == organizationId && id == connectionId)(connection))
@@ -479,17 +629,18 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
     val terminal = OpenSshTerminal.create(repository, runner, ssh, credentials, config.maxConcurrentSessions).unsafeRunSync()
     val durableRepository = sessionRepository.getOrElse(new LifecycleRepository(
       IO.pure(domain.terminal.TerminalRenewResult.Renewed(Instant.now().plusSeconds(45)))))
+    val live = liveTerminals(durableRepository, config)
     TerminalFixture(new TerminalRoutes[IO](terminal, config, support.AuthorizationFixtures.authorization,
-      Slf4jLogger.getLoggerFromName[IO]("test.terminal"), Some(
-        new application.terminal.TerminalSessionLifecycle(durableRepository, runner, UUID.randomUUID(), 4, 32,
-          config.leaseDuration, Slf4jLogger.getLoggerFromName[IO]("test.terminal.lifecycle")))), input, released, terminal)
+      Slf4jLogger.getLoggerFromName[IO]("test.terminal"), live), input, released, terminal, live)
   }
 
-  private def terminalUri(base: URI): URI = URI.create(base.resolve(
-    s"/api/v1/organizations/$organizationId/connections/$connectionId/terminal").toString.replaceFirst("^http", "ws"))
+  private def terminalUri(base: URI, resume: Option[String] = None): URI = URI.create(base.resolve(
+    s"/api/v1/organizations/$organizationId/connections/$connectionId/terminal${resume.fold("")("?resume=" + _)}")
+    .toString.replaceFirst("^http", "ws"))
 
-  private def socketBuilder(client: HttpClient, base: URI, requestProtocol: Boolean): WebSocket.Builder = {
-    val builder = client.newWebSocketBuilder().header("Cookie", "infradesk_session=test-session")
+  private def socketBuilder(client: HttpClient, base: URI, requestProtocol: Boolean,
+    cookie: String = "test-session"): WebSocket.Builder = {
+    val builder = client.newWebSocketBuilder().header("Cookie", s"infradesk_session=$cookie")
       .header("Origin", s"http://${base.getHost}:${base.getPort}")
     if (requestProtocol) builder.subprotocols("infradesk-terminal-v1") else builder
   }
@@ -535,11 +686,15 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
       .withHttpWebSocketApp { builder: WebSocketBuilder2[IO] =>
         val terminalApp = routes.routes(builder).orNotFound
         Kleisli { request: Request[IO] =>
-          if (!request.cookies.exists(cookie => cookie.name == "infradesk_session" && cookie.content == "test-session"))
-            IO.pure(Response[IO](Status.Unauthorized))
-          else terminalApp.run(OrganizationAuthorization.withContext(request,
-            OrganizationAccessContext(AuthenticatedUser(UUID.fromString("23000000-0000-0000-0000-000000000001"),
-              "test@example.test", "Test"), organizationId, role, Some(UUID.randomUUID()))))
+          // Two login sessions of the same user: only the one that opened a shell may resume it.
+          request.cookies.find(_.name == "infradesk_session").map(_.content).collect {
+            case "test-session" => loginSession
+            case "other-session" => otherLoginSession
+          } match {
+            case None => IO.pure(Response[IO](Status.Unauthorized))
+            case Some(login) => terminalApp.run(OrganizationAuthorization.withContext(request,
+              OrganizationAccessContext(AuthenticatedUser(userId, "test@example.test", "Test"), organizationId, role, Some(login))))
+          }
         }
       }
       .build
@@ -567,14 +722,15 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
     released: Ref[IO, Int],
     outputStream: Stream[IO, Byte] = Stream.emits("terminal-output".getBytes(StandardCharsets.UTF_8)) ++ Stream.never[IO],
     beforeOpen: IO[Unit] = IO.unit,
-    beforeWrite: IO[Unit] = IO.unit
+    beforeWrite: IO[Unit] = IO.unit,
+    opened: Option[Ref[IO, Int]] = None
   ) extends SshClient[IO] {
     override def probeHostKey(config: SshConnectionConfig): IO[String] = IO.pure("SHA256:test")
     override def withSession[A](config: SshConnectionConfig, authentication: SshAuthentication)
                                (use: SshSession[IO] => IO[A]): IO[A] = IO.raiseError(new UnsupportedOperationException)
     override def terminal(config: SshConnectionConfig, authentication: SshAuthentication,
                           size: TerminalSize): Resource[IO, InteractiveSshTerminal[IO]] =
-      Resource.make(IO.unit)(_ => released.update(_ + 1)).evalMap { _ => beforeOpen.as(new InteractiveSshTerminal[IO] {
+      Resource.make(opened.traverse_(_.update(_ + 1)))(_ => released.update(_ + 1)).evalMap { _ => beforeOpen.as(new InteractiveSshTerminal[IO] {
         override val output: Stream[IO, Byte] = outputStream
         override def write(bytes: Chunk[Byte]): IO[Unit] = beforeWrite *> input.update(_ ++ bytes.toVector)
         override def resize(next: TerminalSize): IO[Unit] = resized.set(Some(next))
@@ -583,7 +739,7 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
 
   private final class Frames extends WebSocket.Listener {
     val text = new ArrayBlockingQueue[String](8)
-    val binary = new ArrayBlockingQueue[Array[Byte]](8)
+    val binary = new ArrayBlockingQueue[Array[Byte]](64)
     val closed = new ArrayBlockingQueue[(Int, String)](2)
     val pongs = new ArrayBlockingQueue[java.lang.Boolean](8)
     /** What made the client give up on the connection, so a failure names its cause. */

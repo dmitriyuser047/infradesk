@@ -113,6 +113,7 @@ final class PostgresConnectionRepository extends ConnectionRepository[Connection
       from connection
       where organization_id = $organizationId
         and id = $id
+        and deleted_at is null
     """
       .query[ConnectionRow]
       .option
@@ -144,6 +145,7 @@ final class PostgresConnectionRepository extends ConnectionRepository[Connection
         updated_at
       from connection
       where organization_id = $organizationId
+        and deleted_at is null
       order by name asc, id asc
     """
       .query[ConnectionRow]

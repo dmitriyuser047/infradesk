@@ -48,7 +48,7 @@ final class SshConnectionManagementSpec extends FunSuite {
     assert(!new String(f.savedSecret.get.ciphertext, "UTF-8").contains("secret"))
   }
 
-  test("metadata-only update does not probe or replace secret, and deactivate retains it") {
+  test("metadata-only update does not probe or replace secret, and delete destroys it") {
     val f = new ManagementFixture
     val created = f.management.create(support.AuthorizationFixtures.actor(org), request).unsafeRunSync().connection
     val originalSecret = f.savedSecret.get
@@ -61,22 +61,63 @@ final class SshConnectionManagementSpec extends FunSuite {
     assertEquals(f.savedSecret.get.id, originalSecret.id)
     assertEquals(changed.schedule.get.nextRunAt, originalNextRun)
     assertEquals(changed.schedule.get.consecutiveFailures, 2L)
-    f.management.deactivate(support.AuthorizationFixtures.actor(org), created.id).unsafeRunSync()
-    f.management.deactivate(support.AuthorizationFixtures.actor(org), created.id).unsafeRunSync()
-    assertEquals(f.savedConnection.get.isActive, false)
+    f.management.delete(support.AuthorizationFixtures.actor(org), created.id).unsafeRunSync()
+    assertEquals(f.savedConnection, None)
     assertEquals(f.savedSchedule.get.enabled, false)
-    assertEquals(f.savedSchedule.get.consecutiveFailures, 2L)
-    assertEquals(f.savedSecret.get.id, originalSecret.id)
-    // Create, update and the first deactivation are journalled; the second changes nothing but is
-    // still an action the owner performed.
+    // The credential of a deleted connection is destroyed, not kept.
+    assertEquals(f.savedSecret, None)
+    // A deleted connection is gone: deleting it again finds nothing and journals nothing.
+    val again = f.management.delete(support.AuthorizationFixtures.actor(org), created.id).attempt.unsafeRunSync()
+    assertEquals(again.left.toOption.collect { case e: ConnectionManagementError => e.code }, Some("CONNECTION_NOT_FOUND"))
     assertEquals(f.auditEvents.recorded.map(event => (event.action.code, event.targetId)), List(
       ("CONNECTION_CREATED", Some(created.id)),
       ("CONNECTION_UPDATED", Some(created.id)),
-      ("CONNECTION_DELETED", Some(created.id)),
       ("CONNECTION_DELETED", Some(created.id))
     ))
     assertEquals(f.auditEvents.recorded.map(_.targetType.code).distinct, List("CONNECTION"))
     assertEquals(f.auditEvents.recorded.map(_.organizationId).distinct, List(org))
+  }
+
+  test("a second connection to the same server is refused before the host is contacted") {
+    val f = new ManagementFixture
+    f.management.create(support.AuthorizationFixtures.actor(org), request).unsafeRunSync()
+    val sameServer = request.copy(code = "prod-vps-2", name = "Same server",
+      ssh = request.ssh.copy(host = " EXAMPLE.org ", username = "deploy"))
+    val refused = f.management.create(support.AuthorizationFixtures.actor(org), sameServer).attempt.unsafeRunSync()
+    assertEquals(refused.left.toOption.collect { case e: ConnectionManagementError => e.code },
+      Some("CONNECTION_HOST_ALREADY_EXISTS"))
+    assertEquals(f.probes, 1)
+    assertEquals(f.auditEvents.recorded.map(_.action.code), List("CONNECTION_CREATED"))
+    // Creation takes the organization lock, so two concurrent creations cannot both pass the check.
+    assertEquals(f.organizationLocks, 1)
+  }
+
+  test("another SSH port of the same host is a different server") {
+    val f = new ManagementFixture
+    f.management.create(support.AuthorizationFixtures.actor(org), request).unsafeRunSync()
+    f.savedConnection = None
+    val other = f.management.create(support.AuthorizationFixtures.actor(org),
+      request.copy(code = "other-port", ssh = request.ssh.copy(port = 2222))).attempt.unsafeRunSync()
+    assert(other.isRight, clues(other))
+  }
+
+  test("delete is refused with 409 while work uses the connection, and changes nothing") {
+    val f = new ManagementFixture
+    val created = f.management.create(support.AuthorizationFixtures.actor(org), request).unsafeRunSync().connection
+    f.busy = true
+    val app = support.AuthorizationFixtures.authorized(
+      new SshConnectionMutationRoutes[IO](f.management, support.AuthorizationFixtures.authorization).routes.orNotFound)
+    val response = app.run(Request[IO](Method.DELETE,
+      Uri.unsafeFromString(s"/api/v1/organizations/$org/connections/${created.id}"))).unsafeRunSync()
+    assertEquals(response.status, Status.Conflict)
+    assertEquals(response.as[Json].unsafeRunSync().hcursor.get[String]("code"), Right("CONNECTION_BUSY"))
+    assert(f.savedConnection.nonEmpty)
+    assert(f.savedSecret.nonEmpty)
+    assertEquals(f.auditEvents.recorded.map(_.action.code), List("CONNECTION_CREATED"))
+    f.busy = false
+    val deleted = app.run(Request[IO](Method.DELETE,
+      Uri.unsafeFromString(s"/api/v1/organizations/$org/connections/${created.id}"))).unsafeRunSync()
+    assertEquals(deleted.status, Status.NoContent)
   }
 
   test("PRIVATE_KEY HTTP update without credentials keeps the stored key and authentication type") {
@@ -375,6 +416,8 @@ final class SshConnectionManagementSpec extends FunSuite {
     var probeFingerprint = "SHA256:test"
     var probedCredentials = List.empty[SshCredential]
     var beforeVerified: () => Unit = () => ()
+    var busy = false
+    var organizationLocks = 0
 
     val runner = new TransactionRunner[IO, IO] {
       override def run[A](program: IO[A]): IO[A] =
@@ -437,7 +480,21 @@ final class SshConnectionManagementSpec extends FunSuite {
         IO { credentialResolutions += 1; SshCredential.Password("secret") }
     }
     val (auditEvents, auditRecorder) = support.TestAuditRecorder.recording
+    /** The tombstone itself is SQL, covered by ConnectionLifecycleIntegrationSpec; here it hides the row. */
+    val lifecycle = new ConnectionLifecycleRepository[IO] {
+      override def lockOrganization(organizationId: UUID): IO[Unit] = IO { organizationLocks += 1 }
+      override def delete(organizationId: UUID, connectionId: UUID, now: Instant): IO[ConnectionDeletion] = IO {
+        savedConnection.filter(c => c.organizationId == organizationId && c.id == connectionId) match {
+          case None => ConnectionDeletion.NotFound
+          case Some(_) if busy => ConnectionDeletion.Busy
+          case Some(connection) =>
+            savedConnection = None
+            savedSchedule = savedSchedule.map(_.copy(enabled = false))
+            ConnectionDeletion.Deleted(connection.secretRef, 0)
+        }
+      }
+    }
     val management = new SshConnectionManagement[IO](connections, schedules, secrets,
-      projects, environments, runner, probe, auth, cipher, auditRecorder)
+      projects, environments, runner, probe, auth, cipher, auditRecorder, lifecycle)
   }
 }

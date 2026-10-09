@@ -135,7 +135,7 @@ function ProjectCard({ organizationId, project, environments, isOwner, selected,
               to={`${base}/environments/${encodeURIComponent(environment.id)}${contextQuery({ projectId: project.id })}`}>
               <Server aria-hidden size={18} className="link-row-icon" />
               <span className="link-row-text"><strong>{getDisplayName(environment)}</strong>
-                <span className="environment-meta"><small>{environment.code}</small>
+                <span className="environment-meta"><small title={environment.code}>{environment.code}</small>
                   <StatusIndicator label={getEnvironmentKindLabel(environment.kind, i18n)}
                     tone={environment.kind === 'PROD' ? 'info' : 'neutral'} /></span></span>
               <ChevronRight aria-hidden size={18} className="link-row-chevron" />
