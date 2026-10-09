@@ -138,7 +138,7 @@ function ShellFrame({ children, showEntrySplash }: { children: ReactNode; showEn
             aria-controls="navigation-panel" onClick={() => selectGroup('administration')}><ShieldCheck size={21} aria-hidden />
             <span className="rail-tooltip" aria-hidden>{t.administration.title}</span></button> : null}
         </div>
-        <Link className="rail-brand" to="/" aria-label={t.shell.brandHome} title="InfraDesk"><InfraDeskMark /></Link>
+        <Link className="rail-brand" to={modulePath('overview', scope) ?? '/organizations'} aria-label={t.shell.brandHome} title="InfraDesk"><InfraDeskMark /></Link>
       </nav>
     </aside>
     <div className="app-main">
