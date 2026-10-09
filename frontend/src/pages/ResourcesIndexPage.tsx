@@ -46,7 +46,7 @@ function ResourcesIndexContent({ organizationId }: { organizationId: string }) {
     {projects.isSuccess && visible.length === 0 ? <EmptyWorkspaceState title={t.workspace.noProjects}
       detail={canManage ? t.workspace.noProjectsDetail : t.workspace.noProjectsMember}
       action={canManage ? <Link className="primary-button" to={`${base}/projects/new`}>{t.workspace.newProject}</Link> : undefined} /> : null}
-    {visible.map((project, index) => {
+    <div className="resource-environments-grid">{visible.map((project, index) => {
       const query = environments[index]
       return <WorkspaceSection key={project.id} title={getDisplayName(project)}>
         {query?.isPending ? <div className="row-skeleton" aria-label={t.workspace.loadingEnvironments}><span /><span /></div> : null}
@@ -64,6 +64,6 @@ function ResourcesIndexContent({ organizationId }: { organizationId: string }) {
           </li>)}
         </ul> : null}
       </WorkspaceSection>
-    })}
+    })}</div>
   </div>
 }

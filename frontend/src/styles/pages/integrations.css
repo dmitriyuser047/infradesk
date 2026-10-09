@@ -121,3 +121,11 @@
 .onboarding-progress-groups li[data-state="SUCCEEDED"] { border-color: var(--success-border); background: var(--success-soft); }
 .onboarding-progress-groups li[data-state="UNKNOWN"] { border-color: var(--warning-border); background: var(--warning-soft); }
 .onboarding-progress-groups li[data-state="FAILED"] { border-color: var(--danger-border); background: var(--danger-soft); }
+
+.integration-page .notification-list.integration-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); gap: var(--space-4); padding: 0; }
+.integration-page .notification-list.integration-card-grid .integration-card { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-5); border-radius: var(--radius-lg); }
+.integration-card-identity { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.integration-card-identity h3 { min-width: 0; overflow-wrap: anywhere; }
+.integration-provider-mark { display: grid; place-items: center; flex: 0 0 40px; height: 40px; border-radius: var(--radius-md); background: var(--primary-soft); color: var(--primary); }
+.integration-card-grid .notification-actions { margin-top: auto; padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.integration-card-grid .integration-card-statuses { align-items: flex-start; flex-direction: column; gap: var(--space-3); }

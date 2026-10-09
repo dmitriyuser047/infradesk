@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { SearchX } from 'lucide-react'
+import { SearchX, Server, Box, Layers, Archive } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { useEnvironmentResources } from '../api/resources'
@@ -9,7 +9,7 @@ import { useOrganizationPermissions } from '../components/auth/authorization'
 import { isUnavailableError, RefreshWarning } from '../components/layout/RefreshWarning'
 import { AppShell } from '../components/layout/AppShell'
 import { contextQuery } from '../components/layout/workspaceNavigation'
-import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection, WorkspaceMetrics } from '../components/layout/WorkspacePrimitives'
 import { getEnvironmentKindLabel } from '../components/navigation/navigationPresentation'
 import { ResourceTree } from '../components/resources/ResourceTree'
 import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
@@ -67,6 +67,16 @@ function EnvironmentContent({ organizationId, environmentId }: EnvironmentConten
       <div className="workspace-page work-page">
       <WorkspaceHeader title={t.title}
         subtitle={environment ? t.subtitle(environment.name, getEnvironmentKindLabel(environment.kind, i18n)) : t.subtitleFallback} />
+      {resources ? <WorkspaceMetrics items={[
+        { label: i18n.t.design.inventoryRecords, value: resources.length, icon: Layers, detail: i18n.t.design.listSnapshot,
+          onSelect: () => setCriteria(noResourceFilter) },
+        { label: t.types.NODE, value: resources.filter(item => item.resourceTypeCode === 'NODE').length, icon: Server,
+          detail: i18n.t.design.listSnapshot, onSelect: () => setCriteria({ ...noResourceFilter, type: 'NODE' }) },
+        { label: t.types.CONTAINER, value: resources.filter(item => item.resourceTypeCode === 'CONTAINER').length, icon: Box,
+          detail: i18n.t.design.listSnapshot, onSelect: () => setCriteria({ ...noResourceFilter, type: 'CONTAINER' }) },
+        { label: i18n.t.design.inactiveRecords, value: resources.filter(item => !item.active).length, icon: Archive,
+          detail: i18n.t.design.retainedHistory },
+      ]} /> : null}
       <WorkspaceSection title={t.section}
         actions={filtered !== null && filtering ? <span className="resource-count" role="status">{f.shown(filtered.matched, filtered.total)}</span> : null}>
         {resources !== undefined && resources.length > 0

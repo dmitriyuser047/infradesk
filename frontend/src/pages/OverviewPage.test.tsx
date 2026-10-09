@@ -192,9 +192,11 @@ describe('operations overview page', () => {
     // The shell's sign-out button is not part of the overview.
     const html = page.slice(page.indexOf('<main'))
 
-    for (const control of ['New project', 'Add SSH connection', 'Synchronize', 'Start', 'Restart', '<button']) {
+    for (const control of ['New project', 'Add SSH connection', 'Synchronize', 'Start', 'Restart']) {
       expect(html).not.toContain(control)
     }
+    // Refresh reads the existing overview; it grants no infrastructure mutation capability.
+    expect(html).toContain('Refresh')
   })
 
   it('shows a loading state until the overview arrives', () => {

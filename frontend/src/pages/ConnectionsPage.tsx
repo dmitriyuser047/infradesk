@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useParams } from 'react-router-dom'
-import { Cable, Plus } from 'lucide-react'
+import { Cable, Plus, Search, RefreshCw, Power, Terminal, Boxes } from 'lucide-react'
 
 import { useConnections } from '../api/connections'
 import { useConnectionInfrastructureCounts } from '../api/infrastructure'
@@ -12,7 +12,7 @@ import { useOrganizationPermissions } from '../components/auth/authorization'
 import { isUnavailableError, RefreshWarning } from '../components/layout/RefreshWarning'
 import { AppShell } from '../components/layout/AppShell'
 import { useSlowPending } from '../components/layout/useSlowPending'
-import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection, WorkspaceMetrics } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import { InvalidRoutePage } from './InvalidRoutePage'
@@ -60,17 +60,27 @@ function ConnectionsContent({ organizationId }: { organizationId: string }) {
 
   return (
     <AppShell>
-      <div className="workspace-page work-page">
+      <div className="workspace-page work-page connections-page">
         <WorkspaceHeader title={t.title} subtitle={t.subtitle}
           actions={isOwner ? <Link className="primary-button" to={newPath}><Plus aria-hidden size={16} />{t.add}</Link> : null} />
+        {connections ? <WorkspaceMetrics items={[
+          { label: i18n.t.design.configuredConnections, value: connections.length, icon: Cable, detail: i18n.t.design.listSnapshot },
+          { label: i18n.t.design.activeConnections, value: connections.filter(item => item.active).length, icon: Power,
+            detail: i18n.t.design.activeNotHealth, onSelect: () => { setSearch(''); setType('ALL'); setStatus('ACTIVE') } },
+          { label: 'SSH', value: connections.filter(item => item.connectorType === 'SSH').length, icon: Terminal,
+            detail: i18n.t.design.connectionType, onSelect: () => { setSearch(''); setStatus('ALL'); setType('SSH') } },
+          { label: 'Docker', value: connections.filter(item => item.connectorType === 'DOCKER').length, icon: Boxes,
+            detail: i18n.t.design.connectionType, onSelect: () => { setSearch(''); setStatus('ALL'); setType('DOCKER') } },
+        ]} /> : null}
         <WorkspaceSection title={t.section} actions={connectionsQuery.data ? <span className="resource-count">{i18n.t.common.shown(filtered.length, connectionsQuery.data.length)}</span> : null}>
-          <div className="filter-bar">
-            <label>{i18n.t.common.search}<input type="search" value={search} placeholder={i18n.t.workScreens.connectionSearch} onChange={event => setSearch(event.target.value)} /></label>
+          <div className="filter-bar list-filter-bar">
+            <div className="search-field"><Search className="search-field-icon" size={16} aria-hidden />
+              <input type="search" aria-label={i18n.t.common.search} value={search} placeholder={i18n.t.workScreens.connectionSearch} onChange={event => setSearch(event.target.value)} /></div>
             <label>{i18n.t.common.status}<select value={status} onChange={event => setStatus(event.target.value)}><option value="ALL">{i18n.t.common.all}</option>
               <option value="ACTIVE">{i18n.t.common.active}</option><option value="INACTIVE">{i18n.t.common.inactive}</option></select></label>
             <label>{i18n.t.common.type}<select value={type} onChange={event => setType(event.target.value)}><option value="ALL">{i18n.t.common.all}</option>
               <option value="SSH">SSH</option><option value="DOCKER">Docker</option></select></label>
-            <button className="secondary-button" type="button" onClick={() => connectionsQuery.refetch()}>{i18n.t.common.refresh}</button>
+            <button className="secondary-button" type="button" onClick={() => connectionsQuery.refetch()}><RefreshCw size={15} aria-hidden />{i18n.t.common.refresh}</button>
           </div>
           {connectionsQuery.isPending && !slowLoading ? <div className="connection-skeleton" aria-label={t.loading}><span /><span /><span /></div> : null}
           {slowLoading ? <InlineAlert tone="warning" title={t.slowLoading}

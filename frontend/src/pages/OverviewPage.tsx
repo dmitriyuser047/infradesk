@@ -1,6 +1,6 @@
 import { useQueries } from '@tanstack/react-query'
 import {
-  Box, Cable, CheckCircle2, Circle, CircleAlert, CircleHelp, History, Server, TriangleAlert, WifiOff, Wrench,
+  Box, Cable, CheckCircle2, Circle, CircleAlert, CircleHelp, History, Server, TriangleAlert, WifiOff, Wrench, RefreshCw,
   type LucideIcon,
 } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
@@ -67,7 +67,9 @@ function OverviewContent({ organizationId, projectId, environmentId }: {
     : projectId ? t.overview.scopeProject(project?.name ?? '…') : t.overview.scopeOrganization
 
   return <div className="workspace-page">
-    <WorkspaceHeader title={t.overview.title} subtitle={subtitle} />
+    <WorkspaceHeader title={t.overview.title} subtitle={subtitle}
+      actions={<button type="button" className="secondary-button" disabled={overview.isFetching} onClick={() => overview.refetch()}>
+        <RefreshCw aria-hidden size={15} />{t.common.refresh}</button>} />
     <OverviewBody organizationId={organizationId} environmentId={environmentId} projectId={projectId}
       state={overview} canAddConnection={permissions.can('manageConnections')} />
   </div>

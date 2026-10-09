@@ -407,3 +407,13 @@ button.workspace-metric:hover { border-color: var(--primary); background: var(--
   .metric-value { font-size: var(--font-size-section); }
   .metric-detail { overflow-wrap: anywhere; }
 }
+
+/* List toolbars share one search rhythm and keep controls inside the card on mobile. */
+.list-filter-bar { padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-muted); }
+.list-filter-bar .search-field { flex: 1 1 260px; }
+.list-filter-bar .resource-count { margin-left: auto; }
+.list-filter-bar > .text-button { align-self: center; }
+@media (max-width: 640px) {
+  .list-filter-bar .search-field { flex-basis: 100%; width: 100%; }
+  .list-filter-bar > label select { width: 100%; }
+}

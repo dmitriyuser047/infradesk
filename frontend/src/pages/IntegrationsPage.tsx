@@ -1,13 +1,13 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { Plug, Plus } from 'lucide-react'
+import { Plug, Plus, Search, CirclePause, RefreshCw, TriangleAlert, SearchX } from 'lucide-react'
 import { ApiError } from '../api/httpClient'
 import { useDeleteIntegration, useIntegration, useIntegrationProviders, useIntegrations,
   useSaveIntegration, useSetIntegrationEnabled, useTestIntegration } from '../api/integrations'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, InlineAlert, WorkspaceFormSection, WorkspaceHeader,
-  WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+  WorkspaceSection, WorkspaceMetrics } from '../components/layout/WorkspacePrimitives'
 import { PageActionMenu } from '../components/layout/PageActionMenu'
 import { RefreshWarning, isUnavailableError } from '../components/layout/RefreshWarning'
 import { IntegrationDialog } from '../components/integrations/IntegrationDialog'
@@ -45,9 +45,22 @@ function IntegrationList({ organizationId }: { organizationId: string }) {
   const ui = i18n.t.integrationUi
   const createPath = `/organizations/${encodeURIComponent(organizationId)}/integrations/new${location.search}`
   const testError = useIntegrationError(test.error)
+  const [search, setSearch] = useState('')
+  const [presence, setPresence] = useState('ALL')
+  const items = query.data?.filter(item => (presence === 'ALL' || item.enabled === (presence === 'ENABLED')) &&
+    `${item.name} ${item.baseUrl}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) ?? []
   return <AppShell><div className="workspace-page work-page integration-page">
     <WorkspaceHeader title={t.title} subtitle={t.subtitle} actions={canManage ?
       <Link className="primary-button" to={createPath}><Plus aria-hidden size={16} />{t.add}</Link> : undefined} />
+    {canManage && query.data && !isUnavailableError(query.error) ? <WorkspaceMetrics items={[
+      { label: i18n.t.design.configuredIntegrations, value: query.data.length, icon: Plug, detail: i18n.t.design.listSnapshot },
+      { label: i18n.t.design.syncEnabled, value: query.data.filter(item => item.enabled).length, icon: RefreshCw,
+        onSelect: () => { setSearch(''); setPresence('ENABLED') } },
+      { label: i18n.t.design.syncPaused, value: query.data.filter(item => !item.enabled).length, icon: CirclePause,
+        onSelect: () => { setSearch(''); setPresence('DISABLED') } },
+      { label: i18n.t.design.knownSyncFailures, value: query.data.filter(item => item.overview?.lastSync?.status === 'FAILED').length,
+        icon: TriangleAlert, detail: i18n.t.design.latestAttempts },
+    ]} /> : null}
     {permissions.isPending ? <p role="status">{i18n.t.common.loading}</p> : null}
     {!permissions.isPending && !canManage ? <InlineAlert tone="danger" title={t.accessDenied} /> : null}
     {canManage && query.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /><span /></div> : null}
@@ -58,13 +71,25 @@ function IntegrationList({ organizationId }: { organizationId: string }) {
     {canManage && !isUnavailableError(query.error) && query.data?.length === 0 ? <EmptyWorkspaceState icon={Plug} title={t.empty} detail={t.emptyDetail}
       action={<Link className="primary-button" to={createPath}>{t.add}</Link>} /> : null}
     {canManage && !isUnavailableError(query.error) && query.data?.length ? <WorkspaceSection title={t.section}>
-      <div className="notification-list integration-list">{query.data.map(item => {
+      <div className="filter-bar list-filter-bar">
+        <div className="search-field"><Search size={16} aria-hidden className="search-field-icon" />
+          <input type="search" aria-label={i18n.t.design.integrationSearch} placeholder={i18n.t.design.integrationSearch}
+            value={search} onChange={event => setSearch(event.target.value)} /></div>
+        <label>{i18n.t.common.status}<select value={presence} onChange={event => setPresence(event.target.value)}>
+          <option value="ALL">{i18n.t.common.all}</option><option value="ENABLED">{i18n.t.design.onlyEnabled}</option>
+          <option value="DISABLED">{i18n.t.design.onlyDisabled}</option></select></label>
+        {search || presence !== 'ALL' ? <button className="text-button" type="button" onClick={() => { setSearch(''); setPresence('ALL') }}>{ui.resetFilters}</button> : null}
+        <span className="resource-count" role="status">{i18n.t.common.shown(items.length, query.data.length)}</span>
+      </div>
+      {!items.length ? <EmptyWorkspaceState compact icon={SearchX} title={i18n.t.resources.filter.noResults}
+        detail={i18n.t.resources.filter.noResultsDetail} /> : null}
+      <div className="notification-list integration-list integration-card-grid">{items.map(item => {
         const health = connectionHealth(test.variables === item.id && test.isSuccess ? test.data.ok : undefined,
           test.variables === item.id && test.error instanceof ApiError ? test.error.code : undefined)
         const counts = item.overview?.inventory
         const inventorySummary = inventory.inventorySummary(counts?.nodes?.active, counts?.hosts?.active, counts?.configProfiles?.active)
         return <article className="notification-card integration-card" key={item.id}>
-        <div className="notification-card-heading"><div><h3><Link to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}${location.search}`}>
+        <div className="notification-card-heading"><div className="integration-card-identity"><span className="integration-provider-mark"><Plug size={20} aria-hidden /></span><h3><Link to={`/organizations/${encodeURIComponent(organizationId)}/integrations/${encodeURIComponent(item.id)}${location.search}`}>
           {item.name}</Link></h3></div>
           <StatusIndicator label={item.enabled ? t.enabled : t.disabled} /></div>
         <p className="integration-provider-url"><span>Remnawave</span> · <span className="break-anywhere">{item.baseUrl}</span></p>

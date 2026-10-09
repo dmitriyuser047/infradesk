@@ -287,7 +287,9 @@ export const en = {
     sessionActionFailed: 'Could not complete the action.',
   },
 
-  design: { observedObjects: 'Present in inventory', managementFindings: 'Automatic management findings', observedState: 'Observed state', sourceConnections: 'Connections', discoverySources: 'Infrastructure discovery sources', childResources: 'Nested resources' },
+  design: { observedObjects: 'Present in inventory', managementFindings: 'Automatic management findings', observedState: 'Observed state', sourceConnections: 'Connections', discoverySources: 'Infrastructure discovery sources', childResources: 'Nested resources',
+    configuredConnections: 'Configured connections', activeConnections: 'Active connections', activeNotHealth: 'Connection configuration is active', connectionType: 'Connection type', listSnapshot: 'Before filters', inventoryRecords: 'Inventory records', inactiveRecords: 'Inactive records', retainedHistory: 'History is retained',
+    configuredIntegrations: 'Configured integrations', syncEnabled: 'Automatic sync enabled', syncPaused: 'Automatic sync paused', knownSyncFailures: 'Known sync failures', latestAttempts: 'Latest recorded attempts', integrationSearch: 'Search by name or Panel address', onlyEnabled: 'Only enabled', onlyDisabled: 'Only disabled' },
   shell: {
     appearance: 'Appearance', lightTheme: 'Light theme', darkTheme: 'Dark theme',
     brandHome: 'InfraDesk home',

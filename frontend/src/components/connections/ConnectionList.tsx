@@ -23,7 +23,7 @@ export function ConnectionList({
   const canManage = permissions.can('manageConnections')
   const columns = t.connections.columns
   return (
-    <div className="table-scroll"><table className="data-grid">
+    <div className="table-scroll"><table className="data-grid connection-grid">
       <thead><tr><th scope="col">{columns.name}</th><th scope="col">{columns.host}</th><th scope="col">{columns.trust}</th>
         <th scope="col">{columns.resources}</th><th scope="col">{columns.incidents}</th><th scope="col">{columns.lastSync}</th><th scope="col">{columns.nextRun}{canManage ? <span className="visually-hidden"> · {t.workScreens.actions}</span> : null}</th></tr></thead>
       <tbody>

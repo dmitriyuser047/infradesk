@@ -297,7 +297,9 @@ export const ru: Messages = {
     sessionActionFailed: 'Не удалось выполнить действие.',
   },
 
-  design: { observedObjects: 'Обнаружены в инвентаре', managementFindings: 'Результаты автоматического управления', observedState: 'Наблюдаемое состояние', sourceConnections: 'Подключения', discoverySources: 'Источники обнаружения', childResources: 'Вложенные ресурсы' },
+  design: { observedObjects: 'Обнаружены в инвентаре', managementFindings: 'Результаты автоматического управления', observedState: 'Наблюдаемое состояние', sourceConnections: 'Подключения', discoverySources: 'Источники обнаружения', childResources: 'Вложенные ресурсы',
+    configuredConnections: 'Настроенные подключения', activeConnections: 'Активные подключения', activeNotHealth: 'Включены для синхронизации', connectionType: 'Тип подключения', listSnapshot: 'В загруженном инвентаре', inventoryRecords: 'Записи инвентаря', inactiveRecords: 'Неактивные записи', retainedHistory: 'История сохранена',
+    configuredIntegrations: 'Настроенные интеграции', syncEnabled: 'Синхронизация включена', syncPaused: 'Синхронизация приостановлена', knownSyncFailures: 'Известные ошибки синхронизации', latestAttempts: 'Последние сохранённые попытки', integrationSearch: 'Поиск по имени или адресу Panel', onlyEnabled: 'Только включённые', onlyDisabled: 'Только выключенные' },
   shell: {
     appearance: 'Оформление', lightTheme: 'Светлая тема', darkTheme: 'Тёмная тема',
     brandHome: 'InfraDesk — на главную',

@@ -5,14 +5,14 @@
 /* Overall state leads the page. Counts stay quieter; only exceptions receive emphasis. */
 .overview-health {
   display: flex; align-items: center; gap: var(--space-4); min-width: 0;
-  padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius-lg);
   background: var(--surface); scroll-margin-top: var(--topbar-height);
 }
-.overview-health-success { background: var(--success-soft); border-color: var(--success-border); }
-.overview-health-warning { background: var(--warning-soft); border-color: var(--warning-border); }
-.overview-health-icon { flex: 0 0 auto; color: var(--text-secondary); }
-.overview-health-success .overview-health-icon { color: var(--success); }
-.overview-health-warning .overview-health-icon { color: var(--warning); }
+.overview-health-success { border-color: var(--success-border); }
+.overview-health-warning { border-color: var(--warning-border); }
+.overview-health-icon { flex: 0 0 auto; width: 48px; height: 48px; padding: var(--space-3); border-radius: var(--radius-lg); background: var(--neutral-soft); color: var(--text-secondary); }
+.overview-health-success .overview-health-icon { background: var(--success-soft); color: var(--success); }
+.overview-health-warning .overview-health-icon { background: var(--warning-soft); color: var(--warning); }
 .overview-health-body { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .overview-health-body h2 { font-size: var(--font-size-section); margin: 0 0 var(--space-1); }
 .overview-health-body p { color: var(--text-secondary); margin: 0; }
@@ -26,19 +26,19 @@
 /* Fleet summary: a label, the number, one quiet line of detail. Cards in a row share a height. */
 .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(176px, 1fr)); gap: var(--space-3); }
 .summary-card {
-  display: grid; grid-template-rows: auto auto 1fr; align-content: start; gap: 2px; padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm);
+  display: grid; grid-template-rows: auto auto 1fr; align-content: start; gap: var(--space-2); padding: var(--space-5);
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: none;
   color: var(--text-primary); text-decoration: none; min-width: 0;
 }
 .summary-card-link { transition: border-color .12s, box-shadow .12s; }
-.summary-card-link:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+.summary-card-link:hover { border-color: var(--primary); background: var(--surface-selected); }
 .summary-card-link { cursor: pointer; }
 .summary-card-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.summary-card-priority { border-width: 2px; background: var(--warning-soft); }
+.summary-card-priority { background: var(--warning-soft); }
 .summary-card-priority .summary-card-value { color: var(--warning); }
 .summary-card-danger { border-color: var(--danger-border); }
 .summary-card-warning { border-color: var(--warning-border); }
-.summary-card-top { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.summary-card-top { display: flex; flex-direction: row-reverse; justify-content: space-between; align-items: center; gap: var(--space-2); min-width: 0; }
 .summary-card-label { overflow: hidden; color: var(--text-secondary); font-size: var(--font-size-small); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .summary-card-icon {
   display: grid; flex: 0 0 auto; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm);
@@ -47,7 +47,7 @@
 .summary-card-icon.tone-success { background: var(--success-soft); color: var(--success); }
 .summary-card-icon.tone-danger { background: var(--danger-soft); color: var(--danger); }
 .summary-card-icon.tone-warning { background: var(--warning-soft); color: var(--warning); }
-.summary-card-value { margin-top: 4px; font-size: 26px; font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.summary-card-value { margin-top: 4px; font-size: var(--font-size-title); font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; }
 .summary-card-detail { color: var(--text-tertiary); font-size: var(--font-size-caption); line-height: 1.4; }
 .summary-card-skeleton span {
   display: block; height: 12px; border-radius: var(--radius-sm);

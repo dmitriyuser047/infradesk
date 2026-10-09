@@ -59,6 +59,23 @@ function setup(entry = '/organizations/org/integrations', role: 'OWNER' | 'MEMBE
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('integrations settings', () => {
+  it('filters integrations locally by Panel address and enabled state without mutating them', async () => {
+    const { calls } = setup(undefined, 'OWNER', [existing,
+      { ...existing, id: 'two', name: 'Second Panel', baseUrl: 'https://second.example.test', enabled: true }])
+    await screen.findByText('Main Remnawave')
+    const reads = calls.filter(call => call.url.endsWith('/integrations') && call.method === 'GET').length
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search by name or Panel address' }), { target: { value: 'second.example' } })
+    expect(screen.queryByText('Main Remnawave')).toBeNull()
+    expect(screen.getByText('Second Panel')).toBeTruthy()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Status' }), { target: { value: 'DISABLED' } })
+    expect(screen.queryByText('Second Panel')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Reset filters' }))
+    expect(screen.getByText('Main Remnawave')).toBeTruthy()
+    expect(screen.getByText('Second Panel')).toBeTruthy()
+    expect(calls.filter(call => call.url.endsWith('/integrations') && call.method === 'GET')).toHaveLength(reads)
+    expect(calls.every(call => call.method === 'GET')).toBe(true)
+  })
+
   it('hides privileged settings from members without requesting them', async () => {
     const { calls } = setup(undefined, 'MEMBER')
     expect(await screen.findByText('Integration settings require owner access.')).toBeTruthy()

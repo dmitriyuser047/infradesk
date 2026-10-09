@@ -26,3 +26,7 @@
 .fingerprint-value { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
 .fingerprint-value .fingerprint { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; word-break: break-all; }
 .identity-grid .property-row { align-items: center; }
+
+.connection-grid { min-width: 1000px; }
+.connection-grid td { padding-block: var(--space-4); vertical-align: top; }
+.connection-grid .technical-value { overflow-wrap: anywhere; }
