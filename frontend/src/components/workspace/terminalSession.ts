@@ -14,6 +14,9 @@ const darkTheme = {
   brightMagenta: '#d670d6', brightCyan: '#29b8db', brightWhite: '#ffffff',
 }
 
+/** Main screen, soft terminal reset (modes and attributes, not content), then a dim rule. */
+const sessionSeparator = new TextEncoder().encode(`\x1b[?1049l\x1b[!p\r\n\x1b[2m${'─'.repeat(40)}\x1b[0m\r\n`)
+
 function savedTheme(): TerminalTheme {
   try { return localStorage.getItem(themeKey) === 'dark' ? 'dark' : 'light' } catch { return 'light' }
 }
@@ -132,7 +135,10 @@ export class TerminalSessionController {
         write: bytes => { if (this.transport === transport) this.emulator?.write(bytes) },
         ready: () => {
           if (this.transport !== transport) return
-          if (this.everReady) this.emulator?.clear()
+          // Keep the earlier commands and output: the user may need them to repeat work the lost
+          // shell was doing. Leave any full-screen program's buffer and modes behind, then mark the
+          // boundary so new output is never mistaken for the old shell's.
+          if (this.everReady) this.emulator?.write(sessionSeparator)
           this.everReady = true
           this.update({ serverSessionId: transport?.sessionId })
           this.retries = 0

@@ -219,6 +219,8 @@ describe('terminal workspace', () => {
     expect(Socket.instances).toHaveLength(2)
     expect(FakeTerminal.instances).toHaveLength(1)
     expect(FakeTerminal.instances[0].dispose).not.toHaveBeenCalled()
+    act(() => Socket.instances[1].ready())
+    expect(FakeTerminal.instances[0].clear).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
@@ -230,6 +232,7 @@ describe('terminal workspace', () => {
     render(app(workspace))
     await connect()
     act(() => Socket.instances[0].ready())
+    act(() => Socket.instances[0].output('$ make build\r\n'))
     vi.useFakeTimers()
     act(() => Socket.instances[0].control('error', 'SESSION_VALIDATION_FAILED'))
     expect(screen.getAllByText('Reconnecting').length).toBeGreaterThan(0)
@@ -239,7 +242,12 @@ describe('terminal workspace', () => {
     expect(screen.getAllByText('Connected').length).toBeGreaterThan(0)
     act(() => Socket.instances[0].control('error', 'CONNECTION_CHANGED'))
     expect(screen.getAllByText('Connected').length).toBeGreaterThan(0)
-    expect(FakeTerminal.instances[0].clear).toHaveBeenCalledOnce()
+    // The lost session's commands stay readable; the new session starts below a separator.
+    expect(FakeTerminal.instances[0].clear).not.toHaveBeenCalled()
+    const written = FakeTerminal.instances[0].written.join('')
+    expect(written).toContain('$ make build')
+    expect(written.indexOf('\x1b[?1049l\x1b[!p')).toBeGreaterThan(written.indexOf('$ make build'))
+    expect(written).toContain('─'.repeat(40))
     vi.useRealTimers()
   })
 

@@ -9,8 +9,9 @@ Connect is explicit. Navigation detaches the viewport while the workspace keeps 
 and scrollback alive. Disconnect ends the socket and SSH shell; closing the dock tab
 releases the emulator. An unexpected transport loss retries a fresh SSH session up to
 three times with 1, 2 and 4 second delays. Manual Disconnect never retries. A new
-session clears the prior shell output after `ready`; until then, a status label marks it
-as previous output. Fullscreen uses the browser's Fullscreen API.
+session keeps the prior shell output in the scrollback: after `ready` it leaves any
+alternate screen, soft-resets terminal modes and draws a separator line; until then, a
+status label marks it as previous output. Only the explicit Clear action erases it. Fullscreen uses the browser's Fullscreen API.
 
 The terminal has independent light and near-black themes. Only the theme choice is
 persisted in local storage. xterm provides mouse selection and scrollback. Copy and
