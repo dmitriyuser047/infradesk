@@ -106,3 +106,21 @@
 
 .resource-environments-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); align-items: start; gap: var(--space-4); }
 .resource-environments-grid .link-row-icon { box-sizing: content-box; padding: var(--space-2); border-radius: var(--radius-md); background: var(--primary-soft); color: var(--primary); }
+/* Organization entry uses the same authorized membership query as the shell. */
+.organizations-page { max-width: 1100px; margin-inline: auto; }
+.organizations-intro { padding: var(--space-6) 0 var(--space-3); display: grid; gap: var(--space-5); }
+.organization-hero-icon { display: grid; place-items: center; width: 60px; height: 60px; border: 1px solid var(--info-border); border-radius: var(--radius-lg); background: var(--primary-soft); color: var(--primary); }
+.organizations-intro .workspace-title-line h1 { font-size: clamp(24px, 3vw, 34px); letter-spacing: -.03em; }
+.organizations-intro .workspace-subtitle { max-width: 65ch; }
+.organization-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: var(--space-4); margin-top: var(--space-5); }
+.organization-card { display: grid; gap: var(--space-5); padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius-lg); color: var(--text-primary); background: var(--surface); text-decoration: none; box-shadow: var(--shadow-sm); }
+.organization-card:hover { border-color: var(--primary); background: var(--surface-muted); }
+.organization-card-heading { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.organization-card-heading > div { min-width: 0; }
+.organization-card-heading h2 { font-size: var(--font-size-section); margin: 0; overflow-wrap: anywhere; }
+.organization-card-heading span:not(.organization-card-avatar) { color: var(--text-tertiary); font-size: var(--font-size-small); overflow-wrap: anywhere; }
+.organization-card-avatar { display: grid; place-items: center; flex: 0 0 46px; height: 46px; border-radius: var(--radius-md); background: var(--primary-soft); color: var(--primary); font-size: 20px; font-weight: 600; }
+.organization-card-access { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); color: var(--text-tertiary); font-size: var(--font-size-small); }
+.organization-card-access strong { margin-left: auto; color: var(--text-secondary); font-weight: 500; }
+.organization-card-action { display: flex; align-items: center; justify-content: space-between; padding-top: var(--space-4); border-top: 1px solid var(--border); color: var(--primary); font-weight: 600; }
+.organization-card:focus-visible, .sidebar-workspace:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }

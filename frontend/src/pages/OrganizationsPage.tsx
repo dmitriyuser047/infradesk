@@ -1,20 +1,28 @@
 import { Link } from 'react-router-dom'
+import { useState } from 'react'
+import { ArrowRight, Building2, Search, ShieldCheck } from 'lucide-react'
 
 import { useMyOrganizations } from '../api/auth'
 import { getOrganizationRoleLabel } from '../components/auth/authPresentation'
 import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
+import { getDisplayName } from '../components/navigation/navigationPresentation'
 
 export function OrganizationsPage() {
   const i18n = useI18n()
   const t = i18n.t.organizations
   const organizations = useMyOrganizations()
+  const [search, setSearch] = useState('')
+  const items = organizations.data?.filter(item => `${getDisplayName(item, t.columns.organization)} ${item.code}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) ?? []
 
   return (
     <AppShell>
-      <div className="workspace-page">
-        <WorkspaceHeader title={t.title} subtitle={t.subtitle} />
+      <div className="workspace-page organizations-page">
+        <div className="organizations-intro">
+          <span className="organization-hero-icon"><Building2 aria-hidden size={28} /></span>
+          <WorkspaceHeader title={t.welcome} subtitle={t.welcomeDetail} />
+        </div>
         <WorkspaceSection title={t.available}>
           {organizations.isPending ? <div className="context-skeleton" aria-label={t.loading}><span /><span /></div> : null}
           {organizations.isError ? (
@@ -24,13 +32,25 @@ export function OrganizationsPage() {
           {organizations.isSuccess && organizations.data.length === 0 ? (
             <EmptyWorkspaceState title={t.empty} />
           ) : null}
-          {organizations.isSuccess && organizations.data.length > 0 ? <div className="table-scroll"><table className="data-grid">
-            <thead><tr><th>{t.columns.organization}</th><th>{t.columns.code}</th><th>{t.columns.role}</th></tr></thead>
-            <tbody>{organizations.data.map(organization => <tr key={organization.id}>
-              <td><Link className="grid-link" to={`/organizations/${encodeURIComponent(organization.id)}/overview`}>{organization.name}</Link></td>
-              <td className="muted-cell">{organization.code}</td><td>{getOrganizationRoleLabel(organization.role, i18n)}</td>
-            </tr>)}</tbody>
-          </table></div> : null}
+          {organizations.isSuccess && organizations.data.length > 0 ? <>
+            <div className="list-filter-bar">
+              <div className="search-field"><Search aria-hidden size={16} /><input aria-label={t.search} placeholder={t.search}
+                value={search} onChange={event => setSearch(event.target.value)} /></div>
+              <span className="muted-cell">{items.length} / {organizations.data.length}</span>
+            </div>
+            {items.length === 0 ? <EmptyWorkspaceState title={t.noMatches} /> : <div className="organization-card-grid">
+              {items.map(organization => <Link className="organization-card" key={organization.id}
+                to={`/organizations/${encodeURIComponent(organization.id)}/overview`}>
+                <div className="organization-card-heading"><span className="organization-card-avatar" aria-hidden>
+                  {getDisplayName(organization, t.columns.organization).slice(0, 1).toLocaleUpperCase()}</span>
+                  <div><h2>{getDisplayName(organization, t.columns.organization)}</h2><span>{organization.code}</span></div>
+                </div>
+                <div className="organization-card-access"><ShieldCheck aria-hidden size={16} /><span>{t.access}</span>
+                  <strong>{getOrganizationRoleLabel(organization.role, i18n)}</strong></div>
+                <div className="organization-card-action"><span>{t.open}</span><ArrowRight aria-hidden size={18} /></div>
+              </Link>)}
+            </div>}
+          </> : null}
         </WorkspaceSection>
       </div>
     </AppShell>

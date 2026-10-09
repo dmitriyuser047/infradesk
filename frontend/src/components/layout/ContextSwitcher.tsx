@@ -55,9 +55,9 @@ export function ContextSwitcher() {
   return <div className="context-switcher">
     <button ref={popover.triggerRef} type="button" className="context-trigger" onClick={popover.toggle}
       aria-haspopup="dialog" {...popover.triggerProps}
-      aria-label={organizationId === undefined ? t.change : t.current(summary)}>
+      aria-label={organizationId === undefined ? t.organization : t.current(summary)}>
       <Layers aria-hidden size={16} className="context-trigger-icon" />
-      {organizationId === undefined ? <span className="context-trigger-text">{t.change}</span> :
+      {organizationId === undefined ? <span className="context-trigger-text">{i18n.t.shell.organizations}</span> :
         <span className="context-trigger-text">
           <span className="context-trigger-organization">{parts[0]}</span>
           {parts.slice(1).map((part, index) => <span key={index} className="context-trigger-part">

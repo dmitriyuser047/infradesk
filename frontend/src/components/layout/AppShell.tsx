@@ -1,8 +1,10 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Bell, Cable, FileCog, LayoutDashboard, Layers, Menu, Plug, Server, TriangleAlert, X, type LucideIcon } from 'lucide-react'
+import { ArrowUpRight, Building2, Bell, Cable, FileCog, LayoutDashboard, Layers, Menu, Plug, Server, TriangleAlert, X, type LucideIcon } from 'lucide-react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 
 import { useI18n, type Messages } from '../../i18n'
+import { useMyOrganizations } from '../../api/auth'
+import { getDisplayName } from '../navigation/navigationPresentation'
 import { useOrganizationPermissions, type OrganizationPermission } from '../auth/authorization'
 import { AccountMenu } from './AccountMenu'
 import { InfraDeskMark } from './InfraDeskMark'
@@ -75,6 +77,8 @@ function ShellFrame({ children }: { children: ReactNode }) {
   const location = useLocation()
   const scope = useWorkspaceRouteContext()
   const permissions = useOrganizationPermissions(scope.organizationId)
+  const memberships = useMyOrganizations()
+  const organization = memberships.data?.find(item => item.id === scope.organizationId)
   const active = activeWorkspaceModule(location.pathname)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const docked = useTerminalSessions().length > 0
@@ -108,8 +112,25 @@ function ShellFrame({ children }: { children: ReactNode }) {
         <button type="button" className="icon-button sidebar-close" aria-label={t.shell.closeNavigation} title={t.shell.closeNavigation}
           onClick={() => { setDrawerOpen(false); toggleRef.current?.focus() }}><X aria-hidden size={18} /></button>
       </div>
+      <Link className="sidebar-workspace" to="/organizations" aria-current={!scope.organizationId ? 'page' : undefined}>
+        <span className="sidebar-workspace-icon"><Building2 aria-hidden size={20} /></span>
+        <span className="sidebar-workspace-copy"><small>{t.context.organization}</small>
+          <strong>{scope.organizationId ? getDisplayName(organization, t.context.currentOrganization) : t.shell.organizations}</strong></span>
+        <ArrowUpRight aria-hidden size={16} />
+      </Link>
       <nav className="sidebar-nav" aria-label={t.shell.primaryNavigation}>
-        {navigation.map((group, index) => {
+        {!scope.organizationId ? <div className="sidebar-organizations">
+          <div className="nav-group-label">{t.organizations.available}</div>
+          {memberships.isPending ? <p className="nav-hint">{t.organizations.loading}</p> : null}
+          {memberships.isError ? <button className="nav-link sidebar-retry" type="button" onClick={() => void memberships.refetch()}>{t.common.retry}</button> : null}
+          {memberships.isSuccess ? <ul>{memberships.data.map(item => <li key={item.id}>
+            <Link className="nav-link organization-shortcut" to={`/organizations/${encodeURIComponent(item.id)}/overview`}>
+              <span className="organization-initial" aria-hidden>{getDisplayName(item, t.context.organization).slice(0, 1).toLocaleUpperCase()}</span>
+              <span>{getDisplayName(item, t.context.organization)}</span><ArrowUpRight aria-hidden size={16} />
+            </Link>
+          </li>)}</ul> : null}
+          <p className="nav-hint">{t.shell.chooseOrganization}</p>
+        </div> : navigation.map((group, index) => {
           const items = group.items.filter(item => !item.permission || permissions.can(item.permission))
           return items.length > 0 ? <div className="nav-group" key={index}>
           {group.label ? <div className="nav-group-label">{group.label(t)}</div> : null}
@@ -124,7 +145,7 @@ function ShellFrame({ children }: { children: ReactNode }) {
                     if (drawerOpen) { setDrawerOpen(false); contentRef.current?.focus() }
                   }}
                   aria-current={current ? 'page' : undefined}>
-                  <Icon aria-hidden size={18} /><span>{item.label(t)}</span>
+                  <span className="nav-icon"><Icon aria-hidden size={18} /></span><span>{item.label(t)}</span>
                 </Link> :
                 <span className="nav-link nav-link-disabled" aria-disabled="true" title={t.shell.selectOrganizationFirst}>
                   <Icon aria-hidden size={18} /><span>{item.label(t)}</span>
@@ -132,8 +153,8 @@ function ShellFrame({ children }: { children: ReactNode }) {
             })}
           </ul>
         </div> : null})}
-        {scope.organizationId === undefined ? <p className="nav-hint">{t.shell.chooseOrganization}</p> : null}
       </nav>
+      <div className="sidebar-footer"><InfraDeskMark /><div><strong>InfraDesk</strong><span>{t.shell.workspaceCaption}</span></div></div>
     </aside>
     {/* Closing by the backdrop returns focus to the menu button, as Escape and the close button do. */}
     {drawerOpen ? <div className="drawer-backdrop" aria-hidden onClick={() => { setDrawerOpen(false); toggleRef.current?.focus() }} /> : null}

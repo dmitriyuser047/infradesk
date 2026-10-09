@@ -28,6 +28,21 @@
   background: var(--primary); color: var(--text-on-primary);
 }
 .sidebar-nav { padding: var(--space-2) var(--space-3); }
+.sidebar-workspace { display: flex; align-items: center; gap: 10px; margin: var(--space-2) var(--space-3) var(--space-4); padding: var(--space-3); border: 1px solid var(--sidebar-border); border-radius: var(--radius-lg); background: var(--sidebar-hover); color: var(--sidebar-text); text-decoration: none; }
+.sidebar-workspace:hover { border-color: var(--sidebar-accent); }
+.sidebar-workspace-icon { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: var(--radius-md); background: var(--sidebar-active); color: var(--sidebar-accent); }
+.sidebar-workspace-copy { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.sidebar-workspace-copy small { color: var(--sidebar-muted); font-size: 11px; }
+.sidebar-workspace-copy strong { font-size: var(--font-size-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-workspace > svg { flex: 0 0 auto; color: var(--sidebar-muted); }
+.sidebar-footer { display: flex; align-items: center; gap: 10px; margin: auto var(--space-4) 0; padding: var(--space-5) 0; border-top: 1px solid var(--sidebar-border); }
+.sidebar-footer .brand-mark { width: 24px; height: 24px; flex-basis: 24px; background: var(--sidebar-active); color: var(--sidebar-accent); }
+.sidebar-footer div { display: grid; gap: 2px; }
+.sidebar-footer strong { font-size: var(--font-size-small); }
+.sidebar-footer span { color: var(--sidebar-muted); font-size: 11px; }
+.sidebar-retry { width: 100%; border: 0; background: var(--sidebar-hover); text-align: left; }
+.organization-shortcut > span:not(.organization-initial) { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+.organization-initial { display: grid; place-items: center; flex: 0 0 30px; height: 30px; border-radius: var(--radius-md); background: var(--sidebar-active); color: var(--sidebar-accent); font-weight: 700; }
 .sidebar-nav ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
 .nav-group + .nav-group { margin-top: var(--space-5); }
 .nav-group-label {
@@ -35,7 +50,7 @@
   font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
 }
 .nav-link {
-  display: flex; align-items: center; gap: var(--space-3); min-height: 40px; padding: 0 var(--space-3);
+  display: flex; align-items: center; gap: var(--space-3); min-height: 46px; padding: 0 var(--space-3);
   border-radius: var(--radius-md); color: var(--sidebar-text); text-decoration: none; font-weight: 500;
 }
 .nav-link svg { flex: 0 0 auto; color: var(--sidebar-muted); }
@@ -43,6 +58,10 @@
 .nav-link:hover svg { color: var(--sidebar-on-hover); }
 .nav-link-active { background: var(--sidebar-active); color: var(--sidebar-on-hover); box-shadow: inset 0 0 0 1px var(--sidebar-border); }
 .nav-link-active svg { color: var(--sidebar-accent); }
+.nav-icon { display: grid; place-items: center; flex: 0 0 30px; height: 30px; border-radius: var(--radius-sm); }
+.nav-link:hover .nav-icon, .nav-link-active .nav-icon { background: var(--sidebar-hover); }
+.nav-link-active { position: relative; }
+.nav-link-active::before { content: ''; position: absolute; left: 0; top: 13px; bottom: 13px; width: 3px; border-radius: var(--radius-sm); background: var(--sidebar-accent); }
 .nav-link-disabled { opacity: .45; cursor: default; }
 .nav-link-disabled:hover { background: transparent; color: var(--sidebar-text); }
 .nav-link:focus-visible { outline: 2px solid var(--sidebar-accent); outline-offset: -2px; }
@@ -84,6 +103,7 @@
 .context-trigger-icon, .context-trigger-chevron { flex: 0 0 auto; color: var(--text-tertiary); }
 .context-trigger-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-trigger-part { color: var(--text-secondary); }
+.context-trigger-organization { font-weight: 600; }
 .context-separator { margin: 0 6px; color: var(--text-disabled); }
 .context-panel {
   position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; display: grid; gap: var(--space-3);

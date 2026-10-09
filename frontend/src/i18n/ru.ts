@@ -316,6 +316,7 @@ export const ru: Messages = {
     organizations: 'Все организации',
     accountMenu: (name: string) => `Меню учётной записи ${name}`,
     chooseOrganization: 'Выберите организацию, чтобы увидеть её разделы.',
+    workspaceCaption: 'Управление инфраструктурой',
     selectOrganizationFirst: 'Сначала выберите организацию',
     groups: { infrastructure: 'Инфраструктура', monitoring: 'Мониторинг', automation: 'Автоматизация', structure: 'Структура' },
     nav: {
@@ -351,6 +352,12 @@ export const ru: Messages = {
   environmentKinds: { DEV: 'Разработка', TEST: 'Тестирование', STAGE: 'Предпрод', PROD: 'Продакшен', CUSTOM: 'Другое' },
 
   organizations: {
+    welcome: 'Ваша инфраструктура начинается здесь',
+    welcomeDetail: 'Откройте рабочее пространство, чтобы управлять серверами, подключениями и интеграциями в одном месте.',
+    open: 'Открыть пространство',
+    search: 'Найти организацию',
+    noMatches: 'Организации не найдены',
+    access: 'Ваш доступ',
     title: 'Организации',
     subtitle: 'Выберите организацию, чтобы открыть её обзор',
     available: 'Доступные организации',

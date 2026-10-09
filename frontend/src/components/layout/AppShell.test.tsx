@@ -204,20 +204,31 @@ describe('application shell', () => {
     }
   })
 
-  it('disables the sections outside an organization', () => {
+  it('offers authorized workspace shortcuts outside an organization instead of disabled sections', () => {
     setup('/organizations')
     const nav = screen.getByRole('navigation', { name: 'Основная навигация' })
 
     expect(within(nav).queryByRole('link', { name: 'Обзор' })).toBeNull()
-    expect(within(nav).getByText('Выберите организацию, чтобы увидеть её разделы.')).toBeTruthy()
+    expect(nav.querySelector('[aria-disabled]')).toBeNull()
+    expect(within(nav).getByRole('link', { name: 'InfraDesk' }).getAttribute('href')).toBe('/organizations/org/overview')
+    fireEvent.click(within(nav).getByRole('link', { name: 'InfraDesk' }))
+    expect(location()).toBe('/organizations/org/overview')
   })
 
-  it('explains why navigation is disabled without an organization', () => {
-    setup('/organizations', 'OWNER', 'en')
+  it('does not offer workspace links when the membership query fails', () => {
+    setup('/organizations', 'OWNER', 'en', client => {
+      client.getQueryCache().find({ queryKey: ['my-organizations'] })!
+        .setState({ status: 'error', error: new ApiError(403, 'FORBIDDEN', 'unavailable') })
+    })
     const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
-    const overview = within(nav).getByText('Overview').closest('.nav-link')
-    expect(overview?.getAttribute('aria-disabled')).toBe('true')
-    expect(overview?.getAttribute('title')).toBe('Choose an organization first')
+    expect(within(nav).queryByRole('link')).toBeNull()
+    expect(within(nav).getByRole('button', { name: 'Retry' })).toBeTruthy()
+  })
+
+  it('explains workspace selection without showing unavailable module controls', () => {
+    setup('/organizations')
+    const nav = screen.getByRole('navigation', { name: 'Основная навигация' })
+    expect(within(nav).getByText('Выберите организацию, чтобы увидеть её разделы.')).toBeTruthy()
   })
 
   it('shows the context as one line and changes it in a popover', () => {

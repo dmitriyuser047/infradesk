@@ -306,6 +306,7 @@ export const en = {
     organizations: 'All organizations',
     accountMenu: (name: string) => `Account menu for ${name}`,
     chooseOrganization: 'Choose an organization to see its sections.',
+    workspaceCaption: 'Infrastructure workspace',
     selectOrganizationFirst: 'Choose an organization first',
     groups: { infrastructure: 'Infrastructure', monitoring: 'Monitoring', automation: 'Automation', structure: 'Structure' },
     nav: {
@@ -341,6 +342,12 @@ export const en = {
   environmentKinds: { DEV: 'Development', TEST: 'Test', STAGE: 'Staging', PROD: 'Production', CUSTOM: 'Custom' },
 
   organizations: {
+    welcome: 'Your infrastructure starts here',
+    welcomeDetail: 'Open a workspace to manage servers, connections and integrations in one place.',
+    open: 'Open workspace',
+    search: 'Find an organization',
+    noMatches: 'No matching organizations',
+    access: 'Your access',
     title: 'Organizations',
     subtitle: 'Choose an organization to open its overview',
     available: 'Available organizations',

@@ -65,7 +65,7 @@ function queryClient(): QueryClient {
 
 const pages = [
   { path: '/login', route: '/login', element: <LoginPage />, title: 'Войти', titleEn: 'Sign in' },
-  { path: '/organizations', route: '/organizations', element: <OrganizationsPage />, title: 'Организации', titleEn: 'Organizations' },
+  { path: '/organizations', route: '/organizations', element: <OrganizationsPage />, title: 'Ваша инфраструктура начинается здесь', titleEn: 'Your infrastructure starts here' },
   { path: '/organizations/org', route: '/organizations/:organizationId', element: <OrganizationPage />, title: 'Проекты и окружения', titleEn: 'Projects and environments' },
   { path: '/organizations/org/overview', route: '/organizations/:organizationId/overview', element: <OverviewPage />, title: 'Обзор инфраструктуры', titleEn: 'Infrastructure overview' },
   { path: '/organizations/org/projects/new', route: '/organizations/:organizationId/projects/new', element: <ProjectCreatePage />, title: 'Новый проект', titleEn: 'Create project' },
