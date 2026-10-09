@@ -33,7 +33,7 @@ export function OrganizationsPage() {
             <EmptyWorkspaceState title={t.empty} />
           ) : null}
           {organizations.isSuccess && organizations.data.length > 0 ? <>
-            <div className="list-filter-bar">
+            <div className="filter-bar list-filter-bar">
               <div className="search-field"><Search aria-hidden size={16} /><input aria-label={t.search} placeholder={t.search}
                 value={search} onChange={event => setSearch(event.target.value)} /></div>
               <span className="muted-cell">{items.length} / {organizations.data.length}</span>

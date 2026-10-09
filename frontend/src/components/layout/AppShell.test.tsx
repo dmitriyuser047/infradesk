@@ -225,6 +225,15 @@ describe('application shell', () => {
     expect(within(nav).getByRole('button', { name: 'Retry' })).toBeTruthy()
   })
 
+  it('moves focus to the page after choosing an organization from the mobile drawer', () => {
+    setup('/organizations', 'OWNER', 'en')
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }))
+    fireEvent.click(within(screen.getByRole('navigation')).getByRole('link', { name: 'InfraDesk' }))
+    expect(location()).toBe('/organizations/org/overview')
+    expect(screen.getByRole('button', { name: 'Open navigation' }).getAttribute('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(screen.getByRole('main'))
+  })
+
   it('explains workspace selection without showing unavailable module controls', () => {
     setup('/organizations')
     const nav = screen.getByRole('navigation', { name: 'Основная навигация' })

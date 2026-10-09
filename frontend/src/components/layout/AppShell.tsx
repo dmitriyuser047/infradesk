@@ -124,7 +124,8 @@ function ShellFrame({ children }: { children: ReactNode }) {
           {memberships.isPending ? <p className="nav-hint">{t.organizations.loading}</p> : null}
           {memberships.isError ? <button className="nav-link sidebar-retry" type="button" onClick={() => void memberships.refetch()}>{t.common.retry}</button> : null}
           {memberships.isSuccess ? <ul>{memberships.data.map(item => <li key={item.id}>
-            <Link className="nav-link organization-shortcut" to={`/organizations/${encodeURIComponent(item.id)}/overview`}>
+            <Link className="nav-link organization-shortcut" to={`/organizations/${encodeURIComponent(item.id)}/overview`}
+              onClick={() => { if (drawerOpen) { setDrawerOpen(false); contentRef.current?.focus() } }}>
               <span className="organization-initial" aria-hidden>{getDisplayName(item, t.context.organization).slice(0, 1).toLocaleUpperCase()}</span>
               <span>{getDisplayName(item, t.context.organization)}</span><ArrowUpRight aria-hidden size={16} />
             </Link>
