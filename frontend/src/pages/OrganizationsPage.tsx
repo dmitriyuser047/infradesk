@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
-import { ArrowRight, Building2, Search, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Search, ShieldCheck } from 'lucide-react'
 
 import { useMyOrganizations } from '../api/auth'
 import { getOrganizationRoleLabel } from '../components/auth/authPresentation'
@@ -19,10 +19,7 @@ export function OrganizationsPage() {
   return (
     <AppShell>
       <div className="workspace-page organizations-page">
-        <div className="organizations-intro">
-          <span className="organization-hero-icon"><Building2 aria-hidden size={28} /></span>
-          <WorkspaceHeader title={t.welcome} subtitle={t.welcomeDetail} />
-        </div>
+        <WorkspaceHeader title={t.title} />
         <WorkspaceSection title={t.available}>
           {organizations.isPending ? <div className="context-skeleton" aria-label={t.loading}><span /><span /></div> : null}
           {organizations.isError ? (
@@ -34,7 +31,7 @@ export function OrganizationsPage() {
           ) : null}
           {organizations.isSuccess && organizations.data.length > 0 ? <>
             <div className="filter-bar list-filter-bar">
-              <div className="search-field"><Search aria-hidden size={16} /><input aria-label={t.search} placeholder={t.search}
+              <div className="search-field"><Search aria-hidden size={16} className="search-field-icon" /><input aria-label={t.search} placeholder={t.search}
                 value={search} onChange={event => setSearch(event.target.value)} /></div>
               <span className="muted-cell">{items.length} / {organizations.data.length}</span>
             </div>

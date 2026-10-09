@@ -234,10 +234,11 @@ describe('application shell', () => {
     expect(document.activeElement).toBe(screen.getByRole('main'))
   })
 
-  it('explains workspace selection without showing unavailable module controls', () => {
-    setup('/organizations')
+  it('shows the empty membership state without unavailable module controls', () => {
+    setup('/organizations', 'OWNER', 'ru', client => client.setQueryData(['my-organizations'], []))
     const nav = screen.getByRole('navigation', { name: 'Основная навигация' })
-    expect(within(nav).getByText('Выберите организацию, чтобы увидеть её разделы.')).toBeTruthy()
+    expect(within(nav).getByText('Нет доступных организаций')).toBeTruthy()
+    expect(within(nav).queryByRole('link')).toBeNull()
   })
 
   it('shows the context as one line and changes it in a popover', () => {

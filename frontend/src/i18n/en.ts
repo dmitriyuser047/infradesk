@@ -342,8 +342,6 @@ export const en = {
   environmentKinds: { DEV: 'Development', TEST: 'Test', STAGE: 'Staging', PROD: 'Production', CUSTOM: 'Custom' },
 
   organizations: {
-    welcome: 'Your infrastructure starts here',
-    welcomeDetail: 'Open a workspace to manage servers, connections and integrations in one place.',
     open: 'Open workspace',
     search: 'Find an organization',
     noMatches: 'No matching organizations',

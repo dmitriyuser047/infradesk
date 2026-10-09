@@ -106,15 +106,12 @@ function ShellFrame({ children }: { children: ReactNode }) {
     <a className="skip-link" href="#main-content">{t.shell.skipToContent}</a>
     <aside ref={sidebarRef} id="app-sidebar" className="sidebar">
       <div className="sidebar-header">
-        <Link className="brand" to="/organizations" aria-label={t.shell.brandHome}>
-          <InfraDeskMark /><span className="brand-name">InfraDesk</span>
-        </Link>
         <button type="button" className="icon-button sidebar-close" aria-label={t.shell.closeNavigation} title={t.shell.closeNavigation}
           onClick={() => { setDrawerOpen(false); toggleRef.current?.focus() }}><X aria-hidden size={18} /></button>
       </div>
       <Link className="sidebar-workspace" to="/organizations" aria-current={!scope.organizationId ? 'page' : undefined}>
         <span className="sidebar-workspace-icon"><Building2 aria-hidden size={20} /></span>
-        <span className="sidebar-workspace-copy"><small>{t.context.organization}</small>
+        <span className="sidebar-workspace-copy">
           <strong>{scope.organizationId ? getDisplayName(organization, t.context.currentOrganization) : t.shell.organizations}</strong></span>
         <ArrowUpRight aria-hidden size={16} />
       </Link>
@@ -130,7 +127,7 @@ function ShellFrame({ children }: { children: ReactNode }) {
               <span>{getDisplayName(item, t.context.organization)}</span><ArrowUpRight aria-hidden size={16} />
             </Link>
           </li>)}</ul> : null}
-          <p className="nav-hint">{t.shell.chooseOrganization}</p>
+          {memberships.isSuccess && memberships.data.length === 0 ? <p className="nav-hint">{t.organizations.empty}</p> : null}
         </div> : navigation.map((group, index) => {
           const items = group.items.filter(item => !item.permission || permissions.can(item.permission))
           return items.length > 0 ? <div className="nav-group" key={index}>
@@ -155,7 +152,10 @@ function ShellFrame({ children }: { children: ReactNode }) {
           </ul>
         </div> : null})}
       </nav>
-      <div className="sidebar-footer"><InfraDeskMark /><div><strong>InfraDesk</strong><span>{t.shell.workspaceCaption}</span></div></div>
+      <Link className="sidebar-footer" to="/organizations" aria-label={t.shell.brandHome}
+        onClick={() => { if (drawerOpen) { setDrawerOpen(false); contentRef.current?.focus() } }}>
+        <InfraDeskMark /><div><strong>InfraDesk</strong><span>{t.shell.workspaceCaption}</span></div>
+      </Link>
     </aside>
     {/* Closing by the backdrop returns focus to the menu button, as Escape and the close button do. */}
     {drawerOpen ? <div className="drawer-backdrop" aria-hidden onClick={() => { setDrawerOpen(false); toggleRef.current?.focus() }} /> : null}

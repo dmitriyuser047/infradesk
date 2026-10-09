@@ -43,14 +43,14 @@
   --info-border: #d4d0ff;
 
   /* Sidebar */
-  --sidebar-bg: #171b2d;
-  --sidebar-text: #cfd4dc;
-  --sidebar-on-hover: #ffffff;
-  --sidebar-muted: #7d8696;
-  --sidebar-hover: #21263b;
-  --sidebar-active: #2c2d4e;
-  --sidebar-border: #21263b;
-  --sidebar-accent: #b5adff;
+  --sidebar-bg: var(--surface);
+  --sidebar-text: var(--text-secondary);
+  --sidebar-on-hover: var(--text-primary);
+  --sidebar-muted: var(--text-tertiary);
+  --sidebar-hover: var(--surface-muted);
+  --sidebar-active: var(--primary-soft);
+  --sidebar-border: var(--border);
+  --sidebar-accent: var(--primary);
 
   /* Type */
   --font-family: Inter, "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
