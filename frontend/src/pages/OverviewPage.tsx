@@ -11,6 +11,7 @@ import { getEnvironments, useEnvironments, useProjects } from '../api/navigation
 import { useOperationsOverview } from '../api/overview'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { OverviewActivity, OverviewActivityLimit } from '../components/overview/OverviewActivity'
+import { OverviewDistribution } from '../components/overview/OverviewDistribution'
 import { OverviewHealth } from '../components/overview/OverviewHealth'
 import { getOverviewActivityEntries } from '../components/overview/overviewActivityPresentation'
 import { withWorkspaceContext } from '../components/layout/workspaceNavigation'
@@ -165,6 +166,9 @@ export function OverviewBody({ organizationId, projectId, environmentId, state, 
     <section aria-label={t.summary} className="summary-grid">
       {cards.map(card => <SummaryCardView key={card.id} card={card} />)}
     </section>
+    <OverviewDistribution summary={overview.summary}
+      resourcesPath={environmentId ? `${base}/environments/${encodeURIComponent(environmentId)}${context}` : `${base}/resources${context}`}
+      connectionsPath={`${base}/connections${context}`} />
     <div className="overview-columns">
       {hasAttention ? <AttentionSection organizationId={organizationId} overview={overview} context={context} /> : null}
       <WorkspaceSection title={t.activity} className="activity-section"

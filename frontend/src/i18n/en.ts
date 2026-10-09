@@ -1704,6 +1704,13 @@ export const en = {
   },
 
   overview: {
+    distribution: {
+      title: 'Infrastructure state', servers: 'Server availability', containers: 'Container state',
+      connections: 'Connection synchronization', total: 'total', online: 'Online', offline: 'Offline',
+      unknown: 'No data', running: 'Running', stopped: 'Stopped', otherState: 'Other / no data',
+      synchronized: 'Successful', failed: 'Failed', notSynced: 'Never run',
+      empty: 'No objects in the selected scope yet', snapshot: 'Last known state',
+    },
     health: {
       normal: 'All systems are operating normally', warning: 'Some issues need attention',
       empty: 'Infrastructure is not connected yet', unknown: 'State unknown',
