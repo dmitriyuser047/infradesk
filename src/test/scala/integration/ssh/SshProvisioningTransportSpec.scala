@@ -35,16 +35,27 @@ final class SshProvisioningTransportSpec extends FunSuite {
     result("", exits.getOrElse(7, 0), truncatedAt.contains(7)),
     result("running\n", exits.getOrElse(8, 0), truncatedAt.contains(8)))
 
-  test("Debian 12 and Ubuntu 22.04/24.04 are supported; unsupported OS is safe and explicit") {
-    List("debian" -> "12", "ubuntu" -> "22.04", "ubuntu" -> "24.04").foreach { case (os, version) =>
+  test("Debian 12 and Ubuntu 22.04/24.04/26.04 are supported; unsupported OS is safe and explicit") {
+    List("debian" -> "12", "ubuntu" -> "22.04", "ubuntu" -> "24.04", "ubuntu" -> "26.04").foreach { case (os, version) =>
       val checked = transport.assess(transport.parseResults(observed(os, version)))
       assertEquals(checked.failureCode, None)
       assertEquals(checked.verificationResult, Some(true))
+      assertEquals(checked.facts.get("version"), Some(version))
     }
     val unsupported = transport.assess(transport.parseResults(observed("alpine", "3.20")))
     assertEquals(unsupported.failureCode, Some("PROVISIONING_UNSUPPORTED_PLATFORM"))
     assertEquals(unsupported.facts.get("os"), Some("unsupported"))
     assert(!unsupported.facts.values.exists(_.contains("alpine")))
+  }
+
+  test("Ubuntu 26.04 still requires readiness and unreviewed releases fail closed") {
+    val missing = transport.assess(transport.parseResults(observed("ubuntu", "26.04", commandOutput = "")))
+    assertEquals(missing.failureCode, Some("PROVISIONING_COMMANDS_MISSING"))
+    List("25.10", "28.04", "26.04.1").foreach { version =>
+      val checked = transport.assess(transport.parseResults(observed("ubuntu", version)))
+      assertEquals(checked.failureCode, Some("PROVISIONING_UNSUPPORTED_PLATFORM"))
+      assertEquals(checked.facts.get("version"), Some("unsupported"))
+    }
   }
 
   test("empty command inventory and required probe failures fail closed") {

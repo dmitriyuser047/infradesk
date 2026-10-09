@@ -5,7 +5,7 @@
 .administration-role-guide svg { color: var(--primary); }
 .administration-role-guide p { grid-column: 1 / -1; color: var(--text-tertiary); font-size: var(--font-size-caption); margin: 0; }
 .administration-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.administration-avatar { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 12px; background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+.administration-avatar { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: var(--radius-md); background: var(--primary-soft); color: var(--primary); font-weight: 600; }
 .administration-identity > div { display: grid; gap: 3px; min-width: 0; }
 .administration-identity span:not(.administration-avatar) { color: var(--text-tertiary); font-size: var(--font-size-caption); overflow-wrap: anywhere; }
 .administration-global-role { display: inline-flex; align-items: center; gap: 6px; color: var(--primary); font-size: var(--font-size-caption); }

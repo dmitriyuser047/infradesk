@@ -23,6 +23,11 @@ os_release() {
 # Supported platforms
 ok platform_supported ubuntu 22.04 x86_64
 ok platform_supported ubuntu 24.04 x86_64
+ok platform_supported ubuntu 26.04 x86_64
+ok platform_supported ubuntu 26.04 amd64
+no platform_supported ubuntu 26.04 arm64
+no platform_supported ubuntu 25.10 x86_64
+no platform_supported ubuntu 28.04 x86_64
 ok platform_supported debian 12 amd64
 no platform_supported debian 11 x86_64
 no platform_supported ubuntu 20.04 x86_64
@@ -39,10 +44,30 @@ output="$( (check_platform "${file}" x86_64) 2>&1 || true)"
 file="$(os_release "Ubuntu 24.04 LTS" ubuntu 24.04 noble)"
 if (check_platform "${file}" aarch64) >/dev/null 2>&1; then echo "FAIL: arm64 accepted"; FAILURES=$((FAILURES + 1)); fi
 (check_platform "${file}" x86_64 && [ "${PLATFORM_CODENAME}" = noble ]) || { echo "FAIL: Ubuntu 24.04 rejected"; FAILURES=$((FAILURES + 1)); }
+file="$(os_release "Ubuntu 26.04 LTS" ubuntu 26.04 resolute)"
+(check_platform "${file}" x86_64 && [ "${PLATFORM_VERSION}" = 26.04 ] && [ "${PLATFORM_CODENAME}" = resolute ]) || { echo "FAIL: Ubuntu 26.04 rejected or Docker codename changed"; FAILURES=$((FAILURES + 1)); }
 file="$(os_release "Debian GNU/Linux 12 (bookworm)" debian 12 bookworm)"
 (check_platform "${file}" x86_64) || { echo "FAIL: Debian 12 rejected"; FAILURES=$((FAILURES + 1)); }
 
 # Input validation
+ok valid_domain infradesk.example.com
+ok valid_domain infra-desk.example.com
+no valid_domain https://example.com
+no valid_domain 138.124.38.229
+no valid_domain example..com
+no valid_domain example.com.
+no valid_domain '-example.com'
+no valid_domain 'example.com { admin off }'
+no valid_domain 'example.com$INFRADESK_DB_PASSWORD'
+domain_url="$( (env_value() { printf 'infradesk.example.com'; }; base_url) )"
+eq "${domain_url}" 'https://infradesk.example.com' 'automatic HTTPS URL'
+compose_args="$( (env_value() { printf 'infradesk.example.com'; }; docker() { printf '%s\n' "$@"; }; compose_in /bundle up -d) )"
+[[ "${compose_args}" == *'/bundle/compose.https.yml'* ]] || { echo 'FAIL: HTTPS overlay omitted'; FAILURES=$((FAILURES + 1)); }
+compose_args="$( (env_value() { :; }; docker() { printf '%s\n' "$@"; }; compose_in /bundle up -d) )"
+[[ "${compose_args}" != *compose.https.yml* ]] || { echo 'FAIL: HTTP install unexpectedly enabled HTTPS'; FAILURES=$((FAILURES + 1)); }
+if (env_value() { printf 'example.com { }'; }; docker() { exit 0; }; compose_in /bundle up -d) >/dev/null 2>&1; then
+  echo 'FAIL: invalid domain reached Compose'; FAILURES=$((FAILURES + 1))
+fi
 ok valid_port 1; ok valid_port 8080; ok valid_port 65535
 no valid_port 0; no valid_port 65536; no valid_port 80a; no valid_port ""; no valid_port "8080 "
 ok valid_ipv4 127.0.0.1; ok valid_ipv4 0.0.0.0; ok valid_ipv4 192.168.1.20

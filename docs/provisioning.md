@@ -7,7 +7,7 @@ for the same plan and request ID.
 
 Stage 25A performs observations only. It does not install packages, create users, change files,
 enable services, or alter server configuration. The fixed checks require Debian 12 or Ubuntu
-22.04/24.04 on amd64/x86_64, root or non-interactive sudo, at least 512 MiB memory, at least 1 GiB
+22.04/24.04/26.04 on amd64/x86_64, root or non-interactive sudo, at least 512 MiB memory, at least 1 GiB
 free disk, shell/basic commands, apt-get, systemctl, and Docker status observation. Docker being
 absent is reported as a fact but is not a Stage 25A blocker. The verify step repeats
 the readiness observation independently. SSH commands and output are bounded; only allowlisted,

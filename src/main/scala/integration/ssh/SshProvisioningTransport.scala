@@ -23,13 +23,14 @@ final class SshProvisioningTransport(client: SshClient[IO], credentials: SshCred
     "systemctl is-system-running"
   )
   private val expectedCommands = Set("sh", "apt-get", "systemctl", "awk", "df", "grep")
+  private val supportedUbuntuVersions = Set("22.04", "24.04", "26.04")
 
   override def preflight(connection: Connection): IO[ProvisioningStepResult] = observe(connection).map(assess)
 
   private[ssh] def assess(observed: ProvisioningStepResult): ProvisioningStepResult = {
     val facts = observed.facts
     val supported = (facts.get("os") == Some("debian") && facts.get("version") == Some("12")) ||
-      (facts.get("os") == Some("ubuntu") && Set("22.04", "24.04")(facts.getOrElse("version", "")))
+      (facts.get("os") == Some("ubuntu") && supportedUbuntuVersions(facts.getOrElse("version", "")))
     val architecture = facts.get("architecture").exists(Set("amd64", "x86_64"))
     val privileged = facts.get("root") == Some("true") || facts.get("sudoAvailable") == Some("true")
     val checks = List(
@@ -88,7 +89,7 @@ final class SshProvisioningTransport(client: SshClient[IO], credentials: SshCred
       def safeOs(raw: Option[String]): String = raw.filter(Set("debian", "ubuntu")).getOrElse("unsupported")
       def safeVersion(os: String, raw: Option[String]): String =
         if (os == "debian" && raw.contains("12")) "12"
-        else if (os == "ubuntu" && Set("22.04", "24.04")(raw.getOrElse(""))) raw.get
+        else if (os == "ubuntu" && supportedUbuntuVersions(raw.getOrElse(""))) raw.get
         else "unsupported"
       val uid = results(2).stdout.trim.toIntOption
       val memory = results(4).stdout.trim.toLongOption

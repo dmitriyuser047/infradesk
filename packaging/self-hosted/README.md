@@ -8,7 +8,7 @@ tested with.
 
 | | |
 | --- | --- |
-| Operating system | Ubuntu 22.04 LTS, Ubuntu 24.04 LTS, Debian 12 |
+| Operating system | Ubuntu 22.04 LTS, Ubuntu 24.04 LTS, Ubuntu 26.04 LTS, Debian 12 |
 | Architecture | linux/amd64 |
 | Runtime | Docker Engine 24 or newer with the Docker Compose v2 plugin (2.20+) |
 | Memory | 2 GiB minimum, 4 GiB recommended |
@@ -73,56 +73,31 @@ configuration and data.
 Open the printed URL and sign in with the administrator account. Then add your first SSH
 connection (Connections → New connection), confirm the host key, and run a synchronization.
 
-## Put it behind your reverse proxy
+## Caddy and HTTPS
 
-InfraDesk listens on `127.0.0.1:8080` by default and serves plain HTTP there. Publish it with the
-reverse proxy you already run, over HTTPS. The installer does **not** touch nginx, Caddy, Apache,
-your firewall or DNS.
+Caddy serves the frontend and proxies the API and browser SSH WebSocket. For a fresh installation
+with a public domain pointing to this server, run:
 
-InfraDesk has a browser SSH terminal that uses a WebSocket, so the proxy must pass
-`Upgrade`/`Connection`, and allow long-lived connections (terminal sessions last up to two hours;
-a manual synchronization can take up to 45 minutes).
-
-### nginx
-
-```nginx
-map $http_upgrade $infradesk_connection_upgrade {
-  default upgrade;
-  ''      close;
-}
-
-server {
-  listen 443 ssl;
-  http2 on;
-  server_name infradesk.example.com;
-  ssl_certificate     /etc/letsencrypt/live/infradesk.example.com/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/infradesk.example.com/privkey.pem;
-
-  client_max_body_size 1m;
-
-  location / {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    # The browser terminal (/api/v1/organizations/.../connections/.../terminal) is a WebSocket.
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $infradesk_connection_upgrade;
-    # InfraDesk bounds each route itself; these only must not be shorter than its longest one.
-    proxy_read_timeout 7500s;
-    proxy_send_timeout 7500s;
-  }
-}
-
-server {
-  listen 80;
-  server_name infradesk.example.com;
-  return 301 https://$host$request_uri;
-}
+```bash
+sudo ./install.sh --domain infradesk.example.com
 ```
 
-### Caddy
+This publishes TCP 80 and 443, enables secure session cookies, and lets the bundled Caddy obtain
+and renew certificates automatically. DNS must already point here and both ports must be reachable.
+The installer checks local port conflicts before writing configuration; it does not edit host
+firewall rules, DNS, or an existing web server. Certificate storage survives container replacement.
+Keep its Docker volume with the installation when moving to another host; database backups do not
+include certificates (Caddy can issue them again). Uninstall preserves these volumes.
+
+Existing loopback installations keep their address during updates. Caddy runs inside the frontend
+image there as well; an existing host-side proxy can continue forwarding to it. To enable bundled
+HTTPS later, stop conflicting services, back up the root-only environment file, set
+`INFRADESK_DOMAIN`, `INFRADESK_HTTP_PUBLISH=0.0.0.0:80` and `INFRADESK_AUTH_COOKIE_SECURE=true`, then
+run `sudo infradesk start` (which recreates services when their configuration changes). The CLI includes the HTTPS Compose overlay automatically when a
+validated domain is configured. No Node server-profile choice is changed by this setup.
+
+### Existing host-side Caddy
+
 
 ```caddy
 infradesk.example.com {

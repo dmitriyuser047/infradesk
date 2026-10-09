@@ -1,0 +1,235 @@
+/* Shared Obsidian presentation for the application. Colors live in semantic theme tokens. */
+:root .app-shell {
+  background:
+    radial-gradient(ellipse at 35% 0%, var(--obsidian-glow-green), transparent 55%),
+    radial-gradient(ellipse at 92% 65%, var(--obsidian-glow-amber), transparent 48%),
+    radial-gradient(ellipse at 60% 40%, var(--obsidian-glow-blue), transparent 60%),
+    var(--bg-app);
+  background-attachment: fixed;
+}
+:root .sidebar {
+  background: var(--obsidian-glass);
+  backdrop-filter: blur(18px);
+  padding: var(--space-4) var(--space-2) 0;
+}
+:root .sidebar-workspace {
+  border: 1px solid var(--border);
+  margin: var(--space-2) var(--space-3) var(--space-6);
+  min-height: 54px;
+}
+:root .nav-group + .nav-group { margin-top: 28px; }
+:root .nav-group-label {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .13em;
+  padding-bottom: var(--space-3);
+}
+:root .nav-link { min-height: 44px; font-size: 13px; border: 1px solid transparent; }
+:root .nav-link-active {
+  border-color: var(--border-strong); background: var(--surface-hover); color: var(--text-primary);
+  box-shadow: inset 2px 0 var(--primary);
+}
+:root .nav-link-active svg { color: var(--primary); }
+:root .sidebar-footer { padding-block: 26px; }
+:root .sidebar-footer strong { font-size: 19px; letter-spacing: -.05em; }
+:root .sidebar-footer .brand-mark { background: transparent; color: var(--text-primary); }
+:root .sidebar-footer span { font-family: var(--font-mono); font-size: 9px; }
+:root .topbar {
+  background: var(--obsidian-glass); backdrop-filter: blur(18px); padding-inline: 36px;
+}
+:root .context-trigger { background: transparent; font-family: var(--font-mono); font-size: 12px; }
+:root .avatar { border-radius: var(--radius-sm); background: var(--surface-hover); color: var(--text-primary); }
+:root .account-name { font-family: var(--font-mono); font-size: 12px; }
+:root .content { padding: 38px clamp(20px, 3vw, 48px) 48px; }
+:root .workspace-page { gap: 24px; }
+:root .workspace-header { padding-bottom: var(--space-5); border-bottom: 1px solid var(--border); }
+:root .workspace-header h1 { font-size: clamp(28px, 3vw, 42px); letter-spacing: -.055em; font-weight: 500; }
+:root .workspace-subtitle { font-family: var(--font-mono); font-size: 12px; margin-top: 4px; }
+:root .primary-button,
+:root .secondary-button,
+:root .text-button,
+:root .workspace-tab {
+  font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+}
+:root .workspace-section { background: var(--obsidian-panel); box-shadow: 0 8px 24px var(--obsidian-shadow); }
+:root .workspace-section-heading { padding-top: 20px; }
+:root .workspace-section-heading h2 {
+  font-family: var(--font-mono); font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
+}
+:root .status-indicator { border-radius: var(--radius-sm); font-family: var(--font-mono); font-weight: 400; }
+:root .status-dot { border-radius: 0; width: 5px; height: 5px; }
+:root .data-grid th { font-family: var(--font-mono); font-size: 11px; font-weight: 400; }
+:root .data-grid td { padding-block: 16px; }
+:root .overview-page > .workspace-header { padding-top: var(--space-2); padding-bottom: 28px; position: relative; }
+:root .overview-page > .workspace-header::before {
+  content: ""; position: absolute; right: 0; top: 0; height: 12px; width: 12px;
+  border-top: 1px solid var(--text-tertiary); border-right: 1px solid var(--text-tertiary); pointer-events: none;
+}
+:root .overview-page > .workspace-header h1 { font-size: clamp(36px, 4vw, 58px); line-height: 1.1; }
+:root .overview-health { padding: 16px 20px; border-color: var(--border); background: var(--obsidian-panel); border-left: 2px solid var(--text-tertiary); }
+:root .overview-health-success { border-left-color: var(--success); }
+:root .overview-health-warning { border-left-color: var(--warning); }
+:root .overview-health-icon { width: 34px; height: 34px; padding: 7px; border-radius: 0; background: transparent; }
+:root .overview-health-body h2 { font-size: 14px; font-weight: 500; }
+:root .overview-health-body p { font-size: 12px; }
+:root .overview-health-body small { font-family: var(--font-mono); font-size: 10px; margin-top: 6px; }
+:root .summary-grid { gap: 0; border: 1px solid var(--border); background: var(--obsidian-panel); }
+:root .summary-card {
+  padding: 24px; gap: 14px; border: 0; border-right: 1px solid var(--border); border-radius: 0; background: transparent;
+}
+:root .summary-card:last-child { border-right: 0; }
+:root .summary-card-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+:root .summary-card-icon { background: transparent; width: 18px; height: 18px; }
+:root .summary-card-value { font-size: clamp(36px, 3.7vw, 54px); font-weight: 400; letter-spacing: -.055em; }
+:root .summary-card-detail { font-family: var(--font-mono); font-size: 10px; }
+:root .summary-card-priority { background: var(--warning-soft); }
+:root .summary-card-link:hover { background: var(--surface-hover); }
+:root .overview-distributions { gap: 20px; }
+:root .distribution-card { position: relative; }
+:root .distribution-body { min-height: 174px; }
+:root .distribution-ring { width: 142px; flex-basis: 142px; }
+:root .distribution-ring circle { stroke-width: 4px; }
+:root .distribution-total strong { font-size: 32px; font-weight: 400; }
+:root .distribution-total span,
+:root .distribution-note { font-family: var(--font-mono); font-size: 10px; }
+:root .distribution-legend { gap: 12px; font-family: var(--font-mono); font-size: 10px; }
+:root .distribution-dot { border-radius: 0; width: 5px; height: 5px; flex-basis: 5px; }
+:root .attention-list { gap: 0; }
+:root .attention-item { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; padding: 16px 0; }
+:root .attention-item:last-child { border-bottom: 0; }
+:root .attention-item[data-kind="OPERATION_UNKNOWN"] { background: transparent; }
+:root .attention-icon { background: transparent; }
+:root .attention-title { font-size: 12px; font-weight: 500; }
+:root .attention-secondary { font-size: 11px; }
+:root .attention-time,
+:root .activity-time { font-family: var(--font-mono); font-size: 10px; }
+:root .activity-entry { padding-block: 12px; }
+:root .activity-title { font-size: 12px; font-weight: 500; }
+:root .activity-secondary { font-size: 11px; }
+:root .activity-marker { border-radius: 0; width: 6px; height: 6px; border: 0; box-shadow: none; margin-left: 2px; }
+:root .activity-entry:not(:last-child)::before { width: 1px; }
+
+/* Lists and detail screens share the same hierarchy as the dashboard. */
+:root .workspace-metrics { gap: 0; border: 1px solid var(--border); background: var(--obsidian-panel); }
+:root .workspace-metric { border: 0; border-right: 1px solid var(--border); border-radius: 0; background: transparent; padding: 22px; }
+:root .workspace-metric:last-child { border-right: 0; }
+:root .metric-heading { font-family: var(--font-mono); font-size: 11px; }
+:root .metric-value { font-size: 38px; font-weight: 400; letter-spacing: -.04em; }
+:root .metric-detail { font-family: var(--font-mono); font-size: 11px; }
+:root .work-page .workspace-section-heading { padding: 20px; }
+:root .work-page .data-grid td { padding-block: 18px; }
+:root .workspace-tabs { gap: 0; padding: 0; background: var(--obsidian-panel); }
+:root .workspace-tab { position: relative; min-height: 46px; padding-inline: 20px; border-radius: 0; }
+:root .workspace-tab.active { background: var(--surface-hover); color: var(--text-primary); box-shadow: inset 0 -2px var(--primary); }
+:root .tab-count { border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 10px; }
+:root .segmented { gap: 0; padding: 3px; }
+:root .segmented-option { font-family: var(--font-mono); font-size: 12px; border-radius: var(--radius-sm); }
+:root .filter-bar { row-gap: 16px; }
+:root .filter-bar label { font-family: var(--font-mono); font-size: 11px; }
+:root .list-filter-bar { padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+:root .resource-name { font-weight: 500; }
+:root .resource-row { min-height: 64px; }
+:root .resource-link { min-height: 63px; }
+:root .tree-grid-header { font-family: var(--font-mono); font-size: 11px; font-weight: 400; }
+:root .resource-type-cell { font-size: 12px; }
+:root .context-path { font-family: var(--font-mono); font-size: 11px; }
+:root .summary-item { background: var(--obsidian-panel); padding: 20px; }
+:root .summary-item dt, :root .property-row dt { font-family: var(--font-mono); font-size: 12px; }
+:root .summary-value { font-size: 28px; font-weight: 400; }
+:root .property-row { padding-block: 14px; }
+:root .detail-page .property-row { padding-block: 12px; }
+:root .chart-pane { padding: 20px; background: var(--surface-sunken); }
+:root .chart-pane h3, :root .metric-strip dt { font-family: var(--font-mono); font-size: 11px; font-weight: 400; }
+:root .organization-card, :root .project-card { background: var(--obsidian-panel); box-shadow: none; }
+:root .organization-card-action { font-family: var(--font-mono); font-size: 12px; font-weight: 500; }
+:root .organization-card-avatar { background: var(--surface-hover); color: var(--text-primary); }
+
+/* Forms, confirmations and onboarding keep their existing permissions and focus behavior. */
+:root .field-label, :root .compact-field > span, :root .configuration-field > label,
+:root .account-fields label, :root .administration-fields label, :root .field-grid > label,
+:root .configuration-details-grid label, :root .notification-form label:not(.notification-check) {
+  font-size: 12px; font-weight: 500;
+}
+:root .field-hint, :root .field-help, :root .section-description { line-height: 1.6; }
+:root .workspace-form { gap: 24px; }
+:root .form-toolbar { padding-top: 4px; }
+:root .dialog-backdrop { backdrop-filter: blur(5px); }
+:root .integration-dialog { box-shadow: var(--shadow-md); }
+:root .dialog-heading { padding: 20px 24px; background: var(--surface-muted); }
+:root .dialog-heading h2 { font-family: var(--font-mono); font-size: 14px; font-weight: 500; }
+:root .dialog-body { padding: 24px; gap: 16px; }
+:root .dialog-actions { border-top: 1px solid var(--border); background: var(--surface-muted); padding: 16px 24px; }
+:root .inline-alert { border-left-width: 2px; }
+:root .inline-alert-body strong { font-weight: 500; }
+:root .page-action-popup, :root .context-panel, :root .account-menu-panel { box-shadow: var(--shadow-md); }
+:root .menu-group-label { font-family: var(--font-mono); font-weight: 400; }
+:root .administration-account-strip, :root .account-summary { background: var(--obsidian-panel); padding: 20px; }
+:root .administration-avatar, :root .account-summary-avatar { border-radius: var(--radius-md); }
+:root .administration-role-guide > div { background: var(--obsidian-panel); }
+:root .account-security-event-marker { border-radius: 0; }
+:root .notification-card { background: var(--surface-muted); }
+:root .notification-card-heading h3 { font-weight: 500; }
+:root .notification-type, :root .notification-properties dt { font-family: var(--font-mono); font-size: 11px; }
+:root .integration-page .integration-card-grid .integration-card { background: var(--surface-muted); box-shadow: none; }
+:root .integration-card-identity h3 a { color: var(--text-primary); text-decoration: none; }
+:root .integration-card-identity h3 a:hover { color: var(--primary); }
+:root .integration-provider-mark { border: 1px solid var(--border-strong); background: transparent; }
+:root .integration-counters dt, :root .onboarding-run-row time { font-family: var(--font-mono); font-size: 11px; }
+:root .onboarding-protocol-options > label { background: var(--surface-muted); }
+:root .onboarding-protocol-options > label:has(input:checked) { background: var(--primary-soft); }
+:root .remnawave-onboarding-steps li::before { font-family: var(--font-mono); border-radius: var(--radius-sm); }
+:root .onboarding-progress-groups strong { font-family: var(--font-mono); font-size: 11px; }
+:root .configuration-template-input, :root .configuration-code { background: var(--surface-sunken); line-height: 1.7; }
+:root .server-profile-module, :root .server-profile-rule { background: var(--surface-muted); }
+:root .server-profile-module-header h3, :root .deployment-execution legend { font-family: var(--font-mono); font-size: 12px; }
+:root .workspace-dock { background: var(--surface-muted); }
+:root .dock-tab-link, :root .terminal-history-label { font-family: var(--font-mono); font-size: 11px; }
+:root .terminal-panel { background: transparent; }
+
+/* Sign-in uses the same material and measured typography as the workspace. */
+:root .login-page {
+  background:
+    radial-gradient(ellipse at 25% 10%, var(--obsidian-glow-green), transparent 60%),
+    radial-gradient(ellipse at 80% 70%, var(--obsidian-glow-amber), transparent 55%),
+    var(--bg-app);
+}
+:root .login-panel { position: relative; width: min(100%, 460px); padding: 40px; gap: 24px; background: var(--obsidian-panel); box-shadow: var(--shadow-md); }
+:root .login-panel .eyebrow { font-size: 26px; font-weight: 600; letter-spacing: -.04em; }
+:root .login-panel h1 { font-size: 32px; font-weight: 400; letter-spacing: -.04em; }
+:root .login-panel > p { color: var(--text-secondary); }
+:root .login-panel::before { content: ""; position: absolute; top: -12px; left: -12px; width: 18px; height: 18px; border-top: 1px solid var(--text-tertiary); border-left: 1px solid var(--text-tertiary); pointer-events: none; }
+@media (max-width: 1350px) and (min-width: 981px) {
+  :root .distribution-body { flex-direction: row; }
+  :root .distribution-ring { width: 112px; flex-basis: 112px; }
+  :root .distribution-legend { width: auto; flex: 1; }
+}
+@media (max-width: 1100px) and (min-width: 961px) {
+  :root .distribution-body { flex-direction: column; }
+  :root .distribution-legend { width: 100%; }
+}
+@media (max-width: 960px) {
+  :root .sidebar { background: var(--surface); }
+  :root .content { padding: 24px 20px; }
+  :root .topbar { padding-inline: 20px; }
+  :root .summary-card { padding: 20px; }
+}
+@media (max-width: 640px) {
+  :root .topbar { height: 64px; padding-inline: 12px; }
+  :root .workspace-page { gap: 18px; }
+  :root .summary-card { border-bottom: 1px solid var(--border); padding: 18px; }
+  :root .summary-card:nth-child(2n) { border-right: 0; }
+  :root .summary-card:last-child { border-bottom: 0; }
+  :root .overview-health > .secondary-button { margin-left: 0; }
+  :root .overview-health-body { flex-basis: calc(100% - 50px); }
+  :root .distribution-body { min-height: 150px; }
+  :root .distribution-ring { width: 125px; flex-basis: 125px; }
+  :root .workspace-metric { padding: 18px; border-bottom: 1px solid var(--border); }
+  :root .workspace-metric:nth-child(2n) { border-right: 0; }
+  :root .workspace-metric:nth-last-child(-n+2) { border-bottom: 0; }
+  :root .metric-value { font-size: 30px; }
+  :root .workspace-tab { padding-inline: 14px; }
+  :root .dialog-heading, :root .dialog-body, :root .dialog-actions { padding: 16px; }
+  :root .login-panel { padding: 28px; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root .sidebar, :root .topbar, :root .workspace-section, :root .login-panel { background: var(--surface); backdrop-filter: none; }
+  :root .dialog-backdrop { backdrop-filter: none; }
+}

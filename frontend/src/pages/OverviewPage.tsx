@@ -67,7 +67,7 @@ function OverviewContent({ organizationId, projectId, environmentId }: {
   const subtitle = environmentId ? t.overview.scopeEnvironment(environment?.name ?? '…')
     : projectId ? t.overview.scopeProject(project?.name ?? '…') : t.overview.scopeOrganization
 
-  return <div className="workspace-page">
+  return <div className="workspace-page overview-page">
     <WorkspaceHeader title={t.overview.title} subtitle={subtitle}
       actions={<button type="button" className="secondary-button" disabled={overview.isFetching} onClick={() => overview.refetch()}>
         <RefreshCw aria-hidden size={15} />{t.common.refresh}</button>} />

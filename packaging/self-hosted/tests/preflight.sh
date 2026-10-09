@@ -39,6 +39,7 @@ expect() {
 
 expect ubuntu:22.04 "Docker is not installed."
 expect ubuntu:24.04 "Docker is not installed."
+expect ubuntu:26.04 "Docker is not installed."
 expect debian:12 "Docker is not installed."
 expect debian:11 "This platform is not supported."
 expect ubuntu:20.04 "This platform is not supported."

@@ -1,4 +1,4 @@
-# Production topology for a single host: nginx is the only service with a published port, the
+# Production topology for a single host: Caddy is the only service with a published port, the
 # backend and the database talk over the internal network. Every value comes from the environment
 # file described in docs/production.md; this file contains no secrets.
 
@@ -125,7 +125,7 @@ services:
       INFRADESK_SCHEDULER_BATCH_SIZE: ${INFRADESK_SCHEDULER_BATCH_SIZE:-100}
       INFRADESK_SCHEDULER_MAX_CONCURRENCY: ${INFRADESK_SCHEDULER_MAX_CONCURRENCY:-5}
       INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS: ${INFRADESK_SCHEDULER_CLAIM_LEASE_SECONDS:-900}
-    # No published port either: nginx is the only way in.
+    # No published port either: Caddy is the only way in.
     expose:
       - "8080"
     networks:
@@ -149,6 +149,9 @@ services:
       # Only this host-side bridge address may assert X-Forwarded-For. It is the TLS proxy
       # boundary documented in docs/production.md, never a trust-all CIDR.
       INFRADESK_TRUSTED_PROXY_CIDR: ${INFRADESK_TRUSTED_PROXY_CIDR:-172.28.0.1/32}
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
     depends_on:
       backend:
         condition: service_healthy
@@ -160,6 +163,8 @@ services:
 
 volumes:
   postgres-data:
+  caddy-data:
+  caddy-config:
 
 networks:
   internal:

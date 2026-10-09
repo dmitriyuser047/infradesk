@@ -116,7 +116,7 @@ jobs:
             echo "InfraDesk ${RELEASE_TAG} — commit \`${GITHUB_SHA}\`, database schema V${SCHEMA_VERSION}."
             echo
             echo "## Supported platforms"
-            echo "Ubuntu 22.04 / 24.04 LTS and Debian 12, linux/amd64, Docker Engine 24+ with Compose v2.20+."
+            echo "Ubuntu 22.04 / 24.04 / 26.04 LTS and Debian 12, linux/amd64, Docker Engine 24+ with Compose v2.20+."
             echo
             echo "## Install"
             echo '```bash'

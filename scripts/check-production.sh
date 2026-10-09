@@ -23,7 +23,7 @@ check "/" 200 "application shell"
 # React Router owns this path; the proxy has to answer it with the shell rather than a 404.
 check "/organizations" 200 "client-side deep link"
 
-# Vite emits content-addressed files. Verify that the shell references one and nginx serves it,
+# Vite emits content-addressed files. Verify that the shell references one and Caddy serves it,
 # rather than declaring the frontend healthy from index.html alone.
 asset_path="$(curl --silent --show-error --fail --max-time 10 "${BASE_URL}/" \
   | sed -n 's/.*src="\([^\"]*\/assets\/[^\"]*\.js\)".*/\1/p' | head -n 1)"

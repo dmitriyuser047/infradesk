@@ -1,0 +1,7 @@
+# Applied only for a reviewed --domain installation. Caddy owns TLS inside the proxy container.
+services:
+  proxy:
+    environment:
+      INFRADESK_SITE_ADDRESS: ${INFRADESK_DOMAIN:?INFRADESK_DOMAIN is required}
+    ports:
+      - "443:443"

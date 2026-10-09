@@ -17,6 +17,7 @@ BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOTAL_PHASES=8
 BIND_ADDRESS="127.0.0.1"
 HTTP_PORT="8080"
+DOMAIN=""
 INTERACTIVE="auto"
 INSTALL_DOCKER="no"
 RECONCILE="no"
@@ -36,6 +37,7 @@ Usage: sudo ./install.sh [options]
 
   --bind ADDRESS              Address to publish InfraDesk on (default 127.0.0.1)
   --port PORT                 Port to publish InfraDesk on (default 8080)
+  --domain HOSTNAME           Caddy automatic HTTPS; publishes ports 80 and 443
   --no-https                  Users reach InfraDesk over plain HTTP (testing only)
   --admin-email EMAIL         First administrator's email
   --admin-name NAME           First administrator's display name (default Administrator)
@@ -64,6 +66,7 @@ parse_arguments() {
     case "$1" in
       --bind) BIND_ADDRESS="${2:-}"; shift 2 ;;
       --port) HTTP_PORT="${2:-}"; shift 2 ;;
+      --domain) DOMAIN="${2:-}"; valid_domain "${DOMAIN}" || die "--domain must be a DNS hostname." "No changes were made."; shift 2 ;;
       --no-https) HTTPS="no"; shift ;;
       --admin-email) ADMIN_EMAIL="${2:-}"; shift 2 ;;
       --admin-name) ADMIN_NAME="${2:-}"; shift 2 ;;
@@ -81,6 +84,12 @@ parse_arguments() {
   fi
   valid_ipv4 "${BIND_ADDRESS}" || die "--bind must be an IPv4 address, for example 127.0.0.1 or 0.0.0.0." "No changes were made."
   valid_port "${HTTP_PORT}" || die "--port must be a number from 1 to 65535." "No changes were made."
+  if [ -n "${DOMAIN}" ]; then
+    [ "${HTTPS}" != "no" ] || die "--domain cannot be combined with --no-https." "No changes were made."
+    BIND_ADDRESS="0.0.0.0"
+    HTTP_PORT="80"
+    HTTPS="yes"
+  fi
 }
 
 bundle_file() { printf '%s/%s' "${BUNDLE_DIR}" "$1"; }
@@ -140,12 +149,14 @@ collect_inputs() {
   local answer confirm
   if ! bootstrap_needed; then return 0; fi
   if [ "${INTERACTIVE}" = "yes" ]; then
-    read -r -p "Public bind address [${BIND_ADDRESS}]: " answer
-    BIND_ADDRESS="${answer:-${BIND_ADDRESS}}"
-    valid_ipv4 "${BIND_ADDRESS}" || die "The bind address must be an IPv4 address." "No changes were made."
-    read -r -p "Public HTTP port [${HTTP_PORT}]: " answer
-    HTTP_PORT="${answer:-${HTTP_PORT}}"
-    valid_port "${HTTP_PORT}" || die "The port must be a number from 1 to 65535." "No changes were made."
+    if [ -z "${DOMAIN}" ]; then
+      read -r -p "Public bind address [${BIND_ADDRESS}]: " answer
+      BIND_ADDRESS="${answer:-${BIND_ADDRESS}}"
+      valid_ipv4 "${BIND_ADDRESS}" || die "The bind address must be an IPv4 address." "No changes were made."
+      read -r -p "Public HTTP port [${HTTP_PORT}]: " answer
+      HTTP_PORT="${answer:-${HTTP_PORT}}"
+      valid_port "${HTTP_PORT}" || die "The port must be a number from 1 to 65535." "No changes were made."
+    fi
     if [ "${HTTPS}" = "auto" ]; then
       read -r -p "Will users reach InfraDesk over HTTPS through a reverse proxy? [Y/n] " answer
       case "${answer}" in n|N|no|NO) HTTPS="no" ;; *) HTTPS="yes" ;; esac
@@ -201,9 +212,17 @@ phase_check() {
   if [ -f "${INFRADESK_ENV_FILE}" ]; then
     BIND_ADDRESS="$(env_value INFRADESK_HTTP_PUBLISH | cut -d: -f1)"
     HTTP_PORT="$(env_value INFRADESK_HTTP_PUBLISH | cut -d: -f2)"
+    DOMAIN="$(env_value INFRADESK_DOMAIN)"
   fi
-  if [ -z "$(container_id proxy 2>/dev/null || true)" ]; then check_port "${BIND_ADDRESS}" "${HTTP_PORT}"; fi
-  if [ "${BIND_ADDRESS}" = "0.0.0.0" ]; then
+  if [ -n "${DOMAIN}" ]; then
+    valid_domain "${DOMAIN}" || die "INFRADESK_DOMAIN must be a DNS hostname. No changes were made."
+    [ "${BIND_ADDRESS}:${HTTP_PORT}" = '0.0.0.0:80' ] || die "Automatic HTTPS requires publication on 0.0.0.0:80. No changes were made."
+  fi
+  if [ -z "$(container_id proxy 2>/dev/null || true)" ]; then
+    check_port "${BIND_ADDRESS}" "${HTTP_PORT}"
+    if [ -n "${DOMAIN}" ]; then check_port 0.0.0.0 443; fi
+  fi
+  if [ "${BIND_ADDRESS}" = "0.0.0.0" ] && [ -z "${DOMAIN}" ]; then
     warn "InfraDesk will listen on every interface (0.0.0.0:${HTTP_PORT}). The installer does not change"
     warn "your firewall: make sure only trusted networks can reach this port, or use a reverse proxy with HTTPS."
   fi
@@ -249,6 +268,7 @@ INFRADESK_INSTALLER_SCHEMA_VERSION=${INFRADESK_INSTALLER_SCHEMA_VERSION}
 INFRADESK_DB_PASSWORD=$(random_hex 32)
 INFRADESK_SECRET_MASTER_KEY_BASE64=$(random_base64 32)
 INFRADESK_HTTP_PUBLISH=${BIND_ADDRESS}:${HTTP_PORT}
+INFRADESK_DOMAIN=${DOMAIN}
 INFRADESK_AUTH_COOKIE_SECURE=${cookie}
 INFRADESK_INTERNAL_SUBNET=${subnet}
 INFRADESK_TRUSTED_PROXY_CIDR=$(subnet_gateway_cidr "${subnet}")
@@ -339,7 +359,9 @@ summary() {
   log "InfraDesk installed successfully."
   log ""
   log "Version:  ${RELEASE_VERSION}"
-  if [ "${host}" = "0.0.0.0" ]; then
+  if [ -n "$(env_value INFRADESK_DOMAIN)" ]; then
+    log "URL:      ${url} (Caddy automatic HTTPS)"
+  elif [ "${host}" = "0.0.0.0" ]; then
     log "URL:      http://SERVER_IP:$(state_value HTTP_PORT)  (and ${url} on this host)"
   else
     log "URL:      ${url}"
@@ -350,8 +372,10 @@ summary() {
     log "Password: ${ADMIN_PASSWORD}   (temporary: change it after signing in, under Account)"
   fi
   log ""
-  log "To expose it publicly, configure your existing reverse proxy to forward HTTPS traffic to"
-  log "${host}:$(state_value HTTP_PORT). Examples for nginx and Caddy are in ${INFRADESK_APP_DIR}/README.md."
+  if [ -z "$(env_value INFRADESK_DOMAIN)" ]; then
+    log "Caddy serves InfraDesk. For HTTPS, configure a host-side Caddy proxy as described in"
+    log "${INFRADESK_APP_DIR}/README.md, or use --domain on a fresh installation."
+  fi
   log ""
   log "Next:"
   log "  1. Open InfraDesk."

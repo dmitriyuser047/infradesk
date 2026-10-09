@@ -1,0 +1,136 @@
+{
+    admin off
+    servers {
+        trusted_proxies static {$INFRADESK_TRUSTED_PROXY_CIDR:172.28.0.1/32}
+        trusted_proxies_strict
+        client_ip_headers X-Forwarded-For
+        timeouts {
+            read_header 10s
+            read_body 30s
+        }
+    }
+}
+
+(proxy_headers) {
+    header_up X-Real-IP {client_ip}
+    header_up X-Forwarded-For {client_ip}
+    header_up -Forwarded
+}
+
+(application) {
+    root * /srv
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        X-Frame-Options DENY
+        Cross-Origin-Opener-Policy same-origin
+    }
+    request_body {
+        max_size 1MB
+    }
+    handle /api/v1/auth/login {
+        rate_limit {
+            zone login {
+                key {client_ip}
+                events 10
+                window 1m
+            }
+        }
+        reverse_proxy backend:8080 {
+            import proxy_headers
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 30s
+                read_timeout 30s
+                write_timeout 30s
+            }
+        }
+    }
+    @terminal path_regexp terminal ^/api/v1/organizations/[^/]+/connections/[^/]+/terminal$
+    handle @terminal {
+        reverse_proxy backend:8080 {
+            import proxy_headers
+            flush_interval -1
+            stream_timeout 7500s
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 60s
+            }
+        }
+    }
+    @long path_regexp long ^/api/v1/organizations/[^/]+/(connections/[^/]+/sync|resources/[^/]+/operations/[^/]+/executions)$
+    handle @long {
+        reverse_proxy backend:8080 {
+            import proxy_headers
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 2700s
+                read_timeout 2700s
+                write_timeout 2700s
+            }
+        }
+    }
+    handle /health {
+        reverse_proxy backend:8080 {
+            import proxy_headers
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 10s
+                read_timeout 10s
+            }
+        }
+    }
+    handle /ready {
+        reverse_proxy backend:8080 {
+            import proxy_headers
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 7s
+                read_timeout 7s
+            }
+        }
+    }
+    handle /api/* {
+        reverse_proxy backend:8080 {
+            import proxy_headers
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 60s
+                read_timeout 60s
+                write_timeout 60s
+            }
+        }
+    }
+    handle /assets/* {
+        header Cache-Control "public, immutable, max-age=31536000"
+        file_server
+    }
+    handle {
+        route {
+            try_files {path} /index.html
+            @shell path /index.html
+            header @shell Cache-Control no-cache
+            file_server
+        }
+    }
+    handle_errors {
+        @limited expression {err.status_code} == 429
+        handle @limited {
+            header Content-Type application/json
+            respond `{"code":"LOGIN_RATE_LIMITED","message":"Too many login attempts. Try again later."}` 429
+        }
+        respond "Request failed" {err.status_code}
+    }
+}
+
+# Existing loopback installations keep their port. A domain enables automatic HTTPS.
+{$INFRADESK_SITE_ADDRESS::80} {
+    import application
+}
+
+# Image health check only: never published, never exposed by the public site.
+http://127.0.0.1:8081 {
+    root * /srv
+    file_server
+}

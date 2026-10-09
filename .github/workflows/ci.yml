@@ -58,8 +58,10 @@ jobs:
           mkdir -p "$checks"
           python3 src/test/resources/server-profile-safety/extract.py "$PWD" "$checks"
           cp src/test/resources/server-profile-safety/verify.sh "$checks/verify.sh"
-          docker run --rm --network none --mount "type=bind,src=$checks,dst=/checks,readonly" \
-            ubuntu:22.04 sh /checks/verify.sh
+          for image in ubuntu:22.04 ubuntu:24.04 ubuntu:26.04; do
+            docker run --rm --network none --mount "type=bind,src=$checks,dst=/checks,readonly" \
+              "$image" sh /checks/verify.sh
+          done
       - name: Run backend and PostgreSQL integration tests
         run: sbt testFull
       - name: Preserve failed backend test reports
@@ -195,7 +197,11 @@ jobs:
         run: ./scripts/check-production.sh http://127.0.0.1:8081
       - name: Verify terminal smoke client and WebSocket frame parser
         run: node --test scripts/check-terminal-websocket.test.mjs
-      - name: Exercise authenticated terminal WebSocket through production nginx
+      - name: Verify Caddy proxy contracts
+        run: |
+          shellcheck scripts/check-caddy-proxy.sh
+          bash scripts/check-caddy-proxy.sh "infradesk-frontend:${GITHUB_SHA::7}"
+      - name: Exercise authenticated terminal WebSocket through production Caddy
         run: |
           fingerprint="$(docker exec infradesk-ci-terminal-sshd \
             ssh-keygen -E md5 -lf /etc/ssh/ssh_host_rsa_key.pub | awk '{ sub(/^MD5:/, "", $2); print $2 }')"
@@ -216,11 +222,11 @@ jobs:
           INFRADESK_TERMINAL_TEST_EMAIL=terminal-ci@example.test \
           INFRADESK_TERMINAL_TEST_PASSWORD=stage20-ci-admin-password \
             node scripts/check-terminal-websocket.mjs
-      - name: Verify spoofed forwarding headers cannot evade nginx login throttling
+      - name: Verify spoofed forwarding headers cannot evade Caddy login throttling
         run: |
           # The host is the trusted external-TLS boundary in this topology, so host-side curl is
           # deliberately not an attacker. Use one ordinary container on the internal network:
-          # nginx sees its socket address as untrusted and must ignore both forged headers.
+          # Caddy sees its socket address as untrusted and must ignore both forged headers.
           docker run --detach --name infradesk-spoof-client --network infradesk_internal \
             --entrypoint sh curlimages/curl:8.12.1 -c 'sleep 300'
           trap 'docker rm --force infradesk-spoof-client >/dev/null 2>&1 || true' EXIT
@@ -835,7 +841,7 @@ jobs:
           echo "health=${live} ready=${ready} curl=${curl_status}"
           # The process is alive, so liveness answers.
           test "${live}" = "200"
-          # The transport completed: this is InfraDesk reporting itself unavailable, not nginx
+          # The transport completed: this is InfraDesk reporting itself unavailable, not Caddy
           # giving up on it, and not a connection that never produced a response.
           test "${curl_status}" = "0"
           test "${ready}" = "503"

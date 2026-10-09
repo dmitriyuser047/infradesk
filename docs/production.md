@@ -1,7 +1,7 @@
 # Running InfraDesk in production
 
 This is what one person needs to deploy InfraDesk on a clean Linux host and keep it running. It
-assumes Docker with the Compose plugin, a domain name, and a TLS terminator in front of the host.
+assumes Docker with the Compose plugin and a domain name. Caddy can terminate TLS directly.
 
 > Installing a released version without the source tree? Use the self-hosted release bundle and
 > its installer instead: see [`packaging/self-hosted/README.md`](../packaging/self-hosted/README.md).
@@ -10,7 +10,7 @@ assumes Docker with the Compose plugin, a domain name, and a TLS terminator in f
 ## Topology
 
 ```
-Internet → TLS terminator → proxy container (nginx)  ┐
+Internet → TLS terminator → proxy container (Caddy)  ┐
                                 ├── /            static frontend bundle
                                 └── /api, /health, /ready → backend container
                                                      backend → postgres container
@@ -28,7 +28,7 @@ internal Compose network and nowhere else — PostgreSQL has no published port a
   a drifting clock retires work that is still running.
 * UTC. The containers set `TZ=UTC`; timestamps are stored as `timestamptz` and rendered in the
   viewer's local time by the browser.
-* A TLS terminator (nginx, Caddy, Traefik or a cloud load balancer). InfraDesk sets an
+* Caddy automatic HTTPS (or an existing external TLS terminator). InfraDesk sets an
   authentication cookie and must not be reachable over plain HTTP: redirect port 80 to 443 and
   forward `X-Forwarded-Proto: https` and the client address in `X-Forwarded-For`.
 
@@ -43,13 +43,26 @@ subnet conflicts with another Docker network, change `INFRADESK_INTERNAL_SUBNET`
 
 ## Configuration
 
+For direct HTTPS, point a public DNS hostname at the host, make TCP 80 and 443 available,
+set `INFRADESK_DOMAIN=infradesk.example.com` and `INFRADESK_HTTP_PUBLISH=0.0.0.0:80`, then run:
+
+```bash
+docker compose --env-file /etc/infradesk/infradesk.env -f compose.prod.yml -f compose.https.yml up -d
+```
+
+Caddy obtains and renews certificates. Its `/data` and `/config` volumes survive updates.
+The loopback default remains available for existing external proxies. The pinned Caddy rate-limit
+module limits login requests to ten per minute per verified client IP; PostgreSQL-backed account
+and source throttles remain independent. Forwarding headers from untrusted peers are overwritten.
+The Caddy administration endpoint is disabled and access logging does not record session cookies.
+
 Everything is read from the environment at startup, and anything invalid stops the process before
 it serves a request: a missing database URL, user or password, a malformed port, a pool size
 outside 1–100, an unusable encryption key, a webhook URL that is not absolute `http`/`https`, or a
 notification lease shorter than its request timeout.
 
 SSH settings are also bounded: connect timeout is at most 60 seconds and command timeout at most
-1200 seconds. Manual sync and controlled-operation routes receive a 45-minute nginx budget, which
+1200 seconds. Manual sync and controlled-operation routes receive a 45-minute Caddy budget, which
 is longer than the maximum backend transport budget plus its recovery margin. Ordinary API
 routes retain a 60-second proxy timeout.
 

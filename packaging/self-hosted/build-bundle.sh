@@ -53,6 +53,7 @@ main() {
   install -m 0644 "${SOURCE_DIR}/lib/common.sh" "${bundle}/lib/common.sh"
   install -m 0644 "${SOURCE_DIR}/env.example" "${bundle}/.env.example"
   install -m 0644 "${SOURCE_DIR}/README.md" "${bundle}/README.md"
+  install -m 0644 "${SOURCE_DIR}/compose.https.yml" "${bundle}/compose.https.yml"
   sed -e "s|@@BACKEND_IMAGE@@|${backend}|" -e "s|@@FRONTEND_IMAGE@@|${frontend}|" -e "s|@@POSTGRES_IMAGE@@|${postgres}|" \
     "${SOURCE_DIR}/compose.yml" > "${bundle}/compose.yml"
   grep -q '@@' "${bundle}/compose.yml" && die "compose.yml still has unrendered placeholders"

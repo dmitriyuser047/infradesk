@@ -1,0 +1,8 @@
+# Optional source deployment: docker compose -f compose.prod.yml -f compose.https.yml up -d
+# Set INFRADESK_DOMAIN and INFRADESK_HTTP_PUBLISH=0.0.0.0:80 for Caddy automatic HTTPS.
+services:
+  proxy:
+    environment:
+      INFRADESK_SITE_ADDRESS: ${INFRADESK_DOMAIN:?INFRADESK_DOMAIN is required}
+    ports:
+      - "443:443"

@@ -101,7 +101,13 @@ migrate_configuration() {
 
 # Keys every release of this schema needs; a missing one with a safe default is added.
 ensure_configuration() {
-  local key
+  local key domain
+  domain="$(env_value INFRADESK_DOMAIN)"
+  if [ -n "${domain}" ]; then
+    valid_domain "${domain}" || die "INFRADESK_DOMAIN must be a DNS hostname. Nothing was changed."
+    [ "$(env_value INFRADESK_HTTP_PUBLISH)" = '0.0.0.0:80' ] || die "Automatic HTTPS requires INFRADESK_HTTP_PUBLISH=0.0.0.0:80. Nothing was changed."
+    [ "$(env_value INFRADESK_AUTH_COOKIE_SECURE)" = true ] || die "Automatic HTTPS requires secure authentication cookies. Nothing was changed."
+  fi
   for key in INFRADESK_DB_PASSWORD INFRADESK_SECRET_MASTER_KEY_BASE64 INFRADESK_HTTP_PUBLISH \
     INFRADESK_INTERNAL_SUBNET INFRADESK_TRUSTED_PROXY_CIDR; do
     [ -n "$(env_value "${key}")" ] || die "${INFRADESK_ENV_FILE} has no ${key}; it cannot be generated again." \

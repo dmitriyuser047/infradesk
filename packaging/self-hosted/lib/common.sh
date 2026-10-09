@@ -25,7 +25,7 @@ INFRADESK_READY_TIMEOUT_SECONDS=180
 
 # Everything a release bundle installs into the application directory; nothing else is ever
 # written there, and uninstall removes exactly these.
-INFRADESK_BUNDLE_FILES=(compose.yml .env.example install.sh update.sh backup.sh restore.sh uninstall.sh
+INFRADESK_BUNDLE_FILES=(compose.yml compose.https.yml .env.example install.sh update.sh backup.sh restore.sh uninstall.sh
   infradesk VERSION README.md release-manifest.json lib/common.sh)
 
 MIN_DOCKER_VERSION="24.0.0"
@@ -111,9 +111,23 @@ platform_supported() {
   local id="$1" version="$2" arch="$3"
   [ "${arch}" = "x86_64" ] || [ "${arch}" = "amd64" ] || return 1
   case "${id}:${version}" in
-    ubuntu:22.04|ubuntu:24.04|debian:12) return 0 ;;
+    ubuntu:22.04|ubuntu:24.04|ubuntu:26.04|debian:12) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# Only a DNS hostname, never Caddyfile syntax, a URL, IP or shell/environment expression.
+valid_domain() {
+  local domain="$1" label
+  [ "${#domain}" -le 253 ] && [[ "${domain}" == *.* ]] || return 1
+  [[ "${domain}" =~ ^[a-zA-Z0-9.-]+$ ]] || return 1
+  [[ ! "${domain}" =~ ^[0-9.]+$ ]] || return 1
+  local labels
+  IFS=. read -r -a labels <<< "${domain}"
+  [[ "${domain}" != *. ]] || return 1
+  for label in "${labels[@]}"; do
+    [ "${#label}" -le 63 ] && [[ "${label}" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]] || return 1
+  done
 }
 
 check_platform() {
@@ -126,7 +140,7 @@ check_platform() {
   if ! platform_supported "${id:-unknown}" "${version:-unknown}" "${arch}"; then
     die "This platform is not supported." \
       "InfraDesk installer currently supports:" \
-      "  - Ubuntu 22.04 / 24.04" \
+      "  - Ubuntu 22.04 / 24.04 / 26.04" \
       "  - Debian 12" \
       "  - linux/amd64" \
       "" \
@@ -289,7 +303,7 @@ pick_internal_subnet() {
   return 1
 }
 
-# The host-side gateway of a /24 subnet: the only address nginx trusts for X-Forwarded-For.
+# The host-side gateway of a /24 subnet: the only address Caddy trusts for X-Forwarded-For.
 subnet_gateway_cidr() {
   local base="${1%/*}"
   printf '%s.1/32' "${base%.*}"
@@ -398,8 +412,14 @@ manifest_value() {
 # --env-file pairs when needed.
 compose_in() {
   local dir="$1"; shift
+  local extra=() domain
+  domain="$(env_value INFRADESK_DOMAIN)"
+  if [ -n "${domain}" ]; then
+    valid_domain "${domain}" || die "INFRADESK_DOMAIN must be a DNS hostname."
+    extra=(--file "${dir}/compose.https.yml")
+  fi
   docker compose --project-name "${INFRADESK_PROJECT}" --env-file "${INFRADESK_ENV_FILE}" \
-    --file "${dir}/compose.yml" "$@"
+    --file "${dir}/compose.yml" "${extra[@]}" "$@"
 }
 compose() { compose_in "${INFRADESK_APP_DIR}" "$@"; }
 
@@ -431,7 +451,16 @@ public_host() {
   if [ "${bind}" = "0.0.0.0" ]; then printf '127.0.0.1'; else printf '%s' "${bind}"; fi
 }
 
-base_url() { printf 'http://%s:%s' "$(public_host "${1:-}")" "${2:-$(state_value HTTP_PORT)}"; }
+base_url() {
+  local domain
+  domain="$(env_value INFRADESK_DOMAIN)"
+  if [ -n "${domain}" ]; then
+    valid_domain "${domain}" || return 1
+    printf 'https://%s' "${domain}"
+  else
+    printf 'http://%s:%s' "$(public_host "${1:-}")" "${2:-$(state_value HTTP_PORT)}"
+  fi
+}
 
 http_status() {
   curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "$1" 2>/dev/null || printf '000'

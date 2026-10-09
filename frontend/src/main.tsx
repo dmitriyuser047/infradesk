@@ -18,6 +18,7 @@ import './styles/pages/account.css'
 import './styles/pages/administration.css'
 import './styles/pages/infrastructure.css'
 import './styles/pages/terminal.css'
+import './styles/obsidian.css'
 
 initializeTheme()
 

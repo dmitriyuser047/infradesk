@@ -112,6 +112,9 @@ services:
     environment:
       # Only the host-side gateway of the private network may assert X-Forwarded-For.
       INFRADESK_TRUSTED_PROXY_CIDR: ${INFRADESK_TRUSTED_PROXY_CIDR:?INFRADESK_TRUSTED_PROXY_CIDR is required}
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
     depends_on:
       backend:
         condition: service_healthy
@@ -123,6 +126,10 @@ services:
     security_opt:
       - no-new-privileges:true
     logging: *logging
+
+volumes:
+  caddy-data:
+  caddy-config:
 
 networks:
   internal:
