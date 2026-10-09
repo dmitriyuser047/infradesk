@@ -50,7 +50,7 @@ final class SshConnectionSyncBudgetSpec extends FunSuite {
     assertEquals(SyncSessionPolicy.isRecoverable(at.plusMillis(1), at), false)
   }
 
-  test("long-running nginx routes outlive every legal SSH attempt and recovery margin") {
+  test("long-running Caddy routes outlive every legal SSH attempt and recovery margin") {
     val maximum = budget.maxAttemptDuration(ssh(
       SshConnectionSettings.MaxConnectTimeoutSeconds,
       SshConnectionSettings.MaxCommandTimeoutSeconds
@@ -59,20 +59,24 @@ final class SshConnectionSyncBudgetSpec extends FunSuite {
     val operationHorizon = ResourceOperationPolicy.staleAfter(
       (SshConnectionSettings.MaxConnectTimeoutSeconds +
         SshConnectionSettings.MaxCommandTimeoutSeconds).seconds)
-    val nginx = Files.readString(Paths.get("deploy", "nginx", "infradesk.conf"),
+    val config = Files.readString(Paths.get("deploy", "caddy", "Caddyfile"),
       StandardCharsets.UTF_8)
-    val longTimeoutSeconds = "proxy_read_timeout ([0-9]+)s;".r
-      .findAllMatchIn(nginx).map(_.group(1).toLong).max.seconds
+    val start = config.indexOf("handle @long {")
+    val end = config.indexOf("handle /health", start)
+    assert(start >= 0 && end > start)
+    val longRoute = config.substring(start, end)
+    val longTimeoutSeconds = "response_header_timeout ([0-9]+)s".r
+      .findFirstMatchIn(longRoute).get.group(1).toLong.seconds
 
     assertEquals(maximum, 41.minutes)
     assertEquals(syncHorizon, 42.minutes)
     assertEquals(operationHorizon, 22.minutes)
     assert(longTimeoutSeconds > syncHorizon)
     assert(longTimeoutSeconds > operationHorizon)
-    assert(nginx.contains("connections/[^/]+/sync$"))
-    assert(nginx.contains("operations/[^/]+/executions$"))
-    assertEquals("proxy_read_timeout 2700s;".r.findAllIn(nginx).length, 2)
-    assertEquals("proxy_send_timeout 2700s;".r.findAllIn(nginx).length, 2)
+    assert(config.contains("connections/[^/]+/sync"))
+    assert(config.contains("operations/[^/]+/executions"))
+    assert(longRoute.contains("read_timeout 2700s"))
+    assert(longRoute.contains("write_timeout 2700s"))
   }
 
   private def ssh(connect: Int, command: Int): Connection = {

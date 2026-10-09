@@ -21,7 +21,7 @@ final class RemnawaveHardeningMigrationSpec extends FunSuite {
     assume(ConfigurationDeploymentWorld.enabled,"PostgreSQL integration tests are opt-in")
     val config = PostgresTestDatabase.config
     val workflow = java.nio.file.Files.readString(java.nio.file.Paths.get(".github/workflows/ci.yml"))
-    val marker = "-- Hardening V53-V56: remove additive ownership/admission objects in this disposable fixture."
+    val marker = "-- Inventory V65: restore the older action contract in this disposable fixture."
     val blocks = workflow.split(java.util.regex.Pattern.quote(marker)).toList.tail.map { section =>
       (marker + section.take(section.indexOf("\n          SQL"))).linesIterator
         .map(_.stripPrefix("          ")).mkString("\n")
