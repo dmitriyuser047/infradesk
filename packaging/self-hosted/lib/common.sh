@@ -423,6 +423,15 @@ compose_in() {
 }
 compose() { compose_in "${INFRADESK_APP_DIR}" "$@"; }
 
+# Bootstrap adds credentials to the same topology, including the automatic HTTPS overlay.
+compose_first_start() {
+  if [ -f "${INFRADESK_BOOTSTRAP_FILE}" ]; then
+    compose --env-file "${INFRADESK_BOOTSTRAP_FILE}" "$@"
+  else
+    compose "$@"
+  fi
+}
+
 container_id() { compose ps --quiet "$1" 2>/dev/null | awk 'NR == 1'; }
 
 container_health() {

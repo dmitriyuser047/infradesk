@@ -15,6 +15,7 @@ import { OrganizationPage } from '../pages/OrganizationPage'
 import { ProjectCreatePage } from '../pages/ProjectCreatePage'
 import { EnvironmentCreatePage } from '../pages/EnvironmentCreatePage'
 import { OrganizationsPage } from '../pages/OrganizationsPage'
+import { WorkspaceEntryPage } from '../pages/WorkspaceEntryPage'
 import { OverviewPage } from '../pages/OverviewPage'
 import { ResourcesIndexPage } from '../pages/ResourcesIndexPage'
 import { LoginPage } from '../pages/LoginPage'
@@ -32,10 +33,12 @@ export const router = createBrowserRouter([
   },
   {
     element: <RequireAuth />,
-    children: [{ element: <ShellLayout />, children: [
-      { path: '/settings/account', element: <AccountPage /> },
+    children: [
+      { path: '/', element: <WorkspaceEntryPage /> },
       { path: '/organizations', element: <OrganizationsPage /> },
       { path: '/organizations/new', lazy: async () => { const { OrganizationCreatePage } = await import('../pages/AdministrationPages'); return { Component: OrganizationCreatePage } } },
+      { element: <ShellLayout />, children: [
+      { path: '/settings/account', element: <AccountPage /> },
       { path: '/administration', lazy: async () => { const { AdministrationPage } = await import('../pages/AdministrationPages'); return { Component: AdministrationPage } } },
       { path: '/administration/users/new', lazy: async () => { const { AdministrationUserCreatePage } = await import('../pages/AdministrationPages'); return { Component: AdministrationUserCreatePage } } },
       { path: '/administration/users/:userId', lazy: async () => { const { AdministrationUserPage } = await import('../pages/AdministrationPages'); return { Component: AdministrationUserPage } } },

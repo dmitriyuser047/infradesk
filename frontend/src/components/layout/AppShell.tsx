@@ -1,17 +1,19 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUpRight, Building2, Bell, Cable, FileCog, LayoutDashboard, Layers, Menu, Plug, Server, ShieldCheck, Users, TriangleAlert, X, type LucideIcon } from 'lucide-react'
-import { Link, Outlet, useLocation } from 'react-router-dom'
+import { useContext, useEffect, useState, type ReactNode } from 'react'
+import { Building2, Bell, Cable, FileCog, LayoutDashboard, Layers, Plug, Server, ShieldCheck, Users, TriangleAlert, type LucideIcon } from 'lucide-react'
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import { useI18n, type Messages } from '../../i18n'
-import { useMe, useMyOrganizations } from '../../api/auth'
-import { getDisplayName } from '../navigation/navigationPresentation'
+import { useMe } from '../../api/auth'
 import { useOrganizationPermissions, type OrganizationPermission } from '../auth/authorization'
 import { AccountMenu } from './AccountMenu'
+import { ShellContext } from './ShellContext'
 import { InfraDeskMark } from './InfraDeskMark'
 import { WorkspaceDock } from '../workspace/WorkspaceDock'
 import { useTerminalSessions } from '../workspace/TerminalWorkspaceProvider'
-import { ContextSwitcher } from './ContextSwitcher'
+import { WorkspaceScopeFilters } from './WorkspaceScopeFilters'
+import { useMyOrganizations } from '../../api/auth'
 import { useWorkspaceRouteContext } from './useWorkspaceRouteContext'
+import { rememberWorkspace, useRememberedWorkspace } from './useRememberedWorkspace'
 import { activeWorkspaceModule, modulePath, type WorkspaceModule } from './workspaceNavigation'
 
 interface NavigationItem {
@@ -22,6 +24,8 @@ interface NavigationItem {
 }
 
 interface NavigationGroup {
+  id: string
+  icon: LucideIcon
   label: ((t: Messages) => string) | null
   items: NavigationItem[]
 }
@@ -31,109 +35,122 @@ interface NavigationGroup {
  * modules carry the same capability their page and backend route require.
  */
 const navigation: NavigationGroup[] = [
-  { label: null, items: [{ module: 'overview', icon: LayoutDashboard, label: t => t.shell.nav.overview }] },
+  { id: 'overview', icon: LayoutDashboard, label: t => t.shell.nav.overview, items: [{ module: 'overview', icon: LayoutDashboard, label: t => t.shell.nav.overview }] },
   {
-    label: t => t.shell.groups.infrastructure,
+    id: 'infrastructure', icon: Server, label: t => t.shell.groups.infrastructure,
     items: [
       { module: 'resources', icon: Server, label: t => t.shell.nav.resources },
       { module: 'connections', icon: Cable, label: t => t.shell.nav.connections },
     ],
   },
-  { label: t => t.shell.groups.monitoring, items: [
+  { id: 'monitoring', icon: TriangleAlert, label: t => t.shell.groups.monitoring, items: [
     { module: 'incidents', icon: TriangleAlert, label: t => t.shell.nav.incidents },
     { module: 'notifications', icon: Bell, label: t => t.shell.nav.notifications, permission: 'manageNotifications' },
   ] },
-  { label: t => t.shell.groups.automation, items: [
+  { id: 'automation', icon: Plug, label: t => t.shell.groups.automation, items: [
     { module: 'integrations', icon: Plug, label: t => t.shell.nav.integrations, permission: 'manageIntegrations' },
     { module: 'configurations', icon: FileCog, label: t => t.shell.nav.configurations, permission: 'readOrganization' },
   ] },
-  { label: t => t.shell.groups.structure, items: [
+  { id: 'structure', icon: Layers, label: t => t.shell.groups.structure, items: [
     { module: 'workspace', icon: Layers, label: t => t.shell.nav.workspace },
     { module: 'members', icon: Users, label: t => t.administration.members, permission: 'manageMembers' },
   ] },
 ]
 
-// Set by the layout route: a page rendered inside it must not draw a second shell.
-const ShellContext = createContext(false)
-
 /** The persistent application frame of the signed-in part of the router. */
 export function ShellLayout() {
-  return <AppShell><Outlet /></AppShell>
+  return <AppShell showEntrySplash><Outlet /></AppShell>
 }
 
 /**
- * Sidebar, top bar with the context switcher and the account menu, and the content.
+ * Navigation rail, page tabs with the account menu, and the content.
  *
  * Pages still wrap themselves in AppShell so each renders completely on its own (tests, error
  * pages); inside the layout route that wrapper is transparent and the frame is not re-created on
  * navigation.
  */
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({ children, showEntrySplash = false }: { children: ReactNode; showEntrySplash?: boolean }) {
   const nested = useContext(ShellContext)
-  return nested ? <>{children}</> : <ShellContext.Provider value={true}><ShellFrame>{children}</ShellFrame></ShellContext.Provider>
+  return nested ? <>{children}</> : <ShellContext.Provider value={true}><ShellFrame showEntrySplash={showEntrySplash}>{children}</ShellFrame></ShellContext.Provider>
 }
 
-function ShellFrame({ children }: { children: ReactNode }) {
+function ShellFrame({ children, showEntrySplash }: { children: ReactNode; showEntrySplash: boolean }) {
   const { t } = useI18n()
   const location = useLocation()
-  const scope = useWorkspaceRouteContext()
+  const navigate = useNavigate()
+  const remembered = useRememberedWorkspace()
+  const globalPage = location.pathname.startsWith('/administration') || location.pathname.startsWith('/settings')
+  const scope = useWorkspaceRouteContext(globalPage ? remembered : undefined)
   const permissions = useOrganizationPermissions(scope.organizationId)
-  const memberships = useMyOrganizations()
   const me = useMe()
-  const organization = memberships.data?.find(item => item.id === scope.organizationId)
+  const memberships = useMyOrganizations()
   const active = activeWorkspaceModule(location.pathname)
-  const [drawerOpen, setDrawerOpen] = useState(false)
+  const availableGroups = (scope.organizationId ? navigation : []).map(group => ({ ...group,
+    items: group.items.filter(item => !item.permission || permissions.can(item.permission)),
+  })).filter(group => group.items.length > 0)
+  const administrator = me.isSuccess && me.data.isAdministrator
+  const selectedGroup = location.pathname.startsWith('/administration') && administrator ? 'administration'
+    : location.pathname.startsWith('/settings') ? 'account'
+    : scope.organizationId ? availableGroups.find(group => group.items.some(item => item.module === active))?.id ?? 'overview'
+      : 'organizations'
+  const groupTitle = selectedGroup === 'administration' ? t.administration.title
+    : selectedGroup === 'account' ? t.shell.accountSettings
+    : selectedGroup === 'organizations' ? t.shell.organizations
+      : availableGroups.find(group => group.id === selectedGroup)?.label?.(t) ?? t.shell.nav.overview
+  const administrationOrganizations = location.pathname === '/administration' && new URLSearchParams(location.search).get('tab') === 'organizations'
+  const selectGroup = (group: string) => {
+    const firstPage = availableGroups.find(item => item.id === group)?.items[0]
+    const destination = group === 'administration' && administrator ? '/administration'
+      : firstPage ? modulePath(firstPage.module, scope) : undefined
+    if (destination) navigate(destination)
+  }
   const docked = useTerminalSessions().length > 0
-  const toggleRef = useRef<HTMLButtonElement>(null)
-  const sidebarRef = useRef<HTMLElement>(null)
-  const contentRef = useRef<HTMLElement>(null)
-
-  // A navigation always closes the drawer on narrow screens.
-  useEffect(() => { setDrawerOpen(false) }, [location.pathname, location.search])
-
+  const enteringOrganization = globalPage || !showEntrySplash ? undefined : scope.organizationId
+  const [readyOrganization, setReadyOrganization] = useState<string | undefined>()
   useEffect(() => {
-    if (!drawerOpen) return
-    sidebarRef.current?.querySelector<HTMLElement>('a, button')?.focus()
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setDrawerOpen(false)
-        toggleRef.current?.focus()
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [drawerOpen])
+    setReadyOrganization(undefined)
+    if (!enteringOrganization) return
+    const timer = window.setTimeout(() => setReadyOrganization(enteringOrganization), 1000)
+    return () => window.clearTimeout(timer)
+  }, [enteringOrganization])
+  const entering = Boolean(enteringOrganization && (readyOrganization !== enteringOrganization || permissions.isPending))
+  useEffect(() => {
+    if (!globalPage && scope.organizationId && me.isSuccess && permissions.role) rememberWorkspace(me.data.id, scope)
+  }, [globalPage, scope.organizationId, scope.projectId, scope.environmentId, me.isSuccess, me.data?.id, permissions.role])
 
-  return <div className={`app-shell ${drawerOpen ? 'drawer-open' : ''} ${docked ? 'has-dock' : ''}`}>
+  return <><div className={`app-shell ${docked ? 'has-dock' : ''}`} inert={entering ? true : undefined}>
     <a className="skip-link" href="#main-content">{t.shell.skipToContent}</a>
-    <aside ref={sidebarRef} id="app-sidebar" className="sidebar">
-      <div className="sidebar-header">
-        <button type="button" className="icon-button sidebar-close" aria-label={t.shell.closeNavigation} title={t.shell.closeNavigation}
-          onClick={() => { setDrawerOpen(false); toggleRef.current?.focus() }}><X aria-hidden size={18} /></button>
-      </div>
-      <Link className="sidebar-workspace" to="/organizations" aria-current={!scope.organizationId ? 'page' : undefined}>
-        <span className="sidebar-workspace-icon"><Building2 aria-hidden size={20} /></span>
-        <span className="sidebar-workspace-copy">
-          <strong>{scope.organizationId ? getDisplayName(organization, t.context.currentOrganization) : t.shell.organizations}</strong></span>
-        <ArrowUpRight aria-hidden size={16} />
-      </Link>
+    <aside id="app-sidebar" className="sidebar">
+      <nav className="navigation-rail" aria-label={t.shell.navigationSections}>
+        <Link className="rail-organizations" to="/organizations" aria-label={t.shell.organizations} title={t.shell.organizations}>
+          <Building2 size={21} aria-hidden />
+        </Link>
+        <div className="rail-sections">
+          {scope.organizationId ? availableGroups.map(group => {
+            const Icon = group.icon
+            const label = group.label?.(t) ?? t.shell.nav.overview
+            return <button key={group.id} type="button" className={`rail-button ${selectedGroup === group.id ? 'rail-button-selected' : ''}`}
+              aria-label={label} title={label} aria-pressed={selectedGroup === group.id} aria-controls="navigation-panel"
+              onClick={() => selectGroup(group.id)}><Icon size={21} aria-hidden /><span className="rail-tooltip" aria-hidden>{label}</span></button>
+          }) : null}
+          {administrator ? <button type="button" className={`rail-button ${selectedGroup === 'administration' ? 'rail-button-selected' : ''}`}
+            aria-label={t.administration.title} title={t.administration.title} aria-pressed={selectedGroup === 'administration'}
+            aria-controls="navigation-panel" onClick={() => selectGroup('administration')}><ShieldCheck size={21} aria-hidden />
+            <span className="rail-tooltip" aria-hidden>{t.administration.title}</span></button> : null}
+        </div>
+        <Link className="rail-brand" to="/" aria-label={t.shell.brandHome} title="InfraDesk"><InfraDeskMark /></Link>
+      </nav>
+    </aside>
+    <div className="app-main">
+      <section className="navigation-panel" id="navigation-panel" aria-label={t.shell.primaryNavigation}>
+      <div className="navigation-panel-heading"><strong>{groupTitle}</strong></div>
+      <div className="navigation-account"><AccountMenu /></div>
+      {globalPage ? <Link className="workspace-return" to={modulePath('overview', scope) ?? '/organizations'}>
+        <LayoutDashboard size={16} aria-hidden />{t.shell.returnToWorkspace}</Link> : null}
       <nav className="sidebar-nav" aria-label={t.shell.primaryNavigation}>
-        {!scope.organizationId ? <div className="sidebar-organizations">
-          <div className="nav-group-label">{t.organizations.available}</div>
-          {memberships.isPending ? <p className="nav-hint">{t.organizations.loading}</p> : null}
-          {memberships.isError ? <button className="nav-link sidebar-retry" type="button" onClick={() => void memberships.refetch()}>{t.common.retry}</button> : null}
-          {memberships.isSuccess ? <ul>{memberships.data.map(item => <li key={item.id}>
-            <Link className="nav-link organization-shortcut" to={`/organizations/${encodeURIComponent(item.id)}/overview`}
-              onClick={() => { if (drawerOpen) { setDrawerOpen(false); contentRef.current?.focus() } }}>
-              <span className="organization-initial" aria-hidden>{getDisplayName(item, t.context.organization).slice(0, 1).toLocaleUpperCase()}</span>
-              <span>{getDisplayName(item, t.context.organization)}</span><ArrowUpRight aria-hidden size={16} />
-            </Link>
-          </li>)}</ul> : null}
-          {memberships.isSuccess && memberships.data.length === 0 ? <p className="nav-hint">{t.organizations.empty}</p> : null}
-        </div> : navigation.map((group, index) => {
-          const items = group.items.filter(item => !item.permission || permissions.can(item.permission))
-          return items.length > 0 ? <div className="nav-group" key={index}>
-          {group.label ? <div className="nav-group-label">{group.label(t)}</div> : null}
+        {availableGroups.map(group => {
+          const items = group.items
+          return items.length > 0 ? <div className="nav-group" key={group.id} hidden={group.id !== selectedGroup}>
           <ul>
             {items.map(item => {
               const path = modulePath(item.module, scope)
@@ -141,9 +158,6 @@ function ShellFrame({ children }: { children: ReactNode }) {
               const current = active === item.module
               return <li key={item.module}>{path ?
                 <Link className={`nav-link ${current ? 'nav-link-active' : ''}`} to={path}
-                  onClick={() => {
-                    if (drawerOpen) { setDrawerOpen(false); contentRef.current?.focus() }
-                  }}
                   aria-current={current ? 'page' : undefined}>
                   <span className="nav-icon"><Icon aria-hidden size={18} /></span><span>{item.label(t)}</span>
                 </Link> :
@@ -153,30 +167,25 @@ function ShellFrame({ children }: { children: ReactNode }) {
             })}
           </ul>
         </div> : null})}
-        {me.isSuccess && me.data.isAdministrator ? <div className="nav-group"><div className="nav-group-label">{t.administration.title}</div><ul><li>
-          <Link className={`nav-link ${location.pathname.startsWith('/administration') ? 'nav-link-active' : ''}`} to="/administration"
-            aria-current={location.pathname.startsWith('/administration') ? 'page' : undefined}>
+        {administrator ? <div className="nav-group" hidden={selectedGroup !== 'administration'}>
+          <ul><li>
+          <Link className={`nav-link ${selectedGroup === 'administration' && !administrationOrganizations ? 'nav-link-active' : ''}`} to="/administration"
+            aria-current={selectedGroup === 'administration' && !administrationOrganizations ? 'page' : undefined}>
             <span className="nav-icon"><ShieldCheck size={18} aria-hidden /></span><span>{t.administration.users}</span>
+          </Link></li><li><Link className={`nav-link ${administrationOrganizations ? 'nav-link-active' : ''}`} to="/administration?tab=organizations"
+            aria-current={administrationOrganizations ? 'page' : undefined}>
+            <span className="nav-icon"><Building2 size={18} aria-hidden /></span><span>{t.administration.organizations}</span>
           </Link></li></ul></div> : null}
+        <div className="nav-group" hidden={selectedGroup !== 'account'}><ul><li>
+          <Link className={`nav-link ${selectedGroup === 'account' ? 'nav-link-active' : ''}`} to="/settings/account" aria-current={selectedGroup === 'account' ? 'page' : undefined}>
+            <span>{t.shell.accountSettings}</span></Link></li></ul></div>
       </nav>
-      <Link className="sidebar-footer" to="/organizations" aria-label={t.shell.brandHome}
-        onClick={() => { if (drawerOpen) { setDrawerOpen(false); contentRef.current?.focus() } }}>
-        <InfraDeskMark /><div><strong>InfraDesk</strong><span>{t.shell.workspaceCaption}</span></div>
-      </Link>
-    </aside>
-    {/* Closing by the backdrop returns focus to the menu button, as Escape and the close button do. */}
-    {drawerOpen ? <div className="drawer-backdrop" aria-hidden onClick={() => { setDrawerOpen(false); toggleRef.current?.focus() }} /> : null}
-    <div className="app-main">
-      <header className="topbar">
-        <button ref={toggleRef} type="button" className="icon-button menu-toggle" aria-label={t.shell.openNavigation} title={t.shell.openNavigation}
-          aria-controls="app-sidebar" aria-expanded={drawerOpen} onClick={() => setDrawerOpen(true)}>
-          <Menu aria-hidden size={20} />
-        </button>
-        <ContextSwitcher />
-        <AccountMenu />
-      </header>
-      <main ref={contentRef} className="content" id="main-content" tabIndex={-1}>{children}</main>
+      </section>
+      <main className="content" id="main-content" tabIndex={-1}><WorkspaceScopeFilters />{children}</main>
     </div>
     <WorkspaceDock />
-  </div>
+  </div>{entering ? <div className="workspace-splash" role="status" aria-live="polite">
+    <InfraDeskMark /><strong>{memberships.data?.find(item => item.id === enteringOrganization)?.name ?? t.context.currentOrganization}</strong>
+    <span>{t.shell.loadingWorkspace}</span><div className="workspace-splash-progress" aria-hidden />
+  </div> : null}</>
 }

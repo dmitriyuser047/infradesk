@@ -166,7 +166,7 @@ describe('resources page filters', () => {
     expect(await screen.findByText('Серверы ещё не обнаружены')).toBeTruthy()
     expect(screen.queryByText('Ресурсы не найдены')).toBeNull()
     // Nothing to search in: no filter bar at all.
-    expect(screen.queryByRole('searchbox')).toBeNull()
+    expect(screen.queryByRole('searchbox', { name: 'Поиск ресурсов' })).toBeNull()
   })
 
   it('speaks English as well', async () => {

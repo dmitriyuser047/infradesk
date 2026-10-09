@@ -69,6 +69,23 @@ if (env_value() { printf 'example.com { }'; }; docker() { exit 0; }; compose_in 
   echo 'FAIL: invalid domain reached Compose'; FAILURES=$((FAILURES + 1))
 fi
 ok valid_port 1; ok valid_port 8080; ok valid_port 65535
+# A fresh install has bootstrap credentials; it must use the HTTPS topology before readiness.
+touch "${TMP}/bootstrap.env"
+for bootstrap_domain in infradesk.example.com ''; do
+  compose_args="$( (
+    INFRADESK_APP_DIR=/bundle
+    INFRADESK_BOOTSTRAP_FILE="${TMP}/bootstrap.env"
+    env_value() { printf '%s' "${bootstrap_domain}"; }
+    docker() { printf '%s\n' "$@"; }
+    compose_first_start up -d
+  ) )"
+  [[ "${compose_args}" == *"${TMP}/bootstrap.env"* ]] || { echo 'FAIL: bootstrap credentials omitted'; FAILURES=$((FAILURES + 1)); }
+  if [ -n "${bootstrap_domain}" ]; then
+    [[ "${compose_args}" == *'/bundle/compose.https.yml'* ]] || { echo 'FAIL: bootstrap HTTPS overlay omitted'; FAILURES=$((FAILURES + 1)); }
+  else
+    [[ "${compose_args}" != *compose.https.yml* ]] || { echo 'FAIL: HTTP bootstrap enabled HTTPS'; FAILURES=$((FAILURES + 1)); }
+  fi
+done
 no valid_port 0; no valid_port 65536; no valid_port 80a; no valid_port ""; no valid_port "8080 "
 ok valid_ipv4 127.0.0.1; ok valid_ipv4 0.0.0.0; ok valid_ipv4 192.168.1.20
 no valid_ipv4 256.1.1.1; no valid_ipv4 localhost; no valid_ipv4 "1.2.3"; no valid_ipv4 '1.2.3.4;rm'

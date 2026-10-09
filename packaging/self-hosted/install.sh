@@ -297,15 +297,6 @@ INFRADESK_BOOTSTRAP_DISPLAY_NAME=${ADMIN_NAME}"
 
 # --- phases 4 to 8 -----------------------------------------------------------------------------
 
-compose_first_start() {
-  if [ -f "${INFRADESK_BOOTSTRAP_FILE}" ]; then
-    docker compose --project-name "${INFRADESK_PROJECT}" --env-file "${INFRADESK_ENV_FILE}" \
-      --env-file "${INFRADESK_BOOTSTRAP_FILE}" --file "${INFRADESK_APP_DIR}/compose.yml" "$@"
-  else
-    compose "$@"
-  fi
-}
-
 failure_help() {
   die "$1" "Your database and configuration were preserved." "" "Check:" "  infradesk logs backend" "  infradesk doctor" \
     "" "Then run the installer again; it resumes with the same configuration."

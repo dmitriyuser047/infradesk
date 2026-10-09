@@ -45,6 +45,15 @@ function setup(path: string, options: { administrator?: boolean; role?: string; 
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 describe('hierarchical administration', () => {
+  it('opens accessible organizations from the global directory without linking non-member workspaces', async () => {
+    setup('/administration?tab=organizations', { administrator: true, request: r => r.url === '/api/v1/administration/organizations'
+      ? json(page([{ id: 'org', code: 'first', name: 'First organization' }, { id: 'other', code: 'other', name: 'Other organization' }])) : undefined })
+    expect(await screen.findByText('Other organization')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /Other organization/ })).toBeNull()
+    expect(screen.queryByRole('tablist')).toBeNull()
+    fireEvent.click(screen.getByRole('link', { name: /First organization first/ }))
+    expect(await screen.findByText('New organization overview')).toBeTruthy()
+  })
   it('does not load global accounts or show creation controls for an organization owner', async () => {
     const { requests } = setup('/administration')
     expect(await screen.findByText('You do not have permission to manage access here')).toBeTruthy()
@@ -54,7 +63,7 @@ describe('hierarchical administration', () => {
   it('loads paginated global users and uses accessible tab panels', async () => {
     const { requests } = setup('/administration', { administrator: true, request: r => r.url.endsWith('users?after=target') ? json(page([{ ...user, id: 'next', displayName: 'Next account' }])) : r.url.endsWith('/users') ? json(page([user], 'target')) : undefined })
     expect(await screen.findByText('Test account')).toBeTruthy()
-    const tab = screen.getByRole('tab', { name: 'Users' }); expect(tab.getAttribute('aria-controls')).toBe(screen.getByRole('tabpanel').id)
+    expect(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('link', { name: 'Users' }).getAttribute('aria-current')).toBe('page')
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
     expect(await screen.findByText('Next account')).toBeTruthy()
     expect(requests.some(r => r.url.endsWith('users?after=target'))).toBe(true)
@@ -76,6 +85,7 @@ describe('hierarchical administration', () => {
   it('creates an organization and retries an unresolved response using the same identity', async () => {
     let attempts = 0
     const { requests } = setup('/organizations/new', { request: r => r.method === 'POST' ? (++attempts === 1 ? json({ code: 'INTERNAL_ERROR', message: 'Unknown' }, 500) : json({ id: 'second', code: 'second', name: 'Second organization' }, 201)) : undefined })
+    expect(document.querySelector('.app-shell, .sidebar, .navigation-panel, .workspace-dock')).toBeNull()
     fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Second organization' } })
     fireEvent.change(screen.getByRole('textbox', { name: 'Code' }), { target: { value: 'second' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create organization' }))

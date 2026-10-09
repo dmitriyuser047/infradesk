@@ -22,7 +22,7 @@ export function LoginPage() {
   const login = useLogin()
   const navigate = useNavigate()
   const location = useLocation()
-  const from = safeReturnPath((location.state as { from?: unknown } | null)?.from) ?? '/organizations'
+  const from = safeReturnPath((location.state as { from?: unknown } | null)?.from) ?? '/'
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

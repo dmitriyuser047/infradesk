@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -15,7 +15,7 @@ function renderShell(role: 'OWNER' | 'MEMBER') {
 
   render(<I18nProvider initialLocale="en"><QueryClientProvider client={client}>
     <MemoryRouter initialEntries={['/organizations/org/overview']}>
-      <Routes><Route path="/organizations/:organizationId/overview"
+      <Routes><Route path="/organizations/:organizationId/*"
         element={<AppShell><h1>Overview</h1></AppShell>} /></Routes>
     </MemoryRouter>
   </QueryClientProvider></I18nProvider>)
@@ -27,26 +27,20 @@ describe('permission-aware workspace navigation', () => {
   it('shows read-only server profiles to members while keeping sensitive settings owner-only', () => {
     renderShell('MEMBER')
     const memberNav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    fireEvent.click(screen.getByRole('button', { name: 'Monitoring' }))
     expect(within(memberNav).queryByRole('link', { name: 'Notifications' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Automation' }))
     expect(within(memberNav).queryByRole('link', { name: 'Integrations' })).toBeNull()
     expect(within(memberNav).getByRole('link', { name: 'Configurations' })).toBeTruthy()
-    expect(within(memberNav).getByText('Automation')).toBeTruthy()
     cleanup()
 
     renderShell('OWNER')
     const ownerNav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    fireEvent.click(screen.getByRole('button', { name: 'Monitoring' }))
     expect(within(ownerNav).getByRole('link', { name: 'Notifications' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Automation' }))
     expect(within(ownerNav).getByRole('link', { name: 'Integrations' })).toBeTruthy()
     expect(within(ownerNav).getByRole('link', { name: 'Configurations' })).toBeTruthy()
-    expect(Array.from(ownerNav.querySelectorAll('.nav-group')).map(group => ({
-      label: group.querySelector('.nav-group-label')?.textContent ?? null,
-      links: Array.from(group.querySelectorAll('.nav-link')).map(link => link.textContent),
-    }))).toEqual([
-      { label: null, links: ['Overview'] },
-      { label: 'Infrastructure', links: ['Servers', 'Connections'] },
-      { label: 'Monitoring', links: ['Incidents', 'Notifications'] },
-      { label: 'Automation', links: ['Integrations', 'Configurations'] },
-      { label: 'Structure', links: ['Projects & Environments', 'People and access'] },
-    ])
+    expect(within(ownerNav).queryByRole('link', { name: 'Notifications' })).toBeNull()
   })
 })

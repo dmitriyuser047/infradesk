@@ -6,12 +6,13 @@ import { useConnection } from '../../api/connections'
 import { useIncident } from '../../api/incidents'
 import { ApiError, requestJson } from '../../api/httpClient'
 import { useEnvironmentContext, useEnvironments, useProjects } from '../../api/navigation'
-import { activeWorkspaceModule, modulePath } from './workspaceNavigation'
+import { activeWorkspaceModule, modulePath, type WorkspaceScope } from './workspaceNavigation'
 import type { ResourceContextResponse } from '../../types/infrastructure'
 
-export function useWorkspaceRouteContext() {
-  const { organizationId, projectId: routeProjectId, environmentId: routeEnvironmentId,
+export function useWorkspaceRouteContext(fallback?: WorkspaceScope) {
+  const { organizationId: routeOrganizationId, projectId: routeProjectId, environmentId: routeEnvironmentId,
     connectionId, incidentId, resourceId } = useParams()
+  const organizationId = routeOrganizationId ?? fallback?.organizationId
   const [searchParams] = useSearchParams()
   const location = useLocation()
   const navigate = useNavigate()
@@ -23,8 +24,8 @@ export function useWorkspaceRouteContext() {
     queryFn: () => requestJson<ResourceContextResponse>(
       `/api/v1/organizations/${encodeURIComponent(organizationId ?? '')}/resources/${encodeURIComponent(resourceId ?? '')}/context`),
   })
-  const selectedProjectId = routeProjectId ?? (searchParams.get('project') || undefined)
-  const selectedEnvironmentId = routeEnvironmentId ?? (searchParams.get('environment') || undefined)
+  const selectedProjectId = routeProjectId ?? (routeOrganizationId ? searchParams.get('project') || undefined : fallback?.projectId ?? undefined)
+  const selectedEnvironmentId = routeEnvironmentId ?? (routeOrganizationId ? searchParams.get('environment') || undefined : fallback?.environmentId ?? undefined)
   const explicitScope = Boolean(selectedProjectId || selectedEnvironmentId)
   const environmentContext = useEnvironmentContext(organizationId ?? '', selectedEnvironmentId ?? null,
     Boolean(organizationId && selectedEnvironmentId && !selectedProjectId && !resourceId))
@@ -52,7 +53,7 @@ export function useWorkspaceRouteContext() {
   const safeEnvironmentId = missingProject || missingEnvironment ? undefined : environmentId
 
   useEffect(() => {
-    if (!organizationId || (!missingProject && !missingEnvironment)) return
+    if (!routeOrganizationId || (!missingProject && !missingEnvironment)) return
     if (routeProjectId || routeEnvironmentId) {
       const target = modulePath(activeWorkspaceModule(location.pathname) ?? 'overview', {
         organizationId, projectId: safeProjectId, environmentId: safeEnvironmentId,
@@ -64,7 +65,7 @@ export function useWorkspaceRouteContext() {
       params.delete('environment')
       navigate({ pathname: location.pathname, search: params.toString() }, { replace: true })
     }
-  }, [organizationId, missingProject, missingEnvironment, routeProjectId, routeEnvironmentId,
+  }, [routeOrganizationId, organizationId, missingProject, missingEnvironment, routeProjectId, routeEnvironmentId,
     safeProjectId, safeEnvironmentId, location.pathname, location.search, navigate])
 
   return { organizationId, projectId: safeProjectId, environmentId: safeEnvironmentId }

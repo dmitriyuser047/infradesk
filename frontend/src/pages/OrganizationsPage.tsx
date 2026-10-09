@@ -4,7 +4,6 @@ import { ArrowRight, Plus, Search, ShieldCheck } from 'lucide-react'
 
 import { useMyOrganizations } from '../api/auth'
 import { getOrganizationRoleLabel } from '../components/auth/authPresentation'
-import { AppShell } from '../components/layout/AppShell'
 import { EmptyWorkspaceState, InlineAlert, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n } from '../i18n'
 import { getDisplayName } from '../components/navigation/navigationPresentation'
@@ -17,7 +16,7 @@ export function OrganizationsPage() {
   const items = organizations.data?.filter(item => `${getDisplayName(item, t.columns.organization)} ${item.code}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) ?? []
 
   return (
-    <AppShell>
+    <main className="organization-gateway">
       <div className="workspace-page organizations-page">
         <WorkspaceHeader title={t.title} actions={<Link className="primary-button" to="/organizations/new"><Plus size={16} aria-hidden />{i18n.t.administration.createOrganization}</Link>} />
         <WorkspaceSection title={t.available}>
@@ -50,6 +49,6 @@ export function OrganizationsPage() {
           </> : null}
         </WorkspaceSection>
       </div>
-    </AppShell>
+    </main>
   )
 }

@@ -103,6 +103,7 @@ function renderApp(path: string, options: { role?: 'OWNER' | 'MEMBER'; locale?: 
       <Route path="/organizations/:organizationId/configurations/:profileId" element={<ConfigurationProfilePage />} />
       <Route path="/organizations/:organizationId/configurations/:profileId/versions/new" element={<ConfigurationVersionPage />} />
       <Route path="/organizations/:organizationId/overview" element={<AppShell><h1>Overview</h1></AppShell>} />
+      <Route path="/organizations/:organizationId/integrations" element={<AppShell><h1>Integrations</h1></AppShell>} />
     </Routes><Where /></MemoryRouter>
   </QueryClientProvider></I18nProvider>)
 }
@@ -128,9 +129,11 @@ describe('configuration profiles', () => {
   it('shows the configurations entry to members and defaults them to server profiles without requesting file profiles', async () => {
     backend()
     renderApp('/organizations/org/overview')
+    fireEvent.click(screen.getByRole('button', { name: 'Automation' }))
     expect(screen.getByRole('link', { name: 'Configurations' }).getAttribute('href')).toBe('/organizations/org/configurations')
     cleanup()
     renderApp('/organizations/org/overview', { role: 'MEMBER' })
+    fireEvent.click(screen.getByRole('button', { name: 'Automation' }))
     expect(screen.getByRole('link', { name: 'Configurations' }).getAttribute('href')).toBe('/organizations/org/configurations')
     cleanup()
     // Members can read typed server profiles; the legacy file-profile endpoint remains disabled.

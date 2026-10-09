@@ -4,43 +4,43 @@
  */
 :root {
   /* Surfaces */
-  --bg-app: #eff1eb;
-  --surface: #ffffff;
-  --surface-muted: #f3f5ef;
-  --surface-sunken: #e8ece2;
-  --surface-hover: #e9ede4;
-  --surface-selected: #e3e9dc;
+  --bg-app: #e4e7ec;
+  --surface: #f0f2f5;
+  --surface-muted: #eaeef2;
+  --surface-sunken: #dce1e8;
+  --surface-hover: #e1e6ec;
+  --surface-selected: #dee3ea;
 
   /* Text */
-  --text-primary: #20271f;
-  --text-secondary: #4c5846;
-  --text-tertiary: #636f5c;
-  --text-disabled: #8c9787;
+  --text-primary: #20242c;
+  --text-secondary: #4b5563;
+  --text-tertiary: #566170;
+  --text-disabled: #939ba8;
   --text-on-primary: #ffffff;
 
   /* Lines */
-  --border: #d4dbcf;
-  --border-strong: #adb9a6;
+  --border: #cbd2dc;
+  --border-strong: #9aa5b4;
   --focus-ring: var(--primary);
 
   /* Brand and status: text color + soft background pairs, never color alone */
-  --primary: #a23f18;
-  --primary-hover: #863315;
-  --primary-soft: #faebe2;
-  --success: #426622;
-  --success-soft: #eaf0df;
-  --warning: #86601c;
-  --warning-soft: #f7efdf;
-  --danger: #ae3c2a;
-  --danger-soft: #fbebe6;
-  --info: #3f6553;
-  --info-soft: #e7f0e9;
-  --neutral: #4c5846;
-  --neutral-soft: #e8ece2;
-  --success-border: #b6c99e;
-  --warning-border: #d9c28a;
-  --danger-border: #e5b3a5;
-  --info-border: #aec8b8;
+  --primary: #a74118;
+  --primary-hover: #963a16;
+  --primary-soft: #fff0e8;
+  --success: #21734b;
+  --success-soft: #eaf6ef;
+  --warning: #895b14;
+  --warning-soft: #fff6e5;
+  --danger: #b53636;
+  --danger-soft: #fdf0f0;
+  --info: #365f9b;
+  --info-soft: #edf3fc;
+  --neutral: #4b5563;
+  --neutral-soft: #dce1e8;
+  --success-border: #b5dcc5;
+  --warning-border: #ead3a2;
+  --danger-border: #edbcbc;
+  --info-border: #bfd2ef;
 
   /* Sidebar */
   --sidebar-bg: var(--surface);
@@ -75,20 +75,26 @@
   --status-height-compact: 20px;
   --status-height-default: 24px;
   --overlay-backdrop: rgb(16 24 40 / 45%);
-  --radius-sm: 2px;
-  --radius-md: 3px;
-  --radius-lg: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
   --shadow-sm: 0 1px 2px rgb(16 24 40 / 5%);
   --shadow-md: 0 8px 24px rgb(16 24 40 / 12%);
-  --sidebar-width: 246px;
+  --navigation-rail-width: 72px;
+  --sidebar-width: var(--navigation-rail-width);
   --topbar-height: 76px;
   --content-max-width: 1520px;
-  --obsidian-glass: rgb(252 253 249 / 88%);
-  --obsidian-panel: rgb(252 253 249 / 92%);
-  --obsidian-glow-green: rgb(153 178 129 / 15%);
-  --obsidian-glow-amber: rgb(213 170 120 / 13%);
-  --obsidian-glow-blue: rgb(127 162 163 / 12%);
-  --obsidian-shadow: rgb(34 47 29 / 4%);
+  --obsidian-glass: rgb(237 240 244 / 96%);
+  --obsidian-panel: rgb(240 242 245 / 98%);
+  /* Light backgrounds stay neutral; atmospheric color belongs to dark mode. */
+  --obsidian-glow-green: rgb(148 163 184 / 3%);
+  --obsidian-glow-amber: rgb(148 163 184 / 2%);
+  --obsidian-glow-blue: rgb(148 163 184 / 3%);
+  --obsidian-shadow: rgb(24 32 48 / 4%);
+  --glass-menu-fill: #f0f2f5;
+  --glass-sheen: rgb(255 255 255 / 35%);
+  --glass-edge: rgb(255 255 255 / 80%);
+  --glass-shadow: rgb(32 43 58 / 8%);
   --terminal-dark-bg: #0d0d0d;
   --terminal-dark-border: #333333;
 
@@ -129,19 +135,19 @@
   --surface-sunken: #151a18;
   --surface-hover: #2b322e;
   --surface-selected: #30352d;
-  --text-primary: #f0f1eb;
-  --text-secondary: #c0c6bc;
-  --text-tertiary: #969f94;
-  --text-disabled: #778173;
+  --text-primary: #f3f4f6;
+  --text-secondary: #c5c8d0;
+  --text-tertiary: #a2a8b4;
+  --text-disabled: #767e8d;
   --border: #353c35;
   --border-strong: #515b50;
   --primary: #ff9568;
   --primary-hover: #ffb18f;
   --primary-soft: #352820;
   --text-on-primary: #1b160f;
-  --success: #b8d995;
-  --success-soft: #273124;
-  --success-border: #485d3c;
+  --success: #99d6b1;
+  --success-soft: #22332b;
+  --success-border: #3b5d4a;
   --warning: #e4c58c;
   --warning-soft: #342f23;
   --warning-border: #63583e;
@@ -151,7 +157,7 @@
   --info: #b7cac0;
   --info-soft: #26332c;
   --info-border: #4c6255;
-  --neutral: #c0c6bc;
+  --neutral: #c5c8d0;
   --neutral-soft: #2c342e;
   --overlay-backdrop: rgb(6 10 7 / 68%);
   --shadow-sm: 0 2px 6px rgb(0 0 0 / 10%);
@@ -162,4 +168,8 @@
   --obsidian-glow-amber: rgb(185 133 82 / 13%);
   --obsidian-glow-blue: rgb(76 111 119 / 13%);
   --obsidian-shadow: rgb(0 0 0 / 14%);
+  --glass-menu-fill: #1d231f;
+  --glass-sheen: rgb(224 239 225 / 6%);
+  --glass-edge: rgb(224 239 225 / 24%);
+  --glass-shadow: rgb(0 0 0 / 22%);
 }

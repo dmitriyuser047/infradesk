@@ -1,8 +1,8 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { Building2, Crown, LockKeyhole, Plus, Search, Shield, ShieldCheck, UserRound, Users } from 'lucide-react'
+import { ArrowUpRight, Building2, Crown, LockKeyhole, Plus, Search, Shield, ShieldCheck, UserRound, Users } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { createRequestId } from '../app/requestId'
-import { useMe } from '../api/auth'
+import { useMe, useMyOrganizations } from '../api/auth'
 import { addMemberByEmail, changeMembership, changeUserStatus, createAdministrationUser, createOrganization,
   useAdministrationMutation, useAdministrationOrganizations, useAdministrationUser, useAdministrationUsers,
   useOrganizationMembers, useUserMemberships, useAdministrationMembership } from '../api/administration'
@@ -11,7 +11,7 @@ import { useOrganizationPermissions } from '../components/auth/authorization'
 import { IntegrationDialog } from '../components/integrations/IntegrationDialog'
 import { AppShell } from '../components/layout/AppShell'
 import { PermissionGate } from '../components/layout/WorkspaceGate'
-import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceHeader, WorkspaceSection, WorkspaceTabs } from '../components/layout/WorkspacePrimitives'
+import { EmptyWorkspaceState, InlineAlert, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { useI18n, type I18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import type { AdministrationMember, AdministrationUser, ChangeMembershipRequest, CreateAdministrationUserRequest } from '../types/administration'
@@ -61,13 +61,11 @@ export function AdministrationPage() {
 }
 function AdministrationDirectory() {
   const t = useI18n().t.administration
-  const [params, setParams] = useSearchParams()
+  const [params] = useSearchParams()
   const active = params.get('tab') === 'organizations' ? 'organizations' : 'users'
-  return <><WorkspaceTabs active={active} tabs={[{ id: 'users', label: t.users }, { id: 'organizations', label: t.organizations }]}
-    onChange={tab => setParams(tab === 'users' ? {} : { tab })} />
-    <p className="administration-scope-note"><ShieldCheck size={16} aria-hidden />{t.scopeNote}</p>
-    <div id={`panel-${active}`} role="tabpanel" aria-labelledby={`tab-${active}`}>
-      {active === 'users' ? <UserDirectory /> : <OrganizationDirectory />}</div></>
+  return <><p className="administration-scope-note"><ShieldCheck size={16} aria-hidden />{t.scopeNote}</p>
+    <section aria-label={active === 'users' ? t.users : t.organizations}>
+      {active === 'users' ? <UserDirectory /> : <OrganizationDirectory />}</section></>
 }
 function UserDirectory() {
   const i18n = useI18n(); const t = i18n.t.administration
@@ -90,10 +88,15 @@ function UserDirectory() {
 }
 function OrganizationDirectory() {
   const t = useI18n().t.administration; const organizations = useAdministrationOrganizations(true)
+  const memberships = useMyOrganizations()
   return <WorkspaceSection title={t.organizations} actions={<Link className="primary-button" to="/organizations/new"><Plus size={16} aria-hidden />{t.createOrganization}</Link>}>
     {organizations.isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : organizations.isError ? <Failure error={organizations.error} /> :
-      <div className="administration-organizations">{organizations.data.pages.flatMap(page => page.items).map(org => <div key={org.id}>
-        <Building2 size={20} aria-hidden /><div><strong>{org.name}</strong><span>{org.code}</span></div></div>)}</div>}
+      <div className="administration-organizations">{organizations.data.pages.flatMap(page => page.items).map(org => {
+        const content = <><Building2 size={20} aria-hidden /><div><strong>{org.name}</strong><span>{org.code}</span></div></>
+        return memberships.isSuccess && memberships.data.some(item => item.id === org.id)
+          ? <Link key={org.id} className="administration-organization-link" to={`/organizations/${encodeURIComponent(org.id)}/overview`}>{content}<ArrowUpRight size={18} aria-hidden /></Link>
+          : <div key={org.id}>{content}</div>
+      })}</div>}
     <LoadMore available={!!organizations.hasNextPage} busy={organizations.isFetchingNextPage} onClick={() => void organizations.fetchNextPage()} />
   </WorkspaceSection>
 }
@@ -104,7 +107,7 @@ export function OrganizationCreatePage() {
   const [requestId] = useState(createRequestId); const [name, setName] = useState(''); const [code, setCode] = useState('')
   function submit(event: FormEvent) { event.preventDefault(); create.mutate({ requestId, name: name.trim(), code: code.trim() },
     { onSuccess: org => navigate(`/organizations/${encodeURIComponent(org.id)}/overview`) }) }
-  return <AppShell><div className="workspace-page form-page"><WorkspaceHeader title={t.createOrganization} subtitle={t.organizationHint}
+  return <main className="organization-gateway"><div className="workspace-page form-page"><WorkspaceHeader title={t.createOrganization} subtitle={t.organizationHint}
     back={{ label: t.organizations, to: '/organizations' }} />
     <form className="workspace-form" onSubmit={submit}><WorkspaceSection title={t.organization}>
       <fieldset disabled={create.isPending} className="field-grid administration-fields">
@@ -113,7 +116,7 @@ export function OrganizationCreatePage() {
       </fieldset></WorkspaceSection>{create.isError ? <Failure error={create.error} /> : null}
       <div className="form-toolbar"><Link className="secondary-button" to="/organizations">{i18n.t.common.cancel}</Link>
         <button className="primary-button" disabled={create.isPending} type="submit">{t.createOrganization}</button></div>
-    </form></div></AppShell>
+    </form></div></main>
 }
 
 export function AdministrationUserCreatePage() {

@@ -42,8 +42,9 @@ export function AccountMenu() {
     {popover.open ? <div ref={popover.panelRef}
       id={popover.panelId} className="account-menu-panel" role="menu" aria-label={t.account} onKeyDown={onMenuKeyDown}>
       <div className="account-menu-identity" role="presentation">
-        <strong>{name}</strong>
-        {me.data?.email ? <small>{me.data.email}</small> : null}
+        <span className="avatar" aria-hidden>{initials(name)}</span>
+        <div><strong>{name}</strong>
+        {me.data?.email ? <small>{me.data.email}</small> : null}</div>
       </div>
       <div className="menu-separator" role="separator" />
       <button type="button" role="menuitem" className="menu-item"
@@ -52,22 +53,25 @@ export function AccountMenu() {
       </button>
       <div className="menu-separator" role="separator" />
       <div className="menu-group-label" role="presentation">{t.appearance}</div>
+      <div className="account-menu-options">
       <button type="button" role="menuitemradio" autoFocus aria-checked={theme === 'light'} className="menu-item" onClick={() => setTheme('light')}>
         <span className="menu-check" aria-hidden><Sun size={16} /></span>{t.lightTheme}
       </button>
       <button type="button" role="menuitemradio" aria-checked={theme === 'dark'} className="menu-item" onClick={() => setTheme('dark')}>
         <span className="menu-check" aria-hidden><Moon size={16} /></span>{t.darkTheme}
       </button>
-      <div className="menu-separator" role="separator" />
+      </div>
       <div className="menu-group-label" role="presentation">{t.language}</div>
+      <div className="account-menu-options">
       {Locales.map(locale => <button key={locale} type="button" role="menuitemradio"
         aria-checked={i18n.locale === locale} className="menu-item"
         lang={locale} onClick={() => i18n.setLocale(locale)}>
         <span className="menu-check" aria-hidden>{i18n.locale === locale ? <Check size={16} /> : null}</span>
         {t.languages[locale]}
       </button>)}
+      </div>
       <div className="menu-separator" role="separator" />
-      <button type="button" role="menuitem" className="menu-item" disabled={logout.isPending}
+      <button type="button" role="menuitem" className="menu-item account-sign-out" disabled={logout.isPending}
         onClick={() => {
           // Terminals end first. Closing does not wait on the server, so signing out is never held up;
           // revoking the session ends any terminal still open on the server's side.
