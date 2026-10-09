@@ -27,8 +27,10 @@ final class AuthRoutes[Tx[_]](
         case Right(credentials) =>
           login.execute(credentials.email, credentials.password, sourceOf(request)).attempt.flatMap {
             case Right(LoginOutcome.Succeeded(result)) =>
-              Ok(MeResponse(result.user.id, result.user.email, result.user.displayName))
-                .map(_.addCookie(sessionCookie(result.rawToken)))
+              authentication.isAdministrator(result.user.id).flatMap(admin =>
+                Ok(MeResponse(result.user.id, result.user.email, result.user.displayName, admin))
+                  .map(_.addCookie(sessionCookie(result.rawToken))))
+                .handleErrorWith(_ => InternalServerError(ApiErrorResponse("INTERNAL_ERROR", "Internal server error")))
             case Right(LoginOutcome.InvalidCredentials) => IO.pure(Response[IO](status = Status.Unauthorized)
               .withEntity(ApiErrorResponse("INVALID_CREDENTIALS", "Invalid email or password")))
             case Right(LoginOutcome.RateLimited(retryAfter)) => IO.pure(Response[IO](status = Status.TooManyRequests)
@@ -51,7 +53,8 @@ final class AuthRoutes[Tx[_]](
   }
 
   def me(user: AuthenticatedUser): IO[Response[IO]] =
-    Ok(MeResponse(user.id, user.email, user.displayName))
+    authentication.isAdministrator(user.id).flatMap(admin => Ok(MeResponse(user.id, user.email, user.displayName, admin)))
+      .handleErrorWith(_ => InternalServerError(ApiErrorResponse("INTERNAL_ERROR", "Internal server error")))
 
   def organizations(user: AuthenticatedUser): IO[Response[IO]] =
     authentication.organizations(user.id).attempt.flatMap {

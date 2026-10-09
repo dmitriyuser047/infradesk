@@ -12,6 +12,7 @@ sealed trait OrganizationPermission {
 }
 
 object OrganizationPermission {
+  case object ManageMembers extends OrganizationPermission { val code = "MANAGE_MEMBERS" }
 
   /** Reading anything inside an organization the user is a member of. */
   case object ReadOrganization extends OrganizationPermission {
@@ -79,6 +80,7 @@ object OrganizationPermission {
   }
 
   val All: List[OrganizationPermission] = List(
+    ManageMembers,
     ReadOrganization,
     ManageWorkspace,
     ManageConnections,

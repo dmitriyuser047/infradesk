@@ -4,6 +4,14 @@ package domain.auth
 import munit.FunSuite
 
 final class OrganizationAuthorizationPolicySpec extends FunSuite {
+  test("organization operators have bounded operational capabilities and administrators manage members") {
+    assertEquals(OrganizationAuthorizationPolicy.permissions(OrganizationRole.Operator), Set[OrganizationPermission](
+      OrganizationPermission.ReadOrganization, OrganizationPermission.RunConnectionSync,
+      OrganizationPermission.ExecuteOperations, OrganizationPermission.ManageMonitoring))
+    assert(!OrganizationAuthorizationPolicy.allows(OrganizationRole.Operator, OrganizationPermission.OpenTerminal))
+    assert(!OrganizationAuthorizationPolicy.allows(OrganizationRole.Member, OrganizationPermission.ManageMembers))
+    assert(OrganizationAuthorizationPolicy.allows(OrganizationRole.Administrator, OrganizationPermission.ManageMembers))
+  }
 
   test("an owner carries every capability this version defines") {
     OrganizationPermission.All.foreach(permission =>

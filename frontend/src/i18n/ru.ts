@@ -1,4 +1,5 @@
 import type { Messages } from './types'
+import { administrationRu } from './administration'
 
 const pluralRules = new Intl.PluralRules('ru-RU')
 
@@ -9,6 +10,7 @@ function plural(count: number, one: string, few: string, many: string): string {
 }
 
 export const ru: Messages = {
+  administration: administrationRu,
   workScreens: {
     openTerminal: 'Открыть терминал', actions: 'Действия', refreshError: 'Не удалось обновить данные',
     staleSince: (time: string) => `Показано состояние на ${time}.`,
@@ -239,7 +241,7 @@ export const ru: Messages = {
     unableToSignIn: 'Не удалось войти',
     checkingSession: 'Проверка сессии…',
     unableToCheckSession: 'Не удалось проверить сессию',
-    roles: { OWNER: 'Владелец', MEMBER: 'Участник' },
+    roles: { OWNER: 'Владелец', ADMINISTRATOR: 'Администратор', OPERATOR: 'Оператор', MEMBER: 'Участник' },
   },
 
   account: {

@@ -115,6 +115,10 @@ never log or echo it.
 
 ## Upgrade
 
+For user creation, organization roles and initial global administrator provisioning, see
+[Users, organizations and administration](administration.md). Existing installations whose
+bootstrap credentials were removed must explicitly select an existing active administrator.
+
 1. The commit is green in CI.
 2. Note the currently deployed tag: `docker compose -f compose.prod.yml images`.
 3. Take a backup if the release contains a risky migration (see below).

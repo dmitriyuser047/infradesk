@@ -13,8 +13,11 @@ final class Authentication[Tx[_]](
   sessions: AuthSessionRepository[Tx],
   memberships: OrganizationMembershipRepository[Tx],
   runner: TransactionRunner[IO, Tx],
-  tokens: SessionTokens
+  tokens: SessionTokens,
+  administration: Option[application.port.AdministrationRepository[Tx]] = None
 ) {
+  def isAdministrator(userId: UUID): IO[Boolean] =
+    administration.fold(IO.pure(false))(repository => runner.run(repository.isAdministrator(userId)))
   def authenticate(rawToken: String): IO[Option[AuthenticatedSession]] =
     IO(Instant.now()).flatMap(now =>
       runner.run(sessions.findAuthenticatedSessionByTokenHash(tokens.hash(rawToken), now))

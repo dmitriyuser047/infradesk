@@ -1,4 +1,5 @@
 export interface MeResponse {
+  isAdministrator?: boolean
   id: string
   email: string
   displayName: string
@@ -34,5 +35,7 @@ export interface SecurityEventPageResponse {
 
 export const OrganizationRole = {
   owner: 'OWNER',
+  administrator: 'ADMINISTRATOR',
+  operator: 'OPERATOR',
   member: 'MEMBER',
 } as const

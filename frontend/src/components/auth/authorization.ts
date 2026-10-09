@@ -3,6 +3,7 @@ import { OrganizationRole } from '../../types/auth'
 
 /** The capabilities the backend policy defines, named the same way on this side. */
 export type OrganizationPermission =
+  | 'manageMembers'
   | 'readOrganization'
   | 'manageWorkspace'
   | 'manageConnections'
@@ -28,12 +29,15 @@ export function canOrganization(
   role: string | undefined,
   permission: OrganizationPermission,
 ): boolean {
-  if (role === OrganizationRole.owner) {
+  if (role === OrganizationRole.owner || role === OrganizationRole.administrator) {
     return true
   }
 
   if (role === OrganizationRole.member) {
     return memberPermissions.includes(permission)
+  }
+  if (role === OrganizationRole.operator) {
+    return ['readOrganization', 'runConnectionSync', 'executeOperations', 'manageMonitoring'].includes(permission)
   }
 
   return false
@@ -48,7 +52,7 @@ export interface OrganizationPermissions {
 /** Reads the role of the current organization from the memberships the app already loads. */
 export function useOrganizationPermissions(organizationId: string | undefined): OrganizationPermissions {
   const memberships = useMyOrganizations()
-  const role = memberships.data?.find(value => value.id === organizationId)?.role
+  const role = memberships.isSuccess ? memberships.data?.find(value => value.id === organizationId)?.role : undefined
 
   return { role, isPending: memberships.isPending, can: permission => canOrganization(role, permission) }
 }

@@ -10,6 +10,9 @@ sealed trait AuditAction {
 }
 
 object AuditAction {
+  case object OrganizationCreated extends AuditAction { val code = "ORGANIZATION_CREATED" }
+  case object UserCreated extends AuditAction { val code = "USER_CREATED" }
+  case object MembershipChanged extends AuditAction { val code = "MEMBERSHIP_CHANGED" }
   case object TerminalSessionOpened extends AuditAction { val code = "TERMINAL_SESSION_OPENED" }
   case object TerminalSessionClosed extends AuditAction { val code = "TERMINAL_SESSION_CLOSED" }
 
@@ -126,6 +129,7 @@ object AuditAction {
   case object RemnawaveFleetRolloutFailed extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_FAILED" }
 
   val All: List[AuditAction] = List(
+    OrganizationCreated, UserCreated, MembershipChanged,
     ProjectCreated,
     EnvironmentCreated,
     ConnectionCreated,
@@ -232,6 +236,7 @@ sealed trait AuditTargetType {
 }
 
 object AuditTargetType {
+  case object Organization extends AuditTargetType { val code = "ORGANIZATION" }
   case object TerminalSession extends AuditTargetType { val code = "TERMINAL_SESSION" }
 
   case object Project extends AuditTargetType { override val code: String = "PROJECT" }
@@ -251,7 +256,7 @@ object AuditTargetType {
   case object ServerProfile extends AuditTargetType { val code = "SERVER_PROFILE" }
 
   val All: List[AuditTargetType] =
-    List(Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Integration, Account, TerminalSession,
+    List(Organization, Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Integration, Account, TerminalSession,
       ConfigurationProfile, ConfigurationAssignment, ConfigurationDeployment, ConfigurationRollout,
       ConfigurationAssignmentRule, ServerProfile)
 

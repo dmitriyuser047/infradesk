@@ -16,6 +16,10 @@ object OrganizationAuthorizationPolicy {
 
   def permissions(role: OrganizationRole): Set[OrganizationPermission] = role match {
     case OrganizationRole.Owner => ownerPermissions
+    case OrganizationRole.Administrator => ownerPermissions
+    case OrganizationRole.Operator => Set(OrganizationPermission.ReadOrganization,
+      OrganizationPermission.RunConnectionSync, OrganizationPermission.ExecuteOperations,
+      OrganizationPermission.ManageMonitoring)
     case OrganizationRole.Member => memberPermissions
   }
 

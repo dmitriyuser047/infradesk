@@ -92,6 +92,7 @@ object InfraDeskApplication {
           application.cleanupSecurityEvents.run, application.terminalSessionLifecycle.reap)
 
         application.bootstrapAdmin.run(config.bootstrap) *>
+          application.administration.bootstrapAdministrator(config.bootstrapAdministratorEmail) *>
           loggers.lifecycle.info(
             s"application.started version=${BuildInfo.version} gitSha=${BuildInfo.gitSha} " +
               s"workers=${workers.size}"

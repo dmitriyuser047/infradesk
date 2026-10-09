@@ -40,6 +40,10 @@ final class AuthBoundary[Tx[_]](
         authenticated(request)(session => authRoutes.me(session.user))
       case List("api", "v1", "me", "organizations") if request.method == GET =>
         authenticated(request)(session => authRoutes.organizations(session.user))
+      case List("api", "v1", "organizations") if request.method == POST =>
+        authenticated(request)(session => organizationRoutes.run(AuthenticatedRequest.attach(request,session)))
+      case "api" :: "v1" :: "administration" :: _ =>
+        authenticated(request)(session => organizationRoutes.run(AuthenticatedRequest.attach(request,session)))
       // Self-service account operations: the account is the session's, so these need only
       // authentication and never an organization in the path.
       case List("api", "v1", "account", "change-password") if request.method == POST =>

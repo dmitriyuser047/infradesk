@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUpRight, Building2, Bell, Cable, FileCog, LayoutDashboard, Layers, Menu, Plug, Server, TriangleAlert, X, type LucideIcon } from 'lucide-react'
+import { ArrowUpRight, Building2, Bell, Cable, FileCog, LayoutDashboard, Layers, Menu, Plug, Server, ShieldCheck, Users, TriangleAlert, X, type LucideIcon } from 'lucide-react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 
 import { useI18n, type Messages } from '../../i18n'
-import { useMyOrganizations } from '../../api/auth'
+import { useMe, useMyOrganizations } from '../../api/auth'
 import { getDisplayName } from '../navigation/navigationPresentation'
 import { useOrganizationPermissions, type OrganizationPermission } from '../auth/authorization'
 import { AccountMenu } from './AccountMenu'
@@ -49,6 +49,7 @@ const navigation: NavigationGroup[] = [
   ] },
   { label: t => t.shell.groups.structure, items: [
     { module: 'workspace', icon: Layers, label: t => t.shell.nav.workspace },
+    { module: 'members', icon: Users, label: t => t.administration.members, permission: 'manageMembers' },
   ] },
 ]
 
@@ -78,6 +79,7 @@ function ShellFrame({ children }: { children: ReactNode }) {
   const scope = useWorkspaceRouteContext()
   const permissions = useOrganizationPermissions(scope.organizationId)
   const memberships = useMyOrganizations()
+  const me = useMe()
   const organization = memberships.data?.find(item => item.id === scope.organizationId)
   const active = activeWorkspaceModule(location.pathname)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -151,6 +153,11 @@ function ShellFrame({ children }: { children: ReactNode }) {
             })}
           </ul>
         </div> : null})}
+        {me.isSuccess && me.data.isAdministrator ? <div className="nav-group"><div className="nav-group-label">{t.administration.title}</div><ul><li>
+          <Link className={`nav-link ${location.pathname.startsWith('/administration') ? 'nav-link-active' : ''}`} to="/administration"
+            aria-current={location.pathname.startsWith('/administration') ? 'page' : undefined}>
+            <span className="nav-icon"><ShieldCheck size={18} aria-hidden /></span><span>{t.administration.users}</span>
+          </Link></li></ul></div> : null}
       </nav>
       <Link className="sidebar-footer" to="/organizations" aria-label={t.shell.brandHome}
         onClick={() => { if (drawerOpen) { setDrawerOpen(false); contentRef.current?.focus() } }}>

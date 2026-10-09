@@ -21,7 +21,7 @@ const plan: ServerProfilePlan = {
   warnings: [], blockingProblems: [],
 }
 function renderPanel(role: 'OWNER'|'MEMBER' = 'OWNER', onQueued = vi.fn(), options: { operationsBlocked?: boolean; previewPlan?: ServerProfilePlan; automationData?: any; locale?: 'en'|'ru'; startPending?: boolean } = {}) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(['me'], { id:'user', email:'user@example.test', displayName:'User' })
   client.setQueryData(['my-organizations'], [{ id:'org', code:'ORG', name:'Org', role }])
   mocks.automation.mockReturnValue({ data: options.automationData ?? { state:'DRIFTED', operationsBlocked:options.operationsBlocked ?? false, activeRun:null,

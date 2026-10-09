@@ -93,6 +93,7 @@ import java.util.UUID
   * cases they need through their constructors, never this record.
   */
 final case class ApplicationComponents(
+  administration: application.administration.Administration[ConnectionIO],
   terminalSessionLifecycle: application.terminal.TerminalSessionLifecycle[ConnectionIO],
   getResource: GetResource[ConnectionIO],
   listEnvironmentResources: ListEnvironmentResources[ConnectionIO],
@@ -681,11 +682,15 @@ object ApplicationModule {
         securityEventRepository, transactionRunner, loggers.account, config.securityEvents.retention,
         SecurityEventCleanupInterval
       ),
+      administration = new application.administration.Administration[ConnectionIO](administrationRepository,
+        userAccountRepository,membershipRepository,organizationRepository,transactionRunner,passwordHasher,
+        transactionIdGenerator,transactionTimeProvider,auditRecorder),
       authentication = new Authentication[ConnectionIO](
         authSessionRepository,
         membershipRepository,
         transactionRunner,
-        sessionTokens
+        sessionTokens,
+        Some(administrationRepository)
       ),
       changePassword = new ChangePassword[ConnectionIO](
         userAccountRepository,

@@ -74,6 +74,7 @@ object HttpModule {
     }
 
     val businessApp = (
+      new infrastructure.http.AdministrationRoutes(application.administration,transactionRunner).routes <+>
       terminalRoutes <+>
       new ResourceRoutes(
         application.getResource,

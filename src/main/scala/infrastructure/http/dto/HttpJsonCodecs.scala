@@ -142,7 +142,7 @@ object HttpJsonCodecs {
     Encoder.forProduct2("items", "nextCursor")(value => (value.items, value.nextCursor))
 
   implicit val meResponseEncoder: Encoder[MeResponse] =
-    Encoder.forProduct3("id", "email", "displayName")(value => (value.id, value.email, value.displayName))
+    Encoder.forProduct4("id", "email", "displayName", "isAdministrator")(value => (value.id, value.email, value.displayName, value.isAdministrator))
 
   implicit val myOrganizationResponseEncoder: Encoder[MyOrganizationResponse] =
     Encoder.forProduct4("id", "code", "name", "role") { value =>

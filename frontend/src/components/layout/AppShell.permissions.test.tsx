@@ -46,7 +46,7 @@ describe('permission-aware workspace navigation', () => {
       { label: 'Infrastructure', links: ['Servers', 'Connections'] },
       { label: 'Monitoring', links: ['Incidents', 'Notifications'] },
       { label: 'Automation', links: ['Integrations', 'Configurations'] },
-      { label: 'Structure', links: ['Projects & Environments'] },
+      { label: 'Structure', links: ['Projects & Environments', 'People and access'] },
     ])
   })
 })

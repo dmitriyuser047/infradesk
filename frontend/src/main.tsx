@@ -15,6 +15,7 @@ import './styles/pages/resources.css'
 import './styles/pages/incidents.css'
 import './styles/pages/workspace.css'
 import './styles/pages/account.css'
+import './styles/pages/administration.css'
 import './styles/pages/infrastructure.css'
 import './styles/pages/terminal.css'
 

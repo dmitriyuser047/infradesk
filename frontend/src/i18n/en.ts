@@ -4,7 +4,10 @@
  * Keys under `codes`-like maps are backend codes (NO_DATA, CONTAINER_STOP, SSH_HOST_KEY_MISMATCH…):
  * the codes stay stable in the API, only their presentation lives here.
  */
+import { administrationEn } from './administration'
+
 export const en = {
+  administration: administrationEn,
   workScreens: {
     openTerminal: 'Open terminal', actions: 'Actions', refreshError: 'Unable to refresh data',
     staleSince: (time: string) => `Showing state from ${time}.`,
@@ -235,7 +238,7 @@ export const en = {
     unableToSignIn: 'Unable to sign in',
     checkingSession: 'Checking session…',
     unableToCheckSession: 'Unable to check session',
-    roles: { OWNER: 'Owner', MEMBER: 'Member' },
+    roles: { OWNER: 'Owner', ADMINISTRATOR: 'Administrator', OPERATOR: 'Operator', MEMBER: 'Member' },
   },
 
   account: {

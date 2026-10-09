@@ -129,7 +129,8 @@ final case class AppConfig(
   configurationDeployment: ConfigurationDeploymentSettings = ConfigurationDeploymentSettings.Default,
   provisioning: ProvisioningSettings = ProvisioningSettings.Default,
   configurationRules: ConfigurationRuleSettings = ConfigurationRuleSettings(),
-  integrations: IntegrationsConfig = IntegrationsConfig(10.seconds, allowPrivateDestinations = false)
+  integrations: IntegrationsConfig = IntegrationsConfig(10.seconds, allowPrivateDestinations = false),
+  bootstrapAdministratorEmail: Option[String] = None
 )
 
 object AppConfig {
@@ -172,7 +173,9 @@ object AppConfig {
       ConfigurationRuleSettings(enabled = ruleEnabled, reconcileInterval = ruleInterval.seconds),
       IntegrationsConfig(integrationTimeout.seconds, integrationAllowPrivate, integrationSync,
         integrationActions, integrationDesiredState, integrationConfigRollouts, remnawaveFleets,
-        inventoryMaxBytes, inventoryMaxObjects))
+        inventoryMaxBytes, inventoryMaxObjects),
+      values.get("INFRADESK_BOOTSTRAP_ADMINISTRATOR_EMAIL").map(_.trim).filter(_.nonEmpty)
+        .orElse(bootstrap.map(_.email)))
 
   private def parseRemnawaveFleets(
     values: Map[String, String]): Either[IllegalArgumentException, RemnawaveFleetConfig] =

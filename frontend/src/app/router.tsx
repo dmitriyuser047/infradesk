@@ -35,6 +35,12 @@ export const router = createBrowserRouter([
     children: [{ element: <ShellLayout />, children: [
       { path: '/settings/account', element: <AccountPage /> },
       { path: '/organizations', element: <OrganizationsPage /> },
+      { path: '/organizations/new', lazy: async () => { const { OrganizationCreatePage } = await import('../pages/AdministrationPages'); return { Component: OrganizationCreatePage } } },
+      { path: '/administration', lazy: async () => { const { AdministrationPage } = await import('../pages/AdministrationPages'); return { Component: AdministrationPage } } },
+      { path: '/administration/users/new', lazy: async () => { const { AdministrationUserCreatePage } = await import('../pages/AdministrationPages'); return { Component: AdministrationUserCreatePage } } },
+      { path: '/administration/users/:userId', lazy: async () => { const { AdministrationUserPage } = await import('../pages/AdministrationPages'); return { Component: AdministrationUserPage } } },
+      { path: '/organizations/:organizationId/members', lazy: async () => { const { OrganizationMembersPage } = await import('../pages/AdministrationPages'); return { Component: OrganizationMembersPage } } },
+      { path: '/organizations/:organizationId/members/new', lazy: async () => { const { AdministrationUserCreatePage } = await import('../pages/AdministrationPages'); return { Component: AdministrationUserCreatePage } } },
       { path: '/organizations/:organizationId', element: <OrganizationPage /> },
       { path: '/organizations/:organizationId/overview', element: <OverviewPage /> },
       { path: '/organizations/:organizationId/projects/new', element: <ProjectCreatePage /> },

@@ -10,10 +10,14 @@ sealed trait OrganizationRole {
 
 object OrganizationRole {
   case object Owner extends OrganizationRole { val code = "OWNER" }
+  case object Administrator extends OrganizationRole { val code = "ADMINISTRATOR" }
+  case object Operator extends OrganizationRole { val code = "OPERATOR" }
   case object Member extends OrganizationRole { val code = "MEMBER" }
 
   def fromCode(code: String): Either[IllegalArgumentException, OrganizationRole] = code match {
     case Owner.code => Right(Owner)
+    case Administrator.code => Right(Administrator)
+    case Operator.code => Right(Operator)
     case Member.code => Right(Member)
     case other => Left(new IllegalArgumentException(s"Unknown organization role: $other"))
   }

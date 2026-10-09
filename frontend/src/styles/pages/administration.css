@@ -1,0 +1,33 @@
+.administration-page { min-width: 0; }
+.administration-scope-note { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: var(--font-size-small); }
+.administration-role-guide { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: var(--space-3); }
+.administration-role-guide > div { display: grid; grid-template-columns: 20px minmax(0,1fr); gap: 8px; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
+.administration-role-guide svg { color: var(--primary); }
+.administration-role-guide p { grid-column: 1 / -1; color: var(--text-tertiary); font-size: var(--font-size-caption); margin: 0; }
+.administration-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.administration-avatar { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 12px; background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+.administration-identity > div { display: grid; gap: 3px; min-width: 0; }
+.administration-identity span:not(.administration-avatar) { color: var(--text-tertiary); font-size: var(--font-size-caption); overflow-wrap: anywhere; }
+.administration-global-role { display: inline-flex; align-items: center; gap: 6px; color: var(--primary); font-size: var(--font-size-caption); }
+.administration-table td { vertical-align: middle; padding-top: 16px; padding-bottom: 16px; }
+.administration-role-detail { display: block; color: var(--text-tertiary); font-size: var(--font-size-caption); max-width: 300px; white-space: normal; margin-top: 4px; }
+.administration-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.administration-fields label small, .administration-check small { color: var(--text-tertiary); font-size: var(--font-size-caption); font-weight: 400; }
+.administration-check { display: flex !important; align-items: flex-start; gap: 10px; }
+.administration-check input { width: 16px; height: 16px; min-height: 16px; margin-top: 3px; flex: 0 0 16px; }
+.administration-check span { display: grid; gap: 4px; }
+.administration-account-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: var(--space-5); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.administration-account-strip .administration-identity { flex: 1; }
+.administration-add-access { display: flex; gap: 12px; align-items: flex-end; padding-top: 20px; border-top: 1px solid var(--border); margin-top: 20px; }
+.administration-add-access label { display: grid; gap: 8px; flex: 1; max-width: 420px; }
+.administration-load-more { margin-top: 16px; }
+.administration-organizations { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 12px; }
+.administration-organizations > div { display: flex; gap: 12px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.administration-organizations svg { color: var(--primary); flex: 0 0 20px; }
+.administration-organizations > div > div { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.administration-organizations span { color: var(--text-tertiary); font-size: var(--font-size-caption); }
+@media (max-width: 1000px) { .administration-role-guide { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 540px) {
+  .administration-role-guide { grid-template-columns: minmax(0,1fr); }
+  .administration-add-access { flex-direction: column; align-items: stretch; }
+}

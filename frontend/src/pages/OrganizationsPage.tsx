@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
-import { ArrowRight, Search, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Plus, Search, ShieldCheck } from 'lucide-react'
 
 import { useMyOrganizations } from '../api/auth'
 import { getOrganizationRoleLabel } from '../components/auth/authPresentation'
@@ -19,7 +19,7 @@ export function OrganizationsPage() {
   return (
     <AppShell>
       <div className="workspace-page organizations-page">
-        <WorkspaceHeader title={t.title} />
+        <WorkspaceHeader title={t.title} actions={<Link className="primary-button" to="/organizations/new"><Plus size={16} aria-hidden />{i18n.t.administration.createOrganization}</Link>} />
         <WorkspaceSection title={t.available}>
           {organizations.isPending ? <div className="context-skeleton" aria-label={t.loading}><span /><span /></div> : null}
           {organizations.isError ? (

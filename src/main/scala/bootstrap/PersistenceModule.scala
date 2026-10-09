@@ -134,6 +134,7 @@ import persistence.postgres.{
   * individual ports to constructors. It is never passed into a business object.
   */
 final case class PersistenceComponents(
+  administrationRepository: application.port.AdministrationRepository[ConnectionIO],
   terminalSessionRepository: application.port.TerminalSessionRepository[ConnectionIO],
   transactionRunner: TransactionRunner[IO, ConnectionIO],
   /** One read-only snapshot, for read models composed of several statements. */
@@ -273,6 +274,7 @@ object PersistenceModule {
       notificationChannelRoutingQuery = new PostgresNotificationChannelRoutingQuery,
       notificationChannelDispatchQuery = new PostgresNotificationChannelDispatchQuery,
       navigationQueryRepository = new PostgresNavigationQueryRepository,
+      administrationRepository = new persistence.postgres.PostgresAdministrationRepository,
       userAccountRepository = new PostgresUserAccountRepository,
       authSessionRepository = new PostgresAuthSessionRepository,
       loginThrottleRepository = new PostgresLoginThrottleRepository,
