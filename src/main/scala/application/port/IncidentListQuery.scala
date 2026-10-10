@@ -22,7 +22,8 @@ final case class IncidentListItem(
   location: InfrastructureLocation,
   monitorRule: MonitorConditionView,
   parentResource: Option[ResourceReference],
-  sourceConnections: List[SourceConnectionReference]
+  sourceConnections: List[SourceConnectionReference],
+  acknowledgedByName: Option[String] = None
 )
 
 /** Where a page of incidents continues: the exact row the previous page ended on. */

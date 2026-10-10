@@ -90,7 +90,7 @@ object InfraDeskApplication {
         val workers = schedulerWorkers ++ notificationWorkers ++ configurationWorkers ++ ruleWorkers ++ provisioningWorkers ++
           integrationWorkers ++ List(
           application.cleanupLoginThrottle.run,
-          application.cleanupSecurityEvents.run, application.terminalSessionLifecycle.reap)
+          application.cleanupSecurityEvents.run, application.terminalSessionLifecycle.reap, application.metricRetention.run)
 
         application.bootstrapAdmin.run(config.bootstrap) *>
           application.administration.bootstrapAdministrator(config.bootstrapAdministratorEmail) *>

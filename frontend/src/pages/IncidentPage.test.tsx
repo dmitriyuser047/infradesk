@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,7 +10,7 @@ import { IncidentPage } from './IncidentPage'
 
 const incident: IncidentListItemResponse = {
   id: 'cpu', monitorRuleId: '0b69c4d2-5d1e-4f7a-9d3e-1c2b3a4d5e6f', resourceId: 'backend', status: 'OPEN', reason: 'THRESHOLD',
-  startedAt: '2026-09-27T10:00:00Z', openedAt: '2026-09-27T10:05:00Z', resolvedAt: null, createdAt: '', updatedAt: '',
+  startedAt: '2026-09-27T10:00:00Z', openedAt: '2026-09-27T10:05:00Z', resolvedAt: null, createdAt: '', updatedAt: '', notificationsSilenced: false, acknowledgedAt: null, acknowledgedByName: null,
   resource: { id: 'backend', name: 'backend', resourceTypeCode: 'CONTAINER' },
   project: { id: 'project', name: 'SvinPeak' }, environment: { id: 'env', name: 'Production', kind: 'PROD' },
   monitorRule: { id: '0b69c4d2-5d1e-4f7a-9d3e-1c2b3a4d5e6f', metricCode: 'CPU_USAGE_PERCENT', operator: 'GREATER_THAN',
@@ -20,12 +20,13 @@ const incident: IncidentListItemResponse = {
 }
 
 /** The incident is one read; the operations reads decide whether "Go to operations" is offered. */
-function renderPage(value: IncidentListItemResponse = incident, options: { locale?: Locale; path?: string; operations?: string[] } = {}) {
+function renderPage(value: IncidentListItemResponse = incident, options: { locale?: Locale; path?: string; operations?: string[]; role?: string } = {}) {
   const requests: string[] = []
-  vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string, init?: RequestInit) => {
     const path = String(input).replace('/api/v1/organizations/org', '')
-    requests.push(path)
-    const body = path.endsWith('/operations') ? { operations: options.operations ?? [], unavailableReason: null }
+    requests.push(`${init?.method ?? 'GET'} ${path}`.replace(/^GET /, ''))
+    const body = path.endsWith('/acknowledge') ? { ...value, acknowledgedAt: '2026-09-27T10:07:00Z', acknowledgedByName: 'Owner' }
+      : path.endsWith('/operations') ? { operations: options.operations ?? [], unavailableReason: null }
       : path.includes('/operation-executions') ? []
         : path.endsWith('/environments') ? [{ id: 'env', organizationId: 'org', projectId: 'project', code: 'prod', name: 'Production', kind: 'PROD' }]
           : value
@@ -33,7 +34,7 @@ function renderPage(value: IncidentListItemResponse = incident, options: { local
   }))
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(['me'], { id: 'user', email: 'owner@example.com', displayName: 'Owner' })
-  client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Org', role: 'OWNER' }])
+  client.setQueryData(['my-organizations'], [{ id: 'org', code: 'ORG', name: 'Org', role: options.role ?? 'OWNER' }])
   client.setQueryData(['projects', 'org'], [])
   render(<I18nProvider initialLocale={options.locale ?? 'en'}><QueryClientProvider client={client}>
     <MemoryRouter initialEntries={[options.path ?? '/organizations/org/incidents/cpu']}><Routes>
@@ -45,6 +46,33 @@ function renderPage(value: IncidentListItemResponse = incident, options: { local
 
 describe('incident page', () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+  it('lets an owner acknowledge an open incident once, then shows who took it', async () => {
+    const requests = renderPage()
+    const button = await screen.findByRole('button', { name: 'Acknowledge' })
+    await act(async () => { fireEvent.click(button) })
+    expect(requests).toContain('POST /incidents/cpu/acknowledge')
+    expect(await screen.findByText(/^Owner, /)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Acknowledge' })).toBeNull()
+    expect(screen.getAllByText('Acknowledged').length).toBeGreaterThan(0)
+  })
+
+  it('offers no acknowledgement for a member or a resolved incident', async () => {
+    renderPage(incident, { role: 'MEMBER' })
+    expect(await screen.findByRole('heading', { level: 1, name: 'CPU usage threshold breached' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Acknowledge' })).toBeNull()
+    cleanup()
+    renderPage({ ...incident, status: 'RESOLVED', resolvedAt: '2026-09-27T11:00:00Z' })
+    expect(await screen.findByRole('heading', { level: 1, name: 'CPU usage threshold breached' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Acknowledge' })).toBeNull()
+  })
+
+  it('says plainly when an incident opened during maintenance and nobody was notified', async () => {
+    renderPage({ ...incident, notificationsSilenced: true })
+    expect(await screen.findByText('Opened during maintenance')).toBeTruthy()
+    expect(screen.getByText('Notifications about this incident, including its resolution, were not sent.')).toBeTruthy()
+    expect(screen.getAllByText('Maintenance').length).toBeGreaterThan(0)
+  })
 
   it('names what happened and where, never by identifier', async () => {
     const requests = renderPage()

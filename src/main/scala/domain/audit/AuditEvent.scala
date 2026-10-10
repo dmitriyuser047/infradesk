@@ -127,6 +127,9 @@ object AuditAction {
   case object RemnawaveFleetUpgradeRollbackRequested extends AuditAction { val code = "REMNAWAVE_FLEET_UPGRADE_ROLLBACK_REQUESTED" }
   case object RemnawaveFleetUpgradeCompleted extends AuditAction { val code = "REMNAWAVE_FLEET_UPGRADE_COMPLETED" }
   case object RemnawaveFleetRolloutFailed extends AuditAction { val code = "REMNAWAVE_FLEET_ROLLOUT_FAILED" }
+  case object MaintenanceWindowCreated extends AuditAction { val code = "MAINTENANCE_WINDOW_CREATED" }
+  case object MaintenanceWindowCancelled extends AuditAction { val code = "MAINTENANCE_WINDOW_CANCELLED" }
+  case object IncidentAcknowledged extends AuditAction { val code = "INCIDENT_ACKNOWLEDGED" }
 
   val All: List[AuditAction] = List(
     OrganizationCreated, UserCreated, MembershipChanged,
@@ -222,7 +225,8 @@ object AuditAction {
     RemnawaveFleetRolloutCompleted,
     RemnawaveFleetRolloutFailed,
     RemnawaveNodeReleaseTargetChanged, RemnawaveFleetUpgradeRequested, RemnawaveFleetUpgradePaused,
-    RemnawaveFleetUpgradeResumed, RemnawaveFleetUpgradeRollbackRequested, RemnawaveFleetUpgradeCompleted
+    RemnawaveFleetUpgradeResumed, RemnawaveFleetUpgradeRollbackRequested, RemnawaveFleetUpgradeCompleted,
+    MaintenanceWindowCreated, MaintenanceWindowCancelled, IncidentAcknowledged
   )
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditAction] =
@@ -254,11 +258,13 @@ object AuditTargetType {
   case object ConfigurationRollout extends AuditTargetType { override val code: String = "CONFIGURATION_ROLLOUT" }
   case object ConfigurationAssignmentRule extends AuditTargetType { override val code: String = "CONFIGURATION_ASSIGNMENT_RULE" }
   case object ServerProfile extends AuditTargetType { val code = "SERVER_PROFILE" }
+  case object MaintenanceWindow extends AuditTargetType { val code = "MAINTENANCE_WINDOW" }
+  case object Incident extends AuditTargetType { val code = "INCIDENT" }
 
   val All: List[AuditTargetType] =
     List(Organization, Project, Environment, Connection, MonitorRule, Resource, NotificationChannel, Integration, Account, TerminalSession,
       ConfigurationProfile, ConfigurationAssignment, ConfigurationDeployment, ConfigurationRollout,
-      ConfigurationAssignmentRule, ServerProfile)
+      ConfigurationAssignmentRule, ServerProfile, MaintenanceWindow, Incident)
 
   def fromCode(code: String): Either[IllegalArgumentException, AuditTargetType] =
     All.find(_.code == code)

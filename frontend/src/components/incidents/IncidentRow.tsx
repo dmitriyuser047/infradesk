@@ -6,6 +6,7 @@ import { incidentPath, originQuery, resourcePath } from '../infrastructure/infra
 import { sourceSummary } from '../infrastructure/SourceConnections'
 import { formatMonitorCondition, getMetricLabel } from '../monitoring/monitorRulePresentation'
 import { IncidentStatusBadge } from './IncidentStatusBadge'
+import { StatusIndicator } from '../layout/WorkspacePrimitives'
 import { getIncidentReasonPresentation, getIncidentTimePresentation } from './incidentPresentation'
 
 /** What a row repeats depends on where the list is: a resource's own list need not name it. */
@@ -56,6 +57,8 @@ export function IncidentRow({ organizationId, incident, now, options = {} }: {
         <Link className="incident-link" to={destination} title={problem}
           aria-label={i18n.t.incidents.linkLabel(subject, reason.label, time.label)}>{showResource ? problem : subject}</Link>
         {showResource ? <span className="incident-type">{i18n.t.resources.types[resource.resourceTypeCode] ?? resource.resourceTypeCode}</span> : null}
+        {open && incident.acknowledgedAt !== null ? <StatusIndicator label={i18n.t.incidents.page.acknowledgedBadge} tone="info" size="small" /> : null}
+        {incident.notificationsSilenced ? <StatusIndicator label={i18n.t.incidents.page.silencedBadge} tone="neutral" size="small" /> : null}
       </div>
       {showResource ? <Link className="incident-object-link"
         aria-label={`${i18n.t.workScreens.incidentObject}: ${resource.name}`}

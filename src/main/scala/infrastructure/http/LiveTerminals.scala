@@ -103,7 +103,7 @@ final class LiveTerminal private[http] (
   private[http] def detachedFor: IO[Option[FiniteDuration]] =
     (IO.monotonic, outbox.get).mapN((now, state) => state.detachedSince.map(now - _))
   private[http] def requested: IO[TerminalEnd] = stop.get
-  private[http] def pendingBytes: IO[Long] = outbox.get.map(_.bytes)
+  private[http] def pendingOutput: IO[Chunk[Byte]] = outbox.get.map(state => Chunk.concat(state.chunks))
   private[http] def finish(end: TerminalEnd): IO[Unit] = outbox.update(state => state.copy(end = state.end.orElse(Some(end))))
 
   /** Drains the shell into the outbox until EOF; raises on SSH failure. */

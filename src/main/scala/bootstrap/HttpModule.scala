@@ -84,6 +84,8 @@ object HttpModule {
         transactionRunner,
         authorization
       ).routes <+>
+      new infrastructure.http.MetricSeriesRoutes(application.getResourceMetricSeries, transactionRunner, authorization,
+        loggers.readModels).routes <+>
       new ProvisioningRoutes(application.provisioningRuns, authorization, loggers.configuration).routes <+>
         new ServerProfileRoutes(application.serverProfiles,authorization,loggers.configuration).routes <+>
         new ResourceOperationRoutes(
@@ -95,6 +97,8 @@ object HttpModule {
         ).routes <+>
         new IncidentRoutes(application.getIncident, application.listIncidents, transactionRunner,
           authorization, loggers.readModels).routes <+>
+        new infrastructure.http.MaintenanceRoutes(application.maintenanceWindows, application.acknowledgeIncident,
+          application.getIncident, transactionRunner, authorization, loggers.monitor).routes <+>
         // Counts and the previews they summarize must agree: one read-only snapshot.
         new InfrastructureContextRoutes(
           application.getConnectionInfrastructureSummary,

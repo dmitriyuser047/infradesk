@@ -180,7 +180,7 @@ final case class UpdateMonitorRule[Tx[_]: MonadThrow](
         // evaluation, so it is reported through the same outbox, in this transaction.
         transitions = openIncident.toList.map(incident =>
           MonitorTransition.Resolved(updated.organizationId, updated.resourceId, updated.id,
-            incident.id, incident.reason, now))
+            incident.id, incident.reason, now, notificationsSilenced = incident.notificationsSilenced))
         _ <- notificationRecorder.record(transitions)
         // Closing an incident is the same fact however it happened, so it reaches the timeline
         // through this transaction as well.

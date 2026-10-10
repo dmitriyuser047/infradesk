@@ -13,7 +13,7 @@ function incident(index: number, status: 'OPEN' | 'RESOLVED' = 'OPEN'): Incident
   return {
     id: `incident-${index}`, monitorRuleId: `rule-${index}`, resourceId, status, reason: 'THRESHOLD',
     startedAt: '2026-09-25T10:00:00Z', openedAt: '2026-09-25T10:00:00Z',
-    resolvedAt: status === 'RESOLVED' ? '2026-09-25T10:30:00Z' : null, createdAt: '', updatedAt: '',
+    resolvedAt: status === 'RESOLVED' ? '2026-09-25T10:30:00Z' : null, createdAt: '', updatedAt: '', notificationsSilenced: false, acknowledgedAt: null, acknowledgedByName: null,
     resource: { id: resourceId, name: `node-${index}`, resourceTypeCode: index % 2 === 0 ? 'NODE' : 'CONTAINER' },
     project: { id: 'project', name: 'SvinPeak' }, environment: { id: 'env', name: 'Production', kind: 'PROD' },
     monitorRule: { id: 'rule', metricCode: 'CPU_USAGE_PERCENT', operator: 'GREATER_THAN', threshold: 85, forSeconds: 300, noDataSeconds: 900 },

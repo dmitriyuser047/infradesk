@@ -86,6 +86,7 @@ final class PostgresIncidentListQuery extends IncidentListQuery[ConnectionIO] {
       with page as (
         select i.id, i.organization_id, i.monitor_rule_id, i.resource_id, i.status, i.reason,
           i.started_at, i.opened_at, i.resolved_at, i.created_at, i.updated_at,
+          i.notifications_silenced, i.acknowledged_at, i.acknowledged_by, ack.display_name as acknowledged_by_name,
           r.name as resource_name, rt.code as resource_type_code,
           e.id as environment_id, e.name as environment_name, e.kind as environment_kind,
           p.id as project_id, p.name as project_name,
@@ -99,12 +100,14 @@ final class PostgresIncidentListQuery extends IncidentListQuery[ConnectionIO] {
         join monitor_rule m on m.id = i.monitor_rule_id and m.organization_id = i.organization_id
         left join resource pr on pr.id = r.parent_resource_id and pr.organization_id = r.organization_id
         left join resource_type prt on prt.id = pr.resource_type_id
+        left join user_account ack on ack.id = i.acknowledged_by
         where i.organization_id = $organizationId
     """ ++ filter ++ fr"order by i.opened_at desc, i.id desc" ++ pageLimit ++ fr"""
       )
       select page.id, page.organization_id, page.monitor_rule_id, page.resource_id, page.status, page.reason,
         page.started_at, page.opened_at, page.resolved_at, page.created_at, page.updated_at,
-        page.resource_name, page.resource_type_code,
+        page.notifications_silenced, page.acknowledged_at, page.acknowledged_by,
+        page.acknowledged_by_name, page.resource_name, page.resource_type_code,
         page.environment_id, page.environment_name, page.environment_kind,
         page.project_id, page.project_name,
         page.metric_code, page.operator, page.threshold, page.for_seconds, page.no_data_seconds,
@@ -134,6 +137,7 @@ final class PostgresIncidentListQuery extends IncidentListQuery[ConnectionIO] {
 object PostgresIncidentListQuery {
 
   private[postgres] final case class ContextColumns(
+    acknowledgedByName: Option[String],
     resourceName: String,
     resourceTypeCode: String,
     environmentId: UUID,
@@ -167,7 +171,8 @@ object PostgresIncidentListQuery {
         ),
         MonitorConditionView(incident.monitorRuleId, metricCode, operator, threshold, forSeconds, noDataSeconds),
         (parentId, parentName, parentTypeCode).mapN(ResourceReference.apply),
-        sources
+        sources,
+        acknowledgedByName
       )
   }
 

@@ -231,6 +231,37 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
     assertEquals(incidents.batches, List.empty)
   }
 
+  // -------------------------------------------------------------------------------------------
+  // Maintenance
+  // -------------------------------------------------------------------------------------------
+
+  test("an incident opened during maintenance is recorded but silenced, and so is its resolution") {
+    val opened = run(input(cpuRule(forSeconds = 0), None, Some(observation(95)), None).copy(inMaintenance = true))
+    assertEquals(opened.incidents.map(i => (i.status, i.notificationsSilenced)), List((IncidentStatus.Open, true)))
+    assertEquals(opened.transitions.map(t => (t.eventName, t.notificationsSilenced)), List(("incident.opened", true)))
+
+    // The window has ended by the time the incident resolves; the decision taken at opening holds.
+    val silenced = openIncident().copy(notificationsSilenced = true)
+    val resolved = run(input(cpuRule(), Some(state(MonitorRuleStatus.Firing, Some(ObservedAt))),
+      Some(observation(40)), Some(silenced)))
+    assertEquals(resolved.transitions.map(t => (t.eventName, t.notificationsSilenced)), List(("incident.resolved", true)))
+  }
+
+  test("an incident opened before maintenance keeps notifying when it resolves during it") {
+    val resolved = run(input(cpuRule(), Some(state(MonitorRuleStatus.Firing, Some(ObservedAt))),
+      Some(observation(40)), Some(openIncident())).copy(inMaintenance = true))
+    assertEquals(resolved.transitions.map(t => (t.eventName, t.notificationsSilenced)), List(("incident.resolved", false)))
+    val normal = run(input(cpuRule(forSeconds = 0), None, Some(observation(95)), None))
+    assertEquals(normal.incidents.map(_.notificationsSilenced), List(false))
+  }
+
+  test("the evaluation asks for maintenance at its own evaluation time") {
+    val query = new RecordingQuery(Nil)
+    new EvaluateMonitorRules[IO](query, new RecordingStateRepository, new RecordingIncidentRepository, new FixedIdGenerator)
+      .execute(OrganizationId, ConnectionId, EvaluatedAt).unsafeRunSync()
+    assertEquals(query.instants, List(EvaluatedAt))
+  }
+
   test("asks only for the resource types monitoring supports") {
     assertEquals(MonitoredResourceTypes.codes, List("NODE"))
   }
@@ -290,12 +321,15 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
 
   private final class RecordingQuery(values: List[MonitorEvaluationInput]) extends MonitorEvaluationQuery[IO] {
     var calls: List[(UUID, UUID, List[String])] = List.empty
+    var instants: List[Instant] = List.empty
     override def findEnabledForConnection(
       organizationId: UUID,
       connectionId: UUID,
-      resourceTypeCodes: List[String]
+      resourceTypeCodes: List[String],
+      at: java.time.Instant
     ): IO[List[MonitorEvaluationInput]] = IO {
       calls = calls :+ ((organizationId, connectionId, resourceTypeCodes))
+      instants = instants :+ at
       values.filter(_.rule.organizationId == organizationId)
     }
   }

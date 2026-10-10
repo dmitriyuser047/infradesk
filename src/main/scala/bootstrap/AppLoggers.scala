@@ -25,7 +25,8 @@ final case class AppLoggers(
   terminal: Logger[IO],
   readModels: Logger[IO],
   configuration: Logger[IO],
-  integration: Logger[IO]
+  integration: Logger[IO],
+  metrics: Logger[IO]
 )
 
 object AppLoggers {
@@ -45,7 +46,8 @@ object AppLoggers {
     terminal = named("infrastructure.http.TerminalRoutes"),
     readModels = named("infrastructure.http.ReadModelRoutes"),
     configuration = named("infrastructure.http.ConfigurationProfileRoutes"),
-    integration = named("application.integration.IntegrationSync")
+    integration = named("application.integration.IntegrationSync"),
+    metrics = named("application.metric.MetricRetention")
   )
 
   private def named(name: String): Logger[IO] = Slf4jLogger.getLoggerFromName[IO](name)

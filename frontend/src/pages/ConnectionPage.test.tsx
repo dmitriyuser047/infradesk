@@ -20,7 +20,7 @@ const redis: LocatedResourceResponse = { ...backend, id: 'redis', code: 'redis',
 
 const incident: IncidentListItemResponse = {
   id: 'cpu', monitorRuleId: 'rule', resourceId: 'backend', status: 'OPEN', reason: 'THRESHOLD',
-  startedAt: '2026-09-27T10:00:00Z', openedAt: '2026-09-27T10:00:00Z', resolvedAt: null, createdAt: '', updatedAt: '',
+  startedAt: '2026-09-27T10:00:00Z', openedAt: '2026-09-27T10:00:00Z', resolvedAt: null, createdAt: '', updatedAt: '', notificationsSilenced: false, acknowledgedAt: null, acknowledgedByName: null,
   resource: { id: 'backend', name: 'backend', resourceTypeCode: 'CONTAINER' },
   project: { id: 'project', name: 'SvinPeak' }, environment,
   monitorRule: { id: 'rule', metricCode: 'CPU_USAGE_PERCENT', operator: 'GREATER_THAN', threshold: 85, forSeconds: 300, noDataSeconds: 900 },

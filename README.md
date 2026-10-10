@@ -95,6 +95,11 @@ including a failed one, so a connection that stopped answering turns its rules i
 instead of leaving them on stale data. The evaluation is a secondary step: it never changes the
 outcome the synchronization itself reports.
 
+Metric history is kept bounded by five-minute and hourly rollups with configurable retention;
+maintenance windows silence the notifications of incidents opened while they cover a resource, and
+open incidents can be acknowledged. See
+[Metric retention, maintenance windows and incident acknowledgement](docs/metrics-maintenance-acknowledgement.md).
+
 An organization has one SSH connection per server: creating or re-pointing a connection to a host
 and port another connection already uses is refused with `CONNECTION_HOST_ALREADY_EXISTS`, checked
 under an organization lock. `DELETE /api/v1/organizations/{id}/connections/{connectionId}` deletes a

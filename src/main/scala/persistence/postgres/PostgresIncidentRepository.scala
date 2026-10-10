@@ -16,7 +16,7 @@ import java.util.UUID
 import PostgresIncidentRepository.IncidentRow
 
 final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] {
-  private val selectColumns = fr"select id, organization_id, monitor_rule_id, resource_id, status, reason, started_at, opened_at, resolved_at, created_at, updated_at from incident"
+  private val selectColumns = fr"select id, organization_id, monitor_rule_id, resource_id, status, reason, started_at, opened_at, resolved_at, created_at, updated_at, notifications_silenced, acknowledged_at, acknowledged_by from incident"
   private def rows(query: Query0[IncidentRow]): ConnectionIO[List[Incident]] = query.to[List].flatMap(_.traverse(_.toDomain.liftTo[ConnectionIO]))
 
   override def findOpenByRule(
@@ -35,7 +35,10 @@ final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] 
         opened_at,
         resolved_at,
         created_at,
-        updated_at
+        updated_at,
+        notifications_silenced,
+        acknowledged_at,
+        acknowledged_by
       from incident
       where organization_id = $organizationId
         and monitor_rule_id = $monitorRuleId
@@ -63,7 +66,7 @@ final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] 
 
   override def saveAll(incidents: List[Incident]): ConnectionIO[Unit] =
     if (incidents.isEmpty) ().pure[ConnectionIO]
-    else Update[(UUID, UUID, UUID, UUID, String, String, Instant, Instant, Option[Instant], Instant, Instant)]("""
+    else Update[(UUID, UUID, UUID, UUID, String, String, Instant, Instant, Option[Instant], Instant, Instant, Boolean)]("""
       insert into incident (
         id,
         organization_id,
@@ -75,10 +78,12 @@ final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] 
         opened_at,
         resolved_at,
         created_at,
-        updated_at
+        updated_at,
+        notifications_silenced
       )
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       on conflict (id)
+      -- Acknowledgement and silencing are never overwritten by a lifecycle change.
       do update set
         status = excluded.status,
         resolved_at = excluded.resolved_at,
@@ -87,7 +92,7 @@ final class PostgresIncidentRepository extends IncidentRepository[ConnectionIO] 
     """).updateMany(incidents.map(incident =>
       (incident.id, incident.organizationId, incident.monitorRuleId, incident.resourceId,
         incident.status.code, incident.reason.code, incident.startedAt, incident.openedAt,
-        incident.resolvedAt, incident.createdAt, incident.updatedAt)
+        incident.resolvedAt, incident.createdAt, incident.updatedAt, incident.notificationsSilenced)
     )).flatMap { rows =>
       if (rows == incidents.size) ().pure[ConnectionIO]
       else new IllegalStateException(
@@ -109,7 +114,10 @@ object PostgresIncidentRepository {
                                                    openedAt: Instant,
                                                    resolvedAt: Option[Instant],
                                                    createdAt: Instant,
-                                                   updatedAt: Instant
+                                                   updatedAt: Instant,
+                                                   notificationsSilenced: Boolean,
+                                                   acknowledgedAt: Option[Instant],
+                                                   acknowledgedBy: Option[UUID]
                                                  ) {
     def toDomain: Either[IllegalArgumentException, Incident] =
       for {
@@ -126,7 +134,10 @@ object PostgresIncidentRepository {
           openedAt,
           resolvedAt,
           createdAt,
-          updatedAt
+          updatedAt,
+          notificationsSilenced,
+          acknowledgedAt,
+          acknowledgedBy
         )
   }
 }

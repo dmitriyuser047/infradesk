@@ -59,6 +59,15 @@ final class NotificationOutboxSpec extends FunSuite {
     assertEquals(repository.saved.map(_.reason), List(IncidentReason.NoData))
   }
 
+  test("a silenced transition reaches no destination, not even the deployment webhook") {
+    val repository = new RecordingRepository
+    recorder(repository).record(List(opened.copy(notificationsSilenced = true), resolved)).unsafeRunSync()
+
+    assertEquals(repository.saved.map(_.eventType), List(NotificationEventType.IncidentResolved))
+    recorder(repository).record(List(resolved.copy(notificationsSilenced = true))).unsafeRunSync()
+    assertEquals(repository.saved.size, 1)
+  }
+
   test("an evaluation that swaps the reason records both events in one batch") {
     val repository = new RecordingRepository
     recorder(repository).record(List(resolved, opened)).unsafeRunSync()

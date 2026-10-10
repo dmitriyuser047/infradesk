@@ -21,7 +21,10 @@ final class PostgresIncidentRepositorySpec extends FunSuite {
     now,
     None,
     now,
-    now
+    now,
+    false,
+    None,
+    None
   )
 
   test("fails fast when an incident row has an unknown status") {

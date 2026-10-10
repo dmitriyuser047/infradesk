@@ -1,0 +1,19 @@
+/* Maintenance windows: one row each, the resource and its state first, the time and reason below. */
+.maintenance-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.maintenance-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); min-width: 0;
+  padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface);
+}
+.maintenance-active { border-left: 3px solid var(--warning); }
+.maintenance-finished, .maintenance-cancelled { color: var(--text-secondary); }
+.maintenance-main { display: grid; gap: 4px; min-width: 0; }
+.maintenance-subject { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.maintenance-subject strong { overflow-wrap: anywhere; }
+.maintenance-type { color: var(--text-tertiary); font-size: var(--font-size-caption); }
+.maintenance-reason { margin: 0; overflow-wrap: anywhere; }
+.maintenance-meta { color: var(--text-tertiary); font-size: var(--font-size-caption); }
+.maintenance-reason-field { grid-column: 1 / -1; }
+.maintenance-row > .secondary-button { flex: 0 0 auto; }
+@media (max-width: 640px) {
+  .maintenance-row { flex-direction: column; align-items: stretch; }
+}

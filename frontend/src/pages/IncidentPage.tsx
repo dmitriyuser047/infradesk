@@ -2,7 +2,9 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { ApiError } from '../api/httpClient'
 import { useIncident } from '../api/incidents'
+import { useAcknowledgeIncident } from '../api/maintenance'
 import { useAvailableResourceOperations, useResourceOperationExecutions } from '../api/resourceOperations'
+import { useOrganizationPermissions } from '../components/auth/authorization'
 import { IncidentStatusBadge } from '../components/incidents/IncidentStatusBadge'
 import { formatIncidentDuration, getIncidentReasonPresentation } from '../components/incidents/incidentPresentation'
 import {
@@ -11,10 +13,11 @@ import {
 import { SourceConnectionLinks } from '../components/infrastructure/SourceConnections'
 import { isUnavailableError, RefreshWarning } from '../components/layout/RefreshWarning'
 import { AppShell } from '../components/layout/AppShell'
-import { PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
+import { InlineAlert, PageLoading, PageUnavailable, PropertyGrid, StatusIndicator, WorkspaceHeader, WorkspaceSection } from '../components/layout/WorkspacePrimitives'
 import { formatMonitorCondition, formatNoDataTimeout, getMetricLabel } from '../components/monitoring/monitorRulePresentation'
 import { operationsApplicability } from '../components/resources/operationPresentation'
 import { useI18n } from '../i18n'
+import { describeError } from '../i18n/errors'
 import { IncidentReason, type IncidentListItemResponse } from '../types/incident'
 import { InvalidRoutePage } from './InvalidRoutePage'
 
@@ -40,6 +43,8 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
     useAvailableResourceOperations(organizationId, resourceId, incidentQuery.isSuccess),
     useResourceOperationExecutions(organizationId, resourceId, incidentQuery.isSuccess))
   const back = backLink(organizationId, searchParams, incidentQuery.data, i18n)
+  const canAcknowledge = useOrganizationPermissions(organizationId).can('manageMonitoring')
+  const acknowledge = useAcknowledgeIncident(organizationId, incidentId)
   if (incidentQuery.isPending) return <AppShell><PageLoading title={t.loading} back={back} label={t.loading} /></AppShell>
   if (!incidentQuery.data || isUnavailableError(incidentQuery.error)) {
     return <AppShell><PageUnavailable back={back} onRetry={() => incidentQuery.refetch()} error={incidentQuery.error}
@@ -62,9 +67,14 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
 
   return <AppShell><div className="workspace-page work-page detail-page">
     <WorkspaceHeader title={title} subtitle={<>{t.subtitle(resource.name, typeLabel)} · <time dateTime={incident.openedAt}>{t.opened} {i18n.format.dateTime(incident.openedAt)}</time></>}
-      back={back} status={<IncidentStatusBadge status={incident.status} />}
+      back={back} status={<><IncidentStatusBadge status={incident.status} /><IncidentHandlingBadges incident={incident} /></>}
       actions={<>
-        <Link className="primary-button" to={resourceLink}>{infra.openResource}</Link>
+        {/* Taking an open incident in hand is the first thing an on-duty person does here. */}
+        {canAcknowledge && incident.resolvedAt === null && incident.acknowledgedAt === null ? <button className="primary-button"
+          type="button" disabled={acknowledge.isPending} aria-busy={acknowledge.isPending} onClick={() => acknowledge.mutate()}>
+          {t.acknowledge}</button> : null}
+        <Link className={canAcknowledge && incident.resolvedAt === null && incident.acknowledgedAt === null
+          ? 'secondary-button' : 'primary-button'} to={resourceLink}>{infra.openResource}</Link>
         {/* One source is the connection to open; several are listed below, none preferred. */}
         {sources.length === 1 ? <Link className="secondary-button" to={connectionPath(organizationId, sources[0].id, fromIncident)}>
           {infra.openConnection}</Link> : null}
@@ -73,6 +83,8 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
           resource.id, withTab(fromIncident, 'operations'))}>{infra.goToOperations}</Link> : null}
       </>} />
     {incidentQuery.isError ? <RefreshWarning updatedAt={incidentQuery.dataUpdatedAt} retry={() => incidentQuery.refetch()} /> : null}
+    {acknowledge.isError ? <InlineAlert tone="danger" title={t.acknowledgeFailed}>{describeError(acknowledge.error, i18n)}</InlineAlert> : null}
+    {incident.notificationsSilenced ? <InlineAlert tone="info" title={t.silencedTitle}>{t.silencedDetail}</InlineAlert> : null}
     <div className="workspace-split detail-split">
       <WorkspaceSection title={t.overview}><PropertyGrid items={[
         { label: i18n.t.common.status, value: <IncidentStatusBadge status={incident.status} /> },
@@ -82,6 +94,8 @@ function IncidentContent({ organizationId, incidentId }: { organizationId: strin
         { label: t.violationStarted, value: i18n.format.dateTime(incident.startedAt) },
         { label: t.opened, value: i18n.format.dateTime(incident.openedAt) },
         { label: t.resolved, value: incident.resolvedAt ? i18n.format.dateTime(incident.resolvedAt) : '—' },
+        { label: t.acknowledged, value: incident.acknowledgedAt
+          ? t.acknowledgedBy(incident.acknowledgedByName ?? '—', i18n.format.dateTime(incident.acknowledgedAt)) : '—' },
         { label: t.duration, value: incident.resolvedAt ? formatIncidentDuration(incident.openedAt, incident.resolvedAt, i18n)
           : `${formatIncidentDuration(incident.openedAt, null, i18n)} · ${i18n.t.incidents.ongoing}` },
       ]} /></WorkspaceSection>
@@ -131,4 +145,14 @@ function backLink(
   const query = params.toString()
   return { label: i18n.t.incidents.page.back,
     to: `/organizations/${encodeURIComponent(organizationId)}/incidents${query ? `?${query}` : ''}` }
+}
+
+/** Whether someone took the incident in hand, and whether it was opened during maintenance. */
+export function IncidentHandlingBadges({ incident }: { incident: IncidentListItemResponse }) {
+  const i18n = useI18n()
+  const t = i18n.t.incidents.page
+  return <>
+    {incident.acknowledgedAt !== null ? <StatusIndicator label={t.acknowledgedBadge} tone="info" size="small" /> : null}
+    {incident.notificationsSilenced ? <StatusIndicator label={t.silencedBadge} tone="neutral" size="small" /> : null}
+  </>
 }

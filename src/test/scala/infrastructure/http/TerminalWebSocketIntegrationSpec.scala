@@ -527,13 +527,19 @@ final class TerminalWebSocketIntegrationSpec extends FunSuite {
       output = Stream.fromQueueNoneTerminatedChunk(output))
     withServer(fixture.routes, OrganizationRole.Owner) { base =>
       val sessionId = openAndLose(base, fixture)
+      val written = "a" * 3000 + "b" * 3000 + "c" * 3000
       List('a', 'b', 'c').foreach(letter => output.offer(Some(Chunk.array(Array.fill(3000)(letter.toByte)))).unsafeRunSync())
+      // The shell may hand the three writes over separately or as one chunk; either way the
+      // buffer keeps whole newest output and never more than its bound.
       eventually(5.seconds) {
-        assertEquals(liveShell(fixture, sessionId).flatMap(_.traverse(_.pendingBytes)).unsafeRunSync(), Some(3000L))
+        val pending = liveShell(fixture, sessionId).flatMap(_.traverse(_.pendingOutput))
+          .unsafeRunSync().map(bytes => new String(bytes.toArray, StandardCharsets.UTF_8))
+        assert(pending.exists(text => text.length <= 4096 && text.endsWith("c" * 3000) && written.endsWith(text)), clues(pending.map(_.length)))
       }
       withConnection(base, resume = Some(sessionId)) { (_, listener) =>
         assert(Option(listener.text.poll(5, TimeUnit.SECONDS)).exists(_.contains("\"outputTruncated\":true")))
-        assertEquals(Option(listener.binary.poll(5, TimeUnit.SECONDS)).map(new String(_, StandardCharsets.UTF_8)), Some("c" * 3000))
+        val replayed = Option(listener.binary.poll(5, TimeUnit.SECONDS)).map(new String(_, StandardCharsets.UTF_8))
+        assert(replayed.exists(text => text.length <= 4096 && text.endsWith("c" * 3000) && written.endsWith(text)), clues(replayed))
       }
     }
   }

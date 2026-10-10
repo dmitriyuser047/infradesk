@@ -50,10 +50,14 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
     incidentResolvedAt: Option[Instant],
     incidentCreatedAt: Option[Instant],
     incidentUpdatedAt: Option[Instant],
+    incidentNotificationsSilenced: Option[Boolean],
+    incidentAcknowledgedAt: Option[Instant],
+    incidentAcknowledgedBy: Option[UUID],
     resourceName: String,
     resourceTypeName: String,
     environmentName: Option[String],
-    projectName: Option[String]
+    projectName: Option[String],
+    inMaintenance: Boolean
   ) {
     def toDomain: Either[IllegalArgumentException, MonitorEvaluationInput] =
       for {
@@ -72,7 +76,8 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
         serverName = resourceName,
         resourceTypeName = resourceTypeName,
         environmentName = environmentName,
-        projectName = projectName
+        projectName = projectName,
+        inMaintenance = inMaintenance
       )
 
     private def optionalObservation: Either[IllegalArgumentException, Option[MetricObservation]] =
@@ -115,7 +120,8 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
           createdAt <- required(incidentCreatedAt, "incident.createdAt")
           updatedAt <- required(incidentUpdatedAt, "incident.updatedAt")
         } yield Some(Incident(id, organizationId, monitorRuleId, resourceId, status, reason,
-          startedAt, openedAt, incidentResolvedAt, createdAt, updatedAt))
+          startedAt, openedAt, incidentResolvedAt, createdAt, updatedAt,
+          incidentNotificationsSilenced.getOrElse(false), incidentAcknowledgedAt, incidentAcknowledgedBy))
       }
 
     private def required[A](value: Option[A], field: String): Either[IllegalArgumentException, A] =
@@ -125,7 +131,8 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
   override def findEnabledForConnection(
     organizationId: UUID,
     connectionId: UUID,
-    resourceTypeCodes: List[String]
+    resourceTypeCodes: List[String],
+    at: Instant
   ): ConnectionIO[List[MonitorEvaluationInput]] =
     NonEmptyList.fromList(resourceTypeCodes.distinct) match {
       case None => List.empty[MonitorEvaluationInput].pure[ConnectionIO]
@@ -139,7 +146,16 @@ final class PostgresMonitorEvaluationQuery extends MonitorEvaluationQuery[Connec
               mrs.organization_id, mrs.monitor_rule_id, mrs.status, mrs.pending_since, mrs.updated_at,
               i.id, i.organization_id, i.monitor_rule_id, i.resource_id, i.status, i.reason,
               i.started_at, i.opened_at, i.resolved_at, i.created_at, i.updated_at,
-              r.name, rt.name, e.name, p.name
+              i.notifications_silenced, i.acknowledged_at, i.acknowledged_by,
+              r.name, rt.name, e.name, p.name,
+              -- A window on the resource itself or on the resource directly above it.
+              exists (
+                select 1 from maintenance_window w
+                where w.organization_id = mr.organization_id
+                  and w.resource_id in (r.id, r.parent_resource_id)
+                  and w.starts_at <= $at and w.ends_at > $at
+                  and (w.cancelled_at is null or w.cancelled_at > $at)
+              )
             from monitor_rule mr
             join resource r
               on r.id = mr.resource_id

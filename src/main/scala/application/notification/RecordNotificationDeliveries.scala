@@ -44,6 +44,11 @@ final class RecordNotificationDeliveries[Tx[_]: MonadThrow](
 ) {
 
   def record(transitions: List[MonitorTransition]): Tx[Unit] =
+    recordAudible(transitions.filterNot(_.notificationsSilenced))
+
+  // Silenced transitions still reach history and logs through their own recorders; only the
+  // outbox skips them, so no channel, managed or legacy, hears of them.
+  private def recordAudible(transitions: List[MonitorTransition]): Tx[Unit] =
     if (transitions.isEmpty) ().pure[Tx]
     else
       for {

@@ -164,7 +164,7 @@ object HttpJsonCodecs {
 
   implicit val metricObservationResponseEncoder: Encoder[MetricObservationResponse] =
     Encoder.forProduct3("metricCode", "value", "observedAt")(value => (value.metricCode, value.value, value.observedAt))
-  implicit val incidentResponseEncoder: Encoder[IncidentResponse] = Encoder.forProduct10("id","monitorRuleId","resourceId","status","reason","startedAt","openedAt","resolvedAt","createdAt","updatedAt")(v => (v.id,v.monitorRuleId,v.resourceId,v.status,v.reason,v.startedAt,v.openedAt,v.resolvedAt,v.createdAt,v.updatedAt))
+  implicit val incidentResponseEncoder: Encoder[IncidentResponse] = Encoder.forProduct13("id","monitorRuleId","resourceId","status","reason","startedAt","openedAt","resolvedAt","createdAt","updatedAt","notificationsSilenced","acknowledgedAt","acknowledgedByName")(v => (v.id,v.monitorRuleId,v.resourceId,v.status,v.reason,v.startedAt,v.openedAt,v.resolvedAt,v.createdAt,v.updatedAt,v.notificationsSilenced,v.acknowledgedAt,v.acknowledgedByName))
   implicit val incidentResourceResponseEncoder: Encoder[IncidentResourceResponse] =
     Encoder.forProduct3("id", "name", "resourceTypeCode")(v => (v.id, v.name, v.resourceTypeCode))
   implicit val monitorRuleResponseEncoder: Encoder[MonitorRuleResponse] = Encoder.forProduct11("id","resourceId","metricCode","operator","threshold","forSeconds","noDataSeconds","enabled","status","createdAt","updatedAt")(v=>(v.id,v.resourceId,v.metricCode,v.operator,v.threshold,v.forSeconds,v.noDataSeconds,v.enabled,v.status,v.createdAt,v.updatedAt))

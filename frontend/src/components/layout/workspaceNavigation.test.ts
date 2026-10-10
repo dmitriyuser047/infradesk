@@ -26,6 +26,7 @@ describe('workspace navigation', () => {
     expect(activeWorkspaceModule('/organizations/o/environments/e')).toBe('resources')
     expect(activeWorkspaceModule('/organizations/o/environments/e/resources/r')).toBe('resources')
     expect(activeWorkspaceModule('/organizations/o/incidents/i')).toBe('incidents')
+    expect(activeWorkspaceModule('/organizations/o/maintenance')).toBe('maintenance')
     expect(activeWorkspaceModule('/organizations/o/connections/c/sync-sessions/s')).toBe('connections')
     expect(activeWorkspaceModule('/organizations/o/notifications/c/edit')).toBe('notifications')
     expect(activeWorkspaceModule('/organizations/o/configurations/p/revisions/1')).toBe('configurations')
@@ -38,6 +39,7 @@ describe('workspace navigation', () => {
     const scope = { organizationId: 'org', projectId: 'p', environmentId: 'e' }
 
     expect(modulePath('overview', scope)).toBe('/organizations/org/overview?project=p&environment=e')
+    expect(modulePath('maintenance', scope)).toBe('/organizations/org/maintenance?project=p&environment=e')
     expect(modulePath('workspace', scope)).toBe('/organizations/org?project=p&environment=e')
     expect(modulePath('incidents', scope)).toBe('/organizations/org/incidents?project=p&environment=e')
     expect(modulePath('connections', scope)).toBe('/organizations/org/connections?project=p&environment=e')

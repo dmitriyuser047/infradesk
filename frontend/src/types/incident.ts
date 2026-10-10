@@ -25,6 +25,10 @@ export interface IncidentResponse {
   resolvedAt: string | null
   createdAt: string
   updatedAt: string
+  /** Opened during maintenance: recorded, never notified, nor its resolution. */
+  notificationsSilenced: boolean
+  acknowledgedAt: string | null
+  acknowledgedByName: string | null
 }
 
 /** The resource an incident is about: identity only, enough to name and link it in a list. */

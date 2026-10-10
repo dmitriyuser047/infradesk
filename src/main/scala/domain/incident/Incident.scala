@@ -15,5 +15,9 @@ final case class Incident(
                            openedAt: Instant,
                            resolvedAt: Option[Instant],
                            createdAt: Instant,
-                           updatedAt: Instant
+                           updatedAt: Instant,
+                           /** Fixed when the incident opens: one opened during maintenance is never notified, nor its resolution. */
+                           notificationsSilenced: Boolean = false,
+                           acknowledgedAt: Option[Instant] = None,
+                           acknowledgedBy: Option[UUID] = None
                          )

@@ -244,13 +244,13 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         _ <- runner.run(incidents.saveAll(List(incident, resolvedIncident)))
         _ <- runner.run(linkResourceToConnection(ids))
         loaded <- runner.run(projection.findEnabledForConnection(
-          OrganizationId, ConnectionId, List("NODE")))
+          OrganizationId, ConnectionId, List("NODE"), Now))
         foreign <- runner.run(projection.findEnabledForConnection(
-          UUID.randomUUID(), ConnectionId, List("NODE")))
+          UUID.randomUUID(), ConnectionId, List("NODE"), Now))
         otherConnection <- runner.run(projection.findEnabledForConnection(
-          OrganizationId, UUID.randomUUID(), List("NODE")))
+          OrganizationId, UUID.randomUUID(), List("NODE"), Now))
         otherType <- runner.run(projection.findEnabledForConnection(
-          OrganizationId, ConnectionId, List("CONTAINER")))
+          OrganizationId, ConnectionId, List("CONTAINER"), Now))
         persistedMetrics <- runner.run(metrics.findByResourceAndPeriod(
           OrganizationId, ids.resourceId, Now.minusSeconds(2), Now.plusSeconds(3)))
         indexNames <- runner.run(sql"""
@@ -525,9 +525,10 @@ final class MonitorRuleRepositoryIntegrationSpec extends FunSuite {
         override def findEnabledForConnection(
           organizationId: UUID,
           connectionId: UUID,
-          resourceTypeCodes: List[String]
+          resourceTypeCodes: List[String],
+          at: java.time.Instant
         ): ConnectionIO[List[MonitorEvaluationInput]] =
-          delegate.findEnabledForConnection(organizationId, connectionId, resourceTypeCodes)
+          delegate.findEnabledForConnection(organizationId, connectionId, resourceTypeCodes, at)
             .flatTap(_ => FC.delay(Thread.sleep(1500)))
       }
       val evaluator = new EvaluateMonitorRules[ConnectionIO](

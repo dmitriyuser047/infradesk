@@ -3,6 +3,7 @@ package infrastructure.config
 
 import application.auth.{AuthRateLimitSettings, BootstrapConfig, SecurityEventSettings}
 import application.configuration.{ConfigurationDeploymentSettings, ConfigurationRuleSettings}
+import application.metric.MetricRetentionSettings
 import application.provisioning.ProvisioningSettings
 import cats.effect.IO
 import com.comcast.ip4s.{Host, Port}
@@ -130,7 +131,8 @@ final case class AppConfig(
   provisioning: ProvisioningSettings = ProvisioningSettings.Default,
   configurationRules: ConfigurationRuleSettings = ConfigurationRuleSettings(),
   integrations: IntegrationsConfig = IntegrationsConfig(10.seconds, allowPrivateDestinations = false),
-  bootstrapAdministratorEmail: Option[String] = None
+  bootstrapAdministratorEmail: Option[String] = None,
+  metrics: MetricRetentionSettings = MetricRetentionSettings()
 )
 
 object AppConfig {
@@ -168,6 +170,7 @@ object AppConfig {
       provisioning <- parseProvisioning(values)
       ruleEnabled <- parseBoolean(values, "INFRADESK_CONFIGURATION_RULES_ENABLED", default = true)
       ruleInterval <- bounded(values, "INFRADESK_CONFIGURATION_RULE_RECONCILE_SECONDS", 45, 5, 3600)
+      metrics <- parseMetricRetention(values)
     } yield AppConfig(database, http, auth, loginRateLimit, SecurityEventSettings(securityEvents.seconds), bootstrap, secretEncryption, scheduler,
       notification, EnvironmentSecrets.fromEnvironment(values), terminal, configurationDeployment, provisioning,
       ConfigurationRuleSettings(enabled = ruleEnabled, reconcileInterval = ruleInterval.seconds),
@@ -175,7 +178,18 @@ object AppConfig {
         integrationActions, integrationDesiredState, integrationConfigRollouts, remnawaveFleets,
         inventoryMaxBytes, inventoryMaxObjects),
       values.get("INFRADESK_BOOTSTRAP_ADMINISTRATOR_EMAIL").map(_.trim).filter(_.nonEmpty)
-        .orElse(bootstrap.map(_.email)))
+        .orElse(bootstrap.map(_.email)), metrics)
+
+  private def parseMetricRetention(values: Map[String, String]): Either[IllegalArgumentException, MetricRetentionSettings] =
+    for {
+      raw <- bounded(values, "INFRADESK_METRICS_RAW_RETENTION_DAYS", 7, 1, 365)
+      fiveMinutes <- bounded(values, "INFRADESK_METRICS_FIVE_MINUTE_RETENTION_DAYS", 30, 1, 3650)
+      hours <- bounded(values, "INFRADESK_METRICS_HOURLY_RETENTION_DAYS", 400, 1, 3650)
+      interval <- bounded(values, "INFRADESK_METRICS_MAINTENANCE_INTERVAL_SECONDS", 300, 10, 3600)
+      settings <- Try(MetricRetentionSettings(java.time.Duration.ofDays(raw.toLong), java.time.Duration.ofDays(fiveMinutes.toLong),
+        java.time.Duration.ofDays(hours.toLong), interval.seconds)).toEither.left.map(_ => new IllegalArgumentException(
+        "Invalid metric retention: raw <= five-minute <= hourly retention days is required"))
+    } yield settings
 
   private def parseRemnawaveFleets(
     values: Map[String, String]): Either[IllegalArgumentException, RemnawaveFleetConfig] =

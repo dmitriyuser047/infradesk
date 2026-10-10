@@ -4,7 +4,7 @@
  * The URL stays the only source of truth for the context: organization in the path, project and
  * environment in `?project=&environment=`. Nothing here keeps state.
  */
-export type WorkspaceModule = 'overview' | 'resources' | 'connections' | 'incidents' | 'notifications' | 'integrations' | 'configurations' | 'workspace' | 'members'
+export type WorkspaceModule = 'overview' | 'resources' | 'connections' | 'incidents' | 'maintenance' | 'notifications' | 'integrations' | 'configurations' | 'workspace' | 'members'
 
 export interface WorkspaceScope {
   organizationId?: string
@@ -19,6 +19,7 @@ export function activeWorkspaceModule(pathname: string): WorkspaceModule | null 
   if (/^\/organizations\/[^/]+\/overview\/?$/.test(pathname)) return 'overview'
   if (/^\/organizations\/[^/]+\/members(\/|$)/.test(pathname)) return 'members'
   if (/^\/organizations\/[^/]+\/incidents(\/|$)/.test(pathname)) return 'incidents'
+  if (/^\/organizations\/[^/]+\/maintenance(\/|$)/.test(pathname)) return 'maintenance'
   if (/^\/organizations\/[^/]+\/connections(\/|$)/.test(pathname)) return 'connections'
   if (/^\/organizations\/[^/]+\/notifications(\/|$)/.test(pathname)) return 'notifications'
   if (/^\/organizations\/[^/]+\/integrations(\/|$)/.test(pathname)) return 'integrations'
@@ -39,6 +40,7 @@ export function modulePath(module: WorkspaceModule, scope: WorkspaceScope): stri
     case 'members': return `${base}/members`
     case 'workspace': return `${base}${query}`
     case 'incidents': return `${base}/incidents${query}`
+    case 'maintenance': return `${base}/maintenance${query}`
     case 'connections': return `${base}/connections${query}`
     case 'notifications': return `${base}/notifications${query}`
     case 'integrations': return `${base}/integrations${query}`

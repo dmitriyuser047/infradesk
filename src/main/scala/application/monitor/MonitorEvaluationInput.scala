@@ -21,5 +21,7 @@ final case class MonitorEvaluationInput(
   serverName: String = "",
   resourceTypeName: String = "",
   environmentName: Option[String] = None,
-  projectName: Option[String] = None
+  projectName: Option[String] = None,
+  /** A maintenance window covers the resource now: an incident opened now is silenced for good. */
+  inMaintenance: Boolean = false
 )

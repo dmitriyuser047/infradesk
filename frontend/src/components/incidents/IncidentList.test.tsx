@@ -12,7 +12,7 @@ function incident(overrides: Partial<IncidentListItemResponse>): IncidentListIte
   return {
     id: 'incident', monitorRuleId: 'rule', resourceId: 'node', status: 'OPEN', reason: 'THRESHOLD',
     startedAt: '2026-09-25T14:32:00Z', openedAt: '2026-09-25T14:32:00Z', resolvedAt: null,
-    createdAt: '', updatedAt: '', resource: { id: 'node', name: 'finland-node-01', resourceTypeCode: 'NODE' },
+    createdAt: '', updatedAt: '', notificationsSilenced: false, acknowledgedAt: null, acknowledgedByName: null, resource: { id: 'node', name: 'finland-node-01', resourceTypeCode: 'NODE' },
     project: { id: 'project', name: 'SvinPeak' }, environment: { id: 'env', name: 'Production', kind: 'PROD' },
     monitorRule: { id: 'rule', metricCode: 'CPU_USAGE_PERCENT', operator: 'GREATER_THAN', threshold: 85, forSeconds: 300, noDataSeconds: 900 },
     parentResource: null, sourceConnections: [{ id: 'connection', name: 'Finnish Node', connectorType: 'SSH', active: true }],

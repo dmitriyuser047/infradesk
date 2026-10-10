@@ -95,7 +95,7 @@ object InfrastructureContextResponses {
     val i = item.incident
     IncidentContextResponse(
       IncidentResponse(i.id, i.monitorRuleId, i.resourceId, i.status.code, i.reason.code, i.startedAt, i.openedAt,
-        i.resolvedAt, i.createdAt, i.updatedAt),
+        i.resolvedAt, i.createdAt, i.updatedAt, i.notificationsSilenced, i.acknowledgedAt, item.acknowledgedByName),
       IncidentResourceResponse(item.resource.id, item.resource.name, item.resource.typeCode),
       project(item.location),
       environment(item.location.environment),

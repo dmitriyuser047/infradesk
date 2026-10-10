@@ -98,7 +98,11 @@ final case class ApplicationComponents(
   getResource: GetResource[ConnectionIO],
   listEnvironmentResources: ListEnvironmentResources[ConnectionIO],
   getResourceMetricHistory: GetResourceMetricHistory[ConnectionIO],
+  getResourceMetricSeries: application.resource.GetResourceMetricSeries[ConnectionIO],
+  metricRetention: application.metric.MetricRetention[ConnectionIO],
   getIncident: GetIncidentDetail[ConnectionIO],
+  maintenanceWindows: application.monitor.MaintenanceWindows[ConnectionIO],
+  acknowledgeIncident: application.monitor.AcknowledgeIncident[ConnectionIO],
   getConnectionInfrastructureSummary: GetConnectionInfrastructureSummary[ConnectionIO],
   listConnectionResources: ListConnectionResources[ConnectionIO],
   listConnectionIncidents: ListConnectionIncidents[ConnectionIO],
@@ -525,7 +529,15 @@ object ApplicationModule {
       listEnvironmentResources = ListEnvironmentResources[ConnectionIO](resourceRepository),
       getResourceMetricHistory =
         GetResourceMetricHistory[ConnectionIO](resourceRepository, metricObservationRepository),
+      getResourceMetricSeries =
+        application.resource.GetResourceMetricSeries[ConnectionIO](resourceRepository, metricRetentionRepository),
+      metricRetention = new application.metric.MetricRetention[ConnectionIO](
+        metricRetentionRepository, transactionRunner, config.metrics, loggers.metrics),
       getIncident = GetIncidentDetail[ConnectionIO](incidentListQuery),
+      maintenanceWindows = new application.monitor.MaintenanceWindows[ConnectionIO](
+        maintenanceWindowRepository, resourceRepository, transactionRunner, auditRecorder),
+      acknowledgeIncident = new application.monitor.AcknowledgeIncident[ConnectionIO](
+        maintenanceWindowRepository, transactionRunner, auditRecorder),
       getConnectionInfrastructureSummary =
         GetConnectionInfrastructureSummary[ConnectionIO](infrastructureContextQuery, incidentListQuery),
       listConnectionResources = ListConnectionResources[ConnectionIO](infrastructureContextQuery),

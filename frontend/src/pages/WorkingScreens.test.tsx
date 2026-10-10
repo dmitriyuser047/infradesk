@@ -26,7 +26,7 @@ const connection: ConnectionResponse = {
 }
 const incident: IncidentListItemResponse = {
   id: 'cpu', monitorRuleId: 'rule', resourceId: 'server', status: 'OPEN', reason: 'THRESHOLD',
-  startedAt: '2026-10-01T10:00:00Z', openedAt: '2026-10-01T10:05:00Z', resolvedAt: null, createdAt: '', updatedAt: '',
+  startedAt: '2026-10-01T10:00:00Z', openedAt: '2026-10-01T10:05:00Z', resolvedAt: null, createdAt: '', updatedAt: '', notificationsSilenced: false, acknowledgedAt: null, acknowledgedByName: null,
   resource: { id: 'server', name: 'Finland VPS', resourceTypeCode: 'NODE' },
   project: { id: 'p', name: 'App' }, environment: { id: 'env', name: 'Production', kind: 'PROD' },
   monitorRule: { id: 'rule', metricCode: 'CPU_USAGE_PERCENT', operator: 'GREATER_THAN', threshold: 85, forSeconds: 300, noDataSeconds: 900 },

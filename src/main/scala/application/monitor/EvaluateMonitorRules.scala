@@ -28,7 +28,7 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
   ): Tx[List[MonitorTransition]] =
     for {
       inputs <- evaluationQuery.findEnabledForConnection(
-        organizationId, connectionId, MonitoredResourceTypes.codes
+        organizationId, connectionId, MonitoredResourceTypes.codes, evaluatedAt
       )
       plans <- inputs.traverse(input =>
         MonitorRuleStateMachine.calculate(input, evaluatedAt).liftTo[Tx].map(_.map(input -> _))
@@ -51,9 +51,11 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
   ): Tx[EvaluationDecision] = {
     val rule = input.rule
     val resolved = plan.resolvedIncident
+    // A resolution is silenced exactly when its incident was: the decision taken at opening holds.
     val resolvedTransition = resolved.map(incident => MonitorTransition.Resolved(
       rule.organizationId, rule.resourceId, rule.id, incident.id, incident.reason, evaluatedAt,
-      Some(contextOf(input, durationSeconds = Some(durationOf(incident, evaluatedAt))))
+      Some(contextOf(input, durationSeconds = Some(durationOf(incident, evaluatedAt)))),
+      notificationsSilenced = incident.notificationsSilenced
     ))
 
     plan.openedIncident match {
@@ -64,7 +66,8 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
         idGenerator.nextId.map { incidentId =>
           val incident = Incident(
             incidentId, rule.organizationId, rule.id, rule.resourceId, IncidentStatus.Open,
-            opened.reason, opened.startedAt, evaluatedAt, None, evaluatedAt, evaluatedAt
+            opened.reason, opened.startedAt, evaluatedAt, None, evaluatedAt, evaluatedAt,
+            notificationsSilenced = input.inMaintenance
           )
           EvaluationDecision(
             plan.state,
@@ -72,7 +75,8 @@ final class EvaluateMonitorRules[Tx[_]: MonadThrow](
             Some(incident),
             resolvedTransition.toList :+ MonitorTransition.Opened(
               rule.organizationId, rule.resourceId, rule.id, incidentId, opened.reason, evaluatedAt,
-              Some(contextOf(input, durationSeconds = None))
+              Some(contextOf(input, durationSeconds = None)),
+              notificationsSilenced = input.inMaintenance
             )
           )
         }

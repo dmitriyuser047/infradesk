@@ -22,6 +22,8 @@ sealed trait MonitorTransition {
   def reason: IncidentReason
   def evaluatedAt: Instant
   def context: Option[NotificationContext]
+  /** The incident opened during maintenance: the change is recorded, nobody is notified. */
+  def notificationsSilenced: Boolean
 
   final def logMessage: String =
     s"$eventName organizationId=$organizationId resourceId=$resourceId monitorRuleId=$monitorRuleId " +
@@ -36,7 +38,8 @@ object MonitorTransition {
     incidentId: UUID,
     reason: IncidentReason,
     evaluatedAt: Instant,
-    context: Option[NotificationContext] = None
+    context: Option[NotificationContext] = None,
+    notificationsSilenced: Boolean = false
   ) extends MonitorTransition {
     val eventName = "incident.opened"
   }
@@ -48,7 +51,8 @@ object MonitorTransition {
     incidentId: UUID,
     reason: IncidentReason,
     evaluatedAt: Instant,
-    context: Option[NotificationContext] = None
+    context: Option[NotificationContext] = None,
+    notificationsSilenced: Boolean = false
   ) extends MonitorTransition {
     val eventName = "incident.resolved"
   }
