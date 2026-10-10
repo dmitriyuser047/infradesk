@@ -27,12 +27,16 @@ final class SshConnector[F[_]: MonadThrow](
       authentication <- authenticationProvider.resolve(connection)
       result <- sshClient.withSession(config, authentication) { session =>
         for {
-          collectedNode <- nodeCollector.collect(session)
+          collectedNode <- nodeCollector.collect(session, config.host)
           docker <- dockerCollector.collect(session)
           node = collectedNode.inventory
           (containers, completeExternalTypes) = docker match {
             case DockerInventoryResult.Available(values) =>
-              values.map(_.toDiscoveredResource) ->
+              values.map { container =>
+                val metrics = node.telemetry.devices.find(d => d.kind == "container" && d.name == container.id)
+                  .map(_.metrics).getOrElse(Map.empty)
+                container.copy(telemetry = domain.metric.ResourceTelemetry(metrics)).toDiscoveredResource
+              } ->
                 Set(SshConnector.NodeExternalType, SshConnector.ContainerExternalType)
             case DockerInventoryResult.Unavailable(_) =>
               List.empty -> Set(SshConnector.NodeExternalType)

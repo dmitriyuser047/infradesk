@@ -22,7 +22,8 @@ import scala.concurrent.duration._
 
 /**
  * How a live shell ended: the durable close reason and the frames an attached socket receives.
- * Frames are empty when the socket that asked for the end has already answered for itself.
+ * Only the socket's outgoing stream writes them, so an error and its Close frame always arrive in
+ * order and are never cut off by the end itself.
  */
 final case class TerminalEnd(reason: String, frames: List[WebSocketFrame])
 
@@ -91,9 +92,12 @@ final class LiveTerminal private[http] (
         else (state, state.end.map(TerminalDelivery.Ended(_)))
       }.flatMap(_.fold(next(id))(IO.pure))
 
-  /** Only the current socket may end the shell; a superseded socket's late request changes nothing. */
-  def end(id: Long, end: TerminalEnd): IO[Unit] =
-    outbox.get.flatMap(state => stop.complete(end).void.whenA(state.attachment.contains(id)))
+  /**
+   * Only the current socket may end the shell; a superseded socket's late request changes nothing.
+   * True when the end was requested here: its frames then reach the socket through the outgoing stream.
+   */
+  def end(id: Long, end: TerminalEnd): IO[Boolean] =
+    outbox.get.flatMap(state => if (state.attachment.contains(id)) stop.complete(end).as(true) else IO.pure(false))
 
   def write(bytes: Chunk[Byte]): IO[Unit] = shell.write(bytes) *> touch
   def resize(size: TerminalSize): IO[Unit] = shell.resize(size) *> touch

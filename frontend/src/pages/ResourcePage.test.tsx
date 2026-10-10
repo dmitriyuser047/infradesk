@@ -43,7 +43,7 @@ function renderPage(answers: Answers, options: { locale?: Locale; cachedList?: R
       : path.includes('/operation-executions') ? answers.executions ?? []
         : path.includes('/history-events') ? answers.history ?? []
           : path.includes('/integration-bindings') ? { items: answers.bindings ?? [] }
-          : path.includes('/monitor-rules') ? [] : path.includes('/metrics') ? [] : answers.resource
+          : path.includes('/monitor-rules') ? [] : path.includes('/metric-series') ? { resolution: 'RAW', from: '', to: '', points: [] } : answers.resource
     if ((body as unknown) === 'fail') return Promise.resolve(new Response(JSON.stringify({ code: 'INTERNAL_ERROR', message: 'x' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }))
     return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
@@ -108,12 +108,12 @@ describe('resource detail page', () => {
   it('shows the operations tab only when the backend offers operations or some ran before', async () => {
     renderPage({ resource: container, operations: [], executions: [] })
     await screen.findByText('postgres:17')
-    await waitFor(() => expect(tabNames()).toEqual(['Overview', 'Activity']))
+    await waitFor(() => expect(tabNames()).toEqual(['Overview', 'Monitoring', 'Incidents', 'Activity']))
     cleanup()
 
     renderPage({ resource: container, operations: ['CONTAINER_START', 'CONTAINER_STOP'] })
     expect(await screen.findByRole('tab', { name: 'Operations' })).toBeTruthy()
-    expect(tabNames()).toEqual(['Overview', 'Activity', 'Operations'])
+    expect(tabNames()).toEqual(['Overview', 'Monitoring', 'Incidents', 'Activity', 'Operations'])
     cleanup()
 
     renderPage({ resource: container, operations: [], executions: [{ id: 'execution', resourceId: 'postgres',
@@ -126,13 +126,27 @@ describe('resource detail page', () => {
     const requests = renderPage({ resource: server }, { locale: 'ru' })
     await screen.findByText('Время работы')
     expect(tabNames()).toEqual(['Обзор', 'Мониторинг', 'Инциденты', 'События', 'Конфигурации'])
-    expect(requests.some(path => path.includes('/metrics'))).toBe(false)
+    expect(requests.some(path => path.includes('/metric-series'))).toBe(false)
 
     fireEvent.click(screen.getByRole('tab', { name: 'Мониторинг' }))
     expect(screen.getByRole('tab', { name: 'Мониторинг' }).getAttribute('aria-selected')).toBe('true')
-    await waitFor(() => expect(requests.some(path => path.includes('/metrics'))).toBe(true))
+    await waitFor(() => expect(requests.some(path => path.includes('/metric-series'))).toBe(true))
     expect(await screen.findByText('Правила мониторинга')).toBeTruthy()
     expect(screen.getByText('12 д 0 ч')).toBeTruthy()
+  })
+
+  it('draws a longer period from the series endpoint, which picks the resolution', async () => {
+    const requests = renderPage({ resource: server })
+    await screen.findByText('Uptime')
+    fireEvent.click(screen.getByRole('tab', { name: 'Monitoring' }))
+    await waitFor(() => expect(requests.some(path => path.includes('/metric-series'))).toBe(true))
+    fireEvent.change(await screen.findByLabelText('Period'), { target: { value: 'WEEK' } })
+    await waitFor(() => {
+      const latest = requests.filter(path => path.includes('/metric-series')).at(-1)!
+      const query = new URLSearchParams(latest.split('?')[1])
+      const span = new Date(query.get('to')!).getTime() - new Date(query.get('from')!).getTime()
+      expect(span).toBe(7 * 24 * 60 * 60_000)
+    })
   })
 
   it('shows activity through the shared timeline, or says there is none', async () => {

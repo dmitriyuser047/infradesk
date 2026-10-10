@@ -5,6 +5,7 @@ import { useCachedResource } from '../../../api/resources'
 
 import { useI18n } from '../../../i18n'
 import { PropertyGrid, StatusIndicator, WorkspaceSection } from '../../layout/WorkspacePrimitives'
+import { TelemetrySummary } from '../../metrics/TelemetrySummary'
 import { containerCondition, containerStatusPresentation } from './containerStatusPresentation'
 import type { ResourcePresentation, ResourcePresentationProps } from './ResourcePresentation'
 import type { ContainerResourceData, ResourceResponse } from '../../../types/resource'
@@ -36,7 +37,7 @@ function ContainerOverview({ resource }: ResourcePresentationProps) {
       ...(serverPath === null ? [] : [{ label: t.server, value: <Link className="property-link" to={serverPath}>
         {server?.name ?? t.openServer}</Link>, technical: server !== undefined }]),
       { label: i18n.t.common.code, value: resource.code, technical: true },
-    ]} /></WorkspaceSection>
+    ]} /><TelemetrySummary telemetry={data?.status?.telemetry} /></WorkspaceSection>
   </div>
 }
 

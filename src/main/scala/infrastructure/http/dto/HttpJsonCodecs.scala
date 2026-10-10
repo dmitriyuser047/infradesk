@@ -283,16 +283,18 @@ object HttpJsonCodecs {
       "finishedAt", "errorCode", "errorMessage")(v => (v.id, v.resourceId, v.operationCode, v.status,
       v.actorUserId, v.startedAt, v.finishedAt, v.errorCode, v.errorMessage))
 
+  import serialization.resource.ResourceTelemetryJson._
+
   implicit val nodeStatusResponseEncoder: Encoder[NodeStatusResponse] =
-    Encoder.forProduct4("online", "cpuUsagePercent", "memoryUsagePercent", "uptimeSeconds") { value =>
-      (value.online, value.cpuUsagePercent, value.memoryUsagePercent, value.uptimeSeconds)
+    Encoder.forProduct5("online", "cpuUsagePercent", "memoryUsagePercent", "uptimeSeconds", "telemetry") { value =>
+      (value.online, value.cpuUsagePercent, value.memoryUsagePercent, value.uptimeSeconds, value.telemetry)
     }
 
   implicit val containerSpecResponseEncoder: Encoder[ContainerSpecResponse] =
     Encoder.forProduct1("image")(_.image)
 
   implicit val containerStatusResponseEncoder: Encoder[ContainerStatusResponse] =
-    Encoder.forProduct1("state")(_.state)
+    Encoder.forProduct2("state", "telemetry")(v => (v.state, v.telemetry))
 
   implicit val resourceDataResponseEncoder: Encoder[ResourceDataResponse] = Encoder.instance {
     case NodeResourceDataResponse(spec, status) =>

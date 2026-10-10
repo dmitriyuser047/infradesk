@@ -4,6 +4,8 @@ package serialization.resource.container
 import domain.resource.container.{ContainerDefinition, ContainerSpec, ContainerStatus}
 import domain.resource.{ResourceSpec, ResourceStatus}
 import io.circe.{Decoder, Encoder}
+import serialization.resource.ResourceTelemetryJson._
+import domain.metric.ResourceTelemetry
 import serialization.resource.ResourceDataCodec
 import serialization.resource.container.ContainerResourceJson._
 
@@ -34,8 +36,13 @@ private[container] object ContainerResourceJson {
     Decoder.forProduct1("image")(ContainerSpec.apply)
 
   implicit val containerStatusEncoder: Encoder[ContainerStatus] =
-    Encoder.forProduct1("state")(_.state)
+    Encoder.forProduct2("state", "telemetry")(v => (v.state, v.telemetry))
 
   implicit val containerStatusDecoder: Decoder[ContainerStatus] =
-    Decoder.forProduct1("state")(ContainerStatus.apply)
+    Decoder.instance { c =>
+      for {
+        state <- c.get[Option[String]]("state")
+        telemetry <- c.get[Option[ResourceTelemetry]]("telemetry")
+      } yield ContainerStatus(state, telemetry.getOrElse(ResourceTelemetry()))
+    }
 }

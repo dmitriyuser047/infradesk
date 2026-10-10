@@ -46,7 +46,8 @@ object ResourceHttpMapper {
               status.online,
               status.cpuUsagePercent,
               status.memoryUsagePercent,
-              status.uptimeSeconds
+              status.uptimeSeconds,
+              status.telemetry
             ))
           )
         )
@@ -59,7 +60,7 @@ object ResourceHttpMapper {
         Right(
           ContainerResourceDataResponse(
             Some(ContainerSpecResponse(spec.image)),
-            Some(ContainerStatusResponse(status.state))
+            Some(ContainerStatusResponse(status.state, status.telemetry))
           )
         )
 

@@ -7,5 +7,6 @@ final case class NodeStatus(
                              online: Boolean,
                              cpuUsagePercent: Option[BigDecimal],
                              memoryUsagePercent: Option[BigDecimal],
-                             uptimeSeconds: Option[Long]
+                             uptimeSeconds: Option[Long],
+  telemetry: domain.metric.ResourceTelemetry = domain.metric.ResourceTelemetry()
                            ) extends ResourceStatus

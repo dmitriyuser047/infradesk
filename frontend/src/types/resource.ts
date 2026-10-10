@@ -1,3 +1,5 @@
+import type { ResourceTelemetry } from './metric'
+
 export interface NodeSpecResponse {
   hostname: string
   operatingSystem: string | null
@@ -14,6 +16,7 @@ export interface NodeStatusResponse {
   cpuUsagePercent: number | null
   memoryUsagePercent: number | null
   uptimeSeconds: number | null
+  telemetry?: ResourceTelemetry
 }
 
 export interface ContainerSpecResponse {
@@ -22,6 +25,7 @@ export interface ContainerSpecResponse {
 
 export interface ContainerStatusResponse {
   state: string | null
+  telemetry?: ResourceTelemetry
 }
 
 export interface NodeResourceData {

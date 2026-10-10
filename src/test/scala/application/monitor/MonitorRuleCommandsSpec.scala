@@ -30,14 +30,20 @@ final class MonitorRuleCommandsSpec extends FunSuite {
     assertEquals(fixture.rules.saved.map(_.id), List(GeneratedRuleId))
   }
 
+  test("creates a CPU rule for a container") {
+    val fixture = new CommandFixture()
+    val created = fixture.create.execute(support.AuthorizationFixtures.actor(OrganizationId), ContainerResourceId, command()).unsafeRunSync()
+    assertEquals(created.map(_.resourceId), Some(ContainerResourceId))
+  }
+
   test("refuses a rule for a resource type monitoring does not support") {
     val fixture = new CommandFixture()
 
     val failure = intercept[InvalidMonitorRule](
-      fixture.create.execute(support.AuthorizationFixtures.actor(OrganizationId), ContainerResourceId, command()).unsafeRunSync()
+      fixture.create.execute(support.AuthorizationFixtures.actor(OrganizationId), UnsupportedResourceId, command()).unsafeRunSync()
     )
 
-    assert(failure.getMessage.contains("CONTAINER"))
+    assert(failure.getMessage.contains("UNSUPPORTED"))
     assertEquals(fixture.rules.saved, List.empty)
   }
 
@@ -223,7 +229,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
 
   private final class FakeResourceRepository extends ResourceRepository[IO] {
     override def findById(organizationId: UUID, id: UUID): IO[Option[Resource]] =
-      IO.pure(Map(NodeResourceId -> nodeResource, ContainerResourceId -> containerResource)
+      IO.pure(Map(NodeResourceId -> nodeResource, ContainerResourceId -> containerResource, UnsupportedResourceId -> containerResource.copy(id = UnsupportedResourceId, resourceTypeCode = "UNSUPPORTED"))
         .get(id).filter(_.organizationId == organizationId))
     override def findActiveByEnvironment(organizationId: UUID, environmentId: UUID): IO[List[Resource]] =
       IO.pure(List.empty)
@@ -300,6 +306,7 @@ final class MonitorRuleCommandsSpec extends FunSuite {
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
   private val NodeResourceId = UUID.fromString("70000000-0000-0000-0000-000000000001")
   private val ContainerResourceId = UUID.fromString("70000000-0000-0000-0000-000000000002")
+  private val UnsupportedResourceId = UUID.fromString("70000000-0000-0000-0000-000000000003")
   private val RuleId = UUID.fromString("90000000-0000-0000-0000-000000000001")
   private val GeneratedRuleId = UUID.fromString("90000000-0000-0000-0000-000000000009")
   private val IncidentId = UUID.fromString("a0000000-0000-0000-0000-000000000001")

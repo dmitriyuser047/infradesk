@@ -30,6 +30,20 @@ final class NotificationMessageSpec extends FunSuite {
       IncidentReason.ThresholdViolation)), opened)
   }
 
+  test("telemetry metrics read by name and in their own units, bytes in binary multiples") {
+    def text(metric: MetricCode, threshold: BigDecimal, current: BigDecimal, operator: MonitorOperator = MonitorOperator.LessThan) =
+      NotificationMessage.of(event(NotificationEventType.IncidentOpened, IncidentReason.ThresholdViolation,
+        Some(context(operator = operator, threshold = threshold, currentValue = Some(current)).copy(metricCode = metric)))).text
+    val disk = text(MetricCode.DiskFreeBytes, BigDecimal(10L * 1024 * 1024 * 1024), BigDecimal(1610612736))
+    assert(disk.contains("Свободное место на диске ниже допустимого"), disk)
+    assert(disk.contains("Текущее значение: 1.5 GiB") && disk.contains("Порог: < 10 GiB"), disk)
+    val tls = text(MetricCode.TlsDaysRemaining, BigDecimal(14), BigDecimal("6.123"))
+    assert(tls.contains("Текущее значение: 6.12d") && tls.contains("Порог: < 14d"), tls)
+    val network = text(MetricCode.NetworkReceiveBytesPerSecond, BigDecimal(512), BigDecimal(2048), MonitorOperator.GreaterThan)
+    assert(network.contains("Текущее значение: 2 KiB/s") && network.contains("Порог: > 512 B/s"), network)
+    MetricCode.All.foreach(metric => assert(!text(metric, BigDecimal(1), BigDecimal(0)).contains(metric.code), metric.code))
+  }
+
   // A. Incident opened, threshold ---------------------------------------------------------------
 
   test("an opened threshold event reads by name, not by identifier") {

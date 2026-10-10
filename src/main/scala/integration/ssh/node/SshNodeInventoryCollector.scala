@@ -7,8 +7,8 @@ import integration.ssh.SshSession
 
 final class SshNodeInventoryCollector[F[_]: MonadThrow] {
 
-  def collect(session: SshSession[F]): F[CollectedNodeInventory] =
-    session.execute(SshNodeInventoryCollector.Command).flatMap { result =>
+  def collect(session: SshSession[F], serviceHostname: String = "localhost"): F[CollectedNodeInventory] =
+    session.execute(SshNodeInventoryCollector.commandFor(serviceHostname)).flatMap { result =>
       if (!result.isSuccess)
         new IllegalStateException(
           s"SSH node inventory command exited with code ${result.exitCode}"
@@ -36,7 +36,7 @@ object SshNodeInventoryCollector {
       "sub(/^[[:space:]]+/, \"\", value); sub(/[[:space:]]+$/, \"\", value); " +
       "if (value != \"\") print value }"
 
-  val Command: String =
+  private[node] val BaseCommand: String =
     "LC_ALL=C; export LC_ALL; " +
       "printf 'hostname\\t%s\\n' \"$(hostname 2>/dev/null || true)\"; " +
       "printf 'operating_system\\t%s\\n' \"$(uname -s 2>/dev/null || true)\"; " +
@@ -50,5 +50,7 @@ object SshNodeInventoryCollector {
       "cpu_second=''; if sleep 0.2 2>/dev/null; then cpu_second=\"$(awk '/^cpu / { total=0; for (i=2; i<=9 && i<=NF; i++) total += $i; print total, $5 + $6; exit }' /proc/stat 2>/dev/null || true)\"; fi; " +
       "printf 'cpu_usage_percent\\t%s\\n' \"$(awk -v first=\"$cpu_first\" -v second=\"$cpu_second\" 'BEGIN { n1=split(first, a, \" \"); n2=split(second, b, \" \"); if (n1 != 2 || n2 != 2) exit; total1=a[1]+0; idle1=a[2]+0; total2=b[1]+0; idle2=b[2]+0; deltaTotal=total2-total1; deltaIdle=idle2-idle1; if (deltaTotal <= 0) exit; usage=100*(deltaTotal-deltaIdle)/deltaTotal; if (usage < 0 || usage > 100) exit; printf \"%.6f\", usage }' 2>/dev/null || true)\"; " +
       "printf 'memory_usage_percent\\t%s\\n' \"$(awk '/^MemTotal:/ { total=$2; hasTotal=1 } /^MemAvailable:/ { available=$2; hasAvailable=1 } END { if (hasTotal && hasAvailable && total > 0 && available >= 0 && available <= total) printf \"%.6f\", 100 * (total - available) / total }' /proc/meminfo 2>/dev/null || true)\"; " +
-      "printf 'uptime_seconds\\t%s\\n' \"$(awk '{ print int($1) }' /proc/uptime 2>/dev/null || true)\""
+      "printf 'uptime_seconds\\t%s\\n' \"$(awk '{ print int($1) }' /proc/uptime 2>/dev/null || true)\"; " 
+  def commandFor(serviceHostname: String): String = BaseCommand + SshTelemetryCommand.commandFor(serviceHostname)
+  val Command: String = commandFor("localhost")
 }

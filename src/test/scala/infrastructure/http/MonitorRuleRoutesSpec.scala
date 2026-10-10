@@ -103,7 +103,7 @@ final class MonitorRuleRoutesSpec extends FunSuite {
   }
 
   test("rejects unknown metric, unknown operator, negative duration, and malformed JSON") {
-    val unknownMetric = validBody.deepMerge(Json.obj("metricCode" -> Json.fromString("DISK_USAGE_PERCENT")))
+    val unknownMetric = validBody.deepMerge(Json.obj("metricCode" -> Json.fromString("GPU_USAGE_PERCENT")))
     val unknownOperator = validBody.deepMerge(Json.obj("operator" -> Json.fromString("BETWEEN")))
     val negativeDuration = validBody.deepMerge(Json.obj("forSeconds" -> Json.fromLong(-1)))
     val negativeNoData = validBody.deepMerge(Json.obj("noDataSeconds" -> Json.fromLong(-1)))
@@ -136,11 +136,23 @@ final class MonitorRuleRoutesSpec extends FunSuite {
   test("refuses a rule for a resource type monitoring does not support") {
     val fixture = buildFixture(List.empty)
 
-    val response = run(fixture, postRule(OrganizationId, ContainerResourceId, validBody))
+    val response = run(fixture, postRule(OrganizationId, UnsupportedResourceId, validBody))
 
     assertEquals(response._1.status, Status.BadRequest)
     assertEquals(response._2.hcursor.get[String]("code"), Right("INVALID_REQUEST"))
     assertEquals(fixture.monitorRuleRepository.rules, List.empty)
+  }
+
+  test("accepts a container rule on a telemetry metric, whose threshold is not a percentage") {
+    val fixture = buildFixture(List.empty)
+    val restarts = validBody.deepMerge(Json.obj("metricCode" -> Json.fromString("CONTAINER_RESTART_COUNT"),
+      "threshold" -> Json.fromBigDecimal(BigDecimal(250))))
+
+    val response = run(fixture, postRule(OrganizationId, ContainerResourceId, restarts))
+
+    assertEquals(response._1.status, Status.Created)
+    assertEquals(fixture.monitorRuleRepository.rules.map(rule => (rule.resourceId, rule.metricCode)),
+      List(ContainerResourceId -> MetricCode.ContainerRestartCount))
   }
 
   test("returns not found when creating for an absent resource") {
@@ -219,7 +231,7 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     states: List[MonitorRuleState] = List.empty
   ): RouteFixture = {
     val resourceRepository = new InMemoryResourceRepository(
-      Map(ResourceId -> resource, ContainerResourceId -> containerResource)
+      Map(ResourceId -> resource, ContainerResourceId -> containerResource, UnsupportedResourceId -> unsupportedResource)
     )
     val monitorRuleRepository = new InMemoryMonitorRuleRepository(initialRules, failure)
     val monitorRuleStateRepository = new InMemoryMonitorRuleStateRepository(states)
@@ -389,6 +401,7 @@ final class MonitorRuleRoutesSpec extends FunSuite {
   private val OtherOrganizationId = UUID.fromString("20000000-0000-0000-0000-000000000002")
   private val ResourceId = UUID.fromString("70000000-0000-0000-0000-000000000001")
   private val ContainerResourceId = UUID.fromString("70000000-0000-0000-0000-000000000002")
+  private val UnsupportedResourceId = UUID.fromString("70000000-0000-0000-0000-000000000003")
   private val UnknownResourceId = UUID.fromString("70000000-0000-0000-0000-000000000099")
   private val ResourceTypeId = UUID.fromString("10000000-0000-0000-0000-000000000001")
   private val EnvironmentId = UUID.fromString("40000000-0000-0000-0000-000000000001")
@@ -409,6 +422,13 @@ final class MonitorRuleRoutesSpec extends FunSuite {
     Earlier,
     Earlier,
     "NODE"
+  )
+
+  private val unsupportedResource = resource.copy(
+    id = UnsupportedResourceId,
+    code = "volume-1",
+    name = "volume-1",
+    resourceTypeCode = "VOLUME"
   )
 
   private val containerResource = resource.copy(

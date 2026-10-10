@@ -39,7 +39,8 @@ final case class NodeStatusResponse(
                                      online: Boolean,
                                      cpuUsagePercent: Option[BigDecimal],
                                      memoryUsagePercent: Option[BigDecimal],
-                                     uptimeSeconds: Option[Long]
+                                     uptimeSeconds: Option[Long],
+                                     telemetry: domain.metric.ResourceTelemetry = domain.metric.ResourceTelemetry()
                                    )
 
 final case class ContainerResourceDataResponse(spec: Option[ContainerSpecResponse], status: Option[ContainerStatusResponse])
@@ -47,4 +48,4 @@ final case class ContainerResourceDataResponse(spec: Option[ContainerSpecRespons
 
 final case class ContainerSpecResponse(image: Option[String])
 
-final case class ContainerStatusResponse(state: Option[String])
+final case class ContainerStatusResponse(state: Option[String], telemetry: domain.metric.ResourceTelemetry = domain.metric.ResourceTelemetry())

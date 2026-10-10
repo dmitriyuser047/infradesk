@@ -130,7 +130,7 @@ describe('resource page presentation', () => {
 
   it('offers monitoring only where the monitoring feature applies', () => {
     expect(renderResourcePage(node)).toContain('id="tab-monitoring"')
-    expect(renderResourcePage(container)).not.toContain('id="tab-monitoring"')
+    expect(renderResourcePage(container)).toContain('id="tab-monitoring"')
     for (const html of [renderResourcePage(node), renderResourcePage(container)]) {
       expect(html).toContain('id="tab-overview"')
       expect(html).toContain('id="tab-activity"')

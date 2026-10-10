@@ -1,6 +1,6 @@
 import type { I18n } from '../../i18n'
 import type { StatusTone } from '../layout/WorkspacePrimitives'
-import { MetricCode, type KnownMetricCode } from '../../types/metric'
+import { MetricCode, metricUnit, type KnownMetricCode } from '../../types/metric'
 import { MonitorOperator, MonitorRuleStatus, type MonitorOperatorCode } from '../../types/monitorRule'
 
 export type DurationUnit = 'seconds' | 'minutes' | 'hours'
@@ -93,7 +93,7 @@ export function formatRuleDuration(seconds: number, i18n: I18n): string {
 }
 
 export function supportedMetricCodes() {
-  return [MetricCode.cpuUsagePercent, MetricCode.memoryUsagePercent] as const
+  return Object.values(MetricCode)
 }
 
 export function supportedOperators(): readonly MonitorOperatorCode[] {
@@ -115,13 +115,13 @@ export function isSupportedOperator(value: string): value is MonitorOperatorCode
 
 /**
  * A rule's condition in one line — "CPU usage > 85% for 5m" — built from its typed fields, never
- * from a stored string. Every metric this frontend knows is a percentage.
+ * from a stored string. Units are defined by the metric catalog.
  */
 export function formatMonitorCondition(
   rule: { metricCode: string; operator: string; threshold: number; forSeconds: number },
   i18n: I18n,
 ): string {
-  const threshold = isSupportedMetricCode(rule.metricCode) ? `${i18n.format.number(rule.threshold)}%` : i18n.format.number(rule.threshold)
+  const threshold = `${i18n.format.number(rule.threshold)}${metricUnit(rule.metricCode)}`
   const condition = `${getMetricLabel(rule.metricCode, i18n)} ${getOperatorSymbol(rule.operator)} ${threshold}`
   return rule.forSeconds === 0 ? condition : i18n.t.monitoring.conditionFor(condition, formatRuleDuration(rule.forSeconds, i18n))
 }

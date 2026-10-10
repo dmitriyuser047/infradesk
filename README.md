@@ -95,6 +95,10 @@ including a failed one, so a connection that stopped answering turns its rules i
 instead of leaving them on stale data. The evaluation is a secondary step: it never changes the
 outcome the synchronization itself reports.
 
+SSH synchronization also collects agentless telemetry — disks, swap, load, I/O, network, local web
+services, TLS expiry, drive health and container restarts and health checks — recorded as metrics
+of servers and containers; see [Server and container telemetry](docs/telemetry.md).
+
 Metric history is kept bounded by five-minute and hourly rollups with configurable retention;
 maintenance windows silence the notifications of incidents opened while they cover a resource, and
 open incidents can be acknowledged. See

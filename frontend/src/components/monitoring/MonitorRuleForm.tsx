@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 import type { MonitorRuleRequest, MonitorRuleResponse, MonitorOperatorCode } from '../../types/monitorRule'
-import { MetricCode, type KnownMetricCode } from '../../types/metric'
+import { MetricCode, metricUnit, type KnownMetricCode } from '../../types/metric'
 import {
   durationToSeconds,
   getMetricLabel,
@@ -78,7 +78,7 @@ export function MonitorRuleForm({
       setValidationError(t.validation.threshold)
       return
     }
-    if (threshold < 0 || threshold > 100) {
+    if (threshold < 0 || (metricUnit(form.metricCode) === '%' && threshold > 100)) {
       setValidationError(t.validation.thresholdRange)
       return
     }

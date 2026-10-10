@@ -214,7 +214,7 @@ final class TerminalRoutes[Tx[_]](
       case Right(frames) => IO.pure(frames)
       case Left(failure) =>
         logger.error(failure)(s"terminal.transport.failed $logContext errorType=${errorType(failure)}") *>
-          terminal.end(id, TerminalEnd(sshFailure.reason, Nil)).as(sshFailure.frames)
+          endWith(terminal, id, sshFailure)
     }).flatMap(frames => Stream.emits(frames)).takeThrough {
       case _: WebSocketFrame.Close => false
       case _ => true
@@ -275,7 +275,14 @@ final class TerminalRoutes[Tx[_]](
   }
 
   private def clientClose(terminal: LiveTerminal, attachment: Long): IO[List[WebSocketFrame]] =
-    terminal.end(attachment, TerminalEnd("CLIENT_CLOSE", Nil)).as(List(closeFrame("CLIENT_CLOSE", 1000)))
+    endWith(terminal, attachment, TerminalEnd("CLIENT_CLOSE", List(closeFrame("CLIENT_CLOSE", 1000))))
+
+  /**
+   * Ends the shell on behalf of this socket. Its frames are then written by the outgoing stream as
+   * the end's frames; a superseded socket, which cannot end the shell, is answered directly.
+   */
+  private def endWith(terminal: LiveTerminal, attachment: Long, end: TerminalEnd): IO[List[WebSocketFrame]] =
+    terminal.end(attachment, end).map(accepted => if (accepted) Nil else end.frames)
 
   /** A malformed frame from the current socket ends the shell: the session fails closed. */
   private def protocolFailure(
@@ -286,10 +293,9 @@ final class TerminalRoutes[Tx[_]](
     logContext: String,
     closeCode: Int
   ): IO[List[WebSocketFrame]] =
-    terminal.end(attachment, TerminalEnd(code, Nil)) *>
-      logger.warn(s"terminal.protocol.failed $logContext errorType=$code closeReason=$code") *>
-      IO.pure((if (message.isEmpty) List.empty else List(textFrame(control("error", code, message)))) :+
-        closeFrame(code, closeCode))
+    logger.warn(s"terminal.protocol.failed $logContext errorType=$code closeReason=$code") *>
+      endWith(terminal, attachment, TerminalEnd(code,
+        (if (message.isEmpty) List.empty else List(textFrame(control("error", code, message)))) :+ closeFrame(code, closeCode)))
 
   private def isWebSocketUpgrade(request: Request[IO]): Boolean = {
     val upgrade = request.headers.headers.find(_.name == CIString("Upgrade")).exists(_.value.equalsIgnoreCase("websocket"))

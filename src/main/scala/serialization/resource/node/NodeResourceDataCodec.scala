@@ -4,6 +4,8 @@ package serialization.resource.node
 import domain.resource.node.{NodeDefinition, NodeSpec, NodeStatus}
 import domain.resource.{ResourceSpec, ResourceStatus}
 import io.circe.{Decoder, Encoder}
+import serialization.resource.ResourceTelemetryJson._
+import domain.metric.ResourceTelemetry
 import serialization.resource.ResourceDataCodec
 import serialization.resource.node.NodeResourceJson._
 
@@ -41,10 +43,18 @@ private[node] object NodeResourceJson {
     )(NodeSpec.apply)
 
   implicit val nodeStatusEncoder: Encoder[NodeStatus] =
-    Encoder.forProduct4("online", "cpuUsagePercent", "memoryUsagePercent", "uptimeSeconds")(node =>
-      (node.online, node.cpuUsagePercent, node.memoryUsagePercent, node.uptimeSeconds)
+    Encoder.forProduct5("online", "cpuUsagePercent", "memoryUsagePercent", "uptimeSeconds", "telemetry")(node =>
+      (node.online, node.cpuUsagePercent, node.memoryUsagePercent, node.uptimeSeconds, node.telemetry)
     )
 
   implicit val nodeStatusDecoder: Decoder[NodeStatus] =
-    Decoder.forProduct4("online", "cpuUsagePercent", "memoryUsagePercent", "uptimeSeconds")(NodeStatus.apply)
+    Decoder.instance { c =>
+      for {
+        online <- c.get[Boolean]("online")
+        cpu <- c.get[Option[BigDecimal]]("cpuUsagePercent")
+        memory <- c.get[Option[BigDecimal]]("memoryUsagePercent")
+        uptime <- c.get[Option[Long]]("uptimeSeconds")
+        telemetry <- c.get[Option[ResourceTelemetry]]("telemetry")
+      } yield NodeStatus(online, cpu, memory, uptime, telemetry.getOrElse(ResourceTelemetry()))
+    }
 }

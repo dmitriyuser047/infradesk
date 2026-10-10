@@ -85,10 +85,40 @@ object NotificationMessage {
   private def conditionLine(context: NotificationContext): String =
     s"Порог: ${operatorLabel(context.operator)} ${formatValue(context.threshold, context.metricCode)}"
 
-  private def metricLabel(metric: MetricCode): String = metric match {
-    case MetricCode.CpuUsagePercent => "Использование CPU"
-    case MetricCode.MemoryUsagePercent => "Использование памяти"
-  }
+  // Every collected metric reads as a phrase; the code is the last resort for a future one.
+  private val metricLabels: Map[MetricCode, String] = Map(
+    MetricCode.CpuUsagePercent -> "Использование CPU",
+    MetricCode.MemoryUsagePercent -> "Использование памяти",
+    MetricCode.DiskUsagePercent -> "Заполненность диска",
+    MetricCode.DiskFreeBytes -> "Свободное место на диске",
+    MetricCode.InodeUsagePercent -> "Использование inode",
+    MetricCode.SwapUsagePercent -> "Использование swap",
+    MetricCode.SwapUsedBytes -> "Занятый swap",
+    MetricCode.LoadAverage1 -> "Средняя нагрузка за 1 мин",
+    MetricCode.LoadAverage5 -> "Средняя нагрузка за 5 мин",
+    MetricCode.LoadAverage15 -> "Средняя нагрузка за 15 мин",
+    MetricCode.LoadPerCore -> "Нагрузка на ядро CPU",
+    MetricCode.CpuIowaitPercent -> "Ожидание ввода-вывода CPU",
+    MetricCode.DiskReadBytesPerSecond -> "Чтение с диска",
+    MetricCode.DiskWriteBytesPerSecond -> "Запись на диск",
+    MetricCode.DiskLatencyMilliseconds -> "Задержка дисковых операций",
+    MetricCode.DiskBusyPercent -> "Загруженность диска",
+    MetricCode.NetworkReceiveBytesPerSecond -> "Входящий трафик",
+    MetricCode.NetworkTransmitBytesPerSecond -> "Исходящий трафик",
+    MetricCode.NetworkErrorsPerSecond -> "Ошибки сетевых интерфейсов",
+    MetricCode.NetworkDropsPerSecond -> "Потерянные пакеты",
+    MetricCode.ContainerRestartCount -> "Перезапуски контейнера",
+    MetricCode.ContainerHealthy -> "Healthcheck контейнера",
+    MetricCode.TlsDaysRemaining -> "Дней до истечения TLS-сертификата",
+    MetricCode.ServiceAvailable -> "Доступность веб-сервиса",
+    MetricCode.ServiceResponseMilliseconds -> "Время ответа веб-сервиса",
+    MetricCode.DiskTemperatureCelsius -> "Температура накопителя",
+    MetricCode.DiskWearPercent -> "Износ NVMe",
+    MetricCode.DiskMediaErrors -> "Ошибки носителя",
+    MetricCode.DiskHealthy -> "Состояние SMART"
+  )
+
+  private def metricLabel(metric: MetricCode): String = metricLabels.getOrElse(metric, metric.code)
 
   /** Human phrasing of which side of the threshold the value fell on. */
   private def direction(operator: MonitorOperator): String = operator match {
@@ -103,8 +133,19 @@ object NotificationMessage {
     case MonitorOperator.LessThanOrEqual => "<="
   }
 
-  private def formatValue(value: BigDecimal, metric: MetricCode): String =
-    value.bigDecimal.stripTrailingZeros.toPlainString + (if (metric.isPercentage) "%" else "")
+  private def formatValue(value: BigDecimal, metric: MetricCode): String = {
+    def plain(number: BigDecimal) =
+      number.setScale(2, BigDecimal.RoundingMode.HALF_UP).bigDecimal.stripTrailingZeros.toPlainString
+    metric.unit match {
+      // Byte counts read in binary multiples, as the interface shows them.
+      case unit @ ("B" | "B/s") =>
+        val scales = List(BigDecimal(1024).pow(3) -> "GiB", BigDecimal(1024).pow(2) -> "MiB", BigDecimal(1024) -> "KiB")
+        scales.find { case (scale, _) => value.abs >= scale }
+          .fold(plain(value) + " B" + unit.drop(1)) { case (scale, label) => plain(value / scale) + " " + label + unit.drop(1) }
+      case "" => plain(value)
+      case unit => plain(value) + unit
+    }
+  }
 
   private val timeFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm 'UTC'").withZone(ZoneOffset.UTC)

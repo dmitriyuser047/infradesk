@@ -263,7 +263,8 @@ final class EvaluateMonitorRulesSpec extends FunSuite {
   }
 
   test("asks only for the resource types monitoring supports") {
-    assertEquals(MonitoredResourceTypes.codes, List("NODE"))
+    // Telemetry is collected for servers and their containers; nothing else is evaluated.
+    assertEquals(MonitoredResourceTypes.codes, List("CONTAINER", "NODE"))
   }
 
   // -------------------------------------------------------------------------------------------

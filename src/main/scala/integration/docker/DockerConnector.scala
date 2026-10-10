@@ -4,7 +4,8 @@ package integration.docker
 import application.discovery.DiscoveredResource
 import application.port.{ResourceConnector, ResourceConnectorResult}
 import domain.connection.Connection
-import domain.resource.container.ContainerDefinition
+import domain.resource.container.{ContainerDefinition, ContainerSpec, ContainerStatus}
+import domain.resource.ResourceData
 
 import cats.MonadThrow
 import cats.syntax.all._
@@ -41,7 +42,9 @@ final class DockerConnector[F[_]: MonadThrow](
       externalId = container.id,
       resourceTypeCode = ContainerDefinition.code,
       code = name,
-      name = name
+      name = name,
+      data = ResourceData(Some(ContainerSpec(Option(container.image).filter(_.nonEmpty))),
+        Some(ContainerStatus(Option(container.state).filter(_.nonEmpty), container.telemetry)))
     )
   }
 

@@ -18,7 +18,8 @@ final case class NodeInventory(
   memoryMb: Option[Long],
   cpuUsagePercent: Option[BigDecimal],
   memoryUsagePercent: Option[BigDecimal],
-  uptimeSeconds: Option[Long]
+  uptimeSeconds: Option[Long],
+  telemetry: domain.metric.ResourceTelemetry = domain.metric.ResourceTelemetry()
 ) {
   def toDiscoveredResource(connection: Connection): DiscoveredResource =
     DiscoveredResource(
@@ -42,7 +43,8 @@ final case class NodeInventory(
           online = true,
           cpuUsagePercent = cpuUsagePercent,
           memoryUsagePercent = memoryUsagePercent,
-          uptimeSeconds = uptimeSeconds
+          uptimeSeconds = uptimeSeconds,
+          telemetry = telemetry.copy(devices = telemetry.devices.filterNot(_.kind == "container"))
         ))
       )
     )

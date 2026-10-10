@@ -2,6 +2,7 @@ import { Server } from 'lucide-react'
 
 import { useI18n, type I18n } from '../../../i18n'
 import { PropertyGrid, StatusIndicator, WorkspaceSection } from '../../layout/WorkspacePrimitives'
+import { TelemetrySummary } from '../../metrics/TelemetrySummary'
 import { formatMemoryMb, formatPercent } from '../../metrics/formatters'
 import type { ResourcePresentation, ResourcePresentationProps, ResourceStatusPresentation } from './ResourcePresentation'
 import type { NodeResourceData, ResourceResponse } from '../../../types/resource'
@@ -30,6 +31,7 @@ function NodeOverview({ resource }: ResourcePresentationProps) {
   const t = i18n.t.resources.node
   const spec = nodeData(resource)?.spec
   return <WorkspaceSection title={t.currentState}><NodeMetricSummary resource={resource} />
+    <TelemetrySummary telemetry={nodeData(resource)?.status?.telemetry} />
     <details className="operation-disclosure"><summary>{t.properties}</summary><PropertyGrid columns={2} items={[
       { label: t.hostname, value: spec?.hostname ?? '—', technical: spec?.hostname != null },
       { label: t.operatingSystem, value: spec?.operatingSystem ?? '—' },

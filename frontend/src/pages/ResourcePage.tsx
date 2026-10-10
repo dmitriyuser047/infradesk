@@ -5,7 +5,7 @@ import { RefreshCw, Activity, CircleAlert, Cable, Layers } from 'lucide-react'
 
 import { ApiError } from '../api/httpClient'
 import { useResourceContext } from '../api/infrastructure'
-import { createLastHourWindow, useResourceMetrics } from '../api/metrics'
+import { createMetricWindow, MetricPeriods, seriesPoints, useResourceMetricSeries, type MetricPeriod, type MetricSeriesResponse } from '../api/metrics'
 import { useResource } from '../api/resources'
 import { useOrganizationPermissions } from '../components/auth/authorization'
 import { ConfigurationAssignmentList } from '../components/configuration/ConfigurationAssignmentList'
@@ -18,8 +18,8 @@ import {
 } from '../components/layout/WorkspacePrimitives'
 import { useAvailableResourceOperations, useResourceOperationExecutions } from '../api/resourceOperations'
 import { operationsApplicability } from '../components/resources/operationPresentation'
+import { getMetricLabel } from '../components/monitoring/monitorRulePresentation'
 import { MetricChart } from '../components/metrics/MetricChart'
-import { filterMetricSeries } from '../components/metrics/metricSeries'
 import { ResourceActivitySection } from '../components/history/ResourceActivitySection'
 import { InfrastructureContextPath, resourceContextPath } from '../components/infrastructure/InfrastructureContextPath'
 import {
@@ -29,7 +29,7 @@ import { asTree } from '../components/infrastructure/resourceGroups'
 import { ScopedIncidentsPanel } from '../components/infrastructure/ScopedIncidentsPanel'
 import { SourceConnectionLinks } from '../components/infrastructure/SourceConnections'
 import { MonitorRulesSection } from '../components/monitoring/MonitorRulesSection'
-import { supportsResourceMonitoring } from '../components/monitoring/resourceMonitoringSupport'
+import { initialExtraMetric, supportsResourceMonitoring } from '../components/monitoring/resourceMonitoringSupport'
 import { resourceChildrenTitle, resourceDisplayName, resourceTerminalConnection } from '../components/resources/resourceInventoryPresentation'
 import { ResourceTree } from '../components/resources/ResourceTree'
 import { resourcePresentationRegistry } from '../components/resources/presentation/resourcePresentations'
@@ -37,7 +37,7 @@ import type { ResourcePresentationProps } from '../components/resources/presenta
 import { useI18n } from '../i18n'
 import { describeError } from '../i18n/errors'
 import type { ResourceContextResponse } from '../types/infrastructure'
-import { MetricCode, type MetricObservationResponse } from '../types/metric'
+import { MetricCode, type KnownMetricCode } from '../types/metric'
 import type { ResourceResponse } from '../types/resource'
 import { ResourceOperationsPanel } from '../components/resources/ResourceOperationsPanel'
 import { ResourceIntegrationSection } from '../components/integrations/ResourceIntegrationSection'
@@ -70,7 +70,8 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
   const t = i18n.t.resources.page
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = Tabs.find(value => value === searchParams.get('tab')) ?? 'overview'
-  const [metricWindow, setMetricWindow] = useState(() => createLastHourWindow())
+  const [metricPeriod, setMetricPeriod] = useState<MetricPeriod>('HOUR')
+  const [metricWindow, setMetricWindow] = useState(() => createMetricWindow('HOUR'))
   const [focusedRunId, setFocusedRunId] = useState<string | null>(null)
   const resourceQuery = useResource(organizationId, resourceId)
   const contextQuery = useResourceContext(organizationId, resourceId)
@@ -86,8 +87,9 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
   const operations = operationsApplicability(
     useAvailableResourceOperations(organizationId, resourceId, resourceQuery.isSuccess),
     useResourceOperationExecutions(organizationId, resourceId, resourceQuery.isSuccess))
-  const metricsQuery = useResourceMetrics(organizationId, resourceId, metricWindow,
+  const metricsQuery = useResourceMetricSeries(organizationId, resourceId, metricWindow,
     monitored && requestedTab === 'monitoring')
+  const showPeriod = (period: MetricPeriod) => { setMetricPeriod(period); setMetricWindow(createMetricWindow(period)) }
   const back = backLink(organizationId, environmentId, searchParams, context, i18n)
   const linkQuery = originQuery(searchParams, { kind: 'resource', id: resourceId, environmentId })
   const selectTab = (next: Tab) => setSearchParams(previous => {
@@ -172,7 +174,8 @@ function ResourceContent({ organizationId, environmentId, resourceId }: {
       {active === 'monitoring' ? <>
         <MetricsSection resource={resource} Summary={presentation.MetricSummary}
           isPending={metricsQuery.isPending} isError={metricsQuery.isError} error={metricsQuery.error}
-          observations={isUnavailableError(metricsQuery.error) ? undefined : metricsQuery.data} updatedAt={metricsQuery.dataUpdatedAt} refresh={() => setMetricWindow(createLastHourWindow())}
+          series={isUnavailableError(metricsQuery.error) ? undefined : metricsQuery.data} updatedAt={metricsQuery.dataUpdatedAt}
+          period={metricPeriod} onPeriod={showPeriod} refresh={() => showPeriod(metricPeriod)}
           retry={metricsQuery.refetch} />
         <MonitorRulesSection organizationId={organizationId} resourceId={resourceId} />
       </> : null}
@@ -249,32 +252,52 @@ function ResourceChildren({ organizationId, query, linkQuery }: {
   </WorkspaceSection></>
 }
 
-function MetricsSection({ resource, Summary, isPending, isError, error, observations, updatedAt, refresh, retry }: {
+function MetricsSection({ resource, Summary, isPending, isError, error, series, updatedAt, period, onPeriod, refresh, retry }: {
   resource: ResourceResponse
   Summary: ComponentType<ResourcePresentationProps> | undefined
   isPending: boolean
   isError: boolean
   error: Error | null
-  observations: readonly MetricObservationResponse[] | undefined
+  series: MetricSeriesResponse | undefined
   updatedAt: number
+  period: MetricPeriod
+  onPeriod: (period: MetricPeriod) => void
   refresh: () => void
   retry: () => void
 }) {
   const i18n = useI18n()
   const t = i18n.t.metrics
-  const cpuSeries = filterMetricSeries(observations ?? [], MetricCode.cpuUsagePercent)
-  const memorySeries = filterMetricSeries(observations ?? [], MetricCode.memoryUsagePercent)
+  // CPU and memory are always drawn; the third chart is the metric this resource is most often watched by.
+  const [selectedMetric, setSelectedMetric] = useState<KnownMetricCode>(() => initialExtraMetric(resource.resourceTypeCode))
+  const extraTitle = getMetricLabel(selectedMetric, i18n)
+  const longRange = period !== 'HOUR' && period !== 'DAY'
+  const resolution = series ? t.resolutions[series.resolution] : undefined
   return <WorkspaceSection title={t.title} actions={<button className="secondary-button" type="button" onClick={refresh}>
     <RefreshCw aria-hidden size={14} /> {i18n.t.common.refresh}</button>}>
     {Summary ? <Summary resource={resource} /> : null}
+    <div className="metric-controls">
+      <label>{t.period} <select value={period} onChange={event => onPeriod(event.target.value as MetricPeriod)}>
+        {MetricPeriods.map(value => <option key={value} value={value}>{t.periods[value]}</option>)}
+      </select></label>
+      <label>{t.extraMetric} <select value={selectedMetric} onChange={event => setSelectedMetric(event.target.value as KnownMetricCode)}>
+        {Object.values(MetricCode).filter(code => code !== MetricCode.cpuUsagePercent && code !== MetricCode.memoryUsagePercent)
+          .map(code => <option key={code} value={code}>{getMetricLabel(code, i18n)}</option>)}
+      </select></label>
+      {resolution ? <span className="metric-resolution">{t.shownAs(resolution)}</span> : null}
+    </div>
     {isPending ? <div className="row-skeleton" aria-label={t.loading}><span /><span /></div> : null}
-    {isError && observations ? <RefreshWarning updatedAt={updatedAt} retry={retry} /> : null}
-    {isError && !observations ? <InlineAlert tone="danger" title={t.loadError}
+    {isError && series ? <RefreshWarning updatedAt={updatedAt} retry={retry} /> : null}
+    {isError && !series ? <InlineAlert tone="danger" title={t.loadError}
       action={<button className="secondary-button" type="button" onClick={retry}>{i18n.t.common.retry}</button>}>
       {describeError(error, i18n)}</InlineAlert> : null}
-    {!isPending && (!isError || observations !== undefined) ? <div className="charts-grid">
-      <section className="chart-pane" aria-label={t.chart(t.cpu)}><h3>{t.cpu}</h3><MetricChart title={t.cpu} data={cpuSeries} /></section>
-      <section className="chart-pane" aria-label={t.chart(t.memory)}><h3>{t.memory}</h3><MetricChart title={t.memory} data={memorySeries} /></section>
+    {!isPending && (!isError || series !== undefined) ? <div className="charts-grid">
+      <section className="chart-pane" aria-label={t.chart(t.cpu)}><h3>{t.cpu}</h3>
+        <MetricChart title={t.cpu} data={seriesPoints(series, MetricCode.cpuUsagePercent)} longRange={longRange} /></section>
+      <section className="chart-pane" aria-label={t.chart(t.memory)}><h3>{t.memory}</h3>
+        <MetricChart title={t.memory} data={seriesPoints(series, MetricCode.memoryUsagePercent)}
+          metricCode={MetricCode.memoryUsagePercent} longRange={longRange} /></section>
+      <section className="chart-pane" aria-label={t.chart(extraTitle)}><h3>{extraTitle}</h3>
+        <MetricChart title={extraTitle} data={seriesPoints(series, selectedMetric)} metricCode={selectedMetric} longRange={longRange} /></section>
     </div> : null}
   </WorkspaceSection>
 }

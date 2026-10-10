@@ -9,15 +9,20 @@ import {
 } from 'recharts'
 
 import { useI18n } from '../../i18n'
-import type { MetricPoint } from '../../types/metric'
+import { metricUnit, type MetricPoint } from '../../types/metric'
+import { formatMetricValue } from './formatters'
 
 interface MetricChartProps {
   title: string
   data: readonly MetricPoint[]
+  metricCode?: string
+  /** Longer than a day: axis ticks carry the date, not only the time. */
+  longRange?: boolean
 }
 
-export function MetricChart({ title, data }: MetricChartProps) {
+export function MetricChart({ title, data, metricCode = 'CPU_USAGE_PERCENT', longRange = false }: MetricChartProps) {
   const i18n = useI18n()
+  const unit = metricUnit(metricCode)
   if (data.length === 0) {
     return <p className="metric-empty">{i18n.t.metrics.noObservations}</p>
   }
@@ -32,14 +37,15 @@ export function MetricChart({ title, data }: MetricChartProps) {
             axisLine={false}
             tickLine={false}
             tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
-            tickFormatter={(value: string) => i18n.format.time(value)}
+            tickFormatter={(value: string) => longRange ? i18n.format.dateTime(value) : i18n.format.time(value)}
+            minTickGap={24}
           />
           <YAxis
-            domain={[0, 100]}
+            domain={unit === '%' ? [0, 100] : [0, 'auto']}
             axisLine={false}
             tickLine={false}
             tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
-            tickFormatter={(value: number) => `${value}%`}
+            tickFormatter={(value: number) => formatMetricValue(metricCode, value, i18n)}
           />
           <Tooltip
             contentStyle={{
@@ -49,8 +55,8 @@ export function MetricChart({ title, data }: MetricChartProps) {
               color: 'var(--text)',
             }}
             cursor={{ stroke: 'var(--accent)', strokeWidth: 1 }}
-            labelFormatter={(label) => i18n.format.time(String(label))}
-            formatter={(value) => [`${Number(value).toFixed(1)}%`, title]}
+            labelFormatter={(label) => i18n.format.dateTime(String(label))}
+            formatter={(value) => [formatMetricValue(metricCode, Number(value), i18n), title]}
           />
           <Line
             type="monotone"

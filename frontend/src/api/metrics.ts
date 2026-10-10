@@ -9,10 +9,18 @@ export interface MetricWindow {
 }
 
 export function createLastHourWindow(now = new Date()): MetricWindow {
-  return {
-    from: new Date(now.getTime() - 60 * 60 * 1000),
-    to: now,
-  }
+  return createMetricWindow('HOUR', now)
+}
+
+/** The periods a chart offers; the server picks the resolution each one is drawn at. */
+export const MetricPeriods = ['HOUR', 'DAY', 'WEEK', 'MONTH'] as const
+export type MetricPeriod = typeof MetricPeriods[number]
+const periodMilliseconds: Record<MetricPeriod, number> = {
+  HOUR: 60 * 60_000, DAY: 24 * 60 * 60_000, WEEK: 7 * 24 * 60 * 60_000, MONTH: 30 * 24 * 60 * 60_000,
+}
+
+export function createMetricWindow(period: MetricPeriod, now = new Date()): MetricWindow {
+  return { from: new Date(now.getTime() - periodMilliseconds[period]), to: now }
 }
 
 export function useResourceMetrics(
@@ -99,4 +107,10 @@ export function useResourceMetricSeries(organizationId: string | undefined, reso
     queryFn: () => getResourceMetricSeries(requireId(organizationId), requireId(resourceId), window.from, window.to),
     enabled: Boolean(organizationId && resourceId) && enabled,
   })
+}
+
+/** One metric's points, each bucket drawn at its average. */
+export function seriesPoints(series: MetricSeriesResponse | undefined, metricCode: string): { timestamp: string; value: number }[] {
+  return (series?.points ?? []).filter(point => point.metricCode === metricCode)
+    .map(point => ({ timestamp: point.bucketStart, value: point.average }))
 }

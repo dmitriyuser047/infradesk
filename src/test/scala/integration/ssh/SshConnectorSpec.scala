@@ -16,6 +16,7 @@ import java.util.UUID
 
 final class SshConnectorSpec extends FunSuite {
 
+  private val NodeDiscoveryCommand = integration.ssh.node.SshNodeInventoryCollector.commandFor("test.example")
   private val HostKeyFingerprint = "SHA256:test-host-key"
   private val FullContainerId = "73ac69cf50927aadda817a4a31fdcf6b56f2d3cfe782dabeab65b961c230fc6d"
   private val DockerContainersCommand = "docker ps --all --no-trunc --format '{{.ID}}\\t{{.Names}}\\t{{.Image}}\\t{{.State}}'"
@@ -31,7 +32,7 @@ final class SshConnectorSpec extends FunSuite {
     val result = connector.discover(connection).unsafeRunSync()
     val recordedCalls = calls.get.unsafeRunSync()
 
-    assertEquals(recordedCalls.map(_.command), List(SshConnector.NodeDiscoveryCommand, DockerContainersCommand))
+    assertEquals(recordedCalls.map(_.command), List(NodeDiscoveryCommand, DockerContainersCommand))
     assertEquals(sessions.get.unsafeRunSync(), 1)
     assertEquals(recordedCalls.map(_.config.hostKeyFingerprint),
       List(Some(HostKeyFingerprint), Some(HostKeyFingerprint)))
@@ -103,7 +104,7 @@ final class SshConnectorSpec extends FunSuite {
     assertEquals(result.resources.map(_.externalType), List(SshConnector.NodeExternalType))
     assertEquals(result.completeExternalTypes, Set(SshConnector.NodeExternalType))
     assertEquals(sessions.get.unsafeRunSync(), 1)
-    assertEquals(calls.get.unsafeRunSync().map(_.command), List(SshConnector.NodeDiscoveryCommand, DockerContainersCommand))
+    assertEquals(calls.get.unsafeRunSync().map(_.command), List(NodeDiscoveryCommand, DockerContainersCommand))
   }
 
   test("treats successful empty Docker output as a complete authoritative snapshot") {
@@ -182,7 +183,7 @@ final class SshConnectorSpec extends FunSuite {
       new SshConnector[IO](client, new FixedAuthenticationProvider).discover(connection).unsafeRunSync()
     }
     assertEquals(sessions.get.unsafeRunSync(), 1)
-    assertEquals(calls.get.unsafeRunSync().map(_.command), List(SshConnector.NodeDiscoveryCommand))
+    assertEquals(calls.get.unsafeRunSync().map(_.command), List(NodeDiscoveryCommand))
     assertEquals(releases.get.unsafeRunSync(), 1)
   }
 
@@ -323,7 +324,7 @@ final class SshConnectorSpec extends FunSuite {
 
     private def response(command: String): IO[SshCommandResult] =
       command match {
-        case SshConnector.NodeDiscoveryCommand =>
+        case NodeDiscoveryCommand =>
           IO.pure(nodeResult)
 
         case DockerContainersCommand =>
@@ -349,7 +350,7 @@ final class SshConnectorSpec extends FunSuite {
                                (use: SshSession[IO] => IO[A]): IO[A] =
       Resource.make(IO.unit)(_ => releases.update(_ + 1)).use(_ => use(new SshSession[IO] {
         override def execute(command: String): IO[SshCommandResult] = command match {
-        case SshConnector.NodeDiscoveryCommand =>
+        case NodeDiscoveryCommand =>
           IO.pure(SuccessfulNodeDiscoveryResult)
         case DockerContainersCommand =>
           IO.raiseError(new IllegalStateException("Simulated SSH transport failure"))

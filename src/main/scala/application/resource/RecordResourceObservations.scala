@@ -5,6 +5,7 @@ import application.port.MetricObservationRepository
 import domain.metric.{MetricCode, MetricObservation}
 import domain.resource.{Resource, ResourceData}
 import domain.resource.node.{NodeDefinition, NodeStatus}
+import domain.resource.container.{ContainerDefinition, ContainerStatus}
 
 import cats.MonadThrow
 import cats.syntax.all._
@@ -22,16 +23,8 @@ final class RecordResourceObservations[Tx[_]: MonadThrow](
                                                          ) {
 
   def metricCodesFor(resourceTypeCode: String, data: ResourceData): List[MetricCode] =
-    (resourceTypeCode, data.status) match {
-      case (code, Some(status: NodeStatus)) if code == NodeDefinition.code =>
-        List(
-          status.cpuUsagePercent.map(_ => MetricCode.CpuUsagePercent),
-          status.memoryUsagePercent.map(_ => MetricCode.MemoryUsagePercent)
-        ).flatten
+    metricValuesFor(resourceTypeCode, data).map(_._1)
 
-      case _ =>
-        List.empty
-    }
 
   def execute(
                resource: Resource,
@@ -80,14 +73,21 @@ final class RecordResourceObservations[Tx[_]: MonadThrow](
   }
 
   private def valuesFor(resource: Resource): List[(MetricCode, BigDecimal)] =
-    (resource.resourceTypeCode, resource.data.status) match {
+    metricValuesFor(resource.resourceTypeCode, resource.data)
+
+  private def telemetryValues(value: domain.metric.ResourceTelemetry): List[(MetricCode, BigDecimal)] =
+    MetricCode.All.flatMap(code => value.metrics.get(code.code).map(code -> _))
+
+  private def metricValuesFor(resourceTypeCode: String, data: ResourceData): List[(MetricCode, BigDecimal)] =
+    (resourceTypeCode, data.status) match {
       case (code, Some(status: NodeStatus)) if code == NodeDefinition.code =>
         List(
           status.cpuUsagePercent.map(MetricCode.CpuUsagePercent -> _),
           status.memoryUsagePercent.map(MetricCode.MemoryUsagePercent -> _)
-        ).flatten
-
-      case _ =>
-        List.empty
+        ).flatten ++ telemetryValues(status.telemetry).filterNot(v =>
+          v._1 == MetricCode.CpuUsagePercent || v._1 == MetricCode.MemoryUsagePercent)
+      case (code, Some(status: ContainerStatus)) if code == ContainerDefinition.code =>
+        telemetryValues(status.telemetry)
+      case _ => List.empty
     }
 }

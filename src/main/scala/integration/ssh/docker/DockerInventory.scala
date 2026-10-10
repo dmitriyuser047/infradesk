@@ -6,7 +6,7 @@ import domain.resource.ResourceData
 import domain.resource.container.{ContainerDefinition, ContainerSpec, ContainerStatus}
 import integration.ssh.SshConnector
 
-final case class DockerContainerInventory(id: String, name: String, image: Option[String], state: Option[String]) {
+final case class DockerContainerInventory(id: String, name: String, image: Option[String], state: Option[String], telemetry: domain.metric.ResourceTelemetry = domain.metric.ResourceTelemetry()) {
   def toDiscoveredResource: DiscoveredResource = DiscoveredResource(
     externalType = SshConnector.ContainerExternalType,
     externalId = id,
@@ -19,7 +19,7 @@ final case class DockerContainerInventory(id: String, name: String, image: Optio
     )),
     data = ResourceData(
       spec = Some(ContainerSpec(image)),
-      status = Some(ContainerStatus(state))
+      status = Some(ContainerStatus(state, telemetry))
     )
   )
 }

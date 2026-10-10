@@ -120,3 +120,13 @@
 .organization-card-access strong { margin-left: auto; color: var(--text-secondary); font-weight: 500; }
 .organization-card-action { display: flex; align-items: center; justify-content: space-between; padding-top: var(--space-4); border-top: 1px solid var(--border); color: var(--primary); font-weight: 600; }
 .organization-card:focus-visible, .sidebar-workspace:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+.telemetry-summary { display: grid; gap: 16px; margin-block: 16px; }
+.telemetry-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; margin: 0; }
+.telemetry-values > div { padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.telemetry-values dt { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+.telemetry-values dd { margin: 6px 0 0; font-size: 20px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.telemetry-device { padding-block: 12px; }
+.telemetry-device h4 { overflow-wrap: anywhere; }
+.metric-controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-3) var(--space-4); margin-bottom: var(--space-4); }
+.metric-controls label { display: grid; gap: 4px; min-width: min(100%, 220px); }
+.metric-resolution { color: var(--text-tertiary); font-size: var(--font-size-caption); padding-bottom: 8px; }

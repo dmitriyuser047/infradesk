@@ -8,7 +8,8 @@ final case class ContainerSpec(
                               ) extends ResourceSpec
 
 final case class ContainerStatus(
-                                  state: Option[String]
+                                  state: Option[String],
+  telemetry: domain.metric.ResourceTelemetry = domain.metric.ResourceTelemetry()
                                 ) extends ResourceStatus
 
 object ContainerDefinition extends ResourceDefinition {

@@ -6,7 +6,8 @@ final case class DockerContainerSummary(
                                          names: List[String],
                                          image: String,
                                          state: String,
-                                         status: String
+                                         status: String,
+                                         telemetry: domain.metric.ResourceTelemetry = domain.metric.ResourceTelemetry()
                                        )
 
 trait DockerEngineClient[F[_]] {

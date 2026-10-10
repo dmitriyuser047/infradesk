@@ -52,6 +52,10 @@ jobs:
         run: echo "INFRADESK_SECRET_MASTER_KEY_BASE64=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
       - name: Compile backend
         run: sbt compile
+      - name: Test the SSH telemetry collector
+        # The collector runs on monitored servers with whatever python3 they have; its contracts
+        # are checked with the standard library only.
+        run: python3 scripts/test-ssh-telemetry.py
       - name: Test server profile Linux safety helpers
         run: |
           checks="${RUNNER_TEMP}/server-profile-safety"

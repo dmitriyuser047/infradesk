@@ -29,7 +29,11 @@ object NodeInventoryParser {
         memoryMb = values.get("memory_mb").flatMap(parseNonNegativeLong),
         cpuUsagePercent = values.get("cpu_usage_percent").flatMap(parsePercentage),
         memoryUsagePercent = values.get("memory_usage_percent").flatMap(parsePercentage),
-        uptimeSeconds = values.get("uptime_seconds").flatMap(parseNonNegativeLong)
+        uptimeSeconds = values.get("uptime_seconds").flatMap(parseNonNegativeLong),
+        telemetry = values.get("telemetry").flatMap(value => {
+          import serialization.resource.ResourceTelemetryJson._
+          io.circe.parser.decode[domain.metric.ResourceTelemetry](value).toOption
+        }).getOrElse(domain.metric.ResourceTelemetry())
       )
     }
   }
